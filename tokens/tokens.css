@@ -1,41 +1,42 @@
+/* Every colour is written once as light-dark(): the sheet paints the right scheme
+   on the first frame, before any script runs. data-color-scheme (7.5) overrides
+   the system preference; without it the browser's own preference decides. */
 :root {
+  color-scheme: light dark;
   /* === COLORS === */
 
   /* Accent */
   --color-accent: #fb923c;
-  --color-accent-hover: #f97316;
-  --color-accent-active: #ea580c;
-  --color-accent-subtle: rgba(251, 146, 60, 0.08);
-  --color-accent-selection: rgba(251, 146, 60, 0.22);
+  --color-accent-hover: light-dark(#f97316, #fca75f);
+  --color-accent-active: light-dark(#ea580c, #fdbc82);
+  --color-accent-subtle: light-dark(rgba(251, 146, 60, 0.08), rgba(251, 146, 60, 0.14));
+  --color-accent-selection: light-dark(rgba(251, 146, 60, 0.22), rgba(251, 146, 60, 0.30));
   --color-accent-text: #ffffff;
 
   /* Surfaces */
-  --color-canvas: #fffefb;
-  --color-canvas-soft: #f8f4f0;
-  --color-surface-hover: #f3efe9;
-  --color-surface-active: #ebe7e0;
+  --color-canvas: light-dark(#fffefb, #1a1613);
+  --color-canvas-soft: light-dark(#f8f4f0, #221d19);
+  --color-surface-hover: light-dark(#f3efe9, #2b241f);
+  --color-surface-active: light-dark(#ebe7e0, #352d27);
 
   /* Text */
-  --color-ink: #201515;
-  --color-body: #605d52;
-  --color-body-mid: #939084;
-  --color-mute: #c5c0b1;
+  --color-ink: light-dark(#201515, #f6f1ea);
+  --color-body: light-dark(#605d52, #c8c1b6);
+  --color-body-mid: light-dark(#939084, #948d81);
+  --color-mute: light-dark(#c5c0b1, #6a6358);
 
   /* Semantic */
-  --color-danger: #e03131;
-  --color-danger-hover: #c92a2a;
-  --color-danger-subtle: rgba(224, 49, 49, 0.08);
-  --color-success: #2f9e44;
-  --color-success-subtle: rgba(47, 158, 68, 0.08);
-  --color-warning: #e8590c;
-  --color-warning-subtle: rgba(232, 89, 12, 0.08);
+  --color-danger: light-dark(#e03131, #ff6b6b);
+  --color-danger-hover: light-dark(#c92a2a, #ff5252);
+  --color-danger-subtle: light-dark(rgba(224, 49, 49, 0.08), rgba(255, 107, 107, 0.14));
+  --color-success: light-dark(#2f9e44, #51cf66);
+  --color-success-subtle: light-dark(rgba(47, 158, 68, 0.08), rgba(81, 207, 102, 0.14));
+  --color-warning: light-dark(#e8590c, #ffa94d);
+  --color-warning-subtle: light-dark(rgba(232, 89, 12, 0.08), rgba(255, 169, 77, 0.14));
 
   /* Border */
-  --color-border: #e8e3db;
-  --color-border-strong: #d0cabe;
-
-  /* Shadow channel (for use in rgba) */
-  --shadow-color: 32, 21, 21;
+  --color-border: light-dark(#e8e3db, #322b25);
+  --color-border-strong: light-dark(#d0cabe, #473f37);
 
   /* === TYPOGRAPHY === */
 
@@ -74,9 +75,10 @@
   --radius-full: 9999px; /* status dots, badges, avatars */
 
   /* === SHADOWS === */
+  /* Shadows read as black on dark; deeper alphas so a raised sheet still lifts. */
 
-  --shadow-card: 0 1px 3px rgba(var(--shadow-color), 0.06);
-  --shadow-raised: 0 4px 12px rgba(var(--shadow-color), 0.08);
+  --shadow-card: 0 1px 3px light-dark(rgba(32, 21, 21, 0.06), rgba(0, 0, 0, 0.35));
+  --shadow-raised: 0 4px 12px light-dark(rgba(32, 21, 21, 0.08), rgba(0, 0, 0, 0.55));
 
   /* === TRANSITIONS === */
 
@@ -92,42 +94,12 @@
   --focus-ring: 0 0 0 1px var(--color-canvas), 0 0 0 2px var(--color-accent);
 }
 
-/* === DARK THEME === */
+/* === SCHEME OVERRIDE === */
+
+:root[data-color-scheme="light"] {
+  color-scheme: light;
+}
 
 :root[data-color-scheme="dark"] {
-  /* Accent — hover/active go lighter so a press still reads on dark */
-  --color-accent-hover: #fca75f;
-  --color-accent-active: #fdbc82;
-  --color-accent-subtle: rgba(251, 146, 60, 0.14);
-  --color-accent-selection: rgba(251, 146, 60, 0.30);
-
-  /* Surfaces — warm near-blacks */
-  --color-canvas: #1a1613;
-  --color-canvas-soft: #221d19;
-  --color-surface-hover: #2b241f;
-  --color-surface-active: #352d27;
-
-  /* Text — warm off-whites */
-  --color-ink: #f6f1ea;
-  --color-body: #c8c1b6;
-  --color-body-mid: #948d81;
-  --color-mute: #6a6358;
-
-  /* Semantic — brightened for a dark ground */
-  --color-danger: #ff6b6b;
-  --color-danger-hover: #ff5252;
-  --color-danger-subtle: rgba(255, 107, 107, 0.14);
-  --color-success: #51cf66;
-  --color-success-subtle: rgba(81, 207, 102, 0.14);
-  --color-warning: #ffa94d;
-  --color-warning-subtle: rgba(255, 169, 77, 0.14);
-
-  /* Border */
-  --color-border: #322b25;
-  --color-border-strong: #473f37;
-
-  /* Shadows read as black on dark; deepen the alphas so a raised sheet still lifts. */
-  --shadow-color: 0, 0, 0;
-  --shadow-card: 0 1px 3px rgba(var(--shadow-color), 0.35);
-  --shadow-raised: 0 6px 20px rgba(var(--shadow-color), 0.55);
+  color-scheme: dark;
 }

@@ -15,17 +15,25 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const SCREENSHOTS = resolve(REPO, ".screenshots");
 
-// Read the expected value from tokens.css rather than hardcode it, so the test
-// tracks the palette. The dark block is guarded by the data-color-scheme selector.
-function tokenValue(scheme, name) {
+// Read the expected pair from tokens.css rather than hardcode it, so the test
+// tracks the palette. A colour token is one light-dark() call; the browser
+// reports the resolved colour as rgb(), so compare in that form.
+function tokenPair(name) {
   const css = readFileSync(resolve(REPO, "tokens", "tokens.css"), "utf8");
-  const marker = scheme === "dark" ? ':root[data-color-scheme="dark"] {' : ":root {";
-  const open = css.indexOf(marker);
-  const close = css.indexOf("}", open);
-  const block = css.slice(open, close);
-  const match = block.match(new RegExp(`${name}\\s*:\\s*([^;]+);`));
-  assert.ok(match, `${name} not found in the ${scheme} block of tokens.css`);
-  return match[1].trim();
+  const match = css.match(new RegExp(`${name}\\s*:\\s*light-dark\\(([^,]+),\\s*([^)]+)\\);`));
+  assert.ok(match, `${name} is not a light-dark() token in tokens.css`);
+  return { light: match[1].trim(), dark: match[2].trim() };
+}
+
+function rgb(hex) {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+// The body background is where the canvas token lands: the resolved colour,
+// which is what a person sees, rather than the token's text.
+function canvas(page) {
+  return page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 }
 
 // The printed value is what token-sheet renders next to a token name, taken from
@@ -50,11 +58,21 @@ const ENGINES = [
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
   test(`the page follows the colour scheme in ${engine.name}`, async () => {
-    const dark = tokenValue("dark", "--color-canvas");
-    const light = tokenValue("light", "--color-canvas");
+    const pair = tokenPair("--color-canvas");
+    const dark = rgb(pair.dark);
+    const light = rgb(pair.light);
     assert.notEqual(dark, light, "the dark and light canvas must differ for the test to mean anything");
 
     const browser = await engine.launch();
+
+    // Scripts off: only the sheet paints. This is the first frame a person sees,
+    // before any fact has run, and it must already be dark.
+    const still = await browser.newContext({ javaScriptEnabled: false, colorScheme: "dark" });
+    const first = await still.newPage();
+    await first.goto(`${BASE_URL}/design/tokens`);
+    assert.equal(await canvas(first), dark, "the first frame should already be dark");
+    await still.close();
+
     const page = await browser.newPage();
     const problems = [];
     page.on("console", (msg) => {
@@ -79,11 +97,12 @@ for (const engine of ENGINES) {
         await page.evaluate(() => document.documentElement.dataset.colorScheme),
         "dark",
       );
-      const computed = await page.evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue("--color-canvas").trim(),
+      assert.equal(await canvas(page), dark, "the canvas should be painted in the dark value");
+      assert.equal(
+        await printedCanvas(page),
+        `light-dark(${pair.light}, ${pair.dark})`,
+        "token-sheet should print the token as written, both values",
       );
-      assert.equal(computed, dark, "computed --color-canvas should be the dark value");
-      assert.equal(await printedCanvas(page), dark, "token-sheet should print the dark value");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({
@@ -91,37 +110,16 @@ for (const engine of ENGINES) {
         fullPage: true,
       });
 
-      // Flipping proves color-scheme.changed crosses the bus and the sheet
-      // re-reads (4.3, fourth rule).
+      // Flipping proves the fact follows the media query and the attribute
+      // overrides it (7.5): the canvas repaints with the attribute.
       await page.emulateMedia({ colorScheme: "light" });
       await page.waitForFunction(() => document.documentElement.dataset.colorScheme === "light");
-      await page.waitForFunction(
-        (expected) => {
-          const root = document.querySelector("token-sheet").shadowRoot;
-          for (const token of root.querySelectorAll(".token")) {
-            if (token.querySelector(".name")?.textContent === "--color-canvas") {
-              return token.querySelector(".value")?.textContent === expected;
-            }
-          }
-          return false;
-        },
-        light,
-      );
+      assert.equal(await canvas(page), light, "the canvas should follow the flip to light");
 
       // Reversing rules out a path that only ever moves in one direction.
       await page.emulateMedia({ colorScheme: "dark" });
-      await page.waitForFunction(
-        (expected) => {
-          const root = document.querySelector("token-sheet").shadowRoot;
-          for (const token of root.querySelectorAll(".token")) {
-            if (token.querySelector(".name")?.textContent === "--color-canvas") {
-              return token.querySelector(".value")?.textContent === expected;
-            }
-          }
-          return false;
-        },
-        dark,
-      );
+      await page.waitForFunction(() => document.documentElement.dataset.colorScheme === "dark");
+      assert.equal(await canvas(page), dark, "the canvas should follow the flip back to dark");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
