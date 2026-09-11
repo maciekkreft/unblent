@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMachine, emit } from "xstate";
-import { mount, unmount } from "bus";
+import { mount, unmount, ask } from "bus";
 
 // The bus is infrastructure, not a component, so it is tested here rather than
 // under components/. Fake machines stand in for real ones: a producer that emits
@@ -92,4 +92,89 @@ test("an undeclared emit is refused and reaches no subscriber", async () => {
   assert.deepEqual(received, []);
   unmount(p);
   unmount(c);
+});
+
+// Queries (4.2): a fake fact that doubles what it is asked, and an asker that
+// declares the ask. `ask` is called directly, as a view's controller would.
+function fact(id) {
+  return createMachine({
+    id,
+    meta: { kind: "fact", shape: "local-only", emits: [], owns: "doubles" },
+    on: {
+      "read?": { actions: ({ event }) => event.reply({ value: event.payload.id * 2 }) },
+      "twice?": {
+        actions: ({ event }) => {
+          event.reply({ first: true });
+          event.reply({ second: true });
+        },
+      },
+    },
+  });
+}
+
+function asker(id, asks) {
+  return createMachine({ id, meta: { kind: "view", emits: [], attributes: [], asks } });
+}
+
+test("a query is answered with its payload", async () => {
+  const f = mount(fact("f1"), {});
+  const a = asker("a1", ["f1: read"]);
+  assert.deepEqual(await ask(a, "f1", "read", { id: 21 }), { value: 42 });
+  unmount(f);
+});
+
+test("two concurrent asks each get their own reply, with distinct cids", async () => {
+  const cids = [];
+  const slow = createMachine({
+    id: "f2",
+    meta: { kind: "fact", shape: "local-only", emits: [], owns: "slow" },
+    on: {
+      "read?": {
+        actions: ({ event }) => {
+          cids.push(event.cid);
+          setTimeout(() => event.reply({ value: event.payload.id }), 0);
+        },
+      },
+    },
+  });
+  const f = mount(slow, {});
+  const a = asker("a2", ["f2: read"]);
+  const both = await Promise.all([ask(a, "f2", "read", { id: 1 }), ask(a, "f2", "read", { id: 2 })]);
+  assert.deepEqual(both, [{ value: 1 }, { value: 2 }]);
+  assert.equal(cids.length, 2);
+  assert.notEqual(cids[0], cids[1]);
+  unmount(f);
+});
+
+test("an undeclared ask throws", () => {
+  const f = mount(fact("f3"), {});
+  const a = asker("a3", []);
+  assert.throws(() => ask(a, "f3", "read", { id: 1 }), /undeclared ask/);
+  unmount(f);
+});
+
+test("an ask aimed at a view throws", () => {
+  const v = mount(consumer("v4", []), {});
+  const a = asker("a4", ["v4: read"]);
+  assert.throws(() => ask(a, "v4", "read", { id: 1 }), /only a fact component answers/);
+  unmount(v);
+});
+
+test("an unmounted target replies no-answerer", async () => {
+  const a = asker("a5", ["nobody: read"]);
+  assert.deepEqual(await ask(a, "nobody", "read", { id: 1 }), { error: "no-answerer" });
+});
+
+test("a query the target does not handle replies unknown-query", async () => {
+  const f = mount(fact("f6"), {});
+  const a = asker("a6", ["f6: write"]);
+  assert.deepEqual(await ask(a, "f6", "write", {}), { error: "unknown-query" });
+  unmount(f);
+});
+
+test("the first reply wins; a second call is ignored", async () => {
+  const f = mount(fact("f7"), {});
+  const a = asker("a7", ["f7: twice"]);
+  assert.deepEqual(await ask(a, "f7", "twice"), { first: true });
+  unmount(f);
 });

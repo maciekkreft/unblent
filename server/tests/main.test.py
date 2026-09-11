@@ -56,6 +56,15 @@ class ServerEntry(unittest.TestCase):
         # The bus is infrastructure, but its tests/ are hidden the same way.
         self.assertEqual(_request("/static/bus/tests/bus.test.mjs").status, 404)
 
+    def test_component_routers_are_discovered(self):
+        # Section 3.4: a component's server module is mounted at /api/<component>,
+        # without a trailing-slash redirect.
+        res = _request("/api/catalog")
+        self.assertEqual(res.status, 200)
+        self.assertTrue(res.headers.get("Content-Type", "").startswith("application/json"))
+        self.assertEqual(_request("/api/does-not-exist").status, 404)
+        self.assertEqual(_request("/static/components/catalog/server/router.py").status, 404)
+
     def test_design_name_cannot_escape_pages_dir(self):
         # Whether routing or the page.parent guard enforces it, the outcome is 404.
         self.assertEqual(_request("/design/foo%2F..%2Fbar").status, 404)

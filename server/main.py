@@ -1,6 +1,7 @@
 """FastAPI entry point (architecture.md 11.1). Named ``server`` rather than
 ``app`` so it never clashes with ``pages/apps/`` or an app component."""
 
+import importlib.util
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -39,6 +40,20 @@ class ComponentStaticFiles(RevalidatingStaticFiles):
 
 
 app = FastAPI()
+
+
+# Section 3.4: the server discovers routers by walking the components directory;
+# each fact component with a server module is mounted at /api/<component>.
+def _include_component_routers() -> None:
+    for router_file in sorted(COMPONENTS.glob("*/server/router.py")):
+        name = router_file.parent.parent.name
+        spec = importlib.util.spec_from_file_location(f"components.{name}.server.router", router_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        app.include_router(module.router, prefix=f"/api/{name}")
+
+
+_include_component_routers()
 
 app.mount("/static/vendor", RevalidatingStaticFiles(directory=VENDOR), name="vendor")
 app.mount("/static/components", ComponentStaticFiles(directory=COMPONENTS), name="components")

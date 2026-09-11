@@ -10,7 +10,7 @@ export const machine = setup({
     // Bridges the media query into the mailbox. Its cleanup is media's own
     // unsubscribe, so stopping the actor stops listening.
     watchMedia: fromCallback(({ input, sendBack }) =>
-      input.media.subscribe((matches) => sendBack({ type: "mediaChanged", matches })),
+      input.media.subscribe((matches) => sendBack({ type: "_mediaChanged", matches })),
     ),
   },
 }).createMachine({
@@ -27,8 +27,8 @@ export const machine = setup({
   entry: ({ context }) => context.apply(context.scheme),
   invoke: { src: "watchMedia", input: ({ context }) => ({ media: context.media }) },
   on: {
-    // Internal and camelCase: not a bus event, so the bus does not subscribe it.
-    mediaChanged: {
+    // Leading underscore (7.2): an internal message the bus never routes.
+    _mediaChanged: {
       guard: ({ context, event }) => schemeFor(event.matches) !== context.scheme,
       actions: [
         assign({ scheme: ({ event }) => schemeFor(event.matches) }),

@@ -3,6 +3,7 @@
     "imports": {
       "lit": "/static/vendor/lit/lit-core.min.js",
       "xstate": "/static/vendor/xstate/xstate.esm.js",
+      "ulid": "/static/vendor/ulid/index.js",
       "bus": "/static/bus/bus.js"
     }
   },
@@ -32,6 +33,16 @@
         "xstate/xstate-actors.esm.js": "776426609787f05bbba5d3a7607094d3726232ef8b627c59e26d369fd3253f3e",
         "xstate/xstate-dev.esm.js": "2faf423da88e07f488c5c8eb84c34f6889f817c3c12747e37140a850ed7374bd",
         "xstate/xstate.esm.js": "0d5d96e86f5fb280c6aa91594a5c62bedef719ed0c0ff0b1bc63a7254899d82f"
+      }
+    },
+    {
+      "name": "ulid",
+      "version": "3.0.2",
+      "licence": "MIT",
+      "source": "https://registry.npmjs.org/ulid/-/ulid-3.0.2.tgz",
+      "files": {
+        "ulid/LICENSE": "e7e94f2db9f81458817ca8eb7420d63ec607272eb4259b39c420339c76414dfe",
+        "ulid/index.js": "f751358d24681663bf288ccb91a23dee829c07dfb21028ab8ca06e975edd8a4a"
       }
     },
     {

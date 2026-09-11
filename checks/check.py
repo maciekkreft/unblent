@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The one check command (architecture.md 11), stdlib only. `--static` is the fast phase."""
 
+import ast
 import glob
 import hashlib
 import http.client
@@ -95,6 +96,7 @@ def check_layout() -> None:
 
 _KINDS = {"fact", "view"}
 _SHAPES = {"local-only", "replicated", "remote-only"}
+_ASK = re.compile(r"^[\w-]+: [\w-]+$")
 
 
 def read_manifests() -> dict:
@@ -128,6 +130,9 @@ def check_manifests(manifests: dict) -> None:
                  "status is derived from the browser entry (7.3); remove meta.status")
         if not isinstance(meta.get("emits"), list):
             fail(path, "manifest check (7.3)", "meta.emits must be a list, empty if it emits nothing")
+        asks = meta.get("asks", [])
+        if not (isinstance(asks, list) and all(isinstance(a, str) and _ASK.match(a) for a in asks)):
+            fail(path, "manifest check (7.3)", 'meta.asks must be a list of "target: query" strings')
         if meta["kind"] == "fact":
             if meta.get("shape") not in _SHAPES:
                 fail(path, "manifest check (7.3)", f"a fact component's meta.shape must be one of {sorted(_SHAPES)}")
@@ -208,6 +213,38 @@ def check_imports() -> None:
             elif spec not in ALLOWED_BARE:
                 fail(path, "import check (11.2)",
                      f'bare import "{spec}" is not a vendored name, bus, or store')
+
+
+# A server module (11.2) may import the standard library, the packages named in
+# requirements.txt and what they in turn depend on, or a sibling inside its own server/.
+def _requirements() -> set:
+    names = set()
+    for line in (ROOT / "requirements.txt").read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            names.add(re.split(r"[\[<>=!~ ]", line, maxsplit=1)[0].replace("-", "_").lower())
+    return names | {"starlette", "pydantic"}
+
+
+def check_python_imports() -> None:
+    allowed = sys.stdlib_module_names | _requirements()
+    for path in sorted(glob.glob("components/*/server/*.py", root_dir=ROOT)):
+        tree = ast.parse((ROOT / path).read_text(), filename=path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                if node.level > 0:
+                    continue
+                names = [node.module or ""]
+            else:
+                continue
+            for name in names:
+                top = name.split(".")[0]
+                if top not in allowed:
+                    fail(path, "import check (11.2)",
+                         f'import "{name}" is not the standard library, a requirements.txt package, '
+                         "or a relative module inside server/")
 
 
 # --- Page check (architecture.md 8) ----------------------------------------------
@@ -543,6 +580,7 @@ def main() -> None:
     _timed(timings, "manifest check", check_manifests, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
     _timed(timings, "imports", check_imports)
+    _timed(timings, "python imports", check_python_imports)
     _timed(timings, "pages", check_pages)
     _timed(timings, "page components", check_page_components, manifests)
     _timed(timings, "document", check_document_writes)

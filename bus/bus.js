@@ -1,11 +1,14 @@
 // The bus (architecture.md 3.3, 4): the one shared infrastructure that routes
-// events between component actors and validates their names. It keeps no log;
-// facts live in fact components. Pure module — no `document` — so it imports in
-// Node as well as the browser. Machines never import this; a fact component's
-// `fact.js` mounts its actor here, so `machine.js` stays importable anywhere (3.2).
+// events and queries between component actors and validates their names. It
+// keeps no log; facts live in fact components. Pure module — no `document` — so
+// it imports in Node as well as the browser. Machines never import this; a fact
+// component's `fact.js` mounts its actor here, so `machine.js` stays importable
+// anywhere (3.2).
 import { createActor } from "xstate";
+import { ulid } from "ulid";
 
 const mounted = new Map(); // id → actor, so a second mount of an id can be refused
+const machines = new Map(); // id → machine, so `ask` can read the target's kind and handlers
 const registry = new Map(); // event name → schema, so every emit is validated (3.3)
 const subscribers = new Map();
 
@@ -44,19 +47,59 @@ export function mount(machine, { input, events = {} } = {}) {
     registry.set(name, events[name]);
   }
   const actor = createActor(machine, { input });
-  // Subscriptions are derived: a dotted key of `on` is a bus event name; an
-  // internal, camelCase key is the actor's own business.
-  for (const name of Object.keys(machine.config.on ?? {})) {
-    if (name.includes(".")) subscribe(name, actor);
+  // Subscriptions are derived by the 7.2 key convention: a dotted message type the
+  // machine handles in any state is a bus event name; the other types are
+  // commands, queries, or internal messages. XState's own `xstate.*` types are skipped.
+  for (const name of machine.events) {
+    if (name.includes(".") && !name.startsWith("xstate.")) subscribe(name, actor);
   }
   actor.on("*", (event) => forward(machine, actor, event));
   actor.start();
   mounted.set(id, actor);
+  machines.set(id, machine);
   return actor;
 }
 
 export function unmount(actor) {
   actor.stop();
-  for (const [id, a] of mounted) if (a === actor) mounted.delete(id);
+  for (const [id, a] of mounted) {
+    if (a === actor) {
+      mounted.delete(id);
+      machines.delete(id);
+    }
+  }
   for (const set of subscribers.values()) set.delete(actor);
+}
+
+// A query (4.2): addressed to one fact component, always answered. The promise
+// settles when the reply reaches the asker, so a machine consumes it through
+// `fromPromise`, the function arriving through `input`. Two cases are programming
+// errors and throw, like an undeclared emit: an ask the asker did not declare in
+// `meta.asks`, and a query aimed at a view (4.3, rule two). Two cases are honest
+// replies, because a reply always comes: nobody mounted under the target's name,
+// or a target that does not handle the query.
+export function ask(machine, target, name, payload = {}) {
+  const asks = machine.config.meta?.asks ?? [];
+  const key = `${target}: ${name}`;
+  if (!asks.includes(key))
+    throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", not in meta.asks`);
+  const answerer = mounted.get(target);
+  if (!answerer) return Promise.resolve({ error: "no-answerer" });
+  const targetMachine = machines.get(target);
+  if (targetMachine.config.meta?.kind !== "fact")
+    throw new Error(`only a fact component answers queries: ${target} is a ${targetMachine.config.meta?.kind}`);
+  const type = `${name}?`;
+  if (!targetMachine.events.includes(type)) return Promise.resolve({ error: "unknown-query" });
+  return new Promise((resolve) => {
+    let answered = false;
+    // The correlation id is a ULID (section 10), so a later trace can order and
+    // tell apart queries from several tabs; the first reply wins.
+    const cid = ulid();
+    const reply = (value) => {
+      if (answered) return;
+      answered = true;
+      resolve(value);
+    };
+    answerer.send({ type, cid, payload, reply });
+  });
 }
