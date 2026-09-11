@@ -1,0 +1,41 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every page of this site, or an honest error when the server cannot answer.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "pages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string" },
+                "title": { "type": "string" },
+                "kind": { "type": "string" }
+              },
+              "required": ["path", "title", "kind"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["pages"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "unavailable" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  }
+}

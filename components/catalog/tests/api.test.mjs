@@ -27,7 +27,7 @@ test("GET /api/catalog lists every component from its manifest", async () => {
   assert.equal(c.catalog.status, "built");
   assert.equal(c.catalog.kind, "fact");
   assert.equal(c.catalog.shape, "remote-only");
-  assert.deepEqual(c.catalog.answers, ["list"]);
+  assert.deepEqual(c.catalog.answers, ["list", "contracts"]);
   assert.equal(c.catalog.attributes, null);
 
   assert.deepEqual(c["color-scheme"].emits, ["color-scheme.changed"]);
@@ -39,4 +39,24 @@ test("GET /api/catalog lists every component from its manifest", async () => {
     { with: "color-scheme", via: "color-scheme.changed", how: "consumes" },
   ]);
   assert.equal(c["token-sheet"].shape, null);
+});
+
+test("GET /api/catalog/contracts pivots the schema files into the vocabulary", async () => {
+  const res = await fetch(`${BASE_URL}/api/catalog/contracts`);
+  assert.equal(res.status, 200);
+  const { events, queries, commands } = await res.json();
+
+  const scheme = events.find((e) => e.name === "color-scheme.changed");
+  assert.ok(scheme, "the one event is listed");
+  assert.equal(scheme.owner, "color-scheme");
+  assert.deepEqual(scheme.consumers, ["token-sheet"]);
+  assert.equal(scheme.schema.$schema, "https://json-schema.org/draft/2020-12/schema");
+
+  const byKey = Object.fromEntries(queries.map((q) => [`${q.target}: ${q.name}`, q]));
+  assert.deepEqual(byKey["catalog: list"].askers, ["component-list"]);
+  assert.deepEqual(byKey["pages: list"].askers, ["page-nav"]);
+  assert.ok("payload" in byKey["catalog: contracts"] && "reply" in byKey["catalog: contracts"]);
+  assert.deepEqual(byKey["catalog: contracts"].askers, ["contract-list"]);
+
+  assert.deepEqual(commands, []);
 });

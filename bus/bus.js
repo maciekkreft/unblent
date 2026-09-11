@@ -10,6 +10,7 @@ import { ulid } from "ulid";
 const mounted = new Map(); // id → actor, so a second mount of an id can be refused
 const machines = new Map(); // id → machine, so `ask` can read the target's kind and handlers
 const registry = new Map(); // event name → schema, so every emit is validated (3.3)
+const queryRegistry = new Map(); // "target: name" → { payload, reply }, so every query is validated (3.3, 7.2)
 const subscribers = new Map();
 
 function subscribe(name, actor) {
@@ -37,7 +38,7 @@ function forward(machine, emitter, event) {
   }
 }
 
-export function mount(machine, { input, events = {} } = {}) {
+export function mount(machine, { input, events = {}, queries = {} } = {}) {
   const id = machine.config.id;
   if (mounted.has(id)) throw new Error(`already mounted: ${id}`);
   // A declared emit reaches the bus with its schema, so the registry is complete
@@ -45,6 +46,17 @@ export function mount(machine, { input, events = {} } = {}) {
   for (const name of machine.config.meta?.emits ?? []) {
     if (!(name in events)) throw new Error(`mount ${id}: no schema passed for declared emit "${name}"`);
     registry.set(name, events[name]);
+  }
+  // Every query the machine answers (a `name?` handler, 7.2) reaches the bus with
+  // its `{ payload, reply }` schema, the same way an emit does, so a query schema
+  // cannot go stale (7.2). Only a fact component answers, so only a fact registers.
+  for (const type of machine.events) {
+    if (!type.endsWith("?") || type.startsWith("xstate.")) continue;
+    const name = type.slice(0, -1);
+    const schema = queries[name];
+    if (!schema || typeof schema !== "object" || !("payload" in schema) || !("reply" in schema))
+      throw new Error(`mount ${id}: no { payload, reply } schema passed for answered query "${name}"`);
+    queryRegistry.set(`${id}: ${name}`, schema);
   }
   const actor = createActor(machine, { input });
   // Subscriptions are derived by the 7.2 key convention: a dotted message type the
@@ -90,6 +102,10 @@ export function ask(machine, target, name, payload = {}) {
     throw new Error(`only a fact component answers queries: ${target} is a ${targetMachine.config.meta?.kind}`);
   const type = `${name}?`;
   if (!targetMachine.events.includes(type)) return Promise.resolve({ error: "unknown-query" });
+  // The query's schema is registered (`queryRegistry.get(key)`); payload and reply
+  // validation against it lands with the JSON Schema validator (7.2, section 10),
+  // the same task that adds payload validation to events. Registration now is what
+  // lets both kinds be validated together then.
   return new Promise((resolve) => {
     let answered = false;
     // The correlation id is a ULID (section 10), so a later trace can order and

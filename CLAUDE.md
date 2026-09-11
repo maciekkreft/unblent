@@ -16,3 +16,11 @@ The architecture is the spec. If a request conflicts with it, name the section a
 - Comments say why, or cite an architecture section. Never what the code does, never history.
 - Verify UI in WebKit, then Chromium, before reporting done.
 - Commits: 2-3 words, no attribution trailers, same-session fixes amend.
+
+# Reading the slip-box
+
+The dev server runs at 127.0.0.1:8080 and reloads on every edit. Before wiring a component, read what exists from the running system rather than from the code:
+
+- `curl -s 127.0.0.1:8080/api/catalog` — every component's manifest, status, and who it interacts with.
+- `curl -s 127.0.0.1:8080/api/catalog/contracts` — every event, query and command with its JSON Schema, owner, consumers and askers.
+- `curl -s 127.0.0.1:8080/api/pages` — the pages and their kinds.

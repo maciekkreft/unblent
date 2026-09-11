@@ -6,8 +6,10 @@ import { mount, unmount, ask } from "bus";
 // The bus is infrastructure, not a component, so it is tested here rather than
 // under components/. Fake machines stand in for real ones: a producer that emits
 // on an internal (dot-free) event, a consumer that records what the bus delivers.
-// The bus checks event names only; any truthy value serves as a schema.
+// The bus checks event names only; any truthy value serves as an event schema.
+// A query schema is registered by shape, so it must carry payload and reply (7.2).
 const SCHEMA = {};
+const QSCHEMA = { payload: {}, reply: {} };
 
 function producer(id, emits = ["thing.happened"]) {
   return createMachine({
@@ -71,6 +73,16 @@ test("mount refuses a declared emit with no schema", () => {
   assert.throws(() => mount(producer("noschema"), {}), /no schema/);
 });
 
+test("mount refuses an answered query with no schema", () => {
+  assert.throws(() => mount(fact("noq"), {}), /answered query "read"/);
+});
+
+test("mount accepts an answered query given its { payload, reply } schema", () => {
+  const f = mount(fact("okq"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
+  assert.ok(f);
+  unmount(f);
+});
+
 // An emit the machine never declared is refused inside the emitter's `on("*")`
 // listener, which XState rethrows asynchronously; hence uncaughtException. The
 // registry's "unknown event" branch cannot be reached from here — mount registers
@@ -117,7 +129,7 @@ function asker(id, asks) {
 }
 
 test("a query is answered with its payload", async () => {
-  const f = mount(fact("f1"), {});
+  const f = mount(fact("f1"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
   const a = asker("a1", ["f1: read"]);
   assert.deepEqual(await ask(a, "f1", "read", { id: 21 }), { value: 42 });
   unmount(f);
@@ -137,7 +149,7 @@ test("two concurrent asks each get their own reply, with distinct cids", async (
       },
     },
   });
-  const f = mount(slow, {});
+  const f = mount(slow, { queries: { read: QSCHEMA } });
   const a = asker("a2", ["f2: read"]);
   const both = await Promise.all([ask(a, "f2", "read", { id: 1 }), ask(a, "f2", "read", { id: 2 })]);
   assert.deepEqual(both, [{ value: 1 }, { value: 2 }]);
@@ -147,7 +159,7 @@ test("two concurrent asks each get their own reply, with distinct cids", async (
 });
 
 test("an undeclared ask throws", () => {
-  const f = mount(fact("f3"), {});
+  const f = mount(fact("f3"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
   const a = asker("a3", []);
   assert.throws(() => ask(a, "f3", "read", { id: 1 }), /undeclared ask/);
   unmount(f);
@@ -166,14 +178,14 @@ test("an unmounted target replies no-answerer", async () => {
 });
 
 test("a query the target does not handle replies unknown-query", async () => {
-  const f = mount(fact("f6"), {});
+  const f = mount(fact("f6"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
   const a = asker("a6", ["f6: write"]);
   assert.deepEqual(await ask(a, "f6", "write", {}), { error: "unknown-query" });
   unmount(f);
 });
 
 test("the first reply wins; a second call is ignored", async () => {
-  const f = mount(fact("f7"), {});
+  const f = mount(fact("f7"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
   const a = asker("a7", ["f7: twice"]);
   assert.deepEqual(await ask(a, "f7", "twice"), { first: true });
   unmount(f);

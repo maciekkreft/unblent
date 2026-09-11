@@ -69,6 +69,45 @@ def _link(records: list) -> None:
         record["interacts"].sort(key=lambda i: (i["with"], i["via"], i["how"]))
 
 
+def _schema(component: str, kind: str, name: str) -> dict:
+    return json.loads((COMPONENTS / component / kind / f"{name}.json").read_text())
+
+
+def _contracts(records: list) -> dict:
+    """Section 7.2: pivot the schema files into the shared vocabulary. An event's
+    consumers and a query's askers are read from the manifests, the same source as
+    the interactions, so the contracts page and the components page cannot diverge."""
+    events, queries, commands = [], [], []
+    for record in records:
+        owner = record["name"]
+        for name in record["emits"]:
+            events.append({
+                "name": name,
+                "owner": owner,
+                "schema": _schema(owner, "events", name),
+                "consumers": sorted(o["name"] for o in records if name in o["consumes"]),
+            })
+        for name in record["answers"]:
+            schema = _schema(owner, "queries", name)
+            queries.append({
+                "target": owner,
+                "name": name,
+                "payload": schema["payload"],
+                "reply": schema["reply"],
+                "askers": sorted(o["name"] for o in records if f"{owner}: {name}" in o["asks"]),
+            })
+        for name in record["accepts"]:
+            commands.append({
+                "target": owner,
+                "name": name,
+                "payload": _schema(owner, "commands", name),
+            })
+    events.sort(key=lambda e: e["name"])
+    queries.sort(key=lambda q: (q["target"], q["name"]))
+    commands.sort(key=lambda c: (c["target"], c["name"]))
+    return {"events": events, "queries": queries, "commands": commands}
+
+
 @router.get("")
 def list_components():
     try:
@@ -78,3 +117,13 @@ def list_components():
     records = _records(manifests)
     _link(records)
     return {"components": records}
+
+
+@router.get("/contracts")
+def list_contracts():
+    try:
+        manifests = _read_manifests()
+        records = _records(manifests)
+        return _contracts(records)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return JSONResponse({"error": "unavailable"}, status_code=503)

@@ -151,8 +151,8 @@ def check_manifests(manifests: dict) -> None:
 
 # --- Component check (architecture.md 11.1) --------------------------------------
 
-_ALLOWED_ENTRIES = {"machine.js", "view.js", "fact.js", "store.js", "events", "server", "tests"}
-_KIND_FORBIDS = {"view": {"store.js", "server", "events", "fact.js"}, "fact": {"view.js"}}
+_ALLOWED_ENTRIES = {"machine.js", "view.js", "fact.js", "store.js", "events", "queries", "commands", "server", "tests"}
+_KIND_FORBIDS = {"view": {"store.js", "server", "events", "queries", "fact.js"}, "fact": {"view.js"}}
 
 
 def check_component_dirs(manifests: dict) -> None:
@@ -176,6 +176,62 @@ def check_component_dirs(manifests: dict) -> None:
         # A component is built when its browser entry exists (7.3), and a built one has tests.
         if (entries & {"view.js", "fact.js"}) and not list(comp.glob("tests/*.test.mjs")):
             fail(f"{rel}/tests", "component check (11.1)", "a built component has tests")
+
+
+# --- Contract check (architecture.md 7.1, 7.2, 11.2) -----------------------------
+
+_DRAFT = "https://json-schema.org/draft/2020-12/schema"
+
+
+def _parse_schema(path: str, file: Path) -> dict:
+    try:
+        return json.loads(file.read_text())
+    except json.JSONDecodeError as exc:
+        fail(path, "contract check (11.2)", f"is not valid JSON: {exc}")
+
+
+def _check_draft(path: str, schema: object, what: str) -> None:
+    if not isinstance(schema, dict):
+        fail(path, "contract check (11.2)", f"{what} must be a JSON Schema object")
+    if schema.get("$schema") != _DRAFT:
+        fail(path, "contract check (11.2)",
+             f'{what} must state the draft: "$schema": "{_DRAFT}"')
+
+
+def check_contracts(manifests: dict) -> None:
+    """Section 7.2: every declared emit has events/<name>.json, every answered
+    query queries/<name>.json ({ payload, reply }), every accepted command
+    commands/<name>.json; each schema states the draft, and a schema file with no
+    matching declaration or handler fails, so the contracts cannot drift."""
+    for path, manifest in manifests.items():
+        comp = ROOT / Path(path).parent
+        rel = f"components/{comp.name}"
+        expected = {
+            "events": set(manifest["meta"].get("emits", [])),
+            "queries": set(manifest["answers"]),
+            "commands": set(manifest["accepts"]),
+        }
+        singular = {"events": "event", "queries": "query", "commands": "command"}
+        for kind, names in expected.items():
+            directory = comp / kind
+            present = {f.stem for f in directory.glob("*.json")} if directory.is_dir() else set()
+            for name in sorted(names - present):
+                fail(f"{rel}/{kind}/{name}.json", "contract check (11.2)",
+                     f"{comp.name} declares {singular[kind]} {name!r} but its schema file is missing")
+            for name in sorted(present - names):
+                fail(f"{rel}/{kind}/{name}.json", "contract check (11.2)",
+                     f"schema file has no matching {singular[kind]} declaration or handler on {comp.name}")
+            for name in sorted(names & present):
+                schema_path = f"{rel}/{kind}/{name}.json"
+                schema = _parse_schema(schema_path, directory / f"{name}.json")
+                if kind == "queries":
+                    for key in ("payload", "reply"):
+                        if key not in schema:
+                            fail(schema_path, "contract check (11.2)",
+                                 f"a query schema must have a {key!r} key ({{ payload, reply }})")
+                        _check_draft(schema_path, schema[key], key)
+                else:
+                    _check_draft(schema_path, schema, "the schema")
 
 
 # --- Import check (architecture.md 11.2) -----------------------------------------
@@ -591,6 +647,7 @@ def main() -> None:
     manifests = _timed(timings, "manifests", read_manifests)
     _timed(timings, "manifest check", check_manifests, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
+    _timed(timings, "contract check", check_contracts, manifests)
     _timed(timings, "imports", check_imports)
     _timed(timings, "python imports", check_python_imports)
     _timed(timings, "pages", check_pages)

@@ -1,0 +1,70 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "contracts takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The event, query and command vocabulary, pivoted from every component's schema files, or an honest error.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "owner": { "type": "string" },
+                "schema": { "type": "object" },
+                "consumers": { "type": "array", "items": { "type": "string" } }
+              },
+              "required": ["name", "owner", "schema", "consumers"],
+              "additionalProperties": false
+            }
+          },
+          "queries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target": { "type": "string" },
+                "name": { "type": "string" },
+                "payload": { "type": "object" },
+                "reply": { "type": "object" },
+                "askers": { "type": "array", "items": { "type": "string" } }
+              },
+              "required": ["target", "name", "payload", "reply", "askers"],
+              "additionalProperties": false
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target": { "type": "string" },
+                "name": { "type": "string" },
+                "payload": { "type": "object" }
+              },
+              "required": ["target", "name", "payload"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["events", "queries", "commands"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "unavailable" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  }
+}

@@ -99,7 +99,7 @@ A component's **manifest** (section 7.3) is not a separate file: it is read from
 
 ### 3.3 The bus
 
-The one shared piece of infrastructure, built once. It carries events, commands, and queries (section 4), routes each to the right mailboxes, validates every event against the contract registry, refuses emits a component has not declared, and knows nothing about what any event means. It keeps nothing: there is no event log. Facts persist in fact components; the bus is only how the news travels.
+The one shared piece of infrastructure, built once. It carries events, commands, and queries (section 4), routes each to the right mailboxes, validates every event, and every query's payload and reply, against the contract registry, refuses emits a component has not declared, and knows nothing about what any event means. It keeps nothing: there is no event log. Facts persist in fact components; the bus is only how the news travels.
 
 ### 3.4 The server
 
@@ -295,9 +295,12 @@ llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
 conversations: append(turn)
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
 pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }
+catalog: contracts       → { events: [{ name, owner, schema, consumers }], queries: [{ target, name, payload, reply, askers }], commands: [{ target, name, payload }] } | { error: "unavailable" }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
+
+A query's payload and reply shapes are JSON Schemas in the answerer's `queries/<name>.json`, as `{ payload, reply }`; a command's payload shape is in the acceptor's `commands/<name>.json`. The bus validates a query's payload on delivery and its reply before it reaches the asker, so a query schema cannot go stale, the same as an event's.
 
 ### 7.3 Manifest
 
@@ -401,6 +404,7 @@ components/
     store.js          IndexedDB cache + outbox, behind the store interface
     fact.js           browser entry: creates the actor with its inputs and mounts it on the bus
     events/           JSON Schema per event this component owns
+    queries/          JSON Schema per query this component answers: { payload, reply }
     server/
       router.py       FastAPI router for /api/notes
       schema.sql      per-user SQLite schema and migrations
@@ -408,6 +412,7 @@ components/
   note-editor/
     machine.js
     view.js
+    commands/         JSON Schema per command this component accepts
     tests/
   settings/
     machine.js
@@ -453,6 +458,8 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, or `store`. A server module may import the standard library, the packages named in `requirements.txt`, or a relative module inside its own `server/` |
 | Everything goes through the bus | Same check; there is no other importable channel |
 | Events match their contract | The bus validates every emitted event against the schema registry at runtime and throws on unknown names or invalid payloads |
+| Queries match their contract | The bus registers each answered query's schema at mount and validates payload and reply at runtime |
+| Contracts are written down | Contract check: every declared emit has `events/<name>.json`, every answered query `queries/<name>.json`, every accepted command `commands/<name>.json`; each parses as JSON Schema with the draft stated; no schema file without its declaration or handler |
 | Only declared events are emitted | The bus refuses an emit whose name is not in the emitter's declared list |
 | Only fact components answer queries | The bus refuses to route a query to a view component |
 | Contracts only grow | Schema compatibility check against the previous commit: fails on removed, renamed, or new required fields; prints the affected components from the manifests |
@@ -463,7 +470,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Nothing fails in the browser | Browser tests fail on any console error, page error, failed request, or 4xx/5xx response while a page loads |
 | Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
 | Manifests are well-formed | Manifest check: every machine imports in Node, its id equals its directory name, `kind` and `emits` are present and valid, `shape` and `owns` are present on fact components only, `attributes` on view components only, and `status` is absent because it is derived |
-| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `fact.js`, `store.js`, `events/`, `server/`, `tests/`; a view has no `fact.js`, store or server, a fact has no `view.js`; `view.js` defines the element named after its directory; a component with a browser entry has tests |
+| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `fact.js`, `store.js`, `events/`, `queries/`, `commands/`, `server/`, `tests/`; a view has no `fact.js`, store, server or `queries/`, a fact has no `view.js`; `view.js` defines the element named after its directory; a component with a browser entry has tests |
 | Pages compose only what exists | Page check: every custom element on a page is a built view whose `view.js` the page loads, every loaded `view.js` is used, and every loaded `fact.js` belongs to a fact component |
 | Only document facts write to the document | Document check: no file under `components/` writes to `document` (its root element, `body`, `head`, or `title`) except the `fact.js` of a component listed in section 7.5, and that one writes only its own `data-<name>` attribute |
 | The layout is what the document says | Layout check: every top-level directory appears in the listing in 11.1 |

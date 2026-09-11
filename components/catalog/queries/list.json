@@ -1,0 +1,62 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every component's manifest record, or an honest error when the server cannot answer.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "status": { "enum": ["built", "planned"] },
+                "kind": { "enum": ["fact", "view"] },
+                "shape": { "type": ["string", "null"] },
+                "owns": { "type": ["string", "null"] },
+                "attributes": { "type": ["array", "null"], "items": { "type": "string" } },
+                "emits": { "type": "array", "items": { "type": "string" } },
+                "consumes": { "type": "array", "items": { "type": "string" } },
+                "accepts": { "type": "array", "items": { "type": "string" } },
+                "answers": { "type": "array", "items": { "type": "string" } },
+                "asks": { "type": "array", "items": { "type": "string" } },
+                "interacts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "with": { "type": "string" },
+                      "via": { "type": "string" },
+                      "how": { "enum": ["emits", "consumes", "asks", "answers"] }
+                    },
+                    "required": ["with", "via", "how"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["name", "status", "kind", "emits", "consumes", "accepts", "answers", "asks", "interacts"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["components"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "unavailable" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  }
+}
