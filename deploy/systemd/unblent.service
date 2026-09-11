@@ -1,0 +1,19 @@
+[Unit]
+Description=Unblent app (uvicorn)
+Documentation=https://github.com/maciekkreft/unblent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unblent
+Group=unblent
+WorkingDirectory=/opt/unblent
+ExecStart=/opt/unblent/.venv/bin/uvicorn server.main:app --host 127.0.0.1 --port 8080 --reload --reload-dir server --reload-dir components
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

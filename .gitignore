@@ -9,3 +9,12 @@
 
 # TEMP
 .playwright-mcp/
+.screenshots/
+
+# RUNTIME
+.venv/
+data/
+__pycache__/
+*.pyc
+# LOCAL
+.claude/settings.local.json

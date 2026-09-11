@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Design tokens</title>
+    <link rel="stylesheet" href="/static/tokens/tokens.css" />
+    <link rel="stylesheet" href="/static/tokens/base.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "lit": "/static/vendor/lit/lit-core.min.js",
+          "xstate": "/static/vendor/xstate/xstate.esm.js"
+        }
+      }
+    </script>
+    <script type="module" src="/static/components/token-sheet/view.js"></script>
+  </head>
+  <body>
+    <token-sheet></token-sheet>
+  </body>
+</html>

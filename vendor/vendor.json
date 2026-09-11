@@ -1,0 +1,47 @@
+{
+  "importmap": {
+    "imports": {
+      "lit": "/static/vendor/lit/lit-core.min.js",
+      "xstate": "/static/vendor/xstate/xstate.esm.js"
+    }
+  },
+  "packages": [
+    {
+      "name": "lit",
+      "version": "3.3.3",
+      "licence": "BSD-3-Clause",
+      "source": "https://cdn.jsdelivr.net/gh/lit/dist@v3.3.3/core/lit-core.min.js",
+      "files": {
+        "lit/LICENSE": "45d31799d0db956cc3eb5469346abbd9b7025babc5ff29fab10d7095da992ef1",
+        "lit/lit-core.min.js": "f607f470475d8ab790754cb70f72cdbe2390c4a57ab59df6cdb360eeb72bd87c",
+        "lit/lit-core.min.js.map": "098ac670cfb544fd32e7207235617085f0e2f09e3bb2871f41697ca192e7a570"
+      }
+    },
+    {
+      "name": "xstate",
+      "version": "5.32.6",
+      "licence": "MIT",
+      "source": "https://registry.npmjs.org/xstate/-/xstate-5.32.6.tgz",
+      "files": {
+        "xstate/LICENSE": "542d926d7bbb099785e322d1d5574c539d51942e52ec8adce2be4629ba81fc7f",
+        "xstate/StateMachine-28a9f50e.esm.js": "feaa2d3bad3dbeb12bf50b1afb6cdf14adfc824797bb7b6c51528f6fe0b04d7c",
+        "xstate/assign-54f9e2d3.esm.js": "afbefb432a5d325d3bcc70450b280b8749e646719bc8e8be8a50a57985f95af4",
+        "xstate/log-66075555.esm.js": "7cde7830337f914b98f7c3609668729b66b6ac98f40472ce6d87e7b183d91051",
+        "xstate/raise-8dd8aaec.esm.js": "c87262e487559b2c5618be9e9fbf7f1b4403849ad36a30fedebe0d30f47e4554",
+        "xstate/xstate-actors.esm.js": "776426609787f05bbba5d3a7607094d3726232ef8b627c59e26d369fd3253f3e",
+        "xstate/xstate-dev.esm.js": "2faf423da88e07f488c5c8eb84c34f6889f817c3c12747e37140a850ed7374bd",
+        "xstate/xstate.esm.js": "0d5d96e86f5fb280c6aa91594a5c62bedef719ed0c0ff0b1bc63a7254899d82f"
+      }
+    },
+    {
+      "name": "inter",
+      "version": "4.1",
+      "licence": "OFL-1.1",
+      "source": "https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip",
+      "files": {
+        "inter/InterVariable.woff2": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3",
+        "inter/LICENSE.txt": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Agent harnesses append attribution trailers; this project's commits carry none (CLAUDE.md).
+# Wired by `git config core.hooksPath .githooks`, which is local config: re-run it in a fresh clone.
+python3 - "$1" <<'PY'
+import re, sys
+path = sys.argv[1]
+trailer = re.compile(r"^(Co-Authored-By:|Claude-Session:|Generated with|.*claude\.ai/code/session)", re.I)
+lines = [line for line in open(path).read().splitlines() if not trailer.match(line)]
+while lines and not lines[-1].strip():
+    lines.pop()
+open(path, "w").write("\n".join(lines) + "\n")
+PY

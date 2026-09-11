@@ -42,11 +42,11 @@
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
 
   /* App scale */
-  --text-caption: 0.8125rem;   /* 13px — timestamps, metadata */
-  --text-sm: 0.875rem;         /* 14px — secondary UI text, labels */
-  --text-body: 1rem;           /* 16px — default app text, chat messages */
-  --text-subtitle: 1.25rem;    /* 20px — section headings, card titles */
   --text-heading: 1.5rem;      /* 24px — page titles */
+  --text-subtitle: 1.25rem;    /* 20px — section headings, card titles */
+  --text-body: 1rem;           /* 16px — default app text, chat messages */
+  --text-sm: 0.875rem;         /* 14px — secondary UI text, labels */
+  --text-caption: 0.8125rem;   /* 13px — timestamps, metadata */
 
   /* Line height */
   --leading-tight: 1.2;    /* headings, titles */
@@ -82,13 +82,14 @@
 
   --duration-fast: 100ms;
   --duration-slide: 300ms;
-  --duration-undo: 5s;    /* the window a deleted note can be brought back */
+  --duration-undo: 3s;    /* the window a deleted note can be brought back */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
   /* === APP SHELL === */
 
   --border-width: 1px;
-  --focus-ring: 0 0 0 3px var(--color-accent-subtle);
+  /* A canvas gap, then solid accent: visible on any surface in both themes. */
+  --focus-ring: 0 0 0 1px var(--color-canvas), 0 0 0 2px var(--color-accent);
 }
 
 /* === DARK THEME === */

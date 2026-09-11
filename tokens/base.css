@@ -1,0 +1,26 @@
+/* The document layer (architecture.md 7.4): the font face, and inherited
+   properties on html and body. Nothing else crosses a shadow boundary. */
+
+@font-face {
+  font-family: "Inter";
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/static/vendor/inter/InterVariable.woff2") format("woff2");
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  font-weight: var(--weight-normal);
+  line-height: var(--leading-normal);
+  color: var(--color-body);
+  background: var(--color-canvas);
+  font-optical-sizing: auto;
+}

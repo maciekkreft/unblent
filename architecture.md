@@ -101,7 +101,7 @@ The one shared piece of infrastructure, built once. It carries events, commands,
 
 ### 3.4 The server
 
-Not special. It is the far end of the fact components that chose to have a server side. Each such component owns its own FastAPI router, its own SQLite database, and its own migrations. The server discovers routers by walking the components directory. There is no shared sync endpoint and no shared database.
+Not special. It is the far end of the fact components that chose to have a server side. Each such component owns its own FastAPI router, mounted at `/api/<component>`, its own SQLite database, and its own migrations. The server discovers routers by walking the components directory. There is no shared sync endpoint and no shared database.
 
 Authentication is one more fact component: `session`. Its server module runs the passkey (WebAuthn) ceremonies and sets an HttpOnly cookie; its browser actor never sees the cookie, it queries its own server module for "who am I" and emits `session.changed`. Nothing else in the system knows authentication exists.
 
@@ -276,6 +276,8 @@ session.changed       owner: session        { userId | null }
 
 Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. If a change cannot be additive, it is a new event with a new name.
 
+Because the vocabulary is shared, it is not grown casually: **adding an event, or changing an event schema, needs explicit permission from the user first**, even when the change is additive. The proposal names the event, its owner, its payload, and the component that needs it; nothing is written until it is approved. The same holds for the design tokens (section 7.4).
+
 ### 7.2 Command and query contracts
 
 Every command a component accepts, and every query a fact component answers, is named, with the shape of its payload and, for queries, the shape of the reply.
@@ -295,19 +297,21 @@ A component's manifest is not written by hand. It is read from the actor's defin
 
 - **consumes**, **accepts**, **answers**: derived from what the actor's machine handles.
 - **emits**: the one thing that cannot be discovered by inspection, so it is declared as metadata on the machine itself, next to the handlers. The bus refuses any emit not on that list, so the declaration cannot go stale without the code failing.
-- **kind**, **shape**, **status** (`planned` or `built`), **attributes** the tag understands, and **owns**: metadata on the same machine.
+- **kind**, **shape**, **status** (`planned` or `built`), **attributes** the tag understands, and **owns**: metadata on the same machine. **shape** (section 7.1's storage shapes) is metadata of fact components only; a view component omits it.
 
 From manifests alone the system computes, for every component, the components it interacts with: for each consumed event, who emits it; for each emitted event, who consumes it; for each query, who answers it.
 
 ### 7.4 Design tokens
 
-The visual vocabulary: a small set of CSS custom properties for colour, spacing, type, radius, motion. Views use tokens and nothing else. Tokens are the second shared vocabulary and follow the same rule as events: additive only.
+The visual vocabulary: a small set of CSS custom properties for colour, spacing, type, radius, motion. Views use tokens and nothing else: every colour, every length that places or sizes a box, every type value is a token or a `calc()` of tokens. Tokens are the second shared vocabulary and are kept minimal: a token exists because a view uses it, and a token nothing uses is removed. Every change to `tokens.css` needs explicit permission from the user first.
+
+The document layer is two files: `tokens.css`, the custom properties, and `base.css`, the `@font-face` declaration plus the inherited properties set on `html` and `body`. There are no shared utility classes, because shadow DOM stops a class selector at the component boundary; only inherited properties and custom properties cross it, which is why tokens can theme a view and a `.btn` class could not.
 
 ---
 
 ## 8. Pages
 
-A page is an HTML file: an import map plus component tags with attributes. Nothing else. Five kinds, in increasing order of composition:
+A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` with `src` under `/static/components/` and no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). Five kinds, in increasing order of composition:
 
 1. **Tokens page.** Shows the design tokens, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
@@ -346,6 +350,12 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Server | FastAPI | MIT | One router per fact component, discovered by walking the components directory; `--reload` | A shared data layer |
 | Store (server) | SQLite | public domain | One file per user per fact component | A shared schema |
 | Backup | Litestream | Apache-2 | Continuous replication of every file | — |
+| Schema (browser) | @cfworker/json-schema | MIT | Validating payloads in the browser against draft 2020-12, the validator constructed with the draft given explicitly, behind our `validate()` wrapper | A draft chosen implicitly |
+| Schema (server) | Python `jsonschema` | MIT | Validating payloads server-side, and the schema compatibility check (section 11.2) when it arrives | — |
+| Font | Inter | OFL-1.1 | One self-hosted variable file, all weights | Italic, until a view needs it |
+| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does | A test framework |
+
+Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve.
 
 Two pieces are wrapped behind our own small interfaces, because their surface is small and swapping is plausible: the **store** (Dexie now, could be SQLite in the browser) and the **bus** (`EventTarget` now, could be a worker). XState and Lit are not wrapped: they are the actor and view semantics, and a wrapper would be a thinner XState.
 
@@ -359,6 +369,8 @@ Deliberately not used: a global state store, a micro-frontend framework, a messa
 
 The system is maintained by coding agents, so the rules are not advice. Every violation fails immediately, and one `check` command is the definition of done.
 
+The check has two phases with a time budget each: the fast phase (every static rule, about a second) runs after every edit, and the full run (fast phase plus browser tests, thirty seconds) runs before a task ends. Exceeding a budget is itself a failure, naming the slowest rules, so the fast phase stays fast enough to run constantly.
+
 ### 11.1 Directory per component, front and back
 
 ```
@@ -368,7 +380,7 @@ components/
     store.js          IndexedDB cache + outbox, behind the store interface
     events/           JSON Schema per event this component owns
     server/
-      router.py       FastAPI router for /notes
+      router.py       FastAPI router for /api/notes
       schema.sql      per-user SQLite schema and migrations
     tests/
   note-editor/
@@ -380,13 +392,41 @@ components/
     store.js          localStorage, behind the store interface
 ```
 
+The components tree sits inside a small repository-wide layout:
+
+```
+server/          FastAPI entry (named "server", not "app", so it never clashes with pages/apps/)
+  tests/         HTTP tests for the entry; infrastructure like the bus, not a component. Never served
+components/      one directory per component, as above
+vendor/          vendored libraries and vendor.json (the manifest and the import map)
+tokens/          tokens.css and base.css, the document layer (section 7.4)
+pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
+checks/          check.py, the one check command
+bus/             the bus (built once)
+store/           the store interface
+deploy/          systemd unit and anything else the host needs; never served
+data/            per-user SQLite files (section 5), gitignored
+.env             machine-specific settings and secrets, gitignored
+```
+
+Static serving is namespaced so the future app can own `/`:
+
+| URL | Serves |
+|---|---|
+| `/static/vendor/…`, `/static/components/…`, `/static/tokens/…` | those directories, `Cache-Control: no-cache` |
+| `/design/<name>` | `pages/design/<name>.html`, 404 if missing |
+| `/api/<component>/…` | that component's router (discovered by the walk) |
+| `/` | the app; for now a redirect to `/design/tokens` |
+
+A component's `server/` (its Python server module) and `tests/` are never served: the static mount for `components/` 404s any path that dips into them, so source and tests never reach the browser.
+
 Deleting a component is deleting one directory and its databases. Nothing else needs to change, and if it does, the checks say which contract was broken.
 
 ### 11.2 The checks
 
 | Rule | Enforced by |
 |---|---|
-| Components never touch each other | Import check, JavaScript and Python: a component may import only its own directory, `/vendor`, `/bus`, `/store` |
+| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, or `store` |
 | Everything goes through the bus | Same check; there is no other importable channel |
 | Events match their contract | The bus validates every emitted event against the schema registry at runtime and throws on unknown names or invalid payloads |
 | Only declared events are emitted | The bus refuses an emit whose name is not in the emitter's declared list |
@@ -394,8 +434,15 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Contracts only grow | Schema compatibility check against the previous commit: fails on removed, renamed, or new required fields; prints the affected components from the manifests |
 | One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
 | Pages contain no logic | Page check: only an import map and tags |
-| Tokens only | Style check: views use no colour, spacing, or type value that is not a token |
+| Tokens only | Style check: views use no colour, spacing, size, or type value that is not a token, in both `css` templates and the inline `style` attributes of `html` templates. Size means any property that places or sizes a box: width, height, inset, grid tracks, border width. Percentages, `fr`, and unitless factors in `calc()` are relative and allowed |
+| Vendored code is what it claims | Vendor check: every file under `vendor/` is listed in `vendor.json` with a matching sha256, every listed file exists, and every `sourceMappingURL` resolves |
+| Nothing fails in the browser | Browser tests fail on any console error, page error, failed request, or 4xx/5xx response while a page loads |
 | Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
+| Manifests are well-formed | Manifest check: every machine imports in Node, its id equals its directory name, `kind`, `status` and `emits` are present and valid, `shape` is present on fact components only |
+| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `store.js`, `events/`, `server/`, `tests/`; a view has no store or server, a fact has no view; `view.js` defines the element named after its directory; a built component has tests |
+| Pages compose only what exists | Page check: every custom element on a page is a built component whose `view.js` the page loads, and every loaded `view.js` is used |
+| The layout is what the document says | Layout check: every top-level directory appears in the listing in 11.1 |
+| The check stays fast | Time budget: the fast phase within one second, the full run within thirty; exceeding either fails and names the slowest rules |
 
 The architecture document describes the rules; the checks are what make them real.
 
@@ -406,7 +453,7 @@ The architecture document describes the rules; the checks are what make them rea
 - **No query between views.** If two views seem to need to talk, either one should emit an event the other listens to, or they are one view.
 - **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. Example: `note-reader` reacts to `note.selected` by querying `notes: read(id)` while the editor's debounced `note.saved` for the same note is still in flight; the reader gets the old body. Protection is the fourth rule of section 4: it also listens to `note.changed` and adopts the newer version.
 - **Remote-only facts fail offline.** That is by design: `llm` answers with an error and emits `llm.unavailable`; a view decides what to show.
-- **Two shared vocabularies.** The event registry and the design tokens are global schemas in disguise. Both are kept small, both are additive-only, both are reviewed on a page before use.
+- **Two shared vocabularies.** The event registry and the design tokens are global schemas in disguise. Both are kept small: events are additive-only, tokens are minimal. Both change only with permission, and both are reviewed on a page before use.
 - **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.
 
 ---
