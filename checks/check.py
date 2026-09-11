@@ -249,6 +249,11 @@ def check_python_imports() -> None:
 
 # --- Page check (architecture.md 8) ----------------------------------------------
 
+# The five page kinds of section 8; duplicated in the pages router, which the
+# check cannot import, so the two lists cannot share a definition.
+PAGE_KINDS = ("tokens", "contracts", "components", "stem", "app")
+
+
 class PageChecker(HTMLParser):
     def __init__(self, path: str):
         super().__init__()
@@ -256,6 +261,7 @@ class PageChecker(HTMLParser):
         self._script_type = None
         self._script_src = None
         self._script_data = ""
+        self.kinds = []
 
     def _fail(self, detail: str) -> None:
         fail(self.path, "page check (8)", detail)
@@ -269,6 +275,8 @@ class PageChecker(HTMLParser):
         if "-" in tag:
             return
         if tag in ("html", "head", "body", "meta", "title"):
+            if tag == "meta" and attrs.get("name") == "kind":
+                self.kinds.append(attrs.get("content"))
             return
         if tag == "link":
             if attrs.get("rel") != "stylesheet":
@@ -317,6 +325,10 @@ def check_pages() -> None:
     for path in sorted(glob.glob("pages/**/*.html", root_dir=ROOT, recursive=True)):
         checker = PageChecker(path)
         checker.feed((ROOT / path).read_text())
+        if len(checker.kinds) != 1 or checker.kinds[0] not in PAGE_KINDS:
+            fail(path, "page check (8)",
+                 f"a page needs exactly one meta[name=kind] naming one of "
+                 f"{PAGE_KINDS}, got {checker.kinds}")
 
 
 # --- Page composition check (architecture.md 8) ----------------------------------

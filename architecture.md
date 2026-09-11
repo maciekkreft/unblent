@@ -83,7 +83,7 @@ Where it stores the fact is its own business, and there are three shapes:
 |---|---|---|---|
 | **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings` |
 | **Replicated** | Browser cache + server, kept in sync (section 5) | Works; syncs later | `notes`, `conversations`, `session` |
-| **Remote-only** | The fact can only be produced by the server | Fails honestly, with an error reply and, where other views need to know, an `unavailable` event | `llm`, `catalog` |
+| **Remote-only** | The fact can only be produced by the server | Fails honestly, with an error reply and, where other views need to know, an `unavailable` event | `llm`, `catalog`, `pages` |
 
 A fact component that needs the server brings its own server module with it, in the same directory (section 11.1).
 
@@ -294,9 +294,8 @@ notes: read(id)          → { note } | { error: "not-found" }
 llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
 conversations: append(turn)
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
+pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }
 ```
-
-In `catalog`'s reply, `shape` and `owns` are set for fact components and `attributes` for views, `null` otherwise, and `interacts` is a list of `{ with, via, how }` where `how` is one of `emits`, `consumes`, `asks`, `answers`.
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
 
@@ -338,6 +337,8 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. It also shows traffic actually observed on the bus in this session. The components page is the stem page of `catalog`.
 4. **Stem pages.** One per fact component, with its related views wired together: `notes` with editor, list, and reader; `conversations` with chat. A stem page is the test bed for one fact component.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
+
+Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others. A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
 
 The contracts page and the components page show the same data in two arrangements. Neither is hand-written, so they cannot diverge.
 
@@ -456,7 +457,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Only fact components answer queries | The bus refuses to route a query to a view component |
 | Contracts only grow | Schema compatibility check against the previous commit: fails on removed, renamed, or new required fields; prints the affected components from the manifests |
 | One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
-| Pages contain no logic | Page check: only an import map and tags |
+| Pages contain no logic | Page check: only an import map and tags, and exactly one `meta[name=kind]` naming one of the five kinds of section 8 |
 | Tokens only | Style check: views use no colour, spacing, size, or type value that is not a token, in both `css` templates and the inline `style` attributes of `html` templates. Size means any property that places or sizes a box: width, height, inset, grid tracks, border width. Percentages, `fr`, and unitless factors in `calc()` are relative and allowed |
 | Vendored code is what it claims | Vendor check: every file under `vendor/` is listed in `vendor.json` with a matching sha256, every listed file exists, and every `sourceMappingURL` resolves |
 | Nothing fails in the browser | Browser tests fail on any console error, page error, failed request, or 4xx/5xx response while a page loads |

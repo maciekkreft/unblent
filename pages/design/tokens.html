@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Design tokens</title>
+    <meta name="kind" content="tokens" />
+    <title>Tokens</title>
     <link rel="stylesheet" href="/static/tokens/tokens.css" />
     <link rel="stylesheet" href="/static/tokens/base.css" />
     <script type="importmap">
@@ -17,9 +18,12 @@
       }
     </script>
     <script type="module" src="/static/components/color-scheme/fact.js"></script>
+    <script type="module" src="/static/components/pages/fact.js"></script>
+    <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/token-sheet/view.js"></script>
   </head>
   <body>
+    <page-nav></page-nav>
     <token-sheet></token-sheet>
   </body>
 </html>

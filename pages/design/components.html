@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="kind" content="components" />
     <title>Components</title>
     <link rel="stylesheet" href="/static/tokens/tokens.css" />
     <link rel="stylesheet" href="/static/tokens/base.css" />
@@ -18,9 +19,12 @@
     </script>
     <script type="module" src="/static/components/color-scheme/fact.js"></script>
     <script type="module" src="/static/components/catalog/fact.js"></script>
+    <script type="module" src="/static/components/pages/fact.js"></script>
+    <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/component-list/view.js"></script>
   </head>
   <body>
+    <page-nav></page-nav>
     <component-list></component-list>
   </body>
 </html>
