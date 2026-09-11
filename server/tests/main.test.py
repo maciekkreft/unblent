@@ -39,6 +39,7 @@ class ServerEntry(unittest.TestCase):
             "/static/tokens/tokens.css",
             "/static/components/token-sheet/machine.js",
             "/static/vendor/vendor.json",
+            "/static/bus/bus.js",
         ):
             res = _request(path)
             self.assertEqual(res.status, 200, path)
@@ -52,6 +53,8 @@ class ServerEntry(unittest.TestCase):
         self.assertEqual(
             _request("/static/components/token-sheet/server/router.py").status, 404
         )
+        # The bus is infrastructure, but its tests/ are hidden the same way.
+        self.assertEqual(_request("/static/bus/tests/bus.test.mjs").status, 404)
 
     def test_design_name_cannot_escape_pages_dir(self):
         # Whether routing or the page.parent guard enforces it, the outcome is 404.

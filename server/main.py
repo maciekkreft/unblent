@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 VENDOR = ROOT / "vendor"
 COMPONENTS = ROOT / "components"
 TOKENS = ROOT / "tokens"
+BUS = ROOT / "bus"
 PAGES_DESIGN = ROOT / "pages" / "design"
 
 # Section 11.1: source and tests never reach the browser.
@@ -42,6 +43,8 @@ app = FastAPI()
 app.mount("/static/vendor", RevalidatingStaticFiles(directory=VENDOR), name="vendor")
 app.mount("/static/components", ComponentStaticFiles(directory=COMPONENTS), name="components")
 app.mount("/static/tokens", RevalidatingStaticFiles(directory=TOKENS), name="tokens")
+# ComponentStaticFiles so the bus's tests/ 404, the same as a component's (11.1).
+app.mount("/static/bus", ComponentStaticFiles(directory=BUS), name="bus")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])

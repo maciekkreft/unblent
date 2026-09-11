@@ -95,7 +95,6 @@ def check_layout() -> None:
 
 _KINDS = {"fact", "view"}
 _SHAPES = {"local-only", "replicated", "remote-only"}
-_STATUSES = {"planned", "built"}
 
 
 def read_manifests() -> dict:
@@ -124,20 +123,31 @@ def check_manifests(manifests: dict) -> None:
             fail(path, "manifest check (7.3)", f"machine id {manifest['id']!r} must equal the directory name {name!r}")
         if meta.get("kind") not in _KINDS:
             fail(path, "manifest check (7.3)", f"meta.kind must be one of {sorted(_KINDS)}")
-        if meta.get("status") not in _STATUSES:
-            fail(path, "manifest check (7.3)", f"meta.status must be one of {sorted(_STATUSES)}")
+        if "status" in meta:
+            fail(path, "manifest check (7.3)",
+                 "status is derived from the browser entry (7.3); remove meta.status")
         if not isinstance(meta.get("emits"), list):
             fail(path, "manifest check (7.3)", "meta.emits must be a list, empty if it emits nothing")
-        if meta["kind"] == "fact" and meta.get("shape") not in _SHAPES:
-            fail(path, "manifest check (7.3)", f"a fact component's meta.shape must be one of {sorted(_SHAPES)}")
-        if meta["kind"] == "view" and "shape" in meta:
-            fail(path, "manifest check (7.3)", "a view component has no shape")
+        if meta["kind"] == "fact":
+            if meta.get("shape") not in _SHAPES:
+                fail(path, "manifest check (7.3)", f"a fact component's meta.shape must be one of {sorted(_SHAPES)}")
+            if not (isinstance(meta.get("owns"), str) and meta["owns"].strip()):
+                fail(path, "manifest check (7.3)", "a fact component's meta.owns must be a non-empty string naming the fact")
+            if "attributes" in meta:
+                fail(path, "manifest check (7.3)", "a fact component has no attributes")
+        else:
+            if "shape" in meta:
+                fail(path, "manifest check (7.3)", "a view component has no shape")
+            if "owns" in meta:
+                fail(path, "manifest check (7.3)", "a view component owns no fact")
+            if not isinstance(meta.get("attributes"), list):
+                fail(path, "manifest check (7.3)", "a view component's meta.attributes must be a list, empty if none")
 
 
 # --- Component check (architecture.md 11.1) --------------------------------------
 
-_ALLOWED_ENTRIES = {"machine.js", "view.js", "store.js", "events", "server", "tests"}
-_KIND_FORBIDS = {"view": {"store.js", "server", "events"}, "fact": {"view.js"}}
+_ALLOWED_ENTRIES = {"machine.js", "view.js", "fact.js", "store.js", "events", "server", "tests"}
+_KIND_FORBIDS = {"view": {"store.js", "server", "events", "fact.js"}, "fact": {"view.js"}}
 
 
 def check_component_dirs(manifests: dict) -> None:
@@ -158,7 +168,8 @@ def check_component_dirs(manifests: dict) -> None:
             if f'customElements.define("{comp.name}"' not in src:
                 fail(f"{rel}/view.js", "component check (11.1)",
                      f'must define the custom element "{comp.name}", the directory name')
-        if meta["status"] == "built" and not list(comp.glob("tests/*.test.mjs")):
+        # A component is built when its browser entry exists (7.3), and a built one has tests.
+        if (entries & {"view.js", "fact.js"}) and not list(comp.glob("tests/*.test.mjs")):
             fail(f"{rel}/tests", "component check (11.1)", "a built component has tests")
 
 
@@ -274,17 +285,77 @@ def check_pages() -> None:
 # --- Page composition check (architecture.md 8) ----------------------------------
 
 def check_page_components(manifests: dict) -> None:
-    built = {Path(p).parent.name for p, m in manifests.items() if m["meta"].get("status") == "built"}
+    kinds = {Path(p).parent.name: m["meta"].get("kind") for p, m in manifests.items()}
+    # A component is built when its directory holds a browser entry (7.3).
+    entries = {
+        Path(p).parent.name: {
+            e for e in ("view.js", "fact.js") if (ROOT / Path(p).parent / e).is_file()
+        }
+        for p in manifests
+    }
     for path in sorted(glob.glob("pages/**/*.html", root_dir=ROOT, recursive=True)):
         html = (ROOT / path).read_text()
-        scripts = set(re.findall(r'src="/static/components/([\w-]+)/view\.js"', html))
+        view_scripts = set(re.findall(r'src="/static/components/([\w-]+)/view\.js"', html))
+        fact_scripts = set(re.findall(r'src="/static/components/([\w-]+)/fact\.js"', html))
         tags = set(re.findall(r"<([a-z][\w]*-[\w-]*)[\s>]", html))
-        for tag in sorted(tags - built):
-            fail(path, "page check (8)", f"<{tag}> is not a built component")
-        for tag in sorted(tags - scripts):
-            fail(path, "page check (8)", f"<{tag}> is used but its view.js is not loaded")
-        for comp in sorted(scripts - tags):
+        for tag in sorted(tags):
+            if kinds.get(tag) != "view" or "view.js" not in entries.get(tag, set()):
+                fail(path, "page check (8)", f"<{tag}> is not a built view")
+            if tag not in view_scripts:
+                fail(path, "page check (8)", f"<{tag}> is used but its view.js is not loaded")
+        for comp in sorted(view_scripts - tags):
             fail(path, "page check (8)", f"{comp}/view.js is loaded but <{comp}> is not on the page")
+        for comp in sorted(fact_scripts):
+            if kinds.get(comp) != "fact":
+                fail(path, "page check (8)", f"{comp}/fact.js is loaded but {comp} is not a fact component")
+
+
+# --- Document check (architecture.md 7.5) ----------------------------------------
+
+# A write to the document's root element; a bare read such as
+# getComputedStyle(document.documentElement) has no write property after it.
+_DOC_ELEMENT_WRITE = re.compile(
+    r"document\.documentElement\s*\.\s*(dataset|setAttribute|removeAttribute|classList|style|className)"
+)
+_DOC_OTHER = re.compile(r"document\.(body|head|title)\b")
+
+
+def _document_facts() -> dict:
+    """The 7.5 table: component name → the attribute suffix it may write."""
+    doc = (ROOT / "architecture.md").read_text()
+    block = doc[doc.index("### 7.5"):]
+    block = block[: block.index("\n---")]
+    return {
+        m.group(1): m.group(2)
+        for m in re.finditer(r"^\|\s*`([\w-]+)`\s*\|\s*`data-([\w-]+)`\s*\|", block, re.M)
+    }
+
+
+def _camel(name: str) -> str:
+    return re.sub(r"-(\w)", lambda m: m.group(1).upper(), name)
+
+
+def check_document_writes() -> None:
+    facts = _document_facts()
+    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
+        src = _strip_comments((ROOT / path).read_text())
+        for m in _DOC_OTHER.finditer(src):
+            fail(path, "document check (7.5)",
+                 f"writes to document.{m.group(1)}; only a document fact touches the document (7.5)")
+        _, name, file = Path(path).parts
+        allowed = []
+        if file == "fact.js" and name in facts:
+            attr = facts[name]
+            allowed = [
+                re.compile(rf"document\.documentElement\.dataset\.{_camel(attr)}\b"),
+                re.compile(rf'document\.documentElement\.setAttribute\(\s*["\']data-{re.escape(attr)}["\']'),
+            ]
+        for m in _DOC_ELEMENT_WRITE.finditer(src):
+            if any(a.match(src, m.start()) for a in allowed):
+                continue
+            fail(path, "document check (7.5)",
+                 f"writes to document.documentElement.{m.group(1)}; "
+                 "only a listed document fact writes its own data- attribute (7.5)")
 
 
 # --- Style check (architecture.md 11.2) ------------------------------------------
@@ -385,6 +456,16 @@ def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
 
 
 def run_tests() -> None:
+    # The bus is infrastructure, pure Node: its tests need neither the venv nor
+    # the server, so they run first and on their own.
+    bus_tests = sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT))
+    if bus_tests:
+        result = subprocess.run(
+            ["node", "--import", "./checks/register.mjs", "--test", *bus_tests], cwd=ROOT,
+        )
+        if result.returncode != 0:
+            fail("bus/tests", "bus tests", "node --test reported failures")
+
     uvicorn = ROOT / ".venv" / "bin" / "uvicorn"
     if not uvicorn.exists():
         fail("checks/check.py", "tests",
@@ -464,6 +545,7 @@ def main() -> None:
     _timed(timings, "imports", check_imports)
     _timed(timings, "pages", check_pages)
     _timed(timings, "page components", check_page_components, manifests)
+    _timed(timings, "document", check_document_writes)
     _timed(timings, "styles", check_styles)
     _enforce_budget(timings, STATIC_BUDGET_S, "the fast phase")
     if static_only:

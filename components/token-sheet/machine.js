@@ -35,6 +35,6 @@ export function groupByPrefix(tokens) {
 // shape is metadata of fact components only.
 export const machine = createMachine({
   id: "token-sheet",
-  meta: { kind: "view", status: "built", emits: [], attributes: [], owns: null },
+  meta: { kind: "view", emits: [], attributes: [] },
   context: ({ input }) => ({ groups: groupByPrefix(input.tokens) }),
 });

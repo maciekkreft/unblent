@@ -93,6 +93,8 @@ A fact component that needs the server brings its own server module with it, in 
 
 Every component, of either kind, has an **actor**: its brain, a mailbox processed one message at a time, where all decisions are made. View components add a **view**, the visible part, which renders the actor's state and forwards user gestures to the actor as commands. Fact components add a **store**, their private persistence, and possibly a **server module**.
 
+Every component also has a **browser entry**, the one file a page loads: `view.js` for a view, `fact.js` for a fact. `fact.js` creates the actor with its inputs and mounts it on the bus; `machine.js` itself starts nothing, so it can be imported anywhere.
+
 A component's **manifest** (section 7.3) is not a separate file: it is read from the actor's definition.
 
 ### 3.3 The bus
@@ -297,7 +299,8 @@ A component's manifest is not written by hand. It is read from the actor's defin
 
 - **consumes**, **accepts**, **answers**: derived from what the actor's machine handles.
 - **emits**: the one thing that cannot be discovered by inspection, so it is declared as metadata on the machine itself, next to the handlers. The bus refuses any emit not on that list, so the declaration cannot go stale without the code failing.
-- **kind**, **shape**, **status** (`planned` or `built`), **attributes** the tag understands, and **owns**: metadata on the same machine. **shape** (section 7.1's storage shapes) is metadata of fact components only; a view component omits it.
+- **kind**, **shape**, **attributes**, and **owns**: metadata on the same machine. **shape** (section 3.1's storage shapes) and **owns**, a short lowercase noun phrase naming the fact, belong to fact components only; **attributes**, the ones the tag understands, to view components only.
+- **status** is not declared. A component is *built* when its browser entry exists (`view.js` or `fact.js`), *planned* when it has only `machine.js` and `events/`.
 
 From manifests alone the system computes, for every component, the components it interacts with: for each consumed event, who emits it; for each emitted event, who consumes it; for each query, who answers it.
 
@@ -307,11 +310,19 @@ The visual vocabulary: a small set of CSS custom properties for colour, spacing,
 
 The document layer is two files: `tokens.css`, the custom properties, and `base.css`, the `@font-face` declaration plus the inherited properties set on `html` and `body`. There are no shared utility classes, because shadow DOM stops a class selector at the component boundary; only inherited properties and custom properties cross it, which is why tokens can theme a view and a `.btn` class could not.
 
+### 7.5 Document facts
+
+A few facts are properties of the document itself rather than of any view: which colour scheme the page is in, and later perhaps its language or direction. A fact component that owns such a fact writes it as exactly one attribute on `html`, `data-<its name>`, and touches nothing else in the DOM. Views only ever read the document. The list is closed: adding a row, or changing what a row writes, needs explicit permission from the user first, the same as an event or a token.
+
+| Component | Writes |
+|---|---|
+| `color-scheme` | `data-color-scheme` |
+
 ---
 
 ## 8. Pages
 
-A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` with `src` under `/static/components/` and no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). Five kinds, in increasing order of composition:
+A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` whose `src` is a built component's browser entry, `view.js` or `fact.js`, under `/static/components/`, with no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). Five kinds, in increasing order of composition:
 
 1. **Tokens page.** Shows the design tokens, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
@@ -330,7 +341,7 @@ Because changing a contract is the expensive operation, contracts are decided be
 1. Create the component's directory with a machine that declares only metadata, `status: planned`, and any new event or query schemas.
 2. It appears on the components page and the contracts page. Review it there against its neighbours: does it consume events nobody emits, ask queries nobody answers, duplicate a fact someone already owns, or need a change to an existing contract?
 3. Only when the contracts settle, write the actor, then the store or view, then the server module if any, then tests.
-4. Add it to its stem page and set `status: built`.
+4. Add its browser entry and put it on a page: the entry is what makes it built.
 
 Coding agents follow the same four steps. Step 2 is the human's, and the components page is where it happens.
 
@@ -353,7 +364,7 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Schema (browser) | @cfworker/json-schema | MIT | Validating payloads in the browser against draft 2020-12, the validator constructed with the draft given explicitly, behind our `validate()` wrapper | A draft chosen implicitly |
 | Schema (server) | Python `jsonschema` | MIT | Validating payloads server-side, and the schema compatibility check (section 11.2) when it arrives | — |
 | Font | Inter | OFL-1.1 | One self-hosted variable file, all weights | Italic, until a view needs it |
-| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does | A test framework |
+| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does | A test framework |
 
 Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve.
 
@@ -378,6 +389,7 @@ components/
   notes/
     machine.js        actor definition; manifest is read from here
     store.js          IndexedDB cache + outbox, behind the store interface
+    fact.js           browser entry: creates the actor with its inputs and mounts it on the bus
     events/           JSON Schema per event this component owns
     server/
       router.py       FastAPI router for /api/notes
@@ -390,6 +402,7 @@ components/
   settings/
     machine.js
     store.js          localStorage, behind the store interface
+    fact.js
 ```
 
 The components tree sits inside a small repository-wide layout:
@@ -414,6 +427,7 @@ Static serving is namespaced so the future app can own `/`:
 | URL | Serves |
 |---|---|
 | `/static/vendor/…`, `/static/components/…`, `/static/tokens/…` | those directories, `Cache-Control: no-cache` |
+| `/static/bus/…` | the bus, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/design/<name>` | `pages/design/<name>.html`, 404 if missing |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
 | `/` | the app; for now a redirect to `/design/tokens` |
@@ -438,9 +452,10 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Vendored code is what it claims | Vendor check: every file under `vendor/` is listed in `vendor.json` with a matching sha256, every listed file exists, and every `sourceMappingURL` resolves |
 | Nothing fails in the browser | Browser tests fail on any console error, page error, failed request, or 4xx/5xx response while a page loads |
 | Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
-| Manifests are well-formed | Manifest check: every machine imports in Node, its id equals its directory name, `kind`, `status` and `emits` are present and valid, `shape` is present on fact components only |
-| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `store.js`, `events/`, `server/`, `tests/`; a view has no store or server, a fact has no view; `view.js` defines the element named after its directory; a built component has tests |
-| Pages compose only what exists | Page check: every custom element on a page is a built component whose `view.js` the page loads, and every loaded `view.js` is used |
+| Manifests are well-formed | Manifest check: every machine imports in Node, its id equals its directory name, `kind` and `emits` are present and valid, `shape` and `owns` are present on fact components only, `attributes` on view components only, and `status` is absent because it is derived |
+| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `fact.js`, `store.js`, `events/`, `server/`, `tests/`; a view has no `fact.js`, store or server, a fact has no `view.js`; `view.js` defines the element named after its directory; a component with a browser entry has tests |
+| Pages compose only what exists | Page check: every custom element on a page is a built view whose `view.js` the page loads, every loaded `view.js` is used, and every loaded `fact.js` belongs to a fact component |
+| Only document facts write to the document | Document check: no file under `components/` writes to `document` (its root element, `body`, `head`, or `title`) except the `fact.js` of a component listed in section 7.5, and that one writes only its own `data-<name>` attribute |
 | The layout is what the document says | Layout check: every top-level directory appears in the listing in 11.1 |
 | The check stays fast | Time budget: the fast phase within one second, the full run within thirty; exceeding either fails and names the slowest rules |
 
