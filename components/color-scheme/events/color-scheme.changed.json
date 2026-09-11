@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The page's light or dark colour scheme.",
+  "type": "object",
+  "properties": {
+    "scheme": { "enum": ["light", "dark"] }
+  },
+  "required": ["scheme"],
+  "additionalProperties": false
+}

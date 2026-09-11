@@ -4,8 +4,8 @@ import { createActor } from "xstate";
 import { machine } from "../machine.js";
 
 // The actor is where decisions live (architecture.md 3.2), so it is tested
-// directly: create it, start it, read the snapshot. token-sheet has no events
-// yet, so there is nothing to send; a later actor extends this with actor.send().
+// directly: create it, start it, read the snapshot. It re-reads its tokens
+// through the injected `collect` on every color-scheme.changed.
 
 // Ordered so render order differs from input order: proves grouping follows the
 // component's KNOWN_GROUPS, not the order tokens arrive in.
@@ -17,7 +17,7 @@ const tokens = [
 ];
 
 function groups() {
-  const actor = createActor(machine, { input: { tokens } }).start();
+  const actor = createActor(machine, { input: { collect: () => tokens } }).start();
   return actor.getSnapshot().context.groups;
 }
 
@@ -41,5 +41,18 @@ test("tokens of one family are collected together", () => {
   assert.deepEqual(
     color.tokens.map((t) => t.name),
     ["--color-bg", "--color-fg"],
+  );
+});
+
+test("color-scheme.changed re-reads tokens through collect", () => {
+  const first = [{ name: "--color-bg" }];
+  const second = [{ name: "--space-1" }, { name: "--radius-md" }];
+  let call = 0;
+  const collect = () => (call++ === 0 ? first : second);
+  const actor = createActor(machine, { input: { collect } }).start();
+  actor.send({ type: "color-scheme.changed", scheme: "dark" });
+  assert.deepEqual(
+    actor.getSnapshot().context.groups.map((g) => g.name),
+    ["space", "radius"],
   );
 });

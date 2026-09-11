@@ -1,4 +1,4 @@
-import { createMachine } from "xstate";
+import { createMachine, assign } from "xstate";
 
 // Order is render order.
 const KNOWN_GROUPS = [
@@ -36,5 +36,12 @@ export function groupByPrefix(tokens) {
 export const machine = createMachine({
   id: "token-sheet",
   meta: { kind: "view", emits: [], attributes: [] },
-  context: ({ input }) => ({ groups: groupByPrefix(input.tokens) }),
+  context: ({ input }) => ({ collect: input.collect, groups: groupByPrefix(input.collect()) }),
+  on: {
+    // Section 4.3, fourth rule: the starting picture comes from the stylesheet;
+    // after that, re-read it whenever the scheme changes so values follow.
+    "color-scheme.changed": {
+      actions: assign({ groups: ({ context }) => groupByPrefix(context.collect()) }),
+    },
+  },
 });

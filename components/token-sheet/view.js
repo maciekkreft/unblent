@@ -1,9 +1,10 @@
 import { LitElement, html, css } from "lit";
-import { createActor } from "xstate";
+import { mount, unmount } from "bus";
 import { machine } from "./machine.js";
 
-// Called from `hostConnected`, after render-blocking stylesheets have loaded,
-// so `cssRules` is readable. DOM access is the view's job, grouping the actor's.
+// Read from the stylesheet after render-blocking sheets have loaded, so `cssRules`
+// is readable. The actor also calls this on every color-scheme.changed, so the
+// printed values follow the scheme. DOM access is the view's job, grouping the actor's.
 function collectTokens() {
   const names = new Set();
   for (const sheet of document.styleSheets) {
@@ -35,14 +36,13 @@ class ActorController {
   }
 
   hostConnected() {
-    this.actor = createActor(machine, { input: { tokens: collectTokens() } });
+    this.actor = mount(machine, { input: { collect: collectTokens } });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
-    this.actor.start();
   }
 
   hostDisconnected() {
     this.subscription?.unsubscribe();
-    this.actor?.stop();
+    unmount(this.actor);
   }
 
   get groups() {

@@ -94,7 +94,7 @@
 
 /* === DARK THEME === */
 
-:root[data-theme="dark"] {
+:root[data-color-scheme="dark"] {
   /* Accent — hover/active go lighter so a press still reads on dark */
   --color-accent-hover: #fca75f;
   --color-accent-active: #fdbc82;
