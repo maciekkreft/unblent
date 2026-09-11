@@ -29,11 +29,27 @@ class ActorController {
 // Render order of the contract lists on a card.
 const LISTS = ["emits", "consumes", "accepts", "answers", "asks"];
 
+// The two kinds of component (3.1), in the order the page groups them.
+const SECTIONS = [
+  { kind: "fact", title: "Facts" },
+  { kind: "view", title: "Views" },
+];
+
 class ComponentList extends LitElement {
   static styles = css`
     :host {
       display: block;
       padding: var(--space-xl) var(--space-md);
+    }
+    section + section {
+      margin-top: var(--space-xl);
+    }
+    h2 {
+      margin: 0 0 var(--space-md);
+      font-size: var(--text-heading);
+      line-height: var(--leading-tight);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
     }
     .grid {
       display: grid;
@@ -49,7 +65,7 @@ class ComponentList extends LitElement {
       background: var(--color-canvas-soft);
       min-width: 0;
     }
-    h2 {
+    h3 {
       margin: 0;
       font-size: var(--text-subtitle);
       line-height: var(--leading-tight);
@@ -95,7 +111,7 @@ class ComponentList extends LitElement {
       color: var(--color-body);
       word-break: break-word;
     }
-    h3 {
+    h4 {
       margin: 0;
       font-size: var(--text-caption);
       line-height: var(--leading-tight);
@@ -129,12 +145,22 @@ class ComponentList extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">catalog unavailable</p>`;
-    return html`<div class="grid">${snapshot.context.components.map(this.#card)}</div>`;
+    return SECTIONS.map(({ kind, title }) => this.#section(title, snapshot.context.components.filter((c) => c.kind === kind)));
+  }
+
+  #section(title, components) {
+    if (!components.length) return nothing;
+    return html`
+      <section>
+        <h2>${title}</h2>
+        <div class="grid">${components.map(this.#card)}</div>
+      </section>
+    `;
   }
 
   #card = (c) => html`
     <article class="card">
-      <h2>${c.name}</h2>
+      <h3>${c.name}</h3>
       <div class="badges">
         ${c.status === "planned" ? html`<span class="badge planned">planned</span>` : nothing}
         <span class="badge">${c.kind}</span>
@@ -144,7 +170,7 @@ class ComponentList extends LitElement {
       ${this.#lists(c)}
       ${c.interacts.length
         ? html`
-            <h3>interacts with</h3>
+            <h4>interacts with</h4>
             <ul>
               ${c.interacts.map(
                 (i) => html`<li><span class="with">${i.with}</span> · ${i.how} ${i.via}</li>`,

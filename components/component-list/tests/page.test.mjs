@@ -27,7 +27,7 @@ const cardText = (page, name) =>
   page.evaluate((name) => {
     const root = document.querySelector("component-list").shadowRoot;
     for (const card of root.querySelectorAll(".card")) {
-      if (card.querySelector("h2")?.textContent === name) return card.innerText.replace(/\s+/g, " ");
+      if (card.querySelector("h3")?.textContent === name) return card.innerText.replace(/\s+/g, " ");
     }
     return null;
   }, name);
@@ -60,12 +60,19 @@ for (const engine of ENGINES) {
         (n) => document.querySelector("component-list")?.shadowRoot?.querySelectorAll(".card").length === n,
         COMPONENT_DIRS.length,
       );
-      const names = await page.evaluate(() =>
-        [...document.querySelector("component-list").shadowRoot.querySelectorAll("h2")].map(
-          (h) => h.textContent,
-        ),
+      // Cards are grouped into Facts then Views (section 3.1), each group by name.
+      const sections = await page.evaluate(() =>
+        [...document.querySelector("component-list").shadowRoot.querySelectorAll("section")].map((s) => ({
+          title: s.querySelector("h2").textContent,
+          names: [...s.querySelectorAll("h3")].map((h) => h.textContent),
+        })),
       );
-      assert.deepEqual(names, COMPONENT_DIRS);
+      assert.deepEqual(
+        sections.map((s) => s.title),
+        ["Facts", "Views"],
+      );
+      for (const s of sections) assert.deepEqual(s.names, [...s.names].sort());
+      assert.deepEqual(sections.flatMap((s) => s.names).sort(), COMPONENT_DIRS);
 
       const catalog = await cardText(page, "catalog");
       assert.doesNotMatch(catalog, /\bbuilt\b/);

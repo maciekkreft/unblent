@@ -21,9 +21,11 @@ IMPORTMAP = VENDOR_JSON["importmap"]
 ALLOWED_BARE = set(IMPORTMAP["imports"]) | {"bus", "store"}
 
 TEST_PORT = 8099
-# Section 11: the fast phase runs after every edit, the full run before every stop.
+# Section 11: the fast phase runs after every edit within one second in total; a
+# test has its own budget, so the full run's length may grow with the system
+# while no single test may.
 STATIC_BUDGET_S = 1.0
-FULL_BUDGET_S = 30.0
+TEST_TIMEOUT_MS = 5000
 
 
 def _dotenv() -> dict:
@@ -562,11 +564,15 @@ def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
 
 def run_tests() -> None:
     # The bus is infrastructure, pure Node: its tests need neither the venv nor
-    # the server, so they run first and on their own.
+    # the server, so they run first and on their own. The budget is per test (11),
+    # so a file must not count as one: without isolation, node times each test
+    # alone rather than the file, whose lifetime includes the bus's own timers.
     bus_tests = sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT))
     if bus_tests:
         result = subprocess.run(
-            ["node", "--import", "./checks/register.mjs", "--test", *bus_tests], cwd=ROOT,
+            ["node", "--import", "./checks/register.mjs", "--test",
+             "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
+             *bus_tests], cwd=ROOT,
         )
         if result.returncode != 0:
             fail("bus/tests", "bus tests", "node --test reported failures")
@@ -608,11 +614,12 @@ def run_tests() -> None:
             # The loader lets a machine test import its actor (bare `xstate`); it is
             # inert for the browser tests, whose only bare import is Playwright by path.
             # One process for every file: node's default is a process per file,
-            # and sixteen start-ups alone spend a third of the budget (11). The flag
+            # and sixteen start-ups alone cost ten seconds of wall clock. The flag
             # is `--test-isolation=none` from Node 23.
             result = subprocess.run(
                 ["node", "--import", "./checks/register.mjs", "--test",
-                 "--experimental-test-isolation=none", *browser_tests],
+                 "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
+                 *browser_tests],
                 cwd=ROOT, env=env,
             )
             if result.returncode != 0:
@@ -663,7 +670,6 @@ def main() -> None:
         return
     report_unused_tokens()
     _timed(timings, "tests", run_tests)
-    _enforce_budget(timings, FULL_BUDGET_S, "the full check")
     print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s")
 
 

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="kind" content="stem" />
+    <title>Trace</title>
+    <link rel="stylesheet" href="/static/tokens/tokens.css" />
+    <link rel="stylesheet" href="/static/tokens/base.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "lit": "/static/vendor/lit/lit-core.min.js",
+          "xstate": "/static/vendor/xstate/xstate.esm.js",
+          "ulid": "/static/vendor/ulid/index.js",
+          "bus": "/static/bus/bus.js"
+        }
+      }
+    </script>
+    <script type="module" src="/static/components/color-scheme/fact.js"></script>
+    <script type="module" src="/static/components/trace/fact.js"></script>
+    <script type="module" src="/static/components/pages/fact.js"></script>
+    <script type="module" src="/static/components/page-nav/view.js"></script>
+    <script type="module" src="/static/components/trace-list/view.js"></script>
+  </head>
+  <body>
+    <page-nav></page-nav>
+    <trace-list></trace-list>
+  </body>
+</html>

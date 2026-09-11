@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One routing decision the bus made (section 3.3, 10): an event or a query and its outcome. seq and at are assigned by the bus; tab is added by trace; payload is the event, the query payload, or the reply value.",
+  "type": "object",
+  "properties": {
+    "seq": { "type": "integer" },
+    "at": { "type": "integer" },
+    "tab": { "type": "string" },
+    "kind": { "enum": ["event", "query", "reply"] },
+    "name": { "type": "string" },
+    "from": { "type": "string" },
+    "to": { "type": "array", "items": { "type": "string" } },
+    "ignored": { "type": "array", "items": { "type": "string" } },
+    "outcome": {
+      "enum": [
+        "delivered",
+        "ignored",
+        "dropped",
+        "refused",
+        "asked",
+        "no-answerer",
+        "unknown-query",
+        "replied",
+        "unanswered"
+      ]
+    },
+    "reason": { "type": ["string", "null"] },
+    "cid": { "type": ["string", "null"] },
+    "payload": true
+  },
+  "required": ["seq", "at", "tab", "kind", "name", "from", "to", "ignored", "outcome", "reason", "cid", "payload"],
+  "additionalProperties": false
+}

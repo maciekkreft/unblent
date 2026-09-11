@@ -1,0 +1,52 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every trace record kept since the page loaded, in chronological order.",
+    "type": "object",
+    "properties": {
+      "records": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "seq": { "type": "integer" },
+            "at": { "type": "integer" },
+            "tab": { "type": "string" },
+            "kind": { "enum": ["event", "query", "reply"] },
+            "name": { "type": "string" },
+            "from": { "type": "string" },
+            "to": { "type": "array", "items": { "type": "string" } },
+            "ignored": { "type": "array", "items": { "type": "string" } },
+            "outcome": {
+              "enum": [
+                "delivered",
+                "ignored",
+                "dropped",
+                "refused",
+                "asked",
+                "no-answerer",
+                "unknown-query",
+                "replied",
+                "unanswered"
+              ]
+            },
+            "reason": { "type": ["string", "null"] },
+            "cid": { "type": ["string", "null"] },
+            "payload": true
+          },
+          "required": ["seq", "at", "tab", "kind", "name", "from", "to", "ignored", "outcome", "reason", "cid", "payload"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["records"],
+    "additionalProperties": false
+  }
+}

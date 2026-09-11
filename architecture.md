@@ -81,7 +81,7 @@ Where it stores the fact is its own business, and there are three shapes:
 
 | Shape | Storage | Offline | Example |
 |---|---|---|---|
-| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings` |
+| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings`, `trace` |
 | **Replicated** | Browser cache + server, kept in sync (section 5) | Works; syncs later | `notes`, `conversations`, `session` |
 | **Remote-only** | The fact can only be produced by the server | Fails honestly, with an error reply and, where other views need to know, an `unavailable` event | `llm`, `catalog`, `pages` |
 
@@ -100,6 +100,8 @@ A component's **manifest** (section 7.3) is not a separate file: it is read from
 ### 3.3 The bus
 
 The one shared piece of infrastructure, built once. It carries events, commands, and queries (section 4), routes each to the right mailboxes, validates every event, and every query's payload and reply, against the contract registry, refuses emits a component has not declared, and knows nothing about what any event means. It keeps nothing: there is no event log. Facts persist in fact components; the bus is only how the news travels.
+
+The bus has one tap: a listener called synchronously with a record of every routing decision, an event or a query and its outcome. The bus still keeps nothing; the `trace` fact component keeps the session's records.
 
 ### 3.4 The server
 
@@ -276,6 +278,7 @@ note.selected         owner: note-list      { id }
 conversation.changed  owner: conversations  { id, turns, version }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null }
+trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload }
 ```
 
 Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. If a change cannot be additive, it is a new event with a new name.
@@ -296,6 +299,7 @@ conversations: append(turn)
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
 pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }
 catalog: contracts       → { events: [{ name, owner, schema, consumers }], queries: [{ target, name, payload, reply, askers }], commands: [{ target, name, payload }] } | { error: "unavailable" }
+trace: list              → { records: [record] }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
@@ -337,8 +341,8 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 
 1. **Tokens page.** Shows the design tokens, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
-3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. It also shows traffic actually observed on the bus in this session. The components page is the stem page of `catalog`.
-4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). A stem page is the test bed for its root.
+3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
+4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others. A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
@@ -383,7 +387,7 @@ Libraries are vendored as their official builds at pinned versions, copied verba
 
 Two pieces are wrapped behind our own small interfaces, because their surface is small and swapping is plausible: the **store** (Dexie now, could be SQLite in the browser) and the **bus** (`EventTarget` now, could be a worker). XState and Lit are not wrapped: they are the actor and view semantics, and a wrapper would be a thinner XState.
 
-**Tracing.** XState's `inspect` hook receives every message across all actors. A small adapter streams that to the console and to a `/trace` endpoint on the server, so after running a scenario a person or an agent can read a complete, ordered transcript of who sent what to whom. This is the primary debugging tool and it is meant to be used autonomously.
+**Tracing.** The bus taps every routing decision (section 3.3): who emitted or asked what, who received it, who ignored it because their state does not handle it, what was dropped for lack of a subscriber, refused for lack of a declaration, or never answered. The `trace` fact component keeps those records in memory since the page loaded, bridges tabs of the same origin over a `BroadcastChannel` so an inspector tab sees what an acting tab did, and prints one line per record to the console at debug level, so a person or an agent reading the console through Playwright has a complete, ordered transcript. `trace-list` shows the same record on the `trace` stem page. This is the primary debugging tool and it is meant to be used autonomously.
 
 Deliberately not used: a global state store, a micro-frontend framework, a message broker, a bundler, any framework that wants to own the page.
 
@@ -393,7 +397,7 @@ Deliberately not used: a global state store, a micro-frontend framework, a messa
 
 The system is maintained by coding agents, so the rules are not advice. Every violation fails immediately, and one `check` command is the definition of done.
 
-The check has two phases with a time budget each: the fast phase (every static rule, about a second) runs after every edit, and the full run (fast phase plus browser tests, thirty seconds) runs before a task ends. Exceeding a budget is itself a failure, naming the slowest rules, so the fast phase stays fast enough to run constantly.
+The check has two phases: the fast phase (every static rule) runs after every edit, and the full run (fast phase plus tests) runs before a task ends. Each has a time budget that does not grow with the system: the fast phase within one second in total, and every test within five seconds on its own. Exceeding a budget is itself a failure, naming the slowest rules or the slow test, so the fast phase stays fast enough to run constantly and a slow test is found by name rather than hidden in a total.
 
 ### 11.1 Directory per component, front and back
 
@@ -474,7 +478,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Pages compose only what exists | Page check: every custom element on a page is a built view whose `view.js` the page loads, every loaded `view.js` is used, and every loaded `fact.js` belongs to a fact component |
 | Only document facts write to the document | Document check: no file under `components/` writes to `document` (its root element, `body`, `head`, or `title`) except the `fact.js` of a component listed in section 7.5, and that one writes only its own `data-<name>` attribute |
 | The layout is what the document says | Layout check: every top-level directory appears in the listing in 11.1 |
-| The check stays fast | Time budget: the fast phase within one second, the full run within thirty; exceeding either fails and names the slowest rules |
+| The check stays fast | Time budget: the fast phase within one second in total, every test within five seconds on its own; exceeding either fails and names the slowest rules or the slow test |
 
 The architecture document describes the rules; the checks are what make them real.
 
@@ -487,6 +491,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Remote-only facts fail offline.** That is by design: `llm` answers with an error and emits `llm.unavailable`; a view decides what to show.
 - **Two shared vocabularies.** The event registry and the design tokens are global schemas in disguise. Both are kept small: events are additive-only, tokens are minimal. Both change only with permission, and both are reviewed on a page before use.
 - **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.
+
+- **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
 ---
 

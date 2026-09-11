@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMachine, emit } from "xstate";
-import { mount, unmount, ask } from "bus";
+import { mount, unmount, ask, tap } from "bus";
 
 // The bus is infrastructure, not a component, so it is tested here rather than
 // under components/. Fake machines stand in for real ones: a producer that emits
@@ -188,5 +188,208 @@ test("the first reply wins; a second call is ignored", async () => {
   const f = mount(fact("f7"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
   const a = asker("a7", ["f7: twice"]);
   assert.deepEqual(await ask(a, "f7", "twice"), { first: true });
+  unmount(f);
+});
+
+// The tap (section 3.3, 10): every routing decision reaches a listener with its
+// outcome. `records` collects them; `sub` is dropped in each test's cleanup so one
+// test's tap never sees another's traffic.
+function collect() {
+  const records = [];
+  const sub = tap((r) => records.push(r));
+  return { records, sub };
+}
+
+// A consumer that only handles the event in one state, so the bus can see a
+// recipient whose current state ignores it (4, fourth rule).
+function gatedConsumer(id) {
+  return createMachine({
+    id,
+    meta: { kind: "view", emits: [], attributes: [] },
+    initial: "closed",
+    states: { closed: {}, open: { on: { "thing.happened": { actions: () => {} } } } },
+  });
+}
+
+test("tap records a delivered event with its recipients", () => {
+  const { records, sub } = collect();
+  const p = mount(producer("t1"), { events: { "thing.happened": SCHEMA } });
+  const c = mount(consumer("t1c", []), {});
+  p.send({ type: "go", value: 5 });
+  const r = records.at(-1);
+  assert.equal(r.kind, "event");
+  assert.equal(r.name, "thing.happened");
+  assert.equal(r.from, "t1");
+  assert.deepEqual(r.to, ["t1c"]);
+  assert.deepEqual(r.ignored, []);
+  assert.equal(r.outcome, "delivered");
+  assert.equal(r.payload.value, 5);
+  assert.equal(typeof r.seq, "number");
+  assert.equal(typeof r.at, "number");
+  sub();
+  unmount(p);
+  unmount(c);
+});
+
+test("tap records seq rising and unsubscribe stopping delivery", () => {
+  const { records, sub } = collect();
+  const p = mount(producer("t2"), { events: { "thing.happened": SCHEMA } });
+  const c = mount(consumer("t2c", []), {});
+  p.send({ type: "go", value: 1 });
+  p.send({ type: "go", value: 2 });
+  const [a, b] = records.slice(-2);
+  assert.equal(b.seq, a.seq + 1);
+  sub();
+  p.send({ type: "go", value: 3 });
+  assert.equal(records.length, 2);
+  unmount(p);
+  unmount(c);
+});
+
+test("tap records a dropped event when nobody subscribes", () => {
+  const { records, sub } = collect();
+  const p = mount(producer("t3"), { events: { "thing.happened": SCHEMA } });
+  p.send({ type: "go", value: 1 });
+  const r = records.at(-1);
+  assert.equal(r.outcome, "dropped");
+  assert.deepEqual(r.to, []);
+  assert.equal(r.reason, "no subscriber");
+  sub();
+  unmount(p);
+});
+
+test("tap records an ignored event when every recipient's state passes on it", () => {
+  const { records, sub } = collect();
+  const p = mount(producer("t4"), { events: { "thing.happened": SCHEMA } });
+  const c = mount(gatedConsumer("t4c"), {}); // starts closed, does not handle it
+  p.send({ type: "go", value: 1 });
+  const r = records.at(-1);
+  assert.equal(r.outcome, "ignored");
+  assert.deepEqual(r.to, ["t4c"]);
+  assert.deepEqual(r.ignored, ["t4c"]);
+  sub();
+  unmount(p);
+  unmount(c);
+});
+
+test("tap listener sees a refused record before the throw", async () => {
+  const { records, sub } = collect();
+  const p = mount(producer("t5"), { events: { "thing.happened": SCHEMA } });
+  const saved = process.listeners("uncaughtException");
+  process.removeAllListeners("uncaughtException");
+  const caught = new Promise((resolve) => process.once("uncaughtException", resolve));
+  p.send({ type: "surprise" }); // surprise.happened is undeclared
+  const err = await caught;
+  for (const listener of saved) process.on("uncaughtException", listener);
+  assert.match(err.message, /undeclared emit/);
+  const r = records.at(-1);
+  assert.equal(r.outcome, "refused");
+  assert.equal(r.reason, "undeclared emit");
+  assert.equal(r.name, "surprise.happened");
+  sub();
+  unmount(p);
+});
+
+test("tap records asked then replied for an answered query", async () => {
+  const { records, sub } = collect();
+  const f = mount(fact("t6"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
+  const a = asker("t6a", ["t6: read"]);
+  await ask(a, "t6", "read", { id: 3 });
+  const query = records.find((r) => r.kind === "query");
+  const reply = records.find((r) => r.kind === "reply");
+  assert.equal(query.outcome, "asked");
+  assert.deepEqual(query.to, ["t6"]);
+  assert.equal(reply.outcome, "replied");
+  assert.equal(reply.from, "t6");
+  assert.deepEqual(reply.to, ["t6a"]);
+  assert.equal(reply.cid, query.cid);
+  assert.deepEqual(reply.payload, { value: 6 });
+  sub();
+  unmount(f);
+});
+
+test("tap records no-answerer for an unmounted target", async () => {
+  const { records, sub } = collect();
+  const a = asker("t7a", ["nobody: read"]);
+  await ask(a, "nobody", "read", { id: 1 });
+  assert.equal(records.at(-1).outcome, "no-answerer");
+  sub();
+});
+
+test("tap records unknown-query for a query the target does not handle", async () => {
+  const { records, sub } = collect();
+  const f = mount(fact("t8"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
+  const a = asker("t8a", ["t8: write"]);
+  await ask(a, "t8", "write", {});
+  assert.equal(records.at(-1).outcome, "unknown-query");
+  sub();
+  unmount(f);
+});
+
+test("tap records refused for an undeclared ask, before the throw", () => {
+  const { records, sub } = collect();
+  const f = mount(fact("t9"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
+  const a = asker("t9a", []);
+  assert.throws(() => ask(a, "t9", "read", { id: 1 }), /undeclared ask/);
+  const r = records.at(-1);
+  assert.equal(r.outcome, "refused");
+  assert.equal(r.reason, "undeclared ask");
+  sub();
+  unmount(f);
+});
+
+test("tap records refused for a query aimed at a view, before the throw", () => {
+  const { records, sub } = collect();
+  const v = mount(consumer("t10", []), {});
+  const a = asker("t10a", ["t10: read"]);
+  assert.throws(() => ask(a, "t10", "read", { id: 1 }), /only a fact component answers/);
+  const r = records.at(-1);
+  assert.equal(r.outcome, "refused");
+  assert.equal(r.reason, "query to a view");
+  sub();
+  unmount(v);
+});
+
+test("tap records ignored for a query the answerer's state passes on", () => {
+  const { records, sub } = collect();
+  const gated = createMachine({
+    id: "t11",
+    meta: { kind: "fact", shape: "local-only", emits: [], owns: "gated" },
+    initial: "closed",
+    states: { closed: {}, open: { on: { "read?": { actions: ({ event }) => event.reply({ ok: true }) } } } },
+  });
+  const f = mount(gated, { queries: { read: QSCHEMA } });
+  const a = asker("t11a", ["t11: read"]);
+  ask(a, "t11", "read", { id: 1 }); // closed: the query is never answered
+  const r = records.at(-1);
+  assert.equal(r.kind, "query");
+  assert.equal(r.outcome, "ignored");
+  assert.deepEqual(r.ignored, ["t11"]);
+  sub();
+  unmount(f);
+});
+
+test("tap records unanswered after the timeout, then replied on a late reply", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { records, sub } = collect();
+  const box = {};
+  const held = createMachine({
+    id: "t12",
+    meta: { kind: "fact", shape: "local-only", emits: [], owns: "holds the reply" },
+    on: { "read?": { actions: ({ event }) => { box.reply = event.reply; } } },
+  });
+  const f = mount(held, { queries: { read: QSCHEMA } });
+  const a = asker("t12a", ["t12: read"]);
+  const pending = ask(a, "t12", "read", { id: 1 });
+  t.mock.timers.tick(5000);
+  const unanswered = records.find((r) => r.kind === "reply");
+  assert.equal(unanswered.outcome, "unanswered");
+  assert.equal(unanswered.payload, null);
+  box.reply({ value: 9 });
+  assert.deepEqual(await pending, { value: 9 });
+  const late = records.filter((r) => r.kind === "reply").at(-1);
+  assert.equal(late.outcome, "replied");
+  assert.equal(late.reason, "late");
+  sub();
   unmount(f);
 });

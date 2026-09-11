@@ -13,6 +13,33 @@ const registry = new Map(); // event name → schema, so every emit is validated
 const queryRegistry = new Map(); // "target: name" → { payload, reply }, so every query is validated (3.3, 7.2)
 const subscribers = new Map();
 
+// Section 3.3, 10: the bus's one tap. A listener is called synchronously with a
+// record of every routing decision. The bus still keeps nothing; the `trace` fact
+// component keeps the records. `seq` orders records within this tab (its module).
+const taps = new Set();
+let nextSeq = 0;
+const UNANSWERED_MS = 5000;
+
+export function tap(listener) {
+  taps.add(listener);
+  return () => taps.delete(listener);
+}
+
+// Fills the fields the bus assigns — `seq`, `at`, and the defaults for anything a
+// caller leaves out — then hands the record to every tap. Callers pass the parts
+// they know; a record is never mutated after.
+function record(partial) {
+  const full = { ignored: [], reason: null, cid: null, ...partial, seq: nextSeq++, at: Date.now() };
+  for (const listener of taps) listener(full);
+}
+
+// The id a mounted actor answers to (4.1), for a record's `to`. Only mounted
+// actors reach a tap, so the lookup always resolves.
+function idOf(actor) {
+  for (const [id, a] of mounted) if (a === actor) return id;
+  return null;
+}
+
 function subscribe(name, actor) {
   let set = subscribers.get(name);
   if (!set) subscribers.set(name, (set = new Set()));
@@ -24,18 +51,39 @@ function subscribe(name, actor) {
 // point: an undeclared or unknown emit must fail loudly, not pass silently.
 function forward(machine, emitter, event) {
   const name = event.type;
+  const from = machine.config.id;
   const emits = machine.config.meta?.emits ?? [];
-  if (!emits.includes(name))
+  // A refused emit is recorded before it throws (section 10: refusals are traffic
+  // too), so the transcript shows the failure the same way it shows a delivery.
+  if (!emits.includes(name)) {
+    record({ kind: "event", name, from, to: [], outcome: "refused", reason: "undeclared emit", payload: event });
     throw new Error(`undeclared emit: ${machine.config.id} emitted "${name}", not in meta.emits`);
-  if (!registry.has(name))
-    throw new Error(`unknown event: "${name}" is not in the registry`);
-  const set = subscribers.get(name);
-  if (!set) return;
-  // Section 4.1: an event names no target; it reaches every subscriber but never
-  // returns to the one that emitted it.
-  for (const actor of set) {
-    if (actor !== emitter) actor.send(event);
   }
+  if (!registry.has(name)) {
+    record({ kind: "event", name, from, to: [], outcome: "refused", reason: "unknown event", payload: event });
+    throw new Error(`unknown event: "${name}" is not in the registry`);
+  }
+  // Section 4.1: an event names no target; it reaches every subscriber but never
+  // returns to the one that emitted it. A recipient whose current state does not
+  // handle the event is `ignored` (its `can` is false); the bus still sends it, so
+  // the actor, not the bus, decides (section 4, fourth rule).
+  const set = subscribers.get(name);
+  const recipients = set ? [...set].filter((a) => a !== emitter) : [];
+  const ignored = recipients.filter((a) => !a.getSnapshot().can(event));
+  const outcome =
+    recipients.length === 0 ? "dropped" : ignored.length === recipients.length ? "ignored" : "delivered";
+  const reason = outcome === "dropped" ? "no subscriber" : outcome === "ignored" ? "no recipient handles it" : null;
+  record({
+    kind: "event",
+    name,
+    from,
+    to: recipients.map(idOf),
+    ignored: ignored.map(idOf),
+    outcome,
+    reason,
+    payload: event,
+  });
+  for (const actor of recipients) actor.send(event);
 }
 
 export function mount(machine, { input, events = {}, queries = {} } = {}) {
@@ -93,29 +141,67 @@ export function unmount(actor) {
 export function ask(machine, target, name, payload = {}) {
   const asks = machine.config.meta?.asks ?? [];
   const key = `${target}: ${name}`;
-  if (!asks.includes(key))
+  const from = machine.config.id;
+  const to = [target];
+  // The correlation id is a ULID (section 10), so a later trace can order and tell
+  // apart queries from several tabs; the first reply wins. It is minted up front so
+  // every record about this query, even a refusal, carries it.
+  const cid = ulid();
+  if (!asks.includes(key)) {
+    record({ kind: "query", name, from, to, outcome: "refused", reason: "undeclared ask", cid, payload });
     throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", not in meta.asks`);
+  }
   const answerer = mounted.get(target);
-  if (!answerer) return Promise.resolve({ error: "no-answerer" });
+  if (!answerer) {
+    record({ kind: "query", name, from, to, outcome: "no-answerer", cid, payload });
+    return Promise.resolve({ error: "no-answerer" });
+  }
   const targetMachine = machines.get(target);
-  if (targetMachine.config.meta?.kind !== "fact")
+  if (targetMachine.config.meta?.kind !== "fact") {
+    record({ kind: "query", name, from, to, outcome: "refused", reason: "query to a view", cid, payload });
     throw new Error(`only a fact component answers queries: ${target} is a ${targetMachine.config.meta?.kind}`);
+  }
   const type = `${name}?`;
-  if (!targetMachine.events.includes(type)) return Promise.resolve({ error: "unknown-query" });
+  if (!targetMachine.events.includes(type)) {
+    record({ kind: "query", name, from, to, outcome: "unknown-query", cid, payload });
+    return Promise.resolve({ error: "unknown-query" });
+  }
   // The query's schema is registered (`queryRegistry.get(key)`); payload and reply
   // validation against it lands with the JSON Schema validator (7.2, section 10),
   // the same task that adds payload validation to events. Registration now is what
   // lets both kinds be validated together then.
+  const message = { type, cid, payload };
+  const handled = answerer.getSnapshot().can({ ...message, reply: () => {} });
+  record({
+    kind: "query",
+    name,
+    from,
+    to,
+    ignored: handled ? [] : to,
+    outcome: handled ? "asked" : "ignored",
+    reason: handled ? null : `state ${JSON.stringify(answerer.getSnapshot().value)} does not handle it`,
+    cid,
+    payload,
+  });
   return new Promise((resolve) => {
     let answered = false;
-    // The correlation id is a ULID (section 10), so a later trace can order and
-    // tell apart queries from several tabs; the first reply wins.
-    const cid = ulid();
+    // A reply always comes back to the asker (4.2); the trace records it as a
+    // `reply`. If none arrives within UNANSWERED_MS the trace notes `unanswered`
+    // and leaves the promise pending, as today; a late reply still settles it and
+    // records `replied`, reason "late".
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      if (answered) return;
+      timedOut = true;
+      record({ kind: "reply", name, from: target, to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
+    }, UNANSWERED_MS);
     const reply = (value) => {
       if (answered) return;
       answered = true;
+      clearTimeout(timer);
+      record({ kind: "reply", name, from: target, to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
       resolve(value);
     };
-    answerer.send({ type, cid, payload, reply });
+    answerer.send({ ...message, reply });
   });
 }
