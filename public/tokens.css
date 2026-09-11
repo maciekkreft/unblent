@@ -1,0 +1,132 @@
+:root {
+  /* === COLORS === */
+
+  /* Accent */
+  --color-accent: #fb923c;
+  --color-accent-hover: #f97316;
+  --color-accent-active: #ea580c;
+  --color-accent-subtle: rgba(251, 146, 60, 0.08);
+  --color-accent-selection: rgba(251, 146, 60, 0.22);
+  --color-accent-text: #ffffff;
+
+  /* Surfaces */
+  --color-canvas: #fffefb;
+  --color-canvas-soft: #f8f4f0;
+  --color-surface-hover: #f3efe9;
+  --color-surface-active: #ebe7e0;
+
+  /* Text */
+  --color-ink: #201515;
+  --color-body: #605d52;
+  --color-body-mid: #939084;
+  --color-mute: #c5c0b1;
+
+  /* Semantic */
+  --color-danger: #e03131;
+  --color-danger-hover: #c92a2a;
+  --color-danger-subtle: rgba(224, 49, 49, 0.08);
+  --color-success: #2f9e44;
+  --color-success-subtle: rgba(47, 158, 68, 0.08);
+  --color-warning: #e8590c;
+  --color-warning-subtle: rgba(232, 89, 12, 0.08);
+
+  /* Border */
+  --color-border: #e8e3db;
+  --color-border-strong: #d0cabe;
+
+  /* Shadow channel (for use in rgba) */
+  --shadow-color: 32, 21, 21;
+
+  /* === TYPOGRAPHY === */
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+
+  /* App scale */
+  --text-caption: 0.8125rem;   /* 13px — timestamps, metadata */
+  --text-sm: 0.875rem;         /* 14px — secondary UI text, labels */
+  --text-body: 1rem;           /* 16px — default app text, chat messages */
+  --text-subtitle: 1.25rem;    /* 20px — section headings, card titles */
+  --text-heading: 1.5rem;      /* 24px — page titles */
+
+  /* Line height */
+  --leading-tight: 1.2;    /* headings, titles */
+  --leading-normal: 1.5;   /* body text */
+
+  /* Weight */
+  --weight-normal: 400;
+  --weight-semibold: 600;
+
+  /* === SPACING === */
+
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 40px;
+  --space-2xl: 64px;
+
+  /* === RADII === */
+
+  --radius-0: 0;
+  --radius-sm: 6px;     /* pills, form inputs */
+  --radius-md: 12px;    /* buttons, cards */
+  --radius-full: 9999px; /* status dots, badges, avatars */
+
+  /* === SHADOWS === */
+
+  --shadow-card: 0 1px 3px rgba(var(--shadow-color), 0.06);
+  --shadow-raised: 0 4px 12px rgba(var(--shadow-color), 0.08);
+
+  /* === TRANSITIONS === */
+
+  --duration-fast: 100ms;
+  --duration-slide: 300ms;
+  --duration-undo: 5s;    /* the window a deleted note can be brought back */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* === APP SHELL === */
+
+  --border-width: 1px;
+  --focus-ring: 0 0 0 3px var(--color-accent-subtle);
+}
+
+/* === DARK THEME === */
+
+:root[data-theme="dark"] {
+  /* Accent — hover/active go lighter so a press still reads on dark */
+  --color-accent-hover: #fca75f;
+  --color-accent-active: #fdbc82;
+  --color-accent-subtle: rgba(251, 146, 60, 0.14);
+  --color-accent-selection: rgba(251, 146, 60, 0.30);
+
+  /* Surfaces — warm near-blacks */
+  --color-canvas: #1a1613;
+  --color-canvas-soft: #221d19;
+  --color-surface-hover: #2b241f;
+  --color-surface-active: #352d27;
+
+  /* Text — warm off-whites */
+  --color-ink: #f6f1ea;
+  --color-body: #c8c1b6;
+  --color-body-mid: #948d81;
+  --color-mute: #6a6358;
+
+  /* Semantic — brightened for a dark ground */
+  --color-danger: #ff6b6b;
+  --color-danger-hover: #ff5252;
+  --color-danger-subtle: rgba(255, 107, 107, 0.14);
+  --color-success: #51cf66;
+  --color-success-subtle: rgba(81, 207, 102, 0.14);
+  --color-warning: #ffa94d;
+  --color-warning-subtle: rgba(255, 169, 77, 0.14);
+
+  /* Border */
+  --color-border: #322b25;
+  --color-border-strong: #473f37;
+
+  /* Shadows read as black on dark; deepen the alphas so a raised sheet still lifts. */
+  --shadow-color: 0, 0, 0;
+  --shadow-card: 0 1px 3px rgba(var(--shadow-color), 0.35);
+  --shadow-raised: 0 6px 20px rgba(var(--shadow-color), 0.55);
+}

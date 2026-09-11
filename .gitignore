@@ -1,0 +1,11 @@
+# MacOS
+.DS_Store
+
+# IDE
+.idea
+
+# KEYS
+.env
+
+# TEMP
+.playwright-mcp/
