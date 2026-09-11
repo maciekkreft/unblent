@@ -1,0 +1,431 @@
+# Slip-box architecture
+
+How this application is built, for people joining the project. It covers the idea, the building blocks, how they exchange information, the contracts between them, the pages that compose them, the libraries we lean on, and how the rules are enforced. It contains no implementation.
+
+---
+
+## 1. The idea
+
+Niklas Luhmann wrote dozens of books without ever sitting down to write a book. He wrote thousands of small, finished notes, each on one idea, each pointing by name to related notes, and kept them in a slip-box. A book was a path through the box. He could work on whatever interested him that day, change his mind after any note, and the collection still grew into something coherent.
+
+We build software the same way. A **component** is a note: small, complete, tested, useful on its own. Components never touch each other. They announce facts, give instructions, and ask questions through one shared piece of infrastructure, the **bus**, which is the slip-box. An **app** is a path through the box: a page that lists which components to load and nothing else.
+
+The property we optimise for: anyone, including a coding agent, can add, rewrite, or delete a component without opening any other component.
+
+---
+
+## 2. The mapping
+
+| Luhmann | Here |
+|---|---|
+| A note: one idea, finished, self-contained | A component: one concept, or one way of looking at it |
+| The slip-box | The bus |
+| A pointer ("see 21/3d7") | Subscribing to a named event, or addressing a named component |
+| The index card at the front of a stem | A component's manifest |
+| A stem: a note and its follow-ups | A stem: a fact component and its views |
+| A book | An app page that declares which components to compose |
+| Working on whatever is interesting today | Adding a component nobody planned for |
+
+Where the analogy strains: a book only has to read well, an app has to run. So pointers between components are stricter than Luhmann's. They are contracts (section 7), and changing a contract is the one thing that can break a neighbour.
+
+---
+
+## 3. Building blocks
+
+```mermaid
+flowchart TB
+    subgraph browser [Browser]
+        bus[Bus]
+        subgraph facts [Fact components]
+            notes[notes]
+            conv[conversations]
+            llm[llm]
+            session[session]
+            settings[settings]
+        end
+        subgraph views [View components]
+            editor[note-editor]
+            list[note-list]
+            reader[note-reader]
+            chat[chat]
+        end
+        bus <--> notes
+        bus <--> conv
+        bus <--> llm
+        bus <--> session
+        bus <--> settings
+        bus <--> editor
+        bus <--> list
+        bus <--> reader
+        bus <--> chat
+    end
+    subgraph server [Server: FastAPI]
+        notesApi[notes/server]
+        convApi[conversations/server]
+        llmApi[llm/server]
+        sessionApi[session/server]
+    end
+    notes <--> notesApi
+    conv <--> convApi
+    llm <--> llmApi
+    session <--> sessionApi
+```
+
+Every line between a component and anything else goes through the bus. The only exception is a fact component talking to *its own* server module, which is the same component on the other side of the network.
+
+### 3.1 Two kinds of component
+
+**A fact component owns a concept.** The notes, the conversations, the settings, the current session, access to the language model. It is headless. It is the single place the fact lives. It emits an event whenever the fact changes, and it answers queries about the fact.
+
+Where it stores the fact is its own business, and there are three shapes:
+
+| Shape | Storage | Offline | Example |
+|---|---|---|---|
+| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings` |
+| **Replicated** | Browser cache + server, kept in sync (section 5) | Works; syncs later | `notes`, `conversations`, `session` |
+| **Remote-only** | The fact can only be produced by the server | Fails honestly, with an error reply and an `unavailable` event | `llm` |
+
+A fact component that needs the server brings its own server module with it, in the same directory (section 11.1).
+
+**A view component owns a way of looking at or acting on a concept.** Editing, listing, reading, chatting. It owns only its own UI state: cursor position, scroll, which tab is open, the draft in the input box. It points at one or more fact components, queries them, listens to their events, and emits events about what the user did. It never holds a copy of a fact it would be sad to lose.
+
+### 3.2 Inside a component
+
+Every component, of either kind, has an **actor**: its brain, a mailbox processed one message at a time, where all decisions are made. View components add a **view**, the visible part, which renders the actor's state and forwards user gestures to the actor as commands. Fact components add a **store**, their private persistence, and possibly a **server module**.
+
+A component's **manifest** (section 7.3) is not a separate file: it is read from the actor's definition.
+
+### 3.3 The bus
+
+The one shared piece of infrastructure, built once. It carries events, commands, and queries (section 4), routes each to the right mailboxes, validates every event against the contract registry, refuses emits a component has not declared, and knows nothing about what any event means. It keeps nothing: there is no event log. Facts persist in fact components; the bus is only how the news travels.
+
+### 3.4 The server
+
+Not special. It is the far end of the fact components that chose to have a server side. Each such component owns its own FastAPI router, its own SQLite database, and its own migrations. The server discovers routers by walking the components directory. There is no shared sync endpoint and no shared database.
+
+Authentication is one more fact component: `session`. Its server module runs the passkey (WebAuthn) ceremonies and sets an HttpOnly cookie; its browser actor never sees the cookie, it queries its own server module for "who am I" and emits `session.changed`. Nothing else in the system knows authentication exists.
+
+### 3.5 Pages
+
+A page is an HTML file the browser loads: an import map and a list of component tags, nothing else. There are five kinds, described in section 8, and an app is one of them.
+
+---
+
+## 4. Three kinds of information
+
+Everything goes through the bus. There is no other channel.
+
+| | Event | Command | Query |
+|---|---|---|---|
+| What it is | A fact that happened | An instruction | A question |
+| Tense | Past: `note.saved` | Imperative: `focus` | Interrogative: `read(id)` |
+| Addressed to | Nobody; broadcast | One instance, by name | One fact component, by name |
+| Reply | Never | Never | Always, routed back to the asker |
+| Who may send | The fact component that owns the fact, or the view where the user acted | Anyone | Anyone, but only fact components answer |
+| Persisted | No | No | No |
+
+### 4.1 How addressing works
+
+Every component instance has an address: its name, and an instance id when a page holds more than one (`notes`, `note-editor#1`, `note-editor#2`). A command or query names its target; the bus places it in that mailbox. An event names no target; the bus places it in every mailbox that subscribed to that event name.
+
+### 4.2 How queries work
+
+A query is a message carrying the target address, the query name, its payload, and a **correlation id** generated by the asker. The bus delivers it to the target's mailbox. The target's actor answers by sending a reply carrying the same correlation id; the bus routes the reply to the asker's mailbox, and the asker matches it to the question it had open. A query that reaches no fact component, or a fact component that cannot answer (offline, not found), still produces a reply, one that says so. The asker never waits on anything but its own mailbox.
+
+### 4.3 The four rules
+
+**Every fact has exactly one owner.** If two components need the notes, one of them is `notes` and the other asks it. There is no shared database in the browser and no copy that can drift.
+
+**Only fact components answer queries.** A view queries `notes`, never `note-list`. If a view wants to know what another view is showing, that view should have emitted an event (`note.opened`) and this one should have listened.
+
+**Events are self-contained.** `note.saved` carries the whole note, not an id that forces the consumer to ask. This costs duplication and buys isolation. Volume is not a concern: inside the browser a whole note per event is free, and the view that produces changes debounces at source, so an editor emits `note.saved` on a pause or blur, not per keystroke.
+
+**Query for the starting picture, subscribe for everything after.** A view that queries `notes: read(id)` must also listen to `note.changed`, and must treat any later event with a newer version as authoritative. Nothing may assume some other component finished reacting first.
+
+---
+
+## 5. Storage and sync
+
+Fact components are **local-first**: a change is written locally and announced immediately; the server learns about it afterwards. The user never waits for the network, and the app works offline for every replicated and local-only fact.
+
+For replicated fact components:
+
+- The browser side keeps a cache in IndexedDB and an **outbox**: records changed locally and not yet acknowledged by the server. A row is deleted the moment the server acknowledges it. The outbox is the only thing in the browser that must not be lost.
+- A record changed locally is marked *pending* until acknowledged. Views may show this.
+- The fact component drains the outbox whenever it can, coalescing by record id so three offline edits become one write.
+- On page load and whenever the tab regains focus, it first drains the outbox, then pulls what changed on the server. This is how work started on a MacBook continues on an iPhone and back: no live stream, no manual refresh.
+- Every record carries a **version**, assigned by the server. A write states the version it was based on. The server rejects a write based on a stale version, and the fact component emits a `conflicted` event carrying both copies, so a view can show them rather than silently losing one. This is what makes it safe to leave a tab open on one device and continue on another. Simultaneous editing on two devices is not a goal.
+- Ids are generated in the browser (ULIDs), and server writes are idempotent upserts, so retries and duplicates are harmless.
+
+On the server, each replicated fact component has **one SQLite file per user**: `data/<user>/<component>.db`. The session resolves the user, the component's router resolves the file, and neither the schema nor the browser ever mentions users. The backend is written as if for a single user. Litestream streams every file continuously to object storage; the architecture never sees it, and restoring is one command.
+
+---
+
+## 6. Interactions
+
+Every diagram below routes through the bus, because that is the only way anything travels.
+
+### 6.1 Writing a note (local-first)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant E as note-editor
+    participant B as Bus
+    participant N as notes
+    participant S as notes/server
+
+    U->>E: types
+    E->>E: debounce
+    E->>B: event note.saved(note)
+    B->>N: note.saved(note)
+    N->>N: cache (pending) + outbox
+    N->>B: event note.changed(note, pending)
+    B->>E: note.changed
+    N->>S: PUT /notes/{id} (note, baseVersion)
+    S-->>N: ok, version
+    N->>N: clear outbox row, clear pending
+    N->>B: event note.changed(note, version)
+    B->>E: note.changed
+```
+
+The editor is finished the moment it emits. Every other view interested in notes learns of the change the same way, from `note.changed`, whether it came from this tab, from the server, or from another device.
+
+### 6.2 Continuing on another device
+
+```mermaid
+sequenceDiagram
+    participant M as MacBook: notes
+    participant S as notes/server
+    participant P as iPhone: notes
+
+    M->>S: PUT note (based on v3) → v4
+    P->>S: tab focus: pull
+    S-->>P: note v4
+    Note over P: edit → PUT (based on v4) → v5
+    M->>S: tab focus: drain outbox
+    M->>S: pull
+    S-->>M: note v5
+```
+
+If the MacBook still had an unsent edit based on v4 when it regained focus, the server rejects it and `notes` emits `note.conflicted` with both bodies.
+
+### 6.3 A view querying facts: chat about my notes
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as chat
+    participant B as Bus
+    participant N as notes
+    participant L as llm
+    participant V as conversations
+
+    U->>C: asks a question
+    C->>B: query notes: list (cid 1)
+    B->>N: list
+    N->>B: reply cid 1
+    B->>C: titles + ids
+    C->>B: query notes: read(id) (cid 2)
+    B->>N: read
+    N->>B: reply cid 2
+    B->>C: note
+    C->>B: query llm: complete(prompt) (cid 3)
+    B->>L: complete
+    L->>B: reply cid 3
+    B->>C: text, or error if offline
+    C->>B: command conversations: append(turn)
+    B->>V: append
+    V->>B: event conversation.changed
+    B->>C: conversation.changed
+```
+
+`chat` holds only the draft in the input box. The transcript is owned by `conversations`, model access by `llm`, the notes by `notes`. Each can be replaced without touching `chat`.
+
+### 6.4 Adding components nobody planned for
+
+Suppose the build order is: `notes` + `note-editor`, then `note-list`, then `split-view`, then `chat`, then `note-reader`.
+
+- `note-list` queries `notes: list` on start, subscribes to `note.changed` and `note.deleted`, emits `note.selected`. Nothing existing changes.
+- `split-view` is nearly pure declaration: two slots, and a `follows` attribute that turns `note.selected` into a `load(id)` command on the chosen slot.
+- `chat` queries `notes` and `llm`, commands `conversations`. Nothing existing changes.
+- `note-reader` subscribes to `note.selected`, queries `notes: read(id)`. Nothing existing changes.
+
+Each later component used only contracts that already existed, and the components page (section 8) showed which ones were available before it was built. This is the Zettelkasten property made concrete: a new note points at old notes; old notes do not change.
+
+---
+
+## 7. Contracts
+
+Contracts are the only coupling in the system. Every contract is **declared once, in the component that owns it, and derived everywhere else**. Nothing is hand-copied onto a page, and section 11 makes a stale declaration fail at runtime rather than drift.
+
+### 7.1 Event vocabulary
+
+Every event has a name, an owner, and a JSON Schema for its payload, kept in the owning component's directory. Names are `subject.pastTenseVerb`. The set of all event schemas is one of the two shared vocabularies of the system (the other is the design tokens), and it is kept small on purpose.
+
+```
+note.saved            owner: note-editor    { id, title, body, baseVersion }
+note.changed          owner: notes          { id, title, body, version, pending, updatedAt }
+note.deleted          owner: notes          { id }
+note.conflicted       owner: notes          { id, mine, theirs }
+note.selected         owner: note-list      { id }
+conversation.changed  owner: conversations  { id, turns, version }
+llm.unavailable       owner: llm            { reason }
+session.changed       owner: session        { userId | null }
+```
+
+Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. If a change cannot be additive, it is a new event with a new name.
+
+### 7.2 Command and query contracts
+
+Every command a component accepts, and every query a fact component answers, is named, with the shape of its payload and, for queries, the shape of the reply.
+
+```
+note-editor#n: focus
+note-editor#n: load(id)
+notes: list              → { notes: [{ id, title, updatedAt }] }
+notes: read(id)          → { note } | { error: "not-found" }
+llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
+conversations: append(turn)
+```
+
+### 7.3 Manifest
+
+A component's manifest is not written by hand. It is read from the actor's definition:
+
+- **consumes**, **accepts**, **answers**: derived from what the actor's machine handles.
+- **emits**: the one thing that cannot be discovered by inspection, so it is declared as metadata on the machine itself, next to the handlers. The bus refuses any emit not on that list, so the declaration cannot go stale without the code failing.
+- **kind**, **shape**, **status** (`planned` or `built`), **attributes** the tag understands, and **owns**: metadata on the same machine.
+
+From manifests alone the system computes, for every component, the components it interacts with: for each consumed event, who emits it; for each emitted event, who consumes it; for each query, who answers it.
+
+### 7.4 Design tokens
+
+The visual vocabulary: a small set of CSS custom properties for colour, spacing, type, radius, motion. Views use tokens and nothing else. Tokens are the second shared vocabulary and follow the same rule as events: additive only.
+
+---
+
+## 8. Pages
+
+A page is an HTML file: an import map plus component tags with attributes. Nothing else. Five kinds, in increasing order of composition:
+
+1. **Tokens page.** Shows the design tokens, so the visual vocabulary can be reviewed before anything uses it.
+2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
+3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. It also shows traffic actually observed on the bus in this session.
+4. **Stem pages.** One per fact component, with its related views wired together: `notes` with editor, list, and reader; `conversations` with chat. A stem page is the test bed for one fact component.
+5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
+
+The contracts page and the components page show the same data in two arrangements. Neither is hand-written, so they cannot diverge.
+
+---
+
+## 9. How a component comes to exist
+
+Because changing a contract is the expensive operation, contracts are decided before code.
+
+1. Create the component's directory with a machine that declares only metadata, `status: planned`, and any new event or query schemas.
+2. It appears on the components page and the contracts page. Review it there against its neighbours: does it consume events nobody emits, ask queries nobody answers, duplicate a fact someone already owns, or need a change to an existing contract?
+3. Only when the contracts settle, write the actor, then the store or view, then the server module if any, then tests.
+4. Add it to its stem page and set `status: built`.
+
+Coding agents follow the same four steps. Step 2 is the human's, and the components page is where it happens.
+
+---
+
+## 10. Libraries
+
+Each block maps to one small, mature library, vendored under `/vendor` and loaded through an import map. No build step: every change, browser or server, is visible on reload. Beside each library is what we lean on and what we do not, so that the intended use is unambiguous.
+
+| Block | Library | Licence | We use | We do not use |
+|---|---|---|---|---|
+| View | Lit | BSD-3 | Templating (`html`); reactive properties, which turn tag attributes such as `name` and `follows` into state the view reacts to, which is what lets pages be pure declarations; shadow DOM, which isolates a view's styles so it can only be themed through tokens, the one thing that crosses a shadow boundary; the connected/disconnected lifecycle, where a view subscribes to and unsubscribes from the bus, so a removed tag leaves nothing behind; reactive controllers, as the home for "attach this actor's state to this view" | Decorators (need a build); Lit context or any cross-component sharing (that is the bus's job) |
+| Actor | XState v5 | MIT | Machines as the actor definition, which is also where the manifest is read from; the actor system for mailboxes, one message at a time, and addressing by id; `fromPromise` for a fact component's calls to its own server module; the `inspect` hook for tracing | Spawning actors that talk to other components' actors directly; anything that bypasses the bus |
+| Store (browser) | Dexie | Apache-2 | Tables and transactions, one database per fact component | Live queries (the bus is the reactivity); a shared database |
+| Bus | native `EventTarget` | — | Delivery; everything else (routing, validation, correlation) is ours and small | — |
+| Ids | ULID | MIT | Client-generated, sortable ids | Server-assigned ids |
+| Server | FastAPI | MIT | One router per fact component, discovered by walking the components directory; `--reload` | A shared data layer |
+| Store (server) | SQLite | public domain | One file per user per fact component | A shared schema |
+| Backup | Litestream | Apache-2 | Continuous replication of every file | — |
+
+Two pieces are wrapped behind our own small interfaces, because their surface is small and swapping is plausible: the **store** (Dexie now, could be SQLite in the browser) and the **bus** (`EventTarget` now, could be a worker). XState and Lit are not wrapped: they are the actor and view semantics, and a wrapper would be a thinner XState.
+
+**Tracing.** XState's `inspect` hook receives every message across all actors. A small adapter streams that to the console and to a `/trace` endpoint on the server, so after running a scenario a person or an agent can read a complete, ordered transcript of who sent what to whom. This is the primary debugging tool and it is meant to be used autonomously.
+
+Deliberately not used: a global state store, a micro-frontend framework, a message broker, a bundler, any framework that wants to own the page.
+
+---
+
+## 11. Enforcement
+
+The system is maintained by coding agents, so the rules are not advice. Every violation fails immediately, and one `check` command is the definition of done.
+
+### 11.1 Directory per component, front and back
+
+```
+components/
+  notes/
+    machine.js        actor definition; manifest is read from here
+    store.js          IndexedDB cache + outbox, behind the store interface
+    events/           JSON Schema per event this component owns
+    server/
+      router.py       FastAPI router for /notes
+      schema.sql      per-user SQLite schema and migrations
+    tests/
+  note-editor/
+    machine.js
+    view.js
+    tests/
+  settings/
+    machine.js
+    store.js          localStorage, behind the store interface
+```
+
+Deleting a component is deleting one directory and its databases. Nothing else needs to change, and if it does, the checks say which contract was broken.
+
+### 11.2 The checks
+
+| Rule | Enforced by |
+|---|---|
+| Components never touch each other | Import check, JavaScript and Python: a component may import only its own directory, `/vendor`, `/bus`, `/store` |
+| Everything goes through the bus | Same check; there is no other importable channel |
+| Events match their contract | The bus validates every emitted event against the schema registry at runtime and throws on unknown names or invalid payloads |
+| Only declared events are emitted | The bus refuses an emit whose name is not in the emitter's declared list |
+| Only fact components answer queries | The bus refuses to route a query to a view component |
+| Contracts only grow | Schema compatibility check against the previous commit: fails on removed, renamed, or new required fields; prints the affected components from the manifests |
+| One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
+| Pages contain no logic | Page check: only an import map and tags |
+| Tokens only | Style check: views use no colour, spacing, or type value that is not a token |
+| Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
+
+The architecture document describes the rules; the checks are what make them real.
+
+---
+
+## 12. Constraints and known edges
+
+- **No query between views.** If two views seem to need to talk, either one should emit an event the other listens to, or they are one view.
+- **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. Example: `note-reader` reacts to `note.selected` by querying `notes: read(id)` while the editor's debounced `note.saved` for the same note is still in flight; the reader gets the old body. Protection is the fourth rule of section 4: it also listens to `note.changed` and adopts the newer version.
+- **Remote-only facts fail offline.** That is by design: `llm` answers with an error and emits `llm.unavailable`; a view decides what to show.
+- **Two shared vocabularies.** The event registry and the design tokens are global schemas in disguise. Both are kept small, both are additive-only, both are reviewed on a page before use.
+- **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.
+
+---
+
+## 13. Vocabulary
+
+- **Component**: one directory, one name, one concept or one way of looking at it; the unit of ownership. Front and back end together.
+- **Fact component**: headless owner of a concept; emits when it changes, answers queries about it. Local-only, replicated, or remote-only.
+- **View component**: a way of looking at or acting on a concept; owns only UI state.
+- **Actor**: the deciding part of a component; a mailbox processed one message at a time.
+- **View**: the visible, decision-free part of a view component.
+- **Store**: a fact component's private persistence, wherever it lives.
+- **Server module**: the server side of a fact component, in the same directory.
+- **Outbox**: local changes not yet acknowledged by the server.
+- **Bus**: the shared infrastructure that routes events, commands, and queries, and validates them.
+- **Event**: a broadcast fact, past tense, not persisted.
+- **Command**: an addressed instruction; no reply.
+- **Query**: an addressed question to a fact component; always a reply, matched by correlation id.
+- **Manifest**: what a component emits, consumes, accepts, answers, and owns; read from its machine.
+- **Stem**: a fact component together with its related views.
+- **Page**: an HTML file, an import map and tags; tokens, contracts, components, stem, or app.
+- **App**: the page kind that composes components around a purpose.
