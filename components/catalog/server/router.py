@@ -15,13 +15,23 @@ ROOT = Path(__file__).resolve().parents[3]
 COMPONENTS = ROOT / "components"
 
 
+# Reading the manifests spawns Node, and every view on a page asks at load, so
+# the result is kept until any machine changes (11: the full check has a budget).
+_cache: tuple[tuple, dict] | None = None
+
+
 def _read_manifests() -> dict:
+    global _cache
     machines = sorted(str(p.relative_to(ROOT)) for p in COMPONENTS.glob("*/machine.js"))
+    stamp = tuple((m, (ROOT / m).stat().st_mtime_ns) for m in machines)
+    if _cache is not None and _cache[0] == stamp:
+        return _cache[1]
     result = subprocess.run(
         ["node", "--import", "./checks/register.mjs", "checks/manifests.mjs", *machines],
         cwd=ROOT, capture_output=True, text=True, timeout=30, check=True,
     )
-    return json.loads(result.stdout)
+    _cache = (stamp, json.loads(result.stdout))
+    return _cache[1]
 
 
 def _records(manifests: dict) -> list:

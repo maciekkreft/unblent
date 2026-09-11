@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="kind" content="stem" />
+    <title>Work desk</title>
+    <link rel="stylesheet" href="/static/tokens/tokens.css" />
+    <link rel="stylesheet" href="/static/tokens/base.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "lit": "/static/vendor/lit/lit-core.min.js",
+          "xstate": "/static/vendor/xstate/xstate.esm.js",
+          "ulid": "/static/vendor/ulid/index.js",
+          "bus": "/static/bus/bus.js"
+        }
+      }
+    </script>
+    <script type="module" src="/static/components/color-scheme/fact.js"></script>
+    <script type="module" src="/static/components/catalog/fact.js"></script>
+    <script type="module" src="/static/components/pages/fact.js"></script>
+    <script type="module" src="/static/components/page-nav/view.js"></script>
+    <script type="module" src="/static/components/work-desk/view.js"></script>
+    <script type="module" src="/static/components/token-sheet/view.js"></script>
+    <script type="module" src="/static/components/contract-list/view.js"></script>
+    <script type="module" src="/static/components/component-list/view.js"></script>
+  </head>
+  <body>
+    <page-nav></page-nav>
+    <work-desk>
+      <token-sheet></token-sheet>
+      <contract-list></contract-list>
+      <component-list></component-list>
+    </work-desk>
+  </body>
+</html>

@@ -607,8 +607,12 @@ def run_tests() -> None:
                      "PLAYWRIGHT_MODULE is not set; add PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs to .env")
             # The loader lets a machine test import its actor (bare `xstate`); it is
             # inert for the browser tests, whose only bare import is Playwright by path.
+            # One process for every file: node's default is a process per file,
+            # and sixteen start-ups alone spend a third of the budget (11). The flag
+            # is `--test-isolation=none` from Node 23.
             result = subprocess.run(
-                ["node", "--import", "./checks/register.mjs", "--test", *browser_tests],
+                ["node", "--import", "./checks/register.mjs", "--test",
+                 "--experimental-test-isolation=none", *browser_tests],
                 cwd=ROOT, env=env,
             )
             if result.returncode != 0:
