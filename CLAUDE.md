@@ -14,7 +14,7 @@ The architecture is the spec. If a request conflicts with it, name the section a
   reporting done.
 - Ask before changing `tokens/tokens.css`, an event, the document facts list (7.5), or `architecture.md`. Propose, then wait.
 - Comments say why, or cite an architecture section. Never what the code does, never history.
-- Verify UI in WebKit, then Chromium, before reporting done.
+- Verify UI in WebKit, then Chromium, on the desk and in the phone preview (`data-viewport="phone"`, set through `viewport-switch` or localStorage key `viewport`), before reporting done.
 - Commits: 2-3 words, no attribution trailers, same-session fixes amend.
 
 # Reading the slip-box

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The viewport the page is now previewed in.",
+  "type": "object",
+  "properties": {
+    "viewport": { "enum": ["desk", "phone"] }
+  },
+  "required": ["viewport"],
+  "additionalProperties": false
+}

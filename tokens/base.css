@@ -1,5 +1,6 @@
-/* The document layer (architecture.md 7.4): the font face, and inherited
-   properties on html and body. Nothing else crosses a shadow boundary. */
+/* The document layer (architecture.md 7.4): the font face, the inherited
+   properties on html and body, and the rules by which the document reacts to a
+   document fact (7.5). Nothing else crosses a shadow boundary. */
 
 @font-face {
   font-family: "Inter";
@@ -23,4 +24,52 @@ body {
   color: var(--color-body);
   background: var(--color-canvas);
   font-optical-sizing: auto;
+}
+
+/* Section 7.5: the document reacts to the viewport fact. Drawn only where a
+   pointer can use the switch; a phone never previews a phone. The device must
+   stay put while the page scrolls inside the screen, so html clips: an overflow
+   set on a body in normal flow is otherwise propagated to the window, which
+   scrolls the whole page and lets the phone scroll away. The device chrome, the
+   titanium frame and the Dynamic Island, is preview-only physical detail, not
+   part of the app's design vocabulary, so its greys and dimensions are literals
+   here rather than tokens (7.4). The frame is a box-shadow so the screen stays
+   exactly one phone wide. */
+@media (pointer: fine) {
+  html[data-viewport="phone"] {
+    overflow: hidden;
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-canvas-soft);
+  }
+  html[data-viewport="phone"] body {
+    box-sizing: border-box;
+    width: var(--viewport-phone);
+    height: var(--viewport-phone-tall);
+    max-height: calc(100dvh - var(--space-xl));
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-radius: 44px;
+    box-shadow:
+      0 0 0 2px #000000,
+      0 0 0 14px #3a3a40,
+      0 0 0 16px #17171b,
+      0 24px 70px -16px rgba(0, 0, 0, 0.55);
+  }
+  /* Sticky so the content scrolls beneath the island, as on iOS; the margins
+     reserve a status strip so the first content clears it. */
+  html[data-viewport="phone"] body::before {
+    content: "";
+    position: sticky;
+    top: var(--space-sm);
+    z-index: 1;
+    display: block;
+    width: 116px;
+    height: 32px;
+    margin: var(--space-sm) auto var(--space-md);
+    border-radius: var(--radius-full);
+    background: #000000;
+  }
 }

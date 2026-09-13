@@ -38,6 +38,9 @@ class PageNav extends LitElement {
     }
     nav {
       display: flex;
+      /* Wrap whole links to a new row when the window is too narrow (a phone),
+         rather than letting a label break across lines. */
+      flex-wrap: wrap;
       gap: var(--space-sm);
       padding: var(--space-sm) var(--space-md);
       border-bottom: var(--border-width) solid var(--color-border);
@@ -48,6 +51,7 @@ class PageNav extends LitElement {
       text-decoration: none;
       padding: var(--space-2xs) var(--space-xs);
       border-radius: var(--radius-sm);
+      white-space: nowrap;
     }
     a:hover {
       background: var(--color-surface-hover);

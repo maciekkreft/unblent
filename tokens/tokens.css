@@ -78,7 +78,6 @@
   /* Shadows read as black on dark; deeper alphas so a raised sheet still lifts. */
 
   --shadow-card: 0 1px 3px light-dark(rgba(32, 21, 21, 0.06), rgba(0, 0, 0, 0.35));
-  --shadow-raised: 0 4px 12px light-dark(rgba(32, 21, 21, 0.08), rgba(0, 0, 0, 0.55));
 
   /* === TRANSITIONS === */
 
@@ -86,6 +85,11 @@
   --duration-slide: 300ms;
   --duration-undo: 3s;    /* the window a deleted note can be brought back */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* === VIEWPORT === */
+  /* The phone preview (7.5, base.css): an iPhone 14–16 logical screen. */
+  --viewport-phone: 390px;
+  --viewport-phone-tall: 844px;
 
   /* === APP SHELL === */
 

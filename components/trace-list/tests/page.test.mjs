@@ -32,6 +32,15 @@ const rows = (page) =>
 // A row for page-nav's pages: list query: kind query, name list, pages reached.
 const isPagesList = (text) => text.includes("query") && text.includes("list") && text.includes("pages");
 
+// The viewport switch lives on the stem; tests may not import across components,
+// so the helper is copied from components/viewport/tests/page.test.mjs.
+const clickSwitch = (page, label) =>
+  page.evaluate((label) => {
+    for (const b of document.querySelector("viewport-switch").shadowRoot.querySelectorAll("button")) {
+      if (b.textContent.trim() === label) b.click();
+    }
+  }, label);
+
 // WebKit first, then Chromium: a Safari-class engine is the stricter check. The
 // stem page composes trace-list, which shows the page's own bus traffic (section
 // 10); the one other view on it is page-nav, so its pages: list query must appear.
@@ -68,6 +77,30 @@ for (const engine of ENGINES) {
         path: resolve(SCREENSHOTS, `trace-list-${engine.name}.png`),
         fullPage: true,
       });
+
+      // In the phone preview the container query stacks each record, so the table
+      // must fit the narrowed body: no horizontal overflow and no header row.
+      await clickSwitch(page, "Phone");
+      await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
+      const fit = await page.evaluate(() => {
+        const root = document.querySelector("trace-list").shadowRoot;
+        const scroll = root.querySelector(".scroll");
+        const thead = root.querySelector("thead");
+        return {
+          // 1px of slack: Chromium rounds grid tracks up by a sub-pixel where
+          // WebKit lands exactly, and a clipped column would overflow by a word.
+          overflows: scroll.scrollWidth > scroll.clientWidth + 1,
+          headerShown: getComputedStyle(thead).display !== "none",
+        };
+      });
+      assert.ok(!fit.overflows, "the stacked records fit the phone width");
+      assert.ok(!fit.headerShown, "the table header is hidden when stacked");
+      assert.ok((await rows(page)).some(isPagesList), "a pages: list row still reads on the phone");
+      await page.screenshot({ path: resolve(SCREENSHOTS, `trace-list-phone-${engine.name}.png`) });
+
+      // Restore the desk so the stored choice does not leak into other tests.
+      await clickSwitch(page, "Desk");
+      await page.waitForFunction(() => document.documentElement.dataset.viewport === "desk");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

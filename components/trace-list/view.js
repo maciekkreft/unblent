@@ -74,6 +74,9 @@ class TraceList extends LitElement {
     :host {
       display: block;
       padding: var(--space-xl) var(--space-md);
+      /* 3.1/7.5: the preview narrows the body, so the host's own width is the
+         honest signal for the layout on both the phone preview and a real phone. */
+      container-type: inline-size;
     }
     .card {
       display: flex;
@@ -91,7 +94,6 @@ class TraceList extends LitElement {
       font-weight: var(--weight-semibold);
       color: var(--color-ink);
     }
-    .lead,
     .empty {
       margin: 0;
       font-size: var(--text-sm);
@@ -119,6 +121,26 @@ class TraceList extends LitElement {
     }
     .row {
       cursor: pointer;
+    }
+    /* The disclosure chevron is the signifier that a row opens to its payload,
+       so no prose has to say it. It rotates when the row is open. */
+    .caret {
+      display: inline-block;
+      margin-right: var(--space-2xs);
+      color: var(--color-mute);
+      transition: transform var(--duration-fast) var(--ease);
+    }
+    .caret::before {
+      content: "\\25B8";
+    }
+    .row.open .caret {
+      transform: rotate(90deg);
+    }
+    /* The two long columns wrap at every width (they never fit a phone on one
+       line); the short columns stay nowrap. */
+    .route,
+    .shape {
+      white-space: normal;
     }
     .name {
       color: var(--color-ink);
@@ -152,6 +174,77 @@ class TraceList extends LitElement {
       color: var(--color-body);
       white-space: pre-wrap;
     }
+    /* Below the width where the eight-column table stops fitting, stack each
+       record so it reads without sideways scrolling. 45rem is the table (~660px)
+       plus the card and host padding; it is a literal, not a token, because 7.4
+       admits only tokens for lengths that place or size a box, and a container
+       breakpoint is neither. Range syntax: WebKit ≥ 16.4 and Chromium support it. */
+    @container (width < 45rem) {
+      thead {
+        display: none;
+      }
+      table,
+      tbody {
+        display: block;
+      }
+      table {
+        width: 100%;
+      }
+      /* Lay each record out as three lines with flex order, so the id keeps its
+         own width instead of sharing a grid column with the timestamp below it:
+         header (#, kind, name, outcome), then route, then a muted meta line. */
+      tr.row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        column-gap: var(--space-sm);
+        row-gap: var(--space-2xs);
+        padding: var(--space-sm) 0;
+        border-bottom: var(--border-width) solid var(--color-border);
+      }
+      td {
+        padding: 0;
+        border: 0;
+        white-space: normal;
+      }
+      .num {
+        order: 1;
+      }
+      .kind {
+        order: 2;
+      }
+      .name {
+        order: 3;
+      }
+      .outcome {
+        order: 4;
+        margin-left: auto;
+        text-align: right;
+      }
+      .route {
+        order: 5;
+        flex-basis: 100%;
+      }
+      .time {
+        order: 6;
+      }
+      .tab {
+        order: 7;
+      }
+      .shape {
+        order: 8;
+      }
+      .time,
+      .tab,
+      .shape {
+        font-size: var(--text-caption);
+        color: var(--color-body-mid);
+      }
+      tr.payload,
+      tr.payload td {
+        display: block;
+      }
+    }
   `;
 
   #actor = new ActorController(this);
@@ -163,10 +256,6 @@ class TraceList extends LitElement {
     return html`
       <article class="card">
         <h2>Bus traffic</h2>
-        <p class="lead">
-          Every routing decision the bus made this session, in this tab and the other tabs of
-          this origin. Click a row for its payload.
-        </p>
         ${records.length ? this.#table(records, expanded) : html`<p class="empty">No traffic yet.</p>`}
       </article>
     `;
@@ -200,18 +289,22 @@ class TraceList extends LitElement {
     const id = `${r.tab}:${r.seq}`;
     const open = expanded === id;
     return html`
-      <tr class="row" @click=${() => this.#actor.send({ type: "_toggle", id })}>
-        <td class="num">${r.seq}</td>
-        <td>${time(r.at)}</td>
-        <td>${r.tab.slice(-4)}</td>
-        <td>${r.kind}</td>
+      <tr
+        class="row ${open ? "open" : ""}"
+        aria-expanded=${open}
+        @click=${() => this.#actor.send({ type: "_toggle", id })}
+      >
+        <td class="num"><span class="caret" aria-hidden="true"></span>${r.seq}</td>
+        <td class="time">${time(r.at)}</td>
+        <td class="tab">${r.tab.slice(-4)}</td>
+        <td class="kind">${r.kind}</td>
         <td class="name">${r.name}</td>
-        <td>${r.from} → ${recipients(r)}</td>
-        <td>
+        <td class="route">${r.from} → ${recipients(r)}</td>
+        <td class="outcome">
           <span class=${OUTCOME_CLASS[r.outcome] ?? nothing}>${r.outcome}</span>
           ${r.reason ? html` <span class="reason">${r.reason}</span>` : nothing}
         </td>
-        <td>${summary(r.payload)}</td>
+        <td class="shape">${summary(r.payload)}</td>
       </tr>
       ${open
         ? html`<tr class="payload">

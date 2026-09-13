@@ -1,0 +1,19 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The viewport the page is previewed in.",
+    "type": "object",
+    "properties": {
+      "viewport": { "enum": ["desk", "phone"] }
+    },
+    "required": ["viewport"],
+    "additionalProperties": false
+  }
+}

@@ -81,7 +81,7 @@ Where it stores the fact is its own business, and there are three shapes:
 
 | Shape | Storage | Offline | Example |
 |---|---|---|---|
-| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings`, `trace` |
+| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings`, `trace`, `viewport` |
 | **Replicated** | Browser cache + server, kept in sync (section 5) | Works; syncs later | `notes`, `conversations`, `session` |
 | **Remote-only** | The fact can only be produced by the server | Fails honestly, with an error reply and, where other views need to know, an `unavailable` event | `llm`, `catalog`, `pages` |
 
@@ -138,7 +138,7 @@ A query is a message carrying the target address, the query name, its payload, a
 
 In the browser this is `ask(machine, target, name, payload)` on the bus: it returns a promise that settles when the reply reaches the asker's mailbox, and a machine consumes it through `fromPromise`, the function arriving through `input`, so the machine stays importable in Node. A query to a target nobody mounted is replied to at once with `{ error: "no-answerer" }`; one the target does not answer with `{ error: "unknown-query" }`. A query aimed at a view, or one the asker did not declare (section 7.3), is refused.
 
-### 4.3 The four rules
+### 4.3 The five rules
 
 **Every fact has exactly one owner.** If two components need the notes, one of them is `notes` and the other asks it. There is no shared database in the browser and no copy that can drift.
 
@@ -147,6 +147,8 @@ In the browser this is `ask(machine, target, name, payload)` on the bus: it retu
 **Events are self-contained.** `note.saved` carries the whole note, not an id that forces the consumer to ask. This costs duplication and buys isolation. Volume is not a concern: inside the browser a whole note per event is free, and the view that produces changes debounces at source, so an editor emits `note.saved` on a pause or blur, not per keystroke.
 
 **Query for the starting picture, subscribe for everything after.** A view that queries `notes: read(id)` must also listen to `note.changed`, and must treat any later event with a newer version as authoritative. Nothing may assume some other component finished reacting first.
+
+**A fact component learns what the user did from events.** A view where the user acted emits the gesture as an event (`note.saved`, `viewport.selected`); the fact component that owns the concept consumes it. Commands address views: one instance among several, or an instruction that is not a fact (`focus`, `load(id)`).
 
 ---
 
@@ -240,8 +242,8 @@ sequenceDiagram
     B->>L: complete
     L->>B: reply cid 3
     B->>C: text, or error if offline
-    C->>B: command conversations: append(turn)
-    B->>V: append
+    C->>B: event turn.submitted(turn)
+    B->>V: turn.submitted
     V->>B: event conversation.changed
     B->>C: conversation.changed
 ```
@@ -254,7 +256,7 @@ Suppose the build order is: `notes` + `note-editor`, then `note-list`, then `spl
 
 - `note-list` queries `notes: list` on start, subscribes to `note.changed` and `note.deleted`, emits `note.selected`. Nothing existing changes.
 - `split-view` is nearly pure declaration: two slots, and a `follows` attribute that turns `note.selected` into a `load(id)` command on the chosen slot.
-- `chat` queries `notes` and `llm`, commands `conversations`. Nothing existing changes.
+- `chat` queries `notes` and `llm`, emits `turn.submitted`, which `conversations` consumes. Nothing existing changes.
 - `note-reader` subscribes to `note.selected`, queries `notes: read(id)`. Nothing existing changes.
 
 Each later component used only contracts that already existed, and the components page (section 8) showed which ones were available before it was built. This is the Zettelkasten property made concrete: a new note points at old notes; old notes do not change.
@@ -279,6 +281,9 @@ conversation.changed  owner: conversations  { id, turns, version }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null }
 trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload }
+turn.submitted        owner: chat           { conversationId, turn }
+viewport.selected     owner: viewport-switch { viewport }
+viewport.changed      owner: viewport       { viewport }
 ```
 
 Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. If a change cannot be additive, it is a new event with a new name.
@@ -295,11 +300,11 @@ note-editor#n: load(id)
 notes: list              → { notes: [{ id, title, updatedAt }] }
 notes: read(id)          → { note } | { error: "not-found" }
 llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
-conversations: append(turn)
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
 pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }
 catalog: contracts       → { events: [{ name, owner, schema, consumers }], queries: [{ target, name, payload, reply, askers }], commands: [{ target, name, payload }] } | { error: "unavailable" }
 trace: list              → { records: [record] }
+viewport: read           → { viewport }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
@@ -323,7 +328,7 @@ Manifests reach the browser through one fact component, `catalog`: remote-only, 
 
 The visual vocabulary: a small set of CSS custom properties for colour, spacing, type, radius, motion. Views use tokens and nothing else: every colour, every length that places or sizes a box, every type value is a token or a `calc()` of tokens. Tokens are the second shared vocabulary and are kept minimal: a token exists because a view uses it, and a token nothing uses is removed. Every change to `tokens.css` needs explicit permission from the user first.
 
-The document layer is two files: `tokens.css`, the custom properties, and `base.css`, the `@font-face` declaration plus the inherited properties set on `html` and `body`. There are no shared utility classes, because shadow DOM stops a class selector at the component boundary; only inherited properties and custom properties cross it, which is why tokens can theme a view and a `.btn` class could not.
+The document layer is two files: `tokens.css`, the custom properties, and `base.css`, the `@font-face` declaration, the inherited properties set on `html` and `body`, and the rules by which the document reacts to a document fact (7.5). There are no shared utility classes, because shadow DOM stops a class selector at the component boundary; only inherited properties and custom properties cross it, which is why tokens can theme a view and a `.btn` class could not.
 
 ### 7.5 Document facts
 
@@ -332,6 +337,7 @@ A few facts are properties of the document itself rather than of any view: which
 | Component | Writes |
 |---|---|
 | `color-scheme` | `data-color-scheme` |
+| `viewport` | `data-viewport` |
 
 ---
 

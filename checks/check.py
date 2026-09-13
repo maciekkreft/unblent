@@ -154,7 +154,7 @@ def check_manifests(manifests: dict) -> None:
 # --- Component check (architecture.md 11.1) --------------------------------------
 
 _ALLOWED_ENTRIES = {"machine.js", "view.js", "fact.js", "store.js", "events", "queries", "commands", "server", "tests"}
-_KIND_FORBIDS = {"view": {"store.js", "server", "events", "queries", "fact.js"}, "fact": {"view.js"}}
+_KIND_FORBIDS = {"view": {"store.js", "server", "queries", "fact.js"}, "fact": {"view.js"}}
 
 
 def check_component_dirs(manifests: dict) -> None:
