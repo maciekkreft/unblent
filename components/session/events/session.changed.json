@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Who is signed in now, or null when nobody is (3.4). A view takes its starting picture from session: read and follows this after (4.3).",
+  "type": "object",
+  "properties": {
+    "userId": { "type": ["string", "null"] },
+    "registrationOpen": { "type": "boolean" }
+  },
+  "required": ["userId"],
+  "additionalProperties": false
+}

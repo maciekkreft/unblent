@@ -2,6 +2,8 @@
 ``app`` so it never clashes with ``pages/apps/`` or an app component."""
 
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -49,8 +51,18 @@ app = FastAPI()
 def _include_component_routers() -> None:
     for router_file in sorted(COMPONENTS.glob("*/server/router.py")):
         name = router_file.parent.parent.name
-        spec = importlib.util.spec_from_file_location(f"components.{name}.server.router", router_file)
+        # A server module may import a relative module inside its own server/ (11.2),
+        # so its package must resolve: register it in sys.modules with the server
+        # directory as its search path before the router is executed.
+        package = f"components.{name}.server"
+        if package not in sys.modules:
+            pkg = types.ModuleType(package)
+            pkg.__path__ = [str(router_file.parent)]
+            pkg.__package__ = package
+            sys.modules[package] = pkg
+        spec = importlib.util.spec_from_file_location(f"{package}.router", router_file)
         module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         app.include_router(module.router, prefix=f"/api/{name}")
 

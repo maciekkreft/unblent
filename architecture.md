@@ -144,7 +144,7 @@ In the browser this is `ask(machine, target, name, payload)` on the bus: it retu
 
 **Only fact components answer queries.** A view queries `notes`, never `note-list`. If a view wants to know what another view is showing, that view should have emitted an event (`note.opened`) and this one should have listened.
 
-**Events are self-contained.** `note.saved` carries the whole note, not an id that forces the consumer to ask. This costs duplication and buys isolation. Volume is not a concern: inside the browser a whole note per event is free, and the view that produces changes debounces at source, so an editor emits `note.saved` on a pause or blur, not per keystroke.
+**Events are self-contained.** `note.saved` carries the whole note, not an id that forces the consumer to ask. This costs duplication and buys isolation. Volume is not a concern: inside the browser a whole note per event is free, and the view that produces changes coalesces at source, so an editor emits `note.saved` at a short throttle while the user types and at once on blur, never per keystroke. The fact component announces each one immediately; what it debounces is the network (section 5), not the news.
 
 **Query for the starting picture, subscribe for everything after.** A view that queries `notes: read(id)` must also listen to `note.changed`, and must treat any later event with a newer version as authoritative. Nothing may assume some other component finished reacting first.
 
@@ -167,6 +167,10 @@ For replicated fact components:
 
 On the server, each replicated fact component has **one SQLite file per user**: `data/<user>/<component>.db`. The session resolves the user, the component's router resolves the file, and neither the schema nor the browser ever mentions users. The backend is written as if for a single user. Litestream streams every file continuously to object storage; the architecture never sees it, and restoring is one command.
 
+`session` is the exception: it keeps one shared file `data/session.db`, the identity registry, because it defines users and so cannot be per-user. While no user is signed in a replicated fact's outbox does not drain; signing in starts draining, so what was written anonymously becomes the account's, and what was not acknowledged before sign-out uploads at the next sign-in.
+
+While anonymous, `notes` mints versions in the browser and the server adopts the client's number on first upload, so the anonymous note carries its history into the account. Registration is capped by `MAX_USERS`; once the registry is full `session` reports `registrationOpen` false and refuses a new passkey with `registration-closed`. `session`'s own replicated shape is not an outbox but a localStorage cache plus an owed sign-out, because identity has no records to version: there is nothing to base a write on, only the single fact of who is signed in.
+
 ---
 
 ## 6. Interactions
@@ -184,12 +188,13 @@ sequenceDiagram
     participant S as notes/server
 
     U->>E: types
-    E->>E: debounce
+    E->>E: throttle
     E->>B: event note.saved(note)
     B->>N: note.saved(note)
     N->>N: cache (pending) + outbox
     N->>B: event note.changed(note, pending)
     B->>E: note.changed
+    N->>N: debounce
     N->>S: PUT /notes/{id} (note, baseVersion)
     S-->>N: ok, version
     N->>N: clear outbox row, clear pending
@@ -287,7 +292,10 @@ layout.switched       owner: layout-switch  { arranging }
 settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging }
 settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutSwitchHidden, arranging }
 llm.unavailable       owner: llm            { reason }
-session.changed       owner: session        { userId | null }
+session.changed       owner: session        { userId | null, registrationOpen }
+session.refused       owner: session        { reason }  reason ∈ cancelled | registration-closed | unknown-credential | unavailable
+signin.requested      owner: session-switch  {}
+signout.requested     owner: session-switch  {}
 trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
 turn.submitted        owner: chat           { conversationId, turn }
 viewport.selected     owner: viewport-switch { viewport }
@@ -315,6 +323,7 @@ trace: list              → { records: [record] }
 viewport: read           → { viewport }
 dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
 settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging }
+session: read            → { userId: string | null, registrationOpen: boolean }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
@@ -402,7 +411,8 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Schema (server) | Python `jsonschema` | MIT | Validating payloads server-side, and the schema compatibility check (section 11.2) when it arrives | — |
 | Font | Inter | OFL-1.1 | One self-hosted variable file, all weights | Italic, until a view needs it |
 | Icons | Phosphor Icons | MIT | Regular-weight path data, one icon at a time, copied verbatim from `@phosphor-icons/core` 2.1.1 `assets/regular/<name>.svg` (7.6) | The font, the web and react packages, other weights, the whole set |
-| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does | A test framework |
+| WebAuthn | py_webauthn | BSD-3 | The passkey ceremonies (registration and authentication options, and verifying the browser's response) in `session`'s server module | Cookies or sessions, which are `server/user.py`'s HMAC over the user id |
+| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does. A WebAuthn ceremony is tested in Chromium only, through its virtual authenticator; WebKit covers the rendering | A test framework |
 
 Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve.
 
@@ -449,6 +459,7 @@ The components tree sits inside a small repository-wide layout:
 
 ```
 server/          FastAPI entry (named "server", not "app", so it never clashes with pages/apps/)
+  user.py        the entry's user infrastructure: who the request is from and where their files live (UNBLENT_DATA overriding data/); a server module may import it
   tests/         HTTP tests for the entry; infrastructure like the bus, not a component. Never served
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
@@ -457,9 +468,9 @@ pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
 checks/          check.py, the one check command
 bus/             the bus (built once)
 store/           the store interface; tests/ never served
-deploy/          systemd unit and anything else the host needs; never served
+deploy/          systemd unit, litestream.yml (section 5) and anything else the host needs; never served
 data/            per-user SQLite files (section 5), gitignored
-.env             machine-specific settings and secrets, gitignored
+.env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
 ```
 
 Static serving is namespaced so the future app can own `/`:
@@ -482,7 +493,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 
 | Rule | Enforced by |
 |---|---|
-| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, `store`, or `icons`. A server module may import the standard library, the packages named in `requirements.txt`, or a relative module inside its own `server/` |
+| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, `store`, or `icons`. A server module may import the standard library, the packages named in `requirements.txt`, `server.user` (the entry's user infrastructure), or a relative module inside its own `server/` |
 | Everything goes through the bus | Same check; there is no other importable channel |
 | Events match their contract | The bus validates every emitted event against the schema registry at runtime and throws on unknown names or invalid payloads |
 | Queries match their contract | The bus registers each answered query's schema at mount and validates payload and reply at runtime |
@@ -511,10 +522,14 @@ The architecture document describes the rules; the checks are what make them rea
 ## 12. Constraints and known edges
 
 - **No query between views.** If two views seem to need to talk, either one should emit an event the other listens to, or they are one view.
-- **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. Example: `note-reader` reacts to `note.selected` by querying `notes: read(id)` while the editor's debounced `note.saved` for the same note is still in flight; the reader gets the old body. Protection is the fourth rule of section 4: it also listens to `note.changed` and adopts the newer version.
+- **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. Example: `note-reader` reacts to `note.selected` by querying `notes: read(id)` while the editor's throttled `note.saved` for the same note is still in flight; the reader gets the old body. Protection is the fourth rule of section 4: it also listens to `note.changed` and adopts the newer version.
 - **Remote-only facts fail offline.** That is by design: `llm` answers with an error and emits `llm.unavailable`; a view decides what to show.
 - **Three shared vocabularies.** The event registry, the design tokens and the icons are global schemas in disguise. All are kept small: events are additive-only, tokens are minimal, icons grow one glyph at a time, each approved by sight. All change only with permission, and all are reviewed on a page before use.
 - **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.
+
+- **One user per browser.** Signing in adopts everything cached anonymously in that browser, so `notes` enqueues its whole cache to the account; a second account on the same browser is not a goal.
+
+- **No surface for a refused gesture yet.** `session.refused`, `note.conflicted` and `llm.unavailable` reach no view a user sees; a future `notice-stack` view would consume them and show dismissable notices. Until then the trace is where they show.
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 

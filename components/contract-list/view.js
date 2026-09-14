@@ -84,7 +84,7 @@ class ContractList extends LitElement {
     }
     dl {
       display: grid;
-      grid-template-columns: max-content 1fr;
+      grid-template-columns: 30% 1fr;
       gap: var(--space-2xs) var(--space-sm);
       margin: 0;
       font-size: var(--text-sm);
@@ -109,7 +109,12 @@ class ContractList extends LitElement {
       color: var(--color-body-mid);
       text-transform: uppercase;
     }
+    /* One geometry for every card (section 8, kind 2): fixed layout takes the column
+       widths from the header row, not each card's content, so the eye compares the
+       same three columns across cards instead of chasing them to a new x each time. */
     table {
+      width: 100%;
+      table-layout: fixed;
       border-collapse: collapse;
       font-size: var(--text-sm);
       color: var(--color-body);
@@ -120,12 +125,22 @@ class ContractList extends LitElement {
       padding: var(--space-2xs) var(--space-sm);
       border: var(--border-width) solid var(--color-border);
       vertical-align: top;
+      overflow-wrap: anywhere;
     }
     th {
       font-weight: var(--weight-semibold);
       color: var(--color-body-mid);
     }
-    .field {
+    th.field {
+      width: 30%;
+    }
+    th.type {
+      width: 60%;
+    }
+    th.req {
+      width: 10%;
+    }
+    td.field {
       color: var(--color-ink);
     }
     .req {
@@ -243,8 +258,8 @@ class ContractList extends LitElement {
       <table>
         <thead>
           <tr>
-            <th>field</th>
-            <th>type</th>
+            <th class="field">field</th>
+            <th class="type">type</th>
             <th class="req">req</th>
           </tr>
         </thead>

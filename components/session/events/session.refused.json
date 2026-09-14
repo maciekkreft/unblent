@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A sign-in or sign-out gesture could not be honoured. No view surfaces it yet (12); the trace is where it shows.",
+  "type": "object",
+  "properties": {
+    "reason": { "enum": ["cancelled", "registration-closed", "unknown-credential", "unavailable"] }
+  },
+  "required": ["reason"],
+  "additionalProperties": false
+}

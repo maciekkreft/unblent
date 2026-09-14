@@ -4,16 +4,17 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 // draft, which state it is in — and points at `notes`, which owns the fact. On
 // start it asks notes: list and reopens the newest note, or takes a note by the
 // load command or, when it carries `follows`, by note.selected from the list (both
-// ask notes: read); it follows note.changed after (4.3), and emits note.saved when
-// the user pauses. It announces the note it is showing with note.opened whenever
+// ask notes: read); it follows note.changed after (4.3), and emits note.saved at a
+// short throttle while the user types, and on blur. It announces the note it is showing with note.opened whenever
 // its id changes, so a list can highlight that row (6.4). Everything with a side
 // effect — the queries, minting an id, focusing the input — arrives through input,
 // so this stays a pure definition importable in Node.
 
-// A pause, not a keystroke (4.3, third rule): the draft is emitted after the user
-// stops typing, not per character. A duration, not a length that places a box, so
-// it is a plain constant rather than a token (7.4).
-const DEBOUNCE_MS = 800;
+// Short enough that a view following note.changed stays live while the user types,
+// long enough that it is not a save per keystroke (4.3, third rule): a coalescing
+// throttle, not a debounce. A duration, not a length that places a box, so it is a
+// plain constant rather than a token (7.4).
+const THROTTLE_MS = 200;
 
 // The note is one text and its title is the first line that says anything, as in
 // Notes.app: a convention of this editor, not of the contract, which still carries
@@ -184,11 +185,14 @@ export const machine = setup({
         },
         dirty: {
           on: {
-            _typed: { target: "dirty", reenter: true, actions: assignTyped }, // restart the pause timer
+            // Targetless so the `after` window is not restarted: keystrokes made
+            // within it join the one save at its end rather than pushing it back,
+            // which is what makes this a throttle, not a debounce (4.3, third rule).
+            _typed: { actions: assignTyped },
             _blurred: [{ guard: "unchanged", target: "clean" }, { target: "clean", actions: "save" }],
           },
           after: {
-            [DEBOUNCE_MS]: [{ guard: "unchanged", target: "clean" }, { target: "clean", actions: "save" }],
+            [THROTTLE_MS]: [{ guard: "unchanged", target: "clean" }, { target: "clean", actions: "save" }],
           },
         },
       },

@@ -108,7 +108,7 @@ for (const engine of ENGINES) {
       assert.deepEqual(
         rows.map((r) => r.path),
         ["/design/tokens", "/design/contracts", "/design/components", "/design/dock", "/design/notes",
-         "/design/settings", "/design/trace", "/design/work-desk", "/apps/notes"],
+         "/design/session", "/design/settings", "/design/trace", "/design/work-desk", "/apps/notes"],
       );
       assert.equal(rows.find((r) => r.path === "/design/settings").shown, null, "the current page has no hide control");
       const startNav = await navLinks(page);
@@ -120,7 +120,7 @@ for (const engine of ENGINES) {
       const s = await stored(page);
       assert.equal(s.nav[0].path, "/design/contracts");
       assert.equal(s.nav[1].path, "/design/tokens");
-      assert.equal(s.nav.length, 9, "reordering materialises every page's position");
+      assert.equal(s.nav.length, 10, "reordering materialises every page's position");
       await until(async () => (await navLinks(page))[0] === "/design/contracts");
       assert.notDeepEqual(await navLinks(page), startNav);
 

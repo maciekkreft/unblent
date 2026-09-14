@@ -151,13 +151,6 @@ const layoutSwitchOnTop = (page) =>
     const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
     return el === sw || sw.contains(el) ? "top" : "covered";
   });
-// A corner pill's box in the window, with the window size: the pills are lifted
-// clear of the folded-rail band rather than padding the rails aside (fix 3).
-const pillBox = (page, name) =>
-  page.evaluate((name) => {
-    const r = document.querySelector(name).getBoundingClientRect();
-    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, ih: innerHeight, iw: innerWidth };
-  }, name);
 // Whether a folded rail's first tab is clear of the corner pills: elementFromPoint
 // at its centre resolves to the desk (the light-DOM host), not a pill over it.
 const railTabUncovered = (page, side) =>
@@ -250,7 +243,9 @@ const clean = (page) =>
 // stem's story is told in four tests so each fits its own budget (11).
 for (const engine of ENGINES) {
   test(`the desk is four tab groups: dock a view and switch its tabs in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine);
+    // A stored layout with every view on the stage, so this test starts from the
+    // all-staged picture rather than the side dock.html seeds (that is its own test).
+    const { browser, page, problems } = await open(engine, { layout: { stage: "token-sheet", docks: {} } });
     try {
       const debug = [];
       page.on("console", (msg) => {
@@ -274,14 +269,6 @@ for (const engine of ENGINES) {
         Math.abs(glyphs.pill - glyphs.strip) <= 0.5,
         `the layout glyph matches a strip icon, saw ${glyphs.pill} vs ${glyphs.strip}`,
       );
-
-      // Both corner pills are lifted a rail's height (--space-xl, 40px) off the
-      // bottom, so a folded dock's rail — that tall, along an edge — never passes
-      // under them and no rail has to pad its tabs aside (fix 3).
-      for (const pill of ["layout-switch", "viewport-switch"]) {
-        const b = await pillBox(page, pill);
-        assert.ok(b.ih - b.bottom >= 40 - 1, `${pill} clears the folded-rail band, saw ${(b.ih - b.bottom).toFixed(1)}px`);
-      }
 
       // Open Trace; at a mid width the staged trace table must fit the stage.
       await clickTab(page, ".stage", "Trace");
@@ -619,6 +606,22 @@ for (const engine of ENGINES) {
       await until(async () => (await rect(page, ".dock.right")).width <= (await railWidth(page)) + 1.01);
 
       await page.evaluate(() => localStorage.clear());
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a fresh desk seeds the side a page declares in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine);
+    try {
+      // dock.html declares side="right" on Trace and the desk has no stored
+      // arrangement, so it seeds Trace into the right dock while the rest stay stage
+      // tabs (6.4). The first user gesture stores a layout and wins thereafter.
+      await until(async () => await shadowHas(page, ".dock.right"));
+      assert.deepEqual(await labels(page, ".stage"), ["Tokens", "Contracts", "Components"]);
+      assert.deepEqual(await labels(page, ".dock.right .panel"), ["Trace"], "Trace seeds docked on the right");
+      await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

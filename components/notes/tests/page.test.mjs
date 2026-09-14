@@ -44,7 +44,7 @@ const clickNew = (page) =>
   page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".new").click());
 const editorStatus = (page) => page.locator("note-editor .status").textContent();
 const editorBody = (page) => page.locator("note-editor textarea").inputValue();
-// Type a note and commit it: a blur saves at once (4.3), no debounce wait needed.
+// Type a note and commit it: a blur saves at once (4.3), no throttle wait needed.
 const write = (page, text) =>
   page.evaluate((t) => {
     const ta = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
@@ -261,6 +261,22 @@ for (const engine of ENGINES) {
       await until(async () => (await editorBody(page)) === "First\nbody");
       assert.ok((await listRows(page)).find((r) => r.title === "First")?.selected, "Enter selected the next row");
 
+      // The list title stays live as the user types (item 3, 4.3 third rule): a
+      // throttle saves within a typing run, so a save lands mid-run and the row shows
+      // the title before the typing ends, note.saved already in the trace. Typing char
+      // by char without a blur, over a run longer than the throttle window, is the
+      // load-proof discriminator — a wall-clock bound is not, on this small VPS.
+      const live = "A live headline";
+      await page.locator("note-editor textarea").fill("");
+      const before = debug.length;
+      await page.locator("note-editor textarea").focus();
+      await page.keyboard.type(live, { delay: 60 });
+      // Measured at the last keystroke, before any settling wait: only the throttle
+      // has saved by now.
+      const savedDuringRun = debug.slice(before).filter((l) => SAVED.test(l)).length;
+      await until(async () => (await listRows(page)).some((r) => r.title === live && r.selected));
+      assert.ok(savedDuringRun >= 1, `the throttle saved during the typing run, saw ${savedDuringRun}`);
+
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();
@@ -283,24 +299,17 @@ for (const engine of ENGINES) {
         [...document.querySelector("dock-desk").children].map((c) => c.localName),
       );
       assert.ok(
-        ["note-editor", "note-list", "trace-list"].every((n) => children.includes(n)),
-        "editor, list and trace are dock-desk children",
+        ["note-editor", "note-list"].every((n) => children.includes(n)),
+        "editor and list are dock-desk children",
       );
 
-      // The page declares side="right" on Trace and the desk is fresh, so the desk
-      // seeds it into the right dock while the editor and list stay stage tabs.
+      // Editor and Notes are the stage tabs; the desk composes what the page declares (8).
       const tabs = await page.evaluate(() =>
         [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.stage [role="tab"]')].map((b) =>
           b.textContent.trim(),
         ),
       );
       assert.deepEqual(tabs, ["Editor", "Notes"]);
-      const rightTabs = await page.evaluate(() =>
-        [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .strip [role="tab"]')].map(
-          (b) => b.textContent.trim(),
-        ),
-      );
-      assert.deepEqual(rightTabs, ["Trace"], "Trace opens docked on the right");
 
       // The editor is the shown stage tab; its status line proves it has rendered.
       await page.waitForFunction(

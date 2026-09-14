@@ -17,7 +17,7 @@
           "dexie": "/static/vendor/dexie/dexie.mjs",
           "bus": "/static/bus/bus.js",
           "store": "/static/store/store.js",
-      "icons": "/static/tokens/icons.js"
+          "icons": "/static/tokens/icons.js"
         }
       }
     </script>
@@ -28,20 +28,20 @@
     <script type="module" src="/static/components/settings/fact.js"></script>
     <script type="module" src="/static/components/dock/fact.js"></script>
     <script type="module" src="/static/components/notes/fact.js"></script>
+    <script type="module" src="/static/components/session/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
     <script type="module" src="/static/components/note-list/view.js"></script>
     <script type="module" src="/static/components/note-editor/view.js"></script>
     <script type="module" src="/static/components/layout-switch/view.js"></script>
-    <script type="module" src="/static/components/trace-list/view.js"></script>
+    <script type="module" src="/static/components/session-switch/view.js"></script>
   </head>
   <body>
-    <page-nav><layout-switch></layout-switch></page-nav>
+    <page-nav><layout-switch></layout-switch><session-switch></session-switch></page-nav>
     <dock-desk>
       <note-editor label="Editor" follows height="fill"></note-editor>
       <note-list label="Notes"></note-list>
-      <trace-list label="Trace" side="right"></trace-list>
     </dock-desk>
     <viewport-switch></viewport-switch>
   </body>

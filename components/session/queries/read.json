@@ -1,0 +1,20 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The signed-in user's id or null, and whether a passkey may still be registered (registry has room, MAX_USERS).",
+    "type": "object",
+    "properties": {
+      "userId": { "type": ["string", "null"] },
+      "registrationOpen": { "type": "boolean" }
+    },
+    "required": ["userId", "registrationOpen"],
+    "additionalProperties": false
+  }
+}

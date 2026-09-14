@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user asked to sign in (register while a slot is free, else log in). session consumes it (4.3, fifth rule).",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

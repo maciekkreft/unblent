@@ -8,9 +8,11 @@ import http.client
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from html.parser import HTMLParser
 from pathlib import Path
@@ -297,11 +299,14 @@ def check_python_imports() -> None:
             else:
                 continue
             for name in names:
+                # A server module may reach the entry's user infrastructure (11.1).
+                if name == "server.user":
+                    continue
                 top = name.split(".")[0]
                 if top not in allowed:
                     fail(path, "import check (11.2)",
                          f'import "{name}" is not the standard library, a requirements.txt package, '
-                         "or a relative module inside server/")
+                         "server.user, or a relative module inside server/")
 
 
 # --- Store check (architecture.md 11.2) ------------------------------------------
@@ -649,9 +654,17 @@ def run_tests() -> None:
     if not browser_tests and not server_tests:
         return
     port = _free_port()
+    # Section 5, 3.4: the session router needs RP_ID, MAX_USERS and a data directory;
+    # a throwaway one per run keeps the suite off the real data/ and its passkeys and
+    # per-user files disposable. RP_ID=localhost lets WebAuthn accept any port.
+    data_dir = tempfile.mkdtemp(prefix="unblent-test-data-")
+    server_env = {
+        **_dotenv(), **os.environ,
+        "RP_ID": "localhost", "MAX_USERS": "1", "UNBLENT_DATA": data_dir,
+    }
     server = subprocess.Popen(
         [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT,
+        cwd=ROOT, env=server_env,
     )
     try:
         if not _wait_for_server(port):
@@ -687,6 +700,7 @@ def run_tests() -> None:
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+        shutil.rmtree(data_dir, ignore_errors=True)
 
 
 

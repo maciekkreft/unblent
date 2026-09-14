@@ -40,13 +40,13 @@ const VIEWPORTS = [
 class ViewportSwitch extends LitElement {
   static styles = css`
     /* Fixed to the window's bottom-right so it stays outside the phone frame
-       base.css draws (7.5), and lifted a rail's height off the bottom edge so it
-       floats clear of a folded bottom dock's rail (--space-xl tall) rather than
-       over its fold button. Hidden on a touch device: a phone never previews a
-       phone, matching the (pointer: fine) guard in base.css. */
+       base.css draws (7.5). Hidden on a touch device: a phone never previews a
+       phone, matching the (pointer: fine) guard in base.css. It hugs the corner
+       like every fixed control; the fold button of a folded bottom dock yields
+       to it there. */
     :host {
       position: fixed;
-      inset: auto var(--space-md) var(--space-xl) auto;
+      inset: auto var(--space-md) var(--space-md) auto;
       display: flex;
       gap: var(--space-2xs);
       padding: var(--space-2xs);

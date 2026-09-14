@@ -164,7 +164,11 @@ class TraceList extends LitElement {
     .scroll {
       overflow-x: auto;
     }
+    /* Span the card so the table reads as one block edge to edge, not a ragged
+       content-width strip; the wrapping columns take the slack (auto layout, one
+       table here, so no fixed geometry as the contracts cards need across many). */
     table {
+      width: 100%;
       border-collapse: collapse;
       font-size: var(--text-sm);
       color: var(--color-body);

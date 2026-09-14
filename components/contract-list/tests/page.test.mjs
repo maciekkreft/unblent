@@ -71,6 +71,22 @@ for (const engine of ENGINES) {
       assert.match(contracts, /reply/i);
       assert.match(contracts, /askers contract-list/);
 
+      // One geometry for every card (section 8, kind 2): fixed table layout lands the
+      // first column at the same x and width in every card, so the eye compares across
+      // cards instead of chasing the columns.
+      const firstCols = await page.evaluate(() =>
+        [...document.querySelector("contract-list").shadowRoot.querySelectorAll(".card")]
+          .map((c) => c.querySelector("tbody td"))
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((td) => {
+            const r = td.getBoundingClientRect();
+            return { x: Math.round(r.x), w: Math.round(r.width) };
+          }),
+      );
+      assert.equal(firstCols.length, 2, "two cards with a table to compare");
+      assert.deepEqual(firstCols[1], firstCols[0], "every card's first column shares one x and width");
+
       // page-nav picks the new page up through pages: list.
       const nav = await page.evaluate(() =>
         [...document.querySelector("page-nav").shadowRoot.querySelectorAll("a")].map((a) => a.textContent),

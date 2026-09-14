@@ -4,12 +4,12 @@ import { createActor, SimulatedClock } from "xstate";
 import { machine, titleOf } from "../machine.js";
 
 // The actor is where decisions live (3.2): it is driven with a fake ask, mint and
-// focus, the shapes view.js builds for real. A SimulatedClock drives the debounce
+// focus, the shapes view.js builds for real. A SimulatedClock drives the throttle
 // without waiting real time. By default notes answers list with nothing, so the
 // editor starts empty; a test about reopening answers otherwise.
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
-const DEBOUNCE_MS = 800;
+const THROTTLE_MS = 200;
 const NOTE = { id: ID, title: "L", body: "L\nloaded", version: 7, pending: false, updatedAt: 9 };
 
 const answering = (replies) => (target, name) => Promise.resolve(replies[name] ?? {});
@@ -51,16 +51,22 @@ test("typing in an empty editor mints an id and becomes dirty, emitting nothing 
   assert.deepEqual(saved, []);
 });
 
-test("after the pause it emits one note.saved, titled by its first line, with a null base; typing restarts the timer", async () => {
+test("keystrokes inside the window are coalesced into one save, titled by its first line", async () => {
   const { actor, clock, saved } = await started();
   actor.send({ type: "_typed", body: "a" });
-  clock.increment(DEBOUNCE_MS - 1);
-  actor.send({ type: "_typed", body: "ab\nmore" }); // restarts the pause
-  clock.increment(DEBOUNCE_MS - 1);
-  assert.deepEqual(saved, [], "the earlier timer was cancelled");
+  clock.increment(THROTTLE_MS - 1);
+  actor.send({ type: "_typed", body: "ab\nmore" });
   clock.increment(1);
+  // One save at the end of the window the first keystroke opened, carrying the
+  // latest body: the throttle coalesced, it did not debounce (4.3, third rule).
   assert.deepEqual(saved, [{ type: "note.saved", id: ID, title: "ab", body: "ab\nmore", baseVersion: null }]);
   assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+
+  // A keystroke after the save opens the next window, one more save at its end.
+  actor.send({ type: "_typed", body: "ab\nmore\nagain" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 2);
+  assert.deepEqual(saved[1].body, "ab\nmore\nagain");
 });
 
 test("a blur while dirty saves at once", async () => {
@@ -74,8 +80,8 @@ test("a blur while dirty saves at once", async () => {
 test("the echo of our own save bumps baseVersion and leaves a dirty draft untouched", async () => {
   const { actor, clock } = await started();
   actor.send({ type: "_typed", body: "T\nB" });
-  clock.increment(DEBOUNCE_MS); // save: sent = T\nB, clean
-  actor.send({ type: "_typed", body: "T2\nB" }); // dirty again
+  clock.increment(THROTTLE_MS);
+  actor.send({ type: "_typed", body: "T2\nB" });
   actor.send({ type: "note.changed", id: ID, title: "T", body: "T\nB", version: 1, pending: false, updatedAt: 1 });
   const s = actor.getSnapshot();
   assert.deepEqual(s.value, { editing: "dirty" }, "still dirty");
@@ -184,7 +190,7 @@ test("a save after a load carries the loaded version as its base", async () => {
   actor.send({ type: "load", id: ID });
   await tick();
   actor.send({ type: "_typed", body: "L edited\nloaded" });
-  clock.increment(DEBOUNCE_MS);
+  clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 1);
   assert.equal(saved[0].baseVersion, 7);
   assert.equal(saved[0].title, "L edited");
@@ -193,11 +199,11 @@ test("a save after a load carries the loaded version as its base", async () => {
 test("a pause that ends on the text notes already holds saves nothing", async () => {
   const { actor, clock, saved } = await started();
   actor.send({ type: "_typed", body: "T\nB" });
-  clock.increment(DEBOUNCE_MS); // first save
+  clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 1);
   actor.send({ type: "_typed", body: "Tx\nB" });
   actor.send({ type: "_typed", body: "T\nB" }); // undone within the pause
-  clock.increment(DEBOUNCE_MS);
+  clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 1, "the pause emitted nothing");
   assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
   actor.send({ type: "_typed", body: "Tx\nB" });
@@ -211,7 +217,7 @@ test("a pause that ends on the text notes already holds saves nothing", async ()
   await tick();
   loaded.actor.send({ type: "_typed", body: "L!\nloaded" });
   loaded.actor.send({ type: "_typed", body: NOTE.body });
-  loaded.clock.increment(DEBOUNCE_MS);
+  loaded.clock.increment(THROTTLE_MS);
   assert.deepEqual(loaded.saved, []);
 });
 
@@ -263,6 +269,6 @@ test("typing in blank saves under the loaded id with a null base", async () => {
   await tick();
   assert.equal(actor.getSnapshot().value, "blank");
   actor.send({ type: "_typed", body: "made\nhere" });
-  clock.increment(DEBOUNCE_MS);
+  clock.increment(THROTTLE_MS);
   assert.deepEqual(saved, [{ type: "note.saved", id: ID2, title: "made", body: "made\nhere", baseVersion: null }]);
 });
