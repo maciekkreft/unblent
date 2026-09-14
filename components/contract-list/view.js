@@ -1,5 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
+import { icon } from "icons";
 import { machine } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -253,7 +254,7 @@ class ContractList extends LitElement {
               <tr>
                 <td class="field">${name}</td>
                 <td>${typeLabel(properties[name])}</td>
-                <td class="req">${required.has(name) ? "✓" : nothing}</td>
+                <td class="req">${required.has(name) ? icon("check") : nothing}</td>
               </tr>
             `,
           )}

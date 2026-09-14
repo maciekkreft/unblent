@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="kind" content="stem" />
+    <title>Dock</title>
+    <link rel="stylesheet" href="/static/tokens/tokens.css" />
+    <link rel="stylesheet" href="/static/tokens/base.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "lit": "/static/vendor/lit/lit-core.min.js",
+          "xstate": "/static/vendor/xstate/xstate.esm.js",
+          "ulid": "/static/vendor/ulid/index.js",
+          "dexie": "/static/vendor/dexie/dexie.mjs",
+          "bus": "/static/bus/bus.js",
+          "store": "/static/store/store.js",
+      "icons": "/static/tokens/icons.js"
+        }
+      }
+    </script>
+    <script type="module" src="/static/components/color-scheme/fact.js"></script>
+    <script type="module" src="/static/components/trace/fact.js"></script>
+    <script type="module" src="/static/components/catalog/fact.js"></script>
+    <script type="module" src="/static/components/pages/fact.js"></script>
+    <script type="module" src="/static/components/viewport/fact.js"></script>
+    <script type="module" src="/static/components/dock/fact.js"></script>
+    <script type="module" src="/static/components/page-nav/view.js"></script>
+    <script type="module" src="/static/components/viewport-switch/view.js"></script>
+    <script type="module" src="/static/components/dock-desk/view.js"></script>
+    <script type="module" src="/static/components/token-sheet/view.js"></script>
+    <script type="module" src="/static/components/contract-list/view.js"></script>
+    <script type="module" src="/static/components/component-list/view.js"></script>
+    <script type="module" src="/static/components/trace-list/view.js"></script>
+  </head>
+  <body>
+    <page-nav></page-nav>
+    <dock-desk>
+      <token-sheet label="Tokens"></token-sheet>
+      <contract-list label="Contracts"></contract-list>
+      <component-list label="Components"></component-list>
+      <trace-list label="Trace"></trace-list>
+    </dock-desk>
+    <viewport-switch></viewport-switch>
+  </body>
+</html>

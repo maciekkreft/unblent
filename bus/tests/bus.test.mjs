@@ -220,6 +220,7 @@ test("tap records a delivered event with its recipients", () => {
   assert.equal(r.kind, "event");
   assert.equal(r.name, "thing.happened");
   assert.equal(r.from, "t1");
+  assert.equal(r.fromKind, "fact", "the emitter is a fact"); // a producer owns a fact
   assert.deepEqual(r.to, ["t1c"]);
   assert.deepEqual(r.ignored, []);
   assert.equal(r.outcome, "delivered");
@@ -349,9 +350,11 @@ test("tap records asked then replied for an answered query", async () => {
   assert.ok(records.indexOf(query) < records.indexOf(reply), "the question is recorded before its reply");
   assert.ok(query.seq < reply.seq);
   assert.equal(query.outcome, "asked");
+  assert.equal(query.fromKind, "view", "the asker is a view"); // a4/t6a asker is a view
   assert.deepEqual(query.to, ["t6"]);
   assert.equal(reply.outcome, "replied");
   assert.equal(reply.from, "t6");
+  assert.equal(reply.fromKind, "fact", "the answerer is always a fact");
   assert.deepEqual(reply.to, ["t6a"]);
   assert.equal(reply.cid, query.cid);
   assert.deepEqual(reply.payload, { value: 6 });

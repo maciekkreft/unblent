@@ -12,10 +12,12 @@ The architecture is the spec. If a request conflicts with it, name the section a
   Decisions and contracts are agreed before any code (section 9, step 2).
 - `python3 checks/check.py --static` after every edit; the full run before
   reporting done.
-- Ask before changing `tokens/tokens.css`, an event, the document facts list (7.5), or `architecture.md`. Propose, then wait.
+- Ask before changing `tokens/tokens.css`, `tokens/icons.js`, an event, the document facts list (7.5), or `architecture.md`. Propose, then wait.
 - Comments say why, or cite an architecture section. Never what the code does, never history.
+- UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step).
 - Verify UI in WebKit, then Chromium, on the desk and in the phone preview (`data-viewport="phone"`, set through `viewport-switch` or localStorage key `viewport`), before reporting done.
 - Commits: 2-3 words, no attribution trailers, same-session fixes amend.
+- Design together: when asked to brainstorm or decide, interview first if the need is unclear, lead with one recommendation and why, list the alternatives with pros, cons and consequences, illustrate anything complex with ASCII or an example, and write no code until the decision is agreed.
 
 # Reading the slip-box
 

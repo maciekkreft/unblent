@@ -29,6 +29,20 @@ const rows = (page) =>
     ),
   );
 
+const shadowHas = (page, sel) =>
+  page.evaluate((sel) => Boolean(document.querySelector("trace-list").shadowRoot.querySelector(sel)), sel);
+const shadowText = (page, sel) =>
+  page.evaluate((sel) => document.querySelector("trace-list").shadowRoot.querySelector(sel)?.textContent.trim(), sel);
+const clickClear = (page) =>
+  page.evaluate(() => document.querySelector("trace-list").shadowRoot.querySelector(".clear").click());
+// The table's scroll container: it fits when it cannot scroll sideways. 1px of
+// slack: Chromium rounds a track up by a sub-pixel where WebKit lands exactly.
+const overflow = (page) =>
+  page.evaluate(() => {
+    const s = document.querySelector("trace-list").shadowRoot.querySelector(".scroll");
+    return { scrollWidth: s.scrollWidth, clientWidth: s.clientWidth };
+  });
+
 // A row for page-nav's pages: list query: kind query, name list, pages reached.
 const isPagesList = (text) => text.includes("query") && text.includes("list") && text.includes("pages");
 
@@ -72,16 +86,41 @@ for (const engine of ENGINES) {
       );
       assert.ok((await rows(page)).some(isPagesList), "a pages: list row is shown");
 
+      // Every row's seq is prefixed with # (the compact layout hides the header,
+      // so the # must live in the cell); at rest the page's traffic is all queries
+      // and replies, so the gesture/fact split is checked after the switch below.
+      assert.ok((await rows(page)).every((t) => /#\d+/.test(t)), "each row's seq is prefixed with #");
+
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({
         path: resolve(SCREENSHOTS, `trace-list-${engine.name}.png`),
         fullPage: true,
       });
 
+      // No heading: the card opens with the count and Clear. Clear empties the
+      // display only (UI state, 3.1); the next bus traffic shows up again.
+      assert.equal(await shadowHas(page, "h2"), false, "no heading above the table");
+      assert.match(await shadowText(page, ".count"), /^\d+ records$/);
+      await clickClear(page);
+      await page.waitForFunction(
+        () => document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row").length === 0,
+      );
+      assert.equal(await shadowText(page, ".count"), "0 records");
+      assert.ok(await shadowHas(page, ".empty"), "the empty state shows after Clear");
+
+      // At a desk width between the stacked layout and the full table, the table
+      // must still fit its container: nothing may push it into sideways scrolling.
+      await page.setViewportSize({ width: 900, height: 800 });
+
       // In the phone preview the container query stacks each record, so the table
       // must fit the narrowed body: no horizontal overflow and no header row.
       await clickSwitch(page, "Phone");
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
+      await page.waitForFunction(
+        () => document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row").length > 0,
+      );
+      assert.ok((await rows(page)).length > 0, "traffic after Clear is shown again");
+
       const fit = await page.evaluate(() => {
         const root = document.querySelector("trace-list").shadowRoot;
         const scroll = root.querySelector(".scroll");
@@ -95,12 +134,33 @@ for (const engine of ENGINES) {
       });
       assert.ok(!fit.overflows, "the stacked records fit the phone width");
       assert.ok(!fit.headerShown, "the table header is hidden when stacked");
-      assert.ok((await rows(page)).some(isPagesList), "a pages: list row still reads on the phone");
+      const afterSwitch = await rows(page);
+      assert.ok(
+        afterSwitch.some((t) => t.includes("viewport.selected")),
+        "the switch's own viewport.selected row reads on the phone",
+      );
+      // The switch is a view, so viewport.selected reads "gesture"; viewport is a
+      // fact, so viewport.changed reads "fact" (4.3, fifth rule; fromKind). Neither
+      // reads the bare "event".
+      assert.ok(
+        afterSwitch.some((t) => t.includes("viewport.selected") && t.includes("gesture")),
+        "the view's event reads gesture",
+      );
+      assert.ok(
+        afterSwitch.some((t) => t.includes("viewport.changed") && t.includes("fact")),
+        "the fact's event reads fact",
+      );
       await page.screenshot({ path: resolve(SCREENSHOTS, `trace-list-phone-${engine.name}.png`) });
 
-      // Restore the desk so the stored choice does not leak into other tests.
+      // Restore the desk so the stored choice does not leak into other tests, and
+      // check the full table fits at the mid width too.
       await clickSwitch(page, "Desk");
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "desk");
+      await page.waitForFunction(
+        () => document.querySelector("trace-list").shadowRoot.querySelector("thead") !== null,
+      );
+      const desk = await overflow(page);
+      assert.ok(desk.scrollWidth <= desk.clientWidth + 1, `the table fits a 900px desk, saw ${JSON.stringify(desk)}`);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

@@ -1,5 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
+import { icon } from "icons";
 import { machine } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -14,9 +15,14 @@ class ActorController {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    // The relative "time ago" column advances without new traffic: a 1 s tick
+    // feeds the machine's clock (machine.js `_tick`). The controller owns it, so it
+    // starts and stops with the element on the bus.
+    this.ticker = setInterval(() => this.send({ type: "_tick", now: Date.now() }), 1000);
   }
 
   hostDisconnected() {
+    clearInterval(this.ticker);
     this.subscription?.unsubscribe();
     unmount(this.actor);
   }
@@ -35,6 +41,32 @@ const time = (at) => {
   const d = new Date(at);
   const p = (n, len = 2) => String(n).padStart(len, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+};
+
+// Relative "time ago" from the record's absolute `at` (7.1) and the view's clock,
+// so it reads at a glance in the compact layout where the full timestamp does not
+// fit. Intl, not a vendored library (section 10, user's choice). A past record is a
+// negative offset to RelativeTimeFormat; the largest unit under its next threshold
+// wins (seconds < 60, minutes < 60, hours < 24, else days).
+const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+const ago = (at, now) => {
+  const sec = Math.round((at - now) / 1000);
+  if (Math.abs(sec) < 60) return rtf.format(sec, "second");
+  const min = Math.round(sec / 60);
+  if (Math.abs(min) < 60) return rtf.format(min, "minute");
+  const hr = Math.round(min / 60);
+  if (Math.abs(hr) < 24) return rtf.format(hr, "hour");
+  return rtf.format(Math.round(hr / 24), "day");
+};
+
+// The kind a row reads (4.3, fifth rule): a view emits a gesture, a fact emits a
+// fact, so an event splits by the sender's kind; a query and a reply keep their
+// kind. A record without `fromKind` (an older tab over the bridge) reads `event`.
+const kindLabel = (r) => {
+  if (r.kind !== "event") return r.kind;
+  if (r.fromKind === "view") return "gesture";
+  if (r.fromKind === "fact") return "fact";
+  return "event";
 };
 
 // Recipients, an ignored one marked with ~ as in the console line (section 10).
@@ -58,8 +90,16 @@ const parsed = (text) => {
     return text;
   }
 };
-const states = (r) =>
-  r.states ? Object.entries(r.states).map(([id, state]) => `${id}=${stateText(parsed(state))}`).join(" ") : "";
+// One `id=state` line per recipient, for the expanded panel. A stateless machine
+// (e.g. `dock`) reaches its recipients with `{}`; that line carries nothing, so it
+// is dropped rather than printing `id={}`.
+const stateLines = (r) =>
+  r.states
+    ? Object.entries(r.states)
+        .map(([id, text]) => [id, parsed(text)])
+        .filter(([, state]) => !(state && typeof state === "object" && Object.keys(state).length === 0))
+        .map(([id, state]) => `${id}=${stateText(state)}`)
+    : [];
 
 // One cell's worth of a payload: its shape, so a row can be read without opening
 // it. Nothing is ∅, a list its length, an object its top-level keys, a scalar
@@ -168,13 +208,11 @@ class TraceList extends LitElement {
     /* The disclosure chevron is the signifier that a row opens to its payload,
        so no prose has to say it. It rotates when the row is open. */
     .caret {
-      display: inline-block;
+      display: inline-flex;
+      vertical-align: middle;
       margin-right: var(--space-2xs);
       color: var(--color-mute);
       transition: transform var(--duration-fast) var(--ease);
-    }
-    .caret::before {
-      content: "\\25B8";
     }
     .row.open .caret {
       transform: rotate(90deg);
@@ -199,6 +237,23 @@ class TraceList extends LitElement {
     }
     .num {
       text-align: right;
+      color: var(--color-body-mid);
+    }
+    /* Two time cells share one column's worth of meaning: the absolute timestamp
+       reads on the desk, the relative "time ago" in the compact layout. Each layout
+       shows one and hides the other, so the row never carries both. */
+    .ago {
+      display: none;
+    }
+    /* The expanded panel's footer: the absolute time (the compact layout never
+       shows it otherwise) and each recipient's resulting state, one per line,
+       below the payload JSON. */
+    .detail {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+      margin-top: var(--space-xs);
+      font-size: var(--text-caption);
       color: var(--color-body-mid);
     }
     .ok {
@@ -226,11 +281,11 @@ class TraceList extends LitElement {
       color: var(--color-body);
       white-space: pre-wrap;
     }
-    /* Below the width where the eight-column table stops fitting, stack each
-       record so it reads without sideways scrolling. 45rem is the table (~660px)
-       plus the card and host padding; it is a literal, not a token, because 7.4
-       admits only tokens for lengths that place or size a box, and a container
-       breakpoint is neither. Range syntax: WebKit ≥ 16.4 and Chromium support it. */
+    /* Below the width where the table stops fitting, stack each record so it reads
+       without sideways scrolling. 45rem is the table plus the card and host
+       padding; it is a literal, not a token, because 7.4 admits only tokens for
+       lengths that place or size a box, and a container breakpoint is neither.
+       Range syntax: WebKit ≥ 16.4 and Chromium support it. */
     @container (width < 45rem) {
       thead {
         display: none;
@@ -242,9 +297,10 @@ class TraceList extends LitElement {
       table {
         width: 100%;
       }
-      /* Lay each record out as three lines with flex order, so the id keeps its
-         own width instead of sharing a grid column with the timestamp below it:
-         header (#, kind, name, outcome), then route, then a muted meta line. */
+      /* Lay each record out as two lines with flex order: a header (#, kind, name,
+         outcome on the right), then the route and a muted "time ago" below. The
+         absolute time and the payload shape drop; the time returns, absolute, when
+         the row is expanded (.detail). */
       tr.row {
         display: flex;
         flex-wrap: wrap;
@@ -258,6 +314,13 @@ class TraceList extends LitElement {
         padding: 0;
         border: 0;
         white-space: normal;
+      }
+      .time,
+      .shape {
+        display: none;
+      }
+      .ago {
+        display: block;
       }
       .num {
         order: 1;
@@ -277,22 +340,14 @@ class TraceList extends LitElement {
         order: 5;
         flex-basis: 100%;
       }
-      .state {
+      .ago {
         order: 6;
-        flex-basis: 100%;
-      }
-      .time {
-        order: 7;
       }
       .tab {
-        order: 8;
+        order: 7;
       }
-      .shape {
-        order: 9;
-      }
-      .time,
-      .tab,
-      .shape {
+      .ago,
+      .tab {
         font-size: var(--text-caption);
         color: var(--color-body-mid);
       }
@@ -308,7 +363,11 @@ class TraceList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { records, expanded } = snapshot.context;
+    const { records, expanded, now } = snapshot.context;
+    // The tab column earns its place only when the traffic spans more than one tab
+    // (over the bridge, section 12); with a single tab it is noise, so it is left
+    // out of both layouts. Expanded-row ids still carry the tab (tab:seq).
+    const showTab = new Set(records.map((r) => r.tab)).size > 1;
     return html`
       <article class="card">
         <div class="bar">
@@ -317,12 +376,12 @@ class TraceList extends LitElement {
             Clear
           </button>
         </div>
-        ${records.length ? this.#table(records, expanded) : html`<p class="empty">No traffic yet.</p>`}
+        ${records.length ? this.#table(records, expanded, now, showTab) : html`<p class="empty">No traffic yet.</p>`}
       </article>
     `;
   }
 
-  #table(records, expanded) {
+  #table(records, expanded, now, showTab) {
     return html`
       <div class="scroll">
         <table>
@@ -330,39 +389,42 @@ class TraceList extends LitElement {
             <tr>
               <th class="num">#</th>
               <th>time</th>
-              <th>tab</th>
+              ${showTab ? html`<th class="tab">tab</th>` : nothing}
               <th>kind</th>
               <th>name</th>
               <th>from → to</th>
-              <th>state</th>
               <th>outcome</th>
               <th>payload</th>
             </tr>
           </thead>
           <tbody>
-            ${records.map((r) => this.#row(r, expanded))}
+            ${records.map((r) => this.#row(r, expanded, now, showTab))}
           </tbody>
         </table>
       </div>
     `;
   }
 
-  #row(r, expanded) {
+  #row(r, expanded, now, showTab) {
     const id = `${r.tab}:${r.seq}`;
     const open = expanded.has(id);
+    // The desk table (thead present) spans #, time, [tab], kind, name, route,
+    // outcome, shape; the .ago cell is display:none there and does not count.
+    const colspan = showTab ? 8 : 7;
+    const lines = stateLines(r);
     return html`
       <tr
         class="row ${open ? "open" : ""}"
         aria-expanded=${open}
         @click=${() => this.#actor.send({ type: "_toggle", id })}
       >
-        <td class="num"><span class="caret" aria-hidden="true"></span>${r.seq}</td>
+        <td class="num"><span class="caret">${icon("caret-right")}</span>#${r.seq}</td>
         <td class="time">${time(r.at)}</td>
-        <td class="tab">${r.tab.slice(-4)}</td>
-        <td class="kind">${r.kind}</td>
+        <td class="ago">${ago(r.at, now)}</td>
+        ${showTab ? html`<td class="tab">${r.tab.slice(-4)}</td>` : nothing}
+        <td class="kind">${kindLabel(r)}</td>
         <td class="name">${r.name}</td>
         <td class="route">${r.from} → ${recipients(r)}</td>
-        <td class="state">${states(r)}</td>
         <td class="outcome">
           <span class=${OUTCOME_CLASS[r.outcome] ?? nothing}>${r.outcome}</span>
           ${r.reason ? html` <span class="reason">${r.reason}</span>` : nothing}
@@ -371,7 +433,13 @@ class TraceList extends LitElement {
       </tr>
       ${open
         ? html`<tr class="payload">
-            <td colspan="9"><pre>${JSON.stringify(r.payload, null, 2)}</pre></td>
+            <td colspan=${colspan}>
+              <pre>${JSON.stringify(r.payload, null, 2)}</pre>
+              <div class="detail">
+                <span class="at">${time(r.at)}</span>
+                ${lines.map((l) => html`<div class="state">${l}</div>`)}
+              </div>
+            </td>
           </tr>`
         : nothing}
     `;

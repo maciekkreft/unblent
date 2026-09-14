@@ -1,5 +1,6 @@
 import { LitElement, html, css } from "lit";
 import { mount, unmount } from "bus";
+import { icon, names as iconNames } from "icons";
 import { machine } from "./machine.js";
 
 // Read from the stylesheet after render-blocking sheets have loaded, so `cssRules`
@@ -105,7 +106,8 @@ class TokenSheet extends LitElement {
       gap: var(--space-2xs);
       min-width: 0;
     }
-    .name {
+    .name,
+    .icon-name {
       font-size: var(--text-sm);
       font-weight: var(--weight-semibold);
       color: var(--color-ink);
@@ -212,6 +214,14 @@ class TokenSheet extends LitElement {
       text-align: center;
       word-break: break-all;
     }
+    /* An icon is 1em of its text (7.6), so a heading-sized line shows it at
+       review size, in the ink it would inherit. */
+    .glyph {
+      font-size: var(--text-heading);
+      line-height: var(--leading-tight);
+      color: var(--color-ink);
+      display: flex;
+    }
   `;
 
   #actor = new ActorController(this);
@@ -293,6 +303,19 @@ class TokenSheet extends LitElement {
             </section>
           `,
         )}
+        <section class="icons">
+          <h2>icons</h2>
+          <div class="tokens">
+            ${iconNames.map(
+              (name) => html`
+                <div class="token">
+                  <div class="sample"><span class="glyph">${icon(name)}</span></div>
+                  <div class="meta"><code class="icon-name">${name}</code></div>
+                </div>
+              `,
+            )}
+          </div>
+        </section>
       </div>
     `;
   }

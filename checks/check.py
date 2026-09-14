@@ -18,9 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR_JSON = json.loads((ROOT / "vendor" / "vendor.json").read_text())
 IMPORTMAP = VENDOR_JSON["importmap"]
-ALLOWED_BARE = set(IMPORTMAP["imports"]) | {"bus", "store"}
+ALLOWED_BARE = set(IMPORTMAP["imports"]) | {"bus", "store", "icons"}
 
-TEST_PORT = 8099
 # Section 11: the fast phase runs after every edit within one second in total; a
 # test has its own budget, so the full run's length may grow with the system
 # while no single test may.
@@ -270,7 +269,7 @@ def check_imports() -> None:
                      f'absolute import "{spec}" is not allowed; use a bare name or a local path')
             elif spec not in ALLOWED_BARE:
                 fail(path, "import check (11.2)",
-                     f'bare import "{spec}" is not a vendored name, bus, or store')
+                     f'bare import "{spec}" is not a vendored name, bus, store, or icons')
 
 
 # A server module (11.2) may import the standard library, the packages named in
@@ -555,6 +554,30 @@ def check_styles() -> None:
                 _scan_css(style, path, "inline style")
 
 
+# --- Icon check (architecture.md 7.6) --------------------------------------------
+
+# A view names an icon as a literal, so the vocabulary is checked without running
+# anything: every glyph in tokens/icons.js has a user, every use has a glyph.
+_ICON_CALL = re.compile(r'\bicon\("([a-z0-9-]+)"\)')
+_ICON_NAME = re.compile(r'^\s*"?([a-z0-9-]+)"?:', re.M)
+
+
+def check_icons() -> None:
+    src = (ROOT / "tokens" / "icons.js").read_text()
+    body = src[src.index("const GLYPHS = {"):]
+    body = body[: body.index("\n};")]
+    known = set(_ICON_NAME.findall(body))
+    used = {}
+    for path in sorted(glob.glob("components/*/view.js", root_dir=ROOT)):
+        for name in _ICON_CALL.findall(_strip_comments((ROOT / path).read_text())):
+            used.setdefault(name, path)
+    for name, path in sorted(used.items()):
+        if name not in known:
+            fail(path, "icon check (7.6)", f'icon("{name}") is not in tokens/icons.js; propose it first (7.6)')
+    for name in sorted(known - set(used)):
+        fail("tokens/icons.js", "icon check (7.6)", f'icon "{name}" is used by no view; remove it (7.6)')
+
+
 # --- Unused tokens (architecture.md 7.4) -----------------------------------------
 
 def report_unused_tokens() -> None:
@@ -571,10 +594,12 @@ def report_unused_tokens() -> None:
 
 # --- Browser tests (architecture.md 10) ------------------------------------------
 
-def _port_busy(port: int) -> bool:
+def _free_port() -> int:
+    # Several tabs may run the full check at once; a port chosen by the kernel
+    # cannot collide with theirs.
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        return sock.connect_ex(("127.0.0.1", port)) == 0
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
@@ -623,19 +648,16 @@ def run_tests() -> None:
     server_tests = sorted(glob.glob("server/tests/*.test.py", root_dir=ROOT))
     if not browser_tests and not server_tests:
         return
-    if _port_busy(TEST_PORT):
-        fail("checks/check.py", "tests",
-             f"port {TEST_PORT} is busy; stop whatever holds it and retry")
-
+    port = _free_port()
     server = subprocess.Popen(
-        [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(TEST_PORT)],
+        [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT,
     )
     try:
-        if not _wait_for_server(TEST_PORT):
+        if not _wait_for_server(port):
             fail("checks/check.py", "tests",
-                 f"server did not answer on port {TEST_PORT}")
-        env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{TEST_PORT}"}
+                 f"server did not answer on port {port}")
+        env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}"}
 
         for test in server_tests:
             result = subprocess.run([sys.executable, test], cwd=ROOT, env=env)
@@ -701,6 +723,7 @@ def main() -> None:
     _timed(timings, "page components", check_page_components, manifests)
     _timed(timings, "document", check_document_writes)
     _timed(timings, "styles", check_styles)
+    _timed(timings, "icons", check_icons)
     _enforce_budget(timings, STATIC_BUDGET_S, "the fast phase")
     if static_only:
         return

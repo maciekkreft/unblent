@@ -65,6 +65,12 @@ function idOf(actor) {
   return null;
 }
 
+// The sender's kind (3.1), for a record's `fromKind` (7.1): it lets the trace tell
+// a view's gesture from a fact's fact without asking the manifest (4.3, fifth rule).
+function kindOf(machine) {
+  return machine.config.meta?.kind;
+}
+
 function subscribe(name, actor) {
   let set = subscribers.get(name);
   if (!set) subscribers.set(name, (set = new Set()));
@@ -80,12 +86,13 @@ function forward(machine, emitter, event) {
   const emits = machine.config.meta?.emits ?? [];
   // A refused emit is recorded before it throws (section 10: refusals are traffic
   // too), so the transcript shows the failure the same way it shows a delivery.
+  const fromKind = kindOf(machine);
   if (!emits.includes(name)) {
-    record({ kind: "event", name, from, to: [], outcome: "refused", reason: "undeclared emit", payload: event });
+    record({ kind: "event", name, from, fromKind, to: [], outcome: "refused", reason: "undeclared emit", payload: event });
     throw new Error(`undeclared emit: ${machine.config.id} emitted "${name}", not in meta.emits`);
   }
   if (!registry.has(name)) {
-    record({ kind: "event", name, from, to: [], outcome: "refused", reason: "unknown event", payload: event });
+    record({ kind: "event", name, from, fromKind, to: [], outcome: "refused", reason: "unknown event", payload: event });
     throw new Error(`unknown event: "${name}" is not in the registry`);
   }
   // Section 4.1: an event names no target; it reaches every subscriber but never
@@ -113,6 +120,7 @@ function forward(machine, emitter, event) {
         kind: "event",
         name,
         from,
+        fromKind,
         to: recipients.map(idOf),
         ignored: ignored.map(idOf),
         outcome,
@@ -181,28 +189,29 @@ export function ask(machine, target, name, payload = {}) {
   const asks = machine.config.meta?.asks ?? [];
   const key = `${target}: ${name}`;
   const from = machine.config.id;
+  const fromKind = kindOf(machine);
   const to = [target];
   // The correlation id is a ULID (section 10), so a later trace can order and tell
   // apart queries from several tabs; the first reply wins. It is minted up front so
   // every record about this query, even a refusal, carries it.
   const cid = ulid();
   if (!asks.includes(key)) {
-    record({ kind: "query", name, from, to, outcome: "refused", reason: "undeclared ask", cid, payload });
+    record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "undeclared ask", cid, payload });
     throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", not in meta.asks`);
   }
   const answerer = mounted.get(target);
   if (!answerer) {
-    record({ kind: "query", name, from, to, outcome: "no-answerer", cid, payload });
+    record({ kind: "query", name, from, fromKind, to, outcome: "no-answerer", cid, payload });
     return Promise.resolve({ error: "no-answerer" });
   }
   const targetMachine = machines.get(target);
   if (targetMachine.config.meta?.kind !== "fact") {
-    record({ kind: "query", name, from, to, outcome: "refused", reason: "query to a view", cid, payload });
+    record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "query to a view", cid, payload });
     throw new Error(`only a fact component answers queries: ${target} is a ${targetMachine.config.meta?.kind}`);
   }
   const type = `${name}?`;
   if (!targetMachine.events.includes(type)) {
-    record({ kind: "query", name, from, to, outcome: "unknown-query", cid, payload });
+    record({ kind: "query", name, from, fromKind, to, outcome: "unknown-query", cid, payload });
     return Promise.resolve({ error: "unknown-query" });
   }
   // The query's schema is registered (`queryRegistry.get(key)`); payload and reply
@@ -221,13 +230,13 @@ export function ask(machine, target, name, payload = {}) {
     const timer = setTimeout(() => {
       if (answered) return;
       timedOut = true;
-      record({ kind: "reply", name, from: target, to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
+      record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
     }, UNANSWERED_MS);
     const reply = (value) => {
       if (answered) return;
       answered = true;
       clearTimeout(timer);
-      record({ kind: "reply", name, from: target, to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
+      record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
       resolve(value);
     };
     // Completed after delivery, so it carries the answerer's resulting state
@@ -240,6 +249,7 @@ export function ask(machine, target, name, payload = {}) {
         kind: "query",
         name,
         from,
+        fromKind,
         to,
         ignored: handled ? [] : to,
         outcome: handled ? "asked" : "ignored",

@@ -269,7 +269,7 @@ Contracts are the only coupling in the system. Every contract is **declared once
 
 ### 7.1 Event vocabulary
 
-Every event has a name, an owner, and a JSON Schema for its payload, kept in the owning component's directory. Names are `subject.pastTenseVerb`. The set of all event schemas is one of the two shared vocabularies of the system (the other is the design tokens), and it is kept small on purpose.
+Every event has a name, an owner, and a JSON Schema for its payload, kept in the owning component's directory. Names are `subject.pastTenseVerb`. The set of all event schemas is one of the three shared vocabularies of the system (the others are the design tokens and the icons), and it is kept small on purpose.
 
 ```
 note.saved            owner: note-editor    { id, title, body, baseVersion }
@@ -278,6 +278,8 @@ note.deleted          owner: notes          { id }
 note.conflicted       owner: notes          { id, mine, theirs }
 note.selected         owner: note-list      { id }
 conversation.changed  owner: conversations  { id, turns, version }
+dock.arranged         owner: dock-desk      { stage, docks }
+dock.changed          owner: dock           { stage, docks }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null }
 trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
@@ -305,6 +307,7 @@ pages: list              → { pages: [{ path, title, kind }] } | { error: "unav
 catalog: contracts       → { events: [{ name, owner, schema, consumers }], queries: [{ target, name, payload, reply, askers }], commands: [{ target, name, payload }] } | { error: "unavailable" }
 trace: list              → { records: [record] }
 viewport: read           → { viewport }
+dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
@@ -328,7 +331,7 @@ Manifests reach the browser through one fact component, `catalog`: remote-only, 
 
 The visual vocabulary: a small set of CSS custom properties for colour, spacing, type, radius, motion. Views use tokens and nothing else: every colour, every length that places or sizes a box, every type value is a token or a `calc()` of tokens. Tokens are the second shared vocabulary and are kept minimal: a token exists because a view uses it, and a token nothing uses is removed. Every change to `tokens.css` needs explicit permission from the user first.
 
-The document layer is two files: `tokens.css`, the custom properties, and `base.css`, the `@font-face` declaration, the inherited properties set on `html` and `body`, and the rules by which the document reacts to a document fact (7.5). There are no shared utility classes, because shadow DOM stops a class selector at the component boundary; only inherited properties and custom properties cross it, which is why tokens can theme a view and a `.btn` class could not.
+The document layer is three files: `tokens.css`, the custom properties; `base.css`, the `@font-face` declaration, the inherited properties set on `html` and `body`, and the rules by which the document reacts to a document fact (7.5); and `icons.js`, the icons (7.6). There are no shared utility classes, because shadow DOM stops a class selector at the component boundary; only inherited properties and custom properties cross it, which is why tokens can theme a view and a `.btn` class could not.
 
 ### 7.5 Document facts
 
@@ -339,16 +342,20 @@ A few facts are properties of the document itself rather than of any view: which
 | `color-scheme` | `data-color-scheme` |
 | `viewport` | `data-viewport` |
 
+### 7.6 Icons
+
+The glyphs views may use: the third shared vocabulary, beside the events (7.1) and the tokens (7.4). They are Phosphor Icons, regular weight, copied one icon at a time, path data only, into `tokens/icons.js`, and reached as `icon(name)` from the bare specifier `icons`. An icon is sized `1em` and filled `currentColor`, so it matches the text it sits in and follows the scheme. The set is closed: an unknown name throws. An icon exists because a view uses it, and one nothing uses is removed. Adding one needs explicit permission from the user first: the proposal names the Phosphor name and links `https://phosphoricons.com/?q=<name>`, so the glyph is seen before it is approved. The tokens page shows every icon. Running text keeps typographic arrows: a `→` in a table header is prose, not an icon.
+
 ---
 
 ## 8. Pages
 
 A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` whose `src` is a built component's browser entry, `view.js` or `fact.js`, under `/static/components/`, with no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). Five kinds, in increasing order of composition:
 
-1. **Tokens page.** Shows the design tokens, so the visual vocabulary can be reviewed before anything uses it.
+1. **Tokens page.** Shows the design tokens and the icons, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
 3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
-4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
+4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others. A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
@@ -387,6 +394,7 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Schema (browser) | @cfworker/json-schema | MIT | Validating payloads in the browser against draft 2020-12, the validator constructed with the draft given explicitly, behind our `validate()` wrapper | A draft chosen implicitly |
 | Schema (server) | Python `jsonschema` | MIT | Validating payloads server-side, and the schema compatibility check (section 11.2) when it arrives | — |
 | Font | Inter | OFL-1.1 | One self-hosted variable file, all weights | Italic, until a view needs it |
+| Icons | Phosphor Icons | MIT | Regular-weight path data, one icon at a time, copied verbatim from `@phosphor-icons/core` 2.1.1 `assets/regular/<name>.svg` (7.6) | The font, the web and react packages, other weights, the whole set |
 | Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does | A test framework |
 
 Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve.
@@ -437,7 +445,7 @@ server/          FastAPI entry (named "server", not "app", so it never clashes w
   tests/         HTTP tests for the entry; infrastructure like the bus, not a component. Never served
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
-tokens/          tokens.css and base.css, the document layer (section 7.4)
+tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
 pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
 checks/          check.py, the one check command
 bus/             the bus (built once)
@@ -466,7 +474,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 
 | Rule | Enforced by |
 |---|---|
-| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, or `store`. A server module may import the standard library, the packages named in `requirements.txt`, or a relative module inside its own `server/` |
+| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, `store`, or `icons`. A server module may import the standard library, the packages named in `requirements.txt`, or a relative module inside its own `server/` |
 | Everything goes through the bus | Same check; there is no other importable channel |
 | Events match their contract | The bus validates every emitted event against the schema registry at runtime and throws on unknown names or invalid payloads |
 | Queries match their contract | The bus registers each answered query's schema at mount and validates payload and reply at runtime |
@@ -477,6 +485,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
 | Pages contain no logic | Page check: only an import map and tags, and exactly one `meta[name=kind]` naming one of the five kinds of section 8 |
 | Tokens only | Style check: views use no colour, spacing, size, or type value that is not a token, in both `css` templates and the inline `style` attributes of `html` templates. Size means any property that places or sizes a box: width, height, inset, grid tracks, border width. Percentages, `fr`, and unitless factors in `calc()` are relative and allowed |
+| Icons are used and known | Icon check: every name in `tokens/icons.js` is used by some view as a literal `icon("name")`, and every `icon("name")` in a view exists. Names are literals in views, so the check stays static |
 | Vendored code is what it claims | Vendor check: every file under `vendor/` is listed in `vendor.json` with a matching sha256, every listed file exists, and every `sourceMappingURL` resolves |
 | Nothing fails in the browser | Browser tests fail on any console error, page error, failed request, or 4xx/5xx response while a page loads |
 | Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
@@ -496,7 +505,7 @@ The architecture document describes the rules; the checks are what make them rea
 - **No query between views.** If two views seem to need to talk, either one should emit an event the other listens to, or they are one view.
 - **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. Example: `note-reader` reacts to `note.selected` by querying `notes: read(id)` while the editor's debounced `note.saved` for the same note is still in flight; the reader gets the old body. Protection is the fourth rule of section 4: it also listens to `note.changed` and adopts the newer version.
 - **Remote-only facts fail offline.** That is by design: `llm` answers with an error and emits `llm.unavailable`; a view decides what to show.
-- **Two shared vocabularies.** The event registry and the design tokens are global schemas in disguise. Both are kept small: events are additive-only, tokens are minimal. Both change only with permission, and both are reviewed on a page before use.
+- **Three shared vocabularies.** The event registry, the design tokens and the icons are global schemas in disguise. All are kept small: events are additive-only, tokens are minimal, icons grow one glyph at a time, each approved by sight. All change only with permission, and all are reviewed on a page before use.
 - **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.

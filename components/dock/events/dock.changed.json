@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The desk layout is now this: which view is on the stage, and for each side that has anything docked, whether it is open, which views it holds, and which one it shows.",
+  "type": "object",
+  "properties": {
+    "stage": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The address of the view on the stage, or null when nothing is staged."
+    },
+    "docks": {
+      "type": "object",
+      "description": "Each side that has anything docked. A side that is absent holds nothing and is closed.",
+      "properties": {
+        "left": {
+          "type": "object",
+          "description": "The left dock.",
+          "properties": {
+            "open": {
+              "type": "boolean",
+              "description": "The dock is open: its views are visible. Folded (false) keeps them docked but hidden."
+            },
+            "views": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true,
+              "description": "The addresses (4.1) of the views docked on this side, in order."
+            },
+            "active": {
+              "type": "string",
+              "description": "The address of the tab this side shows; absent means the first."
+            }
+          },
+          "required": [
+            "open",
+            "views"
+          ],
+          "additionalProperties": false
+        },
+        "right": {
+          "type": "object",
+          "description": "The right dock.",
+          "properties": {
+            "open": {
+              "type": "boolean",
+              "description": "The dock is open: its views are visible. Folded (false) keeps them docked but hidden."
+            },
+            "views": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true,
+              "description": "The addresses (4.1) of the views docked on this side, in order."
+            },
+            "active": {
+              "type": "string",
+              "description": "The address of the tab this side shows; absent means the first."
+            }
+          },
+          "required": [
+            "open",
+            "views"
+          ],
+          "additionalProperties": false
+        },
+        "bottom": {
+          "type": "object",
+          "description": "The bottom dock.",
+          "properties": {
+            "open": {
+              "type": "boolean",
+              "description": "The dock is open: its views are visible. Folded (false) keeps them docked but hidden."
+            },
+            "views": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true,
+              "description": "The addresses (4.1) of the views docked on this side, in order."
+            },
+            "active": {
+              "type": "string",
+              "description": "The address of the tab this side shows; absent means the first."
+            }
+          },
+          "required": [
+            "open",
+            "views"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "stage",
+    "docks"
+  ],
+  "additionalProperties": false
+}

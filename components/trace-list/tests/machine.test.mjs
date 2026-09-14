@@ -83,6 +83,15 @@ test("more than one row can be open at once", async () => {
   assert.ok(expanded.has("01AAAAAAAAAAAAAAAAAA:1") && expanded.has("01AAAAAAAAAAAAAAAAAA:2"));
 });
 
+test("a tick advances the clock the relative time reads from", async () => {
+  const ask = () => Promise.resolve({ records: [rec()] });
+  const actor = createActor(machine, { input: { ask, now: 1000 } });
+  await settle(actor);
+  assert.equal(actor.getSnapshot().context.now, 1000);
+  actor.send({ type: "_tick", now: 5000 });
+  assert.equal(actor.getSnapshot().context.now, 5000);
+});
+
 test("clear empties what is shown; later traffic is shown again", async () => {
   const ask = () => Promise.resolve({ records: [rec()] });
   const actor = createActor(machine, { input: { ask } });

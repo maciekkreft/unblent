@@ -15,6 +15,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const SCREENSHOTS = resolve(REPO, ".screenshots");
 
+function declaredIconNames() {
+  const src = readFileSync(resolve(REPO, "tokens", "icons.js"), "utf8");
+  return [...src.matchAll(/^\s*"?([a-z0-9-]+)"?:/gm)].map((m) => m[1]);
+}
+
 function declaredTokenNames() {
   const css = readFileSync(resolve(REPO, "tokens", "tokens.css"), "utf8");
   const open = css.indexOf(":root {");
@@ -67,6 +72,20 @@ for (const engine of ENGINES) {
         new Set(declared),
         `rendered names differ from tokens.css.\n  only rendered: ${[...new Set(rendered)].filter((n) => !declared.includes(n))}\n  only declared: ${declared.filter((n) => !rendered.includes(n))}`,
       );
+
+      // 7.6: the tokens page shows every icon, each drawn as an svg.
+      const icons = await page.evaluate(() =>
+        [...document.querySelector("token-sheet").shadowRoot.querySelectorAll(".icons .token")].map((el) => ({
+          name: el.querySelector(".icon-name").textContent,
+          drawn: el.querySelector("svg path")?.getAttribute("d").length > 0,
+        })),
+      );
+      assert.deepEqual(
+        icons.map((i) => i.name),
+        declaredIconNames(),
+        "the icons section lists tokens/icons.js in order",
+      );
+      assert.ok(icons.every((i) => i.drawn), "every icon has path data");
 
       const interReady = await page.evaluate(async () => {
         await document.fonts.ready;
