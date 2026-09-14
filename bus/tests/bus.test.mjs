@@ -272,6 +272,55 @@ test("tap records an ignored event when every recipient's state passes on it", (
   unmount(c);
 });
 
+test("tap records each recipient's state after delivery", () => {
+  const { records, sub } = collect();
+  // A recipient that transitions on the event, so the record must show the state it
+  // reached, not the one it left (section 10).
+  const moving = createMachine({
+    id: "t4b-c",
+    meta: { kind: "view", emits: [], attributes: [] },
+    initial: "before",
+    states: { before: { on: { "thing.happened": { target: "after" } } }, after: {} },
+  });
+  const p = mount(producer("t4b"), { events: { "thing.happened": SCHEMA } });
+  const c = mount(moving, {});
+  p.send({ type: "go", value: 1 });
+  const r = records.at(-1);
+  assert.equal(r.outcome, "delivered");
+  assert.deepEqual(r.states, { "t4b-c": JSON.stringify("after") });
+  sub();
+  unmount(p);
+  unmount(c);
+});
+
+// A recipient that emits while handling: the consequence completes inside the
+// cause's delivery, yet the transcript must read cause first (section 10).
+function reactor(id) {
+  return createMachine({
+    id,
+    meta: { kind: "fact", shape: "local-only", emits: ["thing.followed"], owns: "a reaction" },
+    on: { "thing.happened": { actions: emit({ type: "thing.followed" }) } },
+  });
+}
+
+test("tap records a cause before the event a recipient emitted while handling it", () => {
+  const { records, sub } = collect();
+  const p = mount(producer("t4c"), { events: { "thing.happened": SCHEMA } });
+  const r = mount(reactor("t4d"), { events: { "thing.followed": SCHEMA } });
+  const received = [];
+  const c = mount(consumer("t4e", received, "thing.followed"), {});
+  p.send({ type: "go", value: 1 });
+  const [cause, effect] = records.slice(-2);
+  assert.equal(cause.name, "thing.happened");
+  assert.equal(effect.name, "thing.followed");
+  assert.ok(effect.seq > cause.seq && effect.at >= cause.at);
+  assert.equal(received.length, 1, "delivery itself is unchanged");
+  sub();
+  unmount(p);
+  unmount(r);
+  unmount(c);
+});
+
 test("tap listener sees a refused record before the throw", async () => {
   const { records, sub } = collect();
   const p = mount(producer("t5"), { events: { "thing.happened": SCHEMA } });
@@ -297,6 +346,8 @@ test("tap records asked then replied for an answered query", async () => {
   await ask(a, "t6", "read", { id: 3 });
   const query = records.find((r) => r.kind === "query");
   const reply = records.find((r) => r.kind === "reply");
+  assert.ok(records.indexOf(query) < records.indexOf(reply), "the question is recorded before its reply");
+  assert.ok(query.seq < reply.seq);
   assert.equal(query.outcome, "asked");
   assert.deepEqual(query.to, ["t6"]);
   assert.equal(reply.outcome, "replied");

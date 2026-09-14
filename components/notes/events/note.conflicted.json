@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A write was based on a stale version (5): both copies, so a view can show them rather than silently losing one.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "mine": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "baseVersion": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "required": ["title", "body", "baseVersion"],
+      "additionalProperties": false
+    },
+    "theirs": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "updatedAt": { "type": "integer" }
+      },
+      "required": ["title", "body", "version", "updatedAt"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["id", "mine", "theirs"],
+  "additionalProperties": false
+}

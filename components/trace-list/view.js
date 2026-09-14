@@ -40,6 +40,11 @@ const time = (at) => {
 // Recipients, an ignored one marked with ~ as in the console line (section 10).
 const recipients = (r) => r.to.map((t) => (r.ignored.includes(t) ? `~${t}` : t)).join(", ");
 
+// Each recipient's resulting state after delivery (section 10), as id=state; empty
+// for a record that carries none (a reply).
+const states = (r) =>
+  r.states ? Object.entries(r.states).map(([id, state]) => `${id}=${state}`).join(" ") : "";
+
 // One cell's worth of a payload: its shape, so a row can be read without opening
 // it. Nothing is ∅, a list its length, an object its top-level keys, a scalar
 // itself, cut short.
@@ -136,11 +141,16 @@ class TraceList extends LitElement {
     .row.open .caret {
       transform: rotate(90deg);
     }
-    /* The two long columns wrap at every width (they never fit a phone on one
-       line); the short columns stay nowrap. */
+    /* The long columns wrap at every width (they never fit a phone on one line);
+       the short columns stay nowrap. */
     .route,
-    .shape {
+    .shape,
+    .state {
       white-space: normal;
+    }
+    .state {
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
     }
     .name {
       color: var(--color-ink);
@@ -225,14 +235,18 @@ class TraceList extends LitElement {
         order: 5;
         flex-basis: 100%;
       }
-      .time {
+      .state {
         order: 6;
+        flex-basis: 100%;
       }
-      .tab {
+      .time {
         order: 7;
       }
-      .shape {
+      .tab {
         order: 8;
+      }
+      .shape {
+        order: 9;
       }
       .time,
       .tab,
@@ -273,6 +287,7 @@ class TraceList extends LitElement {
               <th>kind</th>
               <th>name</th>
               <th>from → to</th>
+              <th>state</th>
               <th>outcome</th>
               <th>payload</th>
             </tr>
@@ -300,6 +315,7 @@ class TraceList extends LitElement {
         <td class="kind">${r.kind}</td>
         <td class="name">${r.name}</td>
         <td class="route">${r.from} → ${recipients(r)}</td>
+        <td class="state">${states(r)}</td>
         <td class="outcome">
           <span class=${OUTCOME_CLASS[r.outcome] ?? nothing}>${r.outcome}</span>
           ${r.reason ? html` <span class="reason">${r.reason}</span>` : nothing}
@@ -308,7 +324,7 @@ class TraceList extends LitElement {
       </tr>
       ${open
         ? html`<tr class="payload">
-            <td colspan="8"><pre>${JSON.stringify(r.payload, null, 2)}</pre></td>
+            <td colspan="9"><pre>${JSON.stringify(r.payload, null, 2)}</pre></td>
           </tr>`
         : nothing}
     `;

@@ -29,7 +29,12 @@ const insert = (records, record) => {
 const line = (r) => {
   const to = r.to.map((t) => (r.ignored.includes(t) ? `~${t}` : t)).join(", ");
   const reason = r.reason ? `: ${r.reason}` : "";
-  return `trace #${r.seq} ${r.tab.slice(-4)} ${r.kind} ${r.name} ${r.from} → ${to} ${r.outcome}${reason}`;
+  // Each recipient's resulting state after delivery (section 10), when the record
+  // carries one (a reply record does not).
+  const states = r.states && Object.keys(r.states).length
+    ? ` [${Object.entries(r.states).map(([id, state]) => `${id}=${state}`).join(" ")}]`
+    : "";
+  return `trace #${r.seq} ${r.tab.slice(-4)} ${r.kind} ${r.name} ${r.from} → ${to} ${r.outcome}${reason}${states}`;
 };
 
 export const machine = setup({

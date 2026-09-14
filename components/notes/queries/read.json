@@ -1,0 +1,44 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read names one note by id.",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The whole note, or an honest error when there is none by that id.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+              "title": { "type": "string" },
+              "body": { "type": "string" },
+              "version": { "type": "integer", "minimum": 1 },
+              "pending": { "type": "boolean" },
+              "updatedAt": { "type": "integer" }
+            },
+            "required": ["id", "title", "body", "version", "pending", "updatedAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "not-found" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  }
+}

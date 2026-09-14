@@ -4,7 +4,9 @@
       "lit": "/static/vendor/lit/lit-core.min.js",
       "xstate": "/static/vendor/xstate/xstate.esm.js",
       "ulid": "/static/vendor/ulid/index.js",
-      "bus": "/static/bus/bus.js"
+      "dexie": "/static/vendor/dexie/dexie.mjs",
+      "bus": "/static/bus/bus.js",
+      "store": "/static/store/store.js"
     }
   },
   "packages": [
@@ -43,6 +45,17 @@
       "files": {
         "ulid/LICENSE": "e7e94f2db9f81458817ca8eb7420d63ec607272eb4259b39c420339c76414dfe",
         "ulid/index.js": "f751358d24681663bf288ccb91a23dee829c07dfb21028ab8ca06e975edd8a4a"
+      }
+    },
+    {
+      "name": "dexie",
+      "version": "4.4.6",
+      "licence": "Apache-2.0",
+      "source": "https://registry.npmjs.org/dexie/-/dexie-4.4.6.tgz",
+      "files": {
+        "dexie/LICENSE": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+        "dexie/dexie.mjs": "8711109b9a6770e3e6b0d09ba764f059a871039bae924364922e3dcaf8e8279e",
+        "dexie/dexie.mjs.map": "56381b22b368e888197ba9af99cdbebed9082bf38bacaf21c77426463936524f"
       }
     },
     {

@@ -72,6 +72,12 @@ test("prints an ignored recipient marked with ~ and the reason", () => {
   assert.equal(d.printed[0], "trace #1 0001 event note.saved note-editor → a, ~b ignored: no recipient handles it");
 });
 
+test("prints each recipient's resulting state when the record carries one", () => {
+  const d = driver();
+  d.tap(rec({ to: ["notes"], states: { notes: '"ready"' } }));
+  assert.equal(d.printed[0], 'trace #1 0001 event note.saved note-editor → notes delivered [notes="ready"]');
+});
+
 test("skips its own traffic so it never records itself", () => {
   const d = driver();
   d.tap(rec({ from: "trace" }));

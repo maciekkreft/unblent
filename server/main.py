@@ -16,6 +16,7 @@ VENDOR = ROOT / "vendor"
 COMPONENTS = ROOT / "components"
 TOKENS = ROOT / "tokens"
 BUS = ROOT / "bus"
+STORE = ROOT / "store"
 PAGES_DESIGN = ROOT / "pages" / "design"
 
 # Section 11.1: source and tests never reach the browser.
@@ -60,6 +61,8 @@ app.mount("/static/components", ComponentStaticFiles(directory=COMPONENTS), name
 app.mount("/static/tokens", RevalidatingStaticFiles(directory=TOKENS), name="tokens")
 # ComponentStaticFiles so the bus's tests/ 404, the same as a component's (11.1).
 app.mount("/static/bus", ComponentStaticFiles(directory=BUS), name="bus")
+# The store interface (11.1), served like the bus; its tests/ 404 the same way.
+app.mount("/static/store", ComponentStaticFiles(directory=STORE), name="store")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])

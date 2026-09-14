@@ -39,7 +39,8 @@
             },
             "reason": { "type": ["string", "null"] },
             "cid": { "type": ["string", "null"] },
-            "payload": true
+            "payload": true,
+            "states": { "type": "object", "additionalProperties": { "type": "string" } }
           },
           "required": ["seq", "at", "tab", "kind", "name", "from", "to", "ignored", "outcome", "reason", "cid", "payload"],
           "additionalProperties": false

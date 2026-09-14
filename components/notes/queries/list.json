@@ -1,0 +1,31 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every note as a title and id, for a list.",
+    "type": "object",
+    "properties": {
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+            "title": { "type": "string" },
+            "updatedAt": { "type": "integer" }
+          },
+          "required": ["id", "title", "updatedAt"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["notes"],
+    "additionalProperties": false
+  }
+}

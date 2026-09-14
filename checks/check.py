@@ -305,6 +305,40 @@ def check_python_imports() -> None:
                          "or a relative module inside server/")
 
 
+# --- Store check (architecture.md 11.2) ------------------------------------------
+
+# A call, not the definition: `function openStore(` is excluded so a store.js may
+# still name its own wrapper (viewport's does).
+_OPENSTORE_CALL = re.compile(r"(?<!function )openStore\(")
+_OPENSTORE_LITERAL = re.compile(r"""openStore\(\s*(['"])([^'"]*)\1""")
+
+
+def check_store(manifests: dict) -> None:
+    """Section 11.2, one owner per fact: a component reaches the store only through
+    the bare `store` module, only from a fact's store.js or fact.js (views open
+    none), and every openStore() opens the database bearing the component's own name."""
+    kinds = {Path(p).parent.name: m["meta"].get("kind") for p, m in manifests.items()}
+    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
+        _, comp, file = Path(path).parts
+        src = _strip_comments((ROOT / path).read_text())
+        if "store" in (_STATIC_IMPORT.findall(src) + _DYNAMIC_IMPORT.findall(src)):
+            if file not in ("store.js", "fact.js"):
+                fail(path, "store check (11.2)",
+                     "only a fact component's store.js or fact.js may import the store")
+            if kinds.get(comp) != "fact":
+                fail(path, "store check (11.2)",
+                     f"{comp} is a {kinds.get(comp)} component; only a fact opens a store")
+        calls = _OPENSTORE_CALL.findall(src)
+        literals = _OPENSTORE_LITERAL.findall(src)
+        if len(calls) != len(literals):
+            fail(path, "store check (11.2)",
+                 "openStore(...) must take a string-literal name, the component's own")
+        for _quote, name in literals:
+            if name != comp:
+                fail(path, "store check (11.2)",
+                     f'openStore("{name}") must open the database named "{comp}", the component\'s own')
+
+
 # --- Page check (architecture.md 8) ----------------------------------------------
 
 # The five page kinds of section 8; duplicated in the pages router, which the
@@ -563,19 +597,20 @@ def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
 
 
 def run_tests() -> None:
-    # The bus is infrastructure, pure Node: its tests need neither the venv nor
-    # the server, so they run first and on their own. The budget is per test (11),
-    # so a file must not count as one: without isolation, node times each test
-    # alone rather than the file, whose lifetime includes the bus's own timers.
-    bus_tests = sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT))
-    if bus_tests:
+    # The bus and the store are infrastructure, pure Node: their tests need neither
+    # the venv nor the server, so they run first and on their own. The budget is per
+    # test (11), so a file must not count as one: without isolation, node times each
+    # test alone rather than the file, whose lifetime includes the bus's own timers.
+    node_tests = sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) + \
+        sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT))
+    if node_tests:
         result = subprocess.run(
             ["node", "--import", "./checks/register.mjs", "--test",
              "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
-             *bus_tests], cwd=ROOT,
+             *node_tests], cwd=ROOT,
         )
         if result.returncode != 0:
-            fail("bus/tests", "bus tests", "node --test reported failures")
+            fail("bus/tests, store/tests", "node tests", "node --test reported failures")
 
     uvicorn = ROOT / ".venv" / "bin" / "uvicorn"
     if not uvicorn.exists():
@@ -661,6 +696,7 @@ def main() -> None:
     _timed(timings, "contract check", check_contracts, manifests)
     _timed(timings, "imports", check_imports)
     _timed(timings, "python imports", check_python_imports)
+    _timed(timings, "store check", check_store, manifests)
     _timed(timings, "pages", check_pages)
     _timed(timings, "page components", check_page_components, manifests)
     _timed(timings, "document", check_document_writes)

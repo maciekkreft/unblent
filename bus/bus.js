@@ -25,12 +25,37 @@ export function tap(listener) {
   return () => taps.delete(listener);
 }
 
-// Fills the fields the bus assigns — `seq`, `at`, and the defaults for anything a
-// caller leaves out — then hands the record to every tap. Callers pass the parts
-// they know; a record is never mutated after.
-function record(partial) {
-  const full = { ignored: [], reason: null, cid: null, ...partial, seq: nextSeq++, at: Date.now() };
-  for (const listener of taps) listener(full);
+// A record's place in the transcript is the moment its routing decision was made,
+// so `seq` and `at` are reserved before delivery, while the rest (each recipient's
+// resulting state) is known only after. A recipient that emits while handling a
+// message makes a nested decision: it completes first, but it is the consequence,
+// so records finished inside a delivery wait until the outermost delivery is done
+// and then reach the taps in `seq` order (section 10: an ordered transcript).
+let depth = 0;
+const pending = [];
+
+function reserve() {
+  return { seq: nextSeq++, at: Date.now() };
+}
+
+// Fills the defaults for anything a caller leaves out and the reserved place (or
+// reserves one now, for a decision with no delivery), then hands the record to
+// every tap once no delivery is open. A record is never mutated after.
+function record(partial, place = reserve()) {
+  pending.push({ ignored: [], reason: null, cid: null, ...partial, ...place });
+  if (depth > 0) return;
+  const batch = pending.splice(0).sort((a, b) => a.seq - b.seq);
+  for (const full of batch) for (const listener of taps) listener(full);
+}
+
+// Runs `deliver` as one open delivery, so records made inside it are held.
+function delivering(deliver) {
+  depth++;
+  try {
+    deliver();
+  } finally {
+    depth--;
+  }
 }
 
 // The id a mounted actor answers to (4.1), for a record's `to`. Only mounted
@@ -73,17 +98,31 @@ function forward(machine, emitter, event) {
   const outcome =
     recipients.length === 0 ? "dropped" : ignored.length === recipients.length ? "ignored" : "delivered";
   const reason = outcome === "dropped" ? "no subscriber" : outcome === "ignored" ? "no recipient handles it" : null;
-  record({
-    kind: "event",
-    name,
-    from,
-    to: recipients.map(idOf),
-    ignored: ignored.map(idOf),
-    outcome,
-    reason,
-    payload: event,
-  });
-  for (const actor of recipients) actor.send(event);
+  // The record is completed after delivery, so it can carry each recipient's
+  // resulting state (section 10). A throw inside a recipient must not lose it: the
+  // finally writes the record, then the throw propagates so a failing handler still
+  // fails loudly.
+  const place = reserve();
+  try {
+    delivering(() => {
+      for (const actor of recipients) actor.send(event);
+    });
+  } finally {
+    record(
+      {
+        kind: "event",
+        name,
+        from,
+        to: recipients.map(idOf),
+        ignored: ignored.map(idOf),
+        outcome,
+        reason,
+        payload: event,
+        states: Object.fromEntries(recipients.map((a) => [idOf(a), JSON.stringify(a.getSnapshot().value)])),
+      },
+      place,
+    );
+  }
 }
 
 export function mount(machine, { input, events = {}, queries = {} } = {}) {
@@ -172,17 +211,6 @@ export function ask(machine, target, name, payload = {}) {
   // lets both kinds be validated together then.
   const message = { type, cid, payload };
   const handled = answerer.getSnapshot().can({ ...message, reply: () => {} });
-  record({
-    kind: "query",
-    name,
-    from,
-    to,
-    ignored: handled ? [] : to,
-    outcome: handled ? "asked" : "ignored",
-    reason: handled ? null : `state ${JSON.stringify(answerer.getSnapshot().value)} does not handle it`,
-    cid,
-    payload,
-  });
   return new Promise((resolve) => {
     let answered = false;
     // A reply always comes back to the asker (4.2); the trace records it as a
@@ -202,6 +230,25 @@ export function ask(machine, target, name, payload = {}) {
       record({ kind: "reply", name, from: target, to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
       resolve(value);
     };
-    answerer.send({ ...message, reply });
+    // Completed after delivery, so it carries the answerer's resulting state
+    // (section 10); its place is reserved before, so a synchronous answerer's reply,
+    // made inside the send, follows the question in the transcript.
+    const place = reserve();
+    delivering(() => answerer.send({ ...message, reply }));
+    record(
+      {
+        kind: "query",
+        name,
+        from,
+        to,
+        ignored: handled ? [] : to,
+        outcome: handled ? "asked" : "ignored",
+        reason: handled ? null : `state ${JSON.stringify(answerer.getSnapshot().value)} does not handle it`,
+        cid,
+        payload,
+        states: { [target]: JSON.stringify(answerer.getSnapshot().value) },
+      },
+      place,
+    );
   });
 }

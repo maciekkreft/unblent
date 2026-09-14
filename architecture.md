@@ -280,7 +280,7 @@ note.selected         owner: note-list      { id }
 conversation.changed  owner: conversations  { id, turns, version }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null }
-trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload }
+trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
 turn.submitted        owner: chat           { conversationId, turn }
 viewport.selected     owner: viewport-switch { viewport }
 viewport.changed      owner: viewport       { viewport }
@@ -441,7 +441,7 @@ tokens/          tokens.css and base.css, the document layer (section 7.4)
 pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
 checks/          check.py, the one check command
 bus/             the bus (built once)
-store/           the store interface
+store/           the store interface; tests/ never served
 deploy/          systemd unit and anything else the host needs; never served
 data/            per-user SQLite files (section 5), gitignored
 .env             machine-specific settings and secrets, gitignored
@@ -453,6 +453,7 @@ Static serving is namespaced so the future app can own `/`:
 |---|---|
 | `/static/vendor/…`, `/static/components/…`, `/static/tokens/…` | those directories, `Cache-Control: no-cache` |
 | `/static/bus/…` | the bus, `Cache-Control: no-cache`; its `tests/` are never served |
+| `/static/store/…` | the store interface, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/design/<name>` | `pages/design/<name>.html`, 404 if missing |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
 | `/` | the app; for now a redirect to `/design/tokens` |
