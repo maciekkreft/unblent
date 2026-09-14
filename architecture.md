@@ -277,6 +277,7 @@ note.changed          owner: notes          { id, title, body, version, pending,
 note.deleted          owner: notes          { id }
 note.conflicted       owner: notes          { id, mine, theirs }
 note.selected         owner: note-list      { id }
+note.opened           owner: note-editor    { id }
 conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
 dock.changed          owner: dock           { stage, docks }
@@ -463,6 +464,7 @@ Static serving is namespaced so the future app can own `/`:
 | `/static/bus/…` | the bus, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/static/store/…` | the store interface, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/design/<name>` | `pages/design/<name>.html`, 404 if missing |
+| `/apps/<name>` | `pages/apps/<name>.html`, 404 if missing |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
 | `/` | the app; for now a redirect to `/design/tokens` |
 

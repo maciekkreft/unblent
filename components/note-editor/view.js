@@ -3,6 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { machine } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
+import opened from "./events/note.opened.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -17,8 +18,11 @@ class ActorController {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         mint: ulid,
         focus: () => this.host.renderRoot?.querySelector("textarea")?.focus(),
+        // The attribute is parsed by the time hostConnected runs, so the actor is
+        // born knowing whether it follows the selection (6.4).
+        follows: this.host.follows,
       },
-      events: { "note.saved": saved },
+      events: { "note.saved": saved, "note.opened": opened },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -47,7 +51,12 @@ class NoteEditor extends LitElement {
   // container: it scrolls inside, so the status line stays in view and the page
   // does not scroll. Width is the container's in either mode; a measure is the
   // composing view's decision, not the editor's.
-  static properties = { height: { type: String, reflect: true } };
+  static properties = {
+    height: { type: String, reflect: true },
+    // Whether this editor loads whatever the list selects (6.4). Reflected so the
+    // page's bare `follows` reads as true and the manifest attribute is visible.
+    follows: { type: Boolean, reflect: true },
+  };
 
   static styles = css`
     :host {
@@ -125,7 +134,7 @@ class NoteEditor extends LitElement {
   #status(snapshot) {
     if (snapshot.matches("starting")) return "";
     if (snapshot.matches("empty")) return "New note";
-    if (snapshot.matches("missing")) return "Not found";
+    if (snapshot.matches("blank")) return "New note";
     if (snapshot.matches("failed")) return "notes unavailable";
     if (snapshot.matches({ editing: "dirty" })) return "Unsaved";
     if (snapshot.matches({ editing: "clean" })) {

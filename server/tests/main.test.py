@@ -33,6 +33,13 @@ class ServerEntry(unittest.TestCase):
     def test_unknown_design_page_404s(self):
         self.assertEqual(_request("/design/does-not-exist").status, 404)
 
+    def test_app_page_serves_and_guards(self):
+        # Section 11.1: /apps/<name> serves pages/apps/<name>.html, 404 otherwise,
+        # with the same parent guard as /design/<name>.
+        self.assertEqual(_request("/apps/notes").status, 200)
+        self.assertEqual(_request("/apps/does-not-exist").status, 404)
+        self.assertEqual(_request("/apps/foo%2F..%2Fbar").status, 404)
+
     def test_static_responses_are_no_cache(self):
         # The header the edit-and-reload story rests on, on every static mount.
         for path in (

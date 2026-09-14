@@ -30,7 +30,7 @@ export const machine = setup({
 }).createMachine({
   id: "trace-list",
   meta: { kind: "view", emits: [], asks: ["trace: list"], attributes: [] },
-  context: ({ input }) => ({ ask: input.ask, records: [], expanded: new Set(), now: input.now ?? Date.now() }),
+  context: ({ input }) => ({ ask: input.ask, records: [], expanded: new Set() }),
   initial: "loading",
   states: {
     loading: {
@@ -69,9 +69,5 @@ export const machine = setup({
     // What has been shown is UI state (3.1); the records stay with `trace`, so a
     // reload shows them again. Nothing is announced: no fact changed.
     _clear: { actions: assign({ records: [], expanded: new Set() }) },
-    // The clock the relative "time ago" column reads from (7.1: `at` is absolute).
-    // The view owns a 1 s interval that sends this, so the ages advance without a
-    // new record arriving. Internal (7.2), never routed.
-    _tick: { actions: assign({ now: ({ event }) => event.now }) },
   },
 });

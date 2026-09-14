@@ -15,14 +15,9 @@ class ActorController {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
-    // The relative "time ago" column advances without new traffic: a 1 s tick
-    // feeds the machine's clock (machine.js `_tick`). The controller owns it, so it
-    // starts and stops with the element on the bus.
-    this.ticker = setInterval(() => this.send({ type: "_tick", now: Date.now() }), 1000);
   }
 
   hostDisconnected() {
-    clearInterval(this.ticker);
     this.subscription?.unsubscribe();
     unmount(this.actor);
   }
@@ -41,22 +36,6 @@ const time = (at) => {
   const d = new Date(at);
   const p = (n, len = 2) => String(n).padStart(len, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
-};
-
-// Relative "time ago" from the record's absolute `at` (7.1) and the view's clock,
-// so it reads at a glance in the compact layout where the full timestamp does not
-// fit. Intl, not a vendored library (section 10, user's choice). A past record is a
-// negative offset to RelativeTimeFormat; the largest unit under its next threshold
-// wins (seconds < 60, minutes < 60, hours < 24, else days).
-const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
-const ago = (at, now) => {
-  const sec = Math.round((at - now) / 1000);
-  if (Math.abs(sec) < 60) return rtf.format(sec, "second");
-  const min = Math.round(sec / 60);
-  if (Math.abs(min) < 60) return rtf.format(min, "minute");
-  const hr = Math.round(min / 60);
-  if (Math.abs(hr) < 24) return rtf.format(hr, "hour");
-  return rtf.format(Math.round(hr / 24), "day");
 };
 
 // The kind a row reads (4.3, fifth rule): a view emits a gesture, a fact emits a
@@ -239,15 +218,8 @@ class TraceList extends LitElement {
       text-align: right;
       color: var(--color-body-mid);
     }
-    /* Two time cells share one column's worth of meaning: the absolute timestamp
-       reads on the desk, the relative "time ago" in the compact layout. Each layout
-       shows one and hides the other, so the row never carries both. */
-    .ago {
-      display: none;
-    }
-    /* The expanded panel's footer: the absolute time (the compact layout never
-       shows it otherwise) and each recipient's resulting state, one per line,
-       below the payload JSON. */
+    /* The expanded panel's footer: the absolute time and each recipient's resulting
+       state, one per line, below the payload JSON. */
     .detail {
       display: flex;
       flex-direction: column;
@@ -298,9 +270,8 @@ class TraceList extends LitElement {
         width: 100%;
       }
       /* Lay each record out as two lines with flex order: a header (#, kind, name,
-         outcome on the right), then the route and a muted "time ago" below. The
-         absolute time and the payload shape drop; the time returns, absolute, when
-         the row is expanded (.detail). */
+         outcome on the right), then the route and the muted absolute time below.
+         Only the payload shape drops. */
       tr.row {
         display: flex;
         flex-wrap: wrap;
@@ -315,12 +286,8 @@ class TraceList extends LitElement {
         border: 0;
         white-space: normal;
       }
-      .time,
       .shape {
         display: none;
-      }
-      .ago {
-        display: block;
       }
       .num {
         order: 1;
@@ -340,13 +307,13 @@ class TraceList extends LitElement {
         order: 5;
         flex-basis: 100%;
       }
-      .ago {
+      .time {
         order: 6;
       }
       .tab {
         order: 7;
       }
-      .ago,
+      .time,
       .tab {
         font-size: var(--text-caption);
         color: var(--color-body-mid);
@@ -363,7 +330,7 @@ class TraceList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { records, expanded, now } = snapshot.context;
+    const { records, expanded } = snapshot.context;
     // The tab column earns its place only when the traffic spans more than one tab
     // (over the bridge, section 12); with a single tab it is noise, so it is left
     // out of both layouts. Expanded-row ids still carry the tab (tab:seq).
@@ -376,12 +343,12 @@ class TraceList extends LitElement {
             Clear
           </button>
         </div>
-        ${records.length ? this.#table(records, expanded, now, showTab) : html`<p class="empty">No traffic yet.</p>`}
+        ${records.length ? this.#table(records, expanded, showTab) : html`<p class="empty">No traffic yet.</p>`}
       </article>
     `;
   }
 
-  #table(records, expanded, now, showTab) {
+  #table(records, expanded, showTab) {
     return html`
       <div class="scroll">
         <table>
@@ -398,18 +365,18 @@ class TraceList extends LitElement {
             </tr>
           </thead>
           <tbody>
-            ${records.map((r) => this.#row(r, expanded, now, showTab))}
+            ${records.map((r) => this.#row(r, expanded, showTab))}
           </tbody>
         </table>
       </div>
     `;
   }
 
-  #row(r, expanded, now, showTab) {
+  #row(r, expanded, showTab) {
     const id = `${r.tab}:${r.seq}`;
     const open = expanded.has(id);
     // The desk table (thead present) spans #, time, [tab], kind, name, route,
-    // outcome, shape; the .ago cell is display:none there and does not count.
+    // outcome, shape.
     const colspan = showTab ? 8 : 7;
     const lines = stateLines(r);
     return html`
@@ -420,7 +387,6 @@ class TraceList extends LitElement {
       >
         <td class="num"><span class="caret">${icon("caret-right")}</span>#${r.seq}</td>
         <td class="time">${time(r.at)}</td>
-        <td class="ago">${ago(r.at, now)}</td>
         ${showTab ? html`<td class="tab">${r.tab.slice(-4)}</td>` : nothing}
         <td class="kind">${kindLabel(r)}</td>
         <td class="name">${r.name}</td>

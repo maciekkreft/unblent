@@ -1,12 +1,14 @@
-import { setup, assign, fromPromise, enqueueActions } from "xstate";
+import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 
 // The view component for editing one note (3.1): owns only its own UI state — the
 // draft, which state it is in — and points at `notes`, which owns the fact. On
 // start it asks notes: list and reopens the newest note, or takes a note by the
-// load command (asks notes: read), follows note.changed after (4.3), and emits
-// note.saved when the user pauses. Everything with a side effect — the queries,
-// minting an id, focusing the input — arrives through input, so this stays a pure
-// definition importable in Node.
+// load command or, when it carries `follows`, by note.selected from the list (both
+// ask notes: read); it follows note.changed after (4.3), and emits note.saved when
+// the user pauses. It announces the note it is showing with note.opened whenever
+// its id changes, so a list can highlight that row (6.4). Everything with a side
+// effect — the queries, minting an id, focusing the input — arrives through input,
+// so this stays a pure definition importable in Node.
 
 // A pause, not a keystroke (4.3, third rule): the draft is emitted after the user
 // stops typing, not per character. A duration, not a length that places a box, so
@@ -24,10 +26,16 @@ export function titleOf(body) {
 const assignTyped = assign({ body: ({ event }) => event.body });
 
 // A first keystroke into an editor holding no note mints its id (a ULID, the
-// browser's own, 5) and starts editing it.
+// browser's own, 5) and starts editing it. The id changed, so the note it now shows
+// is announced (note.opened), the same as a load or a reopen does on entering
+// `loading`.
 const mintAndType = {
   target: "editing.dirty",
-  actions: assign({ id: ({ context }) => context.mint(), body: ({ event }) => event.body }),
+  actions: enqueueActions(({ context, event, enqueue }) => {
+    const id = context.mint();
+    enqueue.assign({ id, body: event.body });
+    enqueue.emit({ type: "note.opened", id });
+  }),
 };
 
 export const machine = setup({
@@ -58,11 +66,20 @@ export const machine = setup({
   },
 }).createMachine({
   id: "note-editor",
-  meta: { kind: "view", emits: ["note.saved"], attributes: ["height"], asks: ["notes: list", "notes: read"] },
+  meta: {
+    kind: "view",
+    emits: ["note.saved", "note.opened"],
+    attributes: ["height", "follows"],
+    asks: ["notes: list", "notes: read"],
+  },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
     focus: input.focus,
+    // Present: this editor loads whatever the list selects (6.4). Absent: it ignores
+    // note.selected, so a future page with several editors leaves it off and a
+    // container tells one editor to load by command instead.
+    follows: input.follows,
     id: null,
     body: "",
     baseVersion: null,
@@ -73,6 +90,15 @@ export const machine = setup({
     // A command addressing this instance (4.4). Nobody sends load yet (it arrives
     // with split-view); the machine handles it so the contract exists.
     load: {
+      target: ".loading",
+      actions: assign({ id: ({ event }) => event.id, body: "", baseVersion: null, sent: null }),
+    },
+    // The list's gesture (4.3, fifth rule), taken only when this editor follows the
+    // selection. Same landing as load: ask notes for the note, and announce it
+    // (note.opened, on entering `loading`). An unfollowing editor leaves it to the
+    // bus to record as ignored.
+    "note.selected": {
+      guard: ({ context }) => context.follows,
       target: ".loading",
       actions: assign({ id: ({ event }) => event.id, body: "", baseVersion: null, sent: null }),
     },
@@ -125,9 +151,12 @@ export const machine = setup({
     empty: {
       on: { _typed: mintAndType },
     },
-    // A load command, or the start, asked notes for the note; the reply decides
-    // where we land.
+    // A load command, a follow of the list's selection, or the start asked notes for
+    // the note; the reply decides where we land. Entering here the id has just
+    // changed, so the note now shown is announced once (note.opened), covering all
+    // three ways in.
     loading: {
+      entry: emit(({ context }) => ({ type: "note.opened", id: context.id })),
       invoke: {
         src: "read",
         input: ({ context }) => ({ ask: context.ask, id: context.id }),
@@ -141,7 +170,7 @@ export const machine = setup({
               sent: ({ event }) => ({ body: event.output.note.body }),
             }),
           },
-          { guard: ({ event }) => event.output.error === "not-found", target: "missing" },
+          { guard: ({ event }) => event.output.error === "not-found", target: "blank" },
           { target: "failed" },
         ],
         onError: "failed",
@@ -164,8 +193,13 @@ export const machine = setup({
         },
       },
     },
-    // notes has no such note, or could not answer. A load command leaves either.
-    missing: {},
+    // notes holds no note with this id: the id is a name for a note not yet written
+    // — a fresh one the list minted with its +, or a stale one — and typing here
+    // creates it. A null base under an id notes does not hold upserts as version 1
+    // (notes.applySave), so nothing here differs from an editor that just minted.
+    blank: {
+      on: { _typed: { target: "editing.dirty", actions: assignTyped } },
+    },
     failed: {},
   },
 });

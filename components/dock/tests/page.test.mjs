@@ -20,6 +20,10 @@ const ENGINES = [
   { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
 ];
 
+// The dock's layout is stored under a page-scoped key (dock/store.js), so the stem's
+// arrangement never clobbers an app desk's.
+const DOCK_KEY = "dock:/design/dock";
+
 // The desk's own picture, read from its shadow root. A group's strip is
 // `.stage` or `.dock.<side> .panel`; a folded side's rail is `.dock.<side> .rail`.
 const tabsOf = (page, group) =>
@@ -163,11 +167,11 @@ async function open(engine, { layout, phone = false } = {}) {
   const browser = await engine.launch();
   const context = await browser.newContext();
   await context.addInitScript(
-    ({ layout, phone }) => {
+    ({ layout, phone, key }) => {
       if (phone) localStorage.setItem("viewport", "phone");
-      if (layout) localStorage.setItem("dock", JSON.stringify(layout));
+      if (layout) localStorage.setItem(key, JSON.stringify(layout));
     },
-    { layout, phone },
+    { layout, phone, key: DOCK_KEY },
   );
   const page = await context.newPage();
   const problems = watch(page);
@@ -178,10 +182,10 @@ async function open(engine, { layout, phone = false } = {}) {
 }
 
 const clean = (page) =>
-  page.evaluate(() => {
-    localStorage.removeItem("dock");
+  page.evaluate((key) => {
+    localStorage.removeItem(key);
     localStorage.removeItem("viewport");
-  });
+  }, DOCK_KEY);
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check. The
 // stem's story is told in four tests so each fits its own budget (11).

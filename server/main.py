@@ -18,6 +18,7 @@ TOKENS = ROOT / "tokens"
 BUS = ROOT / "bus"
 STORE = ROOT / "store"
 PAGES_DESIGN = ROOT / "pages" / "design"
+PAGES_APPS = ROOT / "pages" / "apps"
 
 # Section 11.1: source and tests never reach the browser.
 _BLOCKED_SEGMENTS = {"server", "tests"}
@@ -74,5 +75,13 @@ async def index() -> RedirectResponse:
 async def design_page(name: str) -> FileResponse:
     page = PAGES_DESIGN / f"{name}.html"
     if not page.is_file() or page.parent != PAGES_DESIGN:
+        raise HTTPException(status_code=404)
+    return FileResponse(page, headers={"Cache-Control": "no-cache"})
+
+
+@app.api_route("/apps/{name}", methods=["GET", "HEAD"])
+async def app_page(name: str) -> FileResponse:
+    page = PAGES_APPS / f"{name}.html"
+    if not page.is_file() or page.parent != PAGES_APPS:
         raise HTTPException(status_code=404)
     return FileResponse(page, headers={"Cache-Control": "no-cache"})

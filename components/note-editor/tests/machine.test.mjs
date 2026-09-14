@@ -14,13 +14,15 @@ const NOTE = { id: ID, title: "L", body: "L\nloaded", version: 7, pending: false
 
 const answering = (replies) => (target, name) => Promise.resolve(replies[name] ?? {});
 
-function editor({ ask = answering({ list: { notes: [] } }), focus = () => {} } = {}) {
+function editor({ ask = answering({ list: { notes: [] } }), focus = () => {}, follows = false, mint = () => ID } = {}) {
   const clock = new SimulatedClock();
   const saved = [];
-  const actor = createActor(machine, { input: { ask, mint: () => ID, focus }, clock });
+  const opened = [];
+  const actor = createActor(machine, { input: { ask, mint, focus, follows }, clock });
   actor.on("note.saved", (e) => saved.push(e));
+  actor.on("note.opened", (e) => opened.push(e.id));
   actor.start();
-  return { actor, clock, saved };
+  return { actor, clock, saved, opened };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -161,9 +163,9 @@ test("load asks notes: read and lands per the reply", async () => {
   assert.equal(s.context.baseVersion, 7);
   assert.deepEqual(asked[1], ["notes", "read", { id: ID }]);
 
-  const missing = await withReply({ error: "not-found" });
+  const blank = await withReply({ error: "not-found" });
   await tick();
-  assert.equal(missing.getSnapshot().value, "missing");
+  assert.equal(blank.getSnapshot().value, "blank");
 
   const failed = await withReply({ error: "no-answerer" });
   await tick();
@@ -211,4 +213,56 @@ test("a pause that ends on the text notes already holds saves nothing", async ()
   loaded.actor.send({ type: "_typed", body: NOTE.body });
   loaded.clock.increment(DEBOUNCE_MS);
   assert.deepEqual(loaded.saved, []);
+});
+
+test("note.selected loads the note when the editor follows, and is ignored when it does not", async () => {
+  const following = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  following.actor.send({ type: "note.selected", id: ID });
+  await tick();
+  assert.deepEqual(following.actor.getSnapshot().value, { editing: "clean" });
+  assert.equal(following.actor.getSnapshot().context.id, ID);
+
+  const plain = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  assert.equal(plain.actor.getSnapshot().can({ type: "note.selected", id: ID }), false, "unfollowing editor ignores it");
+});
+
+test("note.opened is emitted on reopening at start, on load, on a followed selection, and on minting", async () => {
+  // On start with notes: reopens ID2 and announces it.
+  const start = editor({
+    ask: (target, name) =>
+      name === "list" ? Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }] }) : Promise.resolve({ note: { ...NOTE, id: ID2 } }),
+  });
+  await tick();
+  await tick();
+  assert.deepEqual(start.opened, [ID2]);
+
+  // On load.
+  const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  loaded.actor.send({ type: "load", id: ID });
+  await tick();
+  assert.deepEqual(loaded.opened, [ID]);
+
+  // On a followed selection.
+  const followed = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  followed.actor.send({ type: "note.selected", id: ID2 });
+  await tick();
+  assert.deepEqual(followed.opened, [ID2]);
+
+  // On minting from a keystroke into an editor holding no note.
+  const minted = await started();
+  minted.actor.send({ type: "_typed", body: "fresh" });
+  assert.deepEqual(minted.opened, [ID]);
+});
+
+test("typing in blank saves under the loaded id with a null base", async () => {
+  const { actor, clock, saved } = await started({
+    follows: true,
+    ask: answering({ list: { notes: [] }, read: { error: "not-found" } }),
+  });
+  actor.send({ type: "note.selected", id: ID2 });
+  await tick();
+  assert.equal(actor.getSnapshot().value, "blank");
+  actor.send({ type: "_typed", body: "made\nhere" });
+  clock.increment(DEBOUNCE_MS);
+  assert.deepEqual(saved, [{ type: "note.saved", id: ID2, title: "made", body: "made\nhere", baseVersion: null }]);
 });

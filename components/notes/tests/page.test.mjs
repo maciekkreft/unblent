@@ -17,7 +17,41 @@ const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 // The console lines trace prints (section 10): the round trip the editor and the
 // fact make through the bus, proof the stem is wired, not just rendered.
 const SAVED = /event note\.saved note-editor → notes delivered/;
-const CHANGED = /event note\.changed notes → note-editor delivered/;
+// note.changed now reaches both the editor and the list, so the recipient list is
+// no longer just note-editor; match it wherever it sits among the recipients.
+const CHANGED = /event note\.changed notes → .*\bnote-editor\b.* delivered/;
+// The list ↔ editor round trip (6.4): the editor announces the note it shows, the
+// list announces the note the user picked.
+const OPENED = /event note\.opened note-editor → note-list delivered/;
+const SELECTED = /event note\.selected note-list → note-editor delivered/;
+
+// The list's own shadow, read as the user sees it: each row's title and whether it
+// is the highlighted (open) one.
+const listRows = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("note-list").shadowRoot.querySelectorAll(".row")].map((r) => ({
+      title: r.querySelector(".name").textContent.trim(),
+      selected: r.getAttribute("aria-selected") === "true",
+    })),
+  );
+const clickRow = (page, title) =>
+  page.evaluate((title) => {
+    [...document.querySelector("note-list").shadowRoot.querySelectorAll(".row")]
+      .find((r) => r.querySelector(".name").textContent.trim() === title)
+      ?.click();
+  }, title);
+const clickNew = (page) =>
+  page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".new").click());
+const editorStatus = (page) => page.locator("note-editor .status").textContent();
+const editorBody = (page) => page.locator("note-editor textarea").inputValue();
+// Type a note and commit it: a blur saves at once (4.3), no debounce wait needed.
+const write = (page, text) =>
+  page.evaluate((t) => {
+    const ta = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
+    ta.value = t;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.dispatchEvent(new Event("blur"));
+  }, text);
 
 async function until(fn, timeout = 3000) {
   const start = Date.now();
@@ -151,6 +185,111 @@ for (const engine of ENGINES) {
       assert.ok(fits, "the editor must not overflow sideways on the phone");
       mkdirSync(SCREENSHOTS, { recursive: true });
       await phone.screenshot({ path: resolve(SCREENSHOTS, `notes-phone-${engine.name}.png`) });
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`the note-list highlights the open note and drives the editor in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const context = await browser.newContext();
+    try {
+      const problems = [];
+      const debug = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      page.on("console", (msg) => {
+        if (msg.type() === "debug") debug.push(msg.text());
+      });
+
+      await page.goto(`${BASE_URL}/design/notes`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () =>
+          document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea") &&
+          document.querySelector("note-list")?.shadowRoot,
+      );
+
+      // The first keystroke mints an id and the editor announces it (note.opened);
+      // the list gains that row and highlights it, since the highlighted row is
+      // whatever the editor is showing (6.4), never the list's own choice.
+      await write(page, "First\nbody");
+      await until(async () => (await listRows(page)).some((r) => r.title === "First" && r.selected));
+      await until(() => debug.some((l) => OPENED.test(l)));
+
+      // + : a "New note" placeholder appears highlighted and the editor is blank.
+      await clickNew(page);
+      await until(async () => (await editorStatus(page))?.trim() === "New note");
+      assert.equal(await editorBody(page), "", "the editor is empty for a new note");
+      assert.ok(
+        (await listRows(page)).some((r) => r.title === "New note" && r.selected),
+        "the placeholder is highlighted",
+      );
+
+      // Typing turns the placeholder into the real row at the top, still highlighted.
+      await write(page, "Second\nx");
+      await until(async () => {
+        const rows = await listRows(page);
+        return rows[0]?.title === "Second" && rows[0].selected && !rows.some((r) => r.title === "New note");
+      });
+
+      // Clicking the older row loads it into the editor and moves the highlight; the
+      // list announced the pick (note.selected), the editor consumed it.
+      await clickRow(page, "First");
+      await until(() => debug.some((l) => SELECTED.test(l)));
+      await until(async () => (await editorBody(page)) === "First\nbody");
+      await until(async () => {
+        const rows = await listRows(page);
+        return rows.find((r) => r.title === "First")?.selected && !rows.find((r) => r.title === "Second")?.selected;
+      });
+
+      // Keyboard: pick the top row (Second) so the roving focus sits there, then
+      // ArrowDown moves it to the next row and Enter selects that one (First).
+      await clickRow(page, "Second");
+      await until(async () => (await editorBody(page)) === "Second\nx");
+      // The roving focus sits on the picked row (Second) before any key is pressed.
+      await page.waitForFunction(() => {
+        const r = document.querySelector("note-list").shadowRoot.querySelector('.row[tabindex="0"]');
+        return r && r.querySelector(".name").textContent.trim() === "Second";
+      });
+      await page.evaluate(() =>
+        document.querySelector("note-list").shadowRoot.querySelector('.row[tabindex="0"]').focus(),
+      );
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await until(async () => (await editorBody(page)) === "First\nbody");
+      assert.ok((await listRows(page)).find((r) => r.title === "First")?.selected, "Enter selected the next row");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`the notes app composes the list and editor in a dock-desk in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const context = await browser.newContext();
+    try {
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.waitForFunction(() => document.querySelector("dock-desk")?.shadowRoot?.querySelector(".stage"));
+
+      // Both views are the desk's children (8): the page composes, dock-desk lays out.
+      const children = await page.evaluate(() =>
+        [...document.querySelector("dock-desk").children].map((c) => c.localName),
+      );
+      assert.ok(children.includes("note-editor") && children.includes("note-list"), "both are dock-desk children");
+
+      // The stage starts with both as tabs, in page order, by their labels.
+      const tabs = await page.evaluate(() =>
+        [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.stage [role="tab"]')].map((b) =>
+          b.textContent.trim(),
+        ),
+      );
+      assert.deepEqual(tabs, ["Editor", "Notes"]);
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
