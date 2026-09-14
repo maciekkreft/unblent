@@ -68,7 +68,29 @@ test("toggle opens a row and toggles it shut", async () => {
   await settle(actor);
   const id = "01AAAAAAAAAAAAAAAAAA:1";
   actor.send({ type: "_toggle", id });
-  assert.equal(actor.getSnapshot().context.expanded, id);
+  assert.ok(actor.getSnapshot().context.expanded.has(id));
   actor.send({ type: "_toggle", id });
-  assert.equal(actor.getSnapshot().context.expanded, null);
+  assert.ok(!actor.getSnapshot().context.expanded.has(id));
+});
+
+test("more than one row can be open at once", async () => {
+  const ask = () => Promise.resolve({ records: [rec({ seq: 1 }), rec({ seq: 2, at: 2000 })] });
+  const actor = createActor(machine, { input: { ask } });
+  await settle(actor);
+  actor.send({ type: "_toggle", id: "01AAAAAAAAAAAAAAAAAA:1" });
+  actor.send({ type: "_toggle", id: "01AAAAAAAAAAAAAAAAAA:2" });
+  const { expanded } = actor.getSnapshot().context;
+  assert.ok(expanded.has("01AAAAAAAAAAAAAAAAAA:1") && expanded.has("01AAAAAAAAAAAAAAAAAA:2"));
+});
+
+test("clear empties what is shown; later traffic is shown again", async () => {
+  const ask = () => Promise.resolve({ records: [rec()] });
+  const actor = createActor(machine, { input: { ask } });
+  await settle(actor);
+  actor.send({ type: "_toggle", id: "01AAAAAAAAAAAAAAAAAA:1" });
+  actor.send({ type: "_clear" });
+  assert.deepEqual(actor.getSnapshot().context.records, []);
+  assert.equal(actor.getSnapshot().context.expanded.size, 0);
+  actor.send({ type: "trace.recorded", ...rec({ seq: 2, at: 2000 }) });
+  assert.deepEqual(actor.getSnapshot().context.records.map((r) => r.seq), [2]);
 });

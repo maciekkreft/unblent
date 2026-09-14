@@ -41,9 +41,25 @@ const time = (at) => {
 const recipients = (r) => r.to.map((t) => (r.ignored.includes(t) ? `~${t}` : t)).join(", ");
 
 // Each recipient's resulting state after delivery (section 10), as id=state; empty
-// for a record that carries none (a reply).
+// for a record that carries none (a reply). The record carries each state as a
+// JSON string (7.1); here a string state prints bare and a nested one as
+// {child: value, …}, so it wraps at its natural points and no single token can
+// widen the table past wherever the view is placed.
+const stateText = (state) =>
+  state && typeof state === "object"
+    ? `{${Object.entries(state)
+        .map(([k, v]) => `${k}: ${stateText(v)}`)
+        .join(", ")}}`
+    : String(state);
+const parsed = (text) => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+};
 const states = (r) =>
-  r.states ? Object.entries(r.states).map(([id, state]) => `${id}=${state}`).join(" ") : "";
+  r.states ? Object.entries(r.states).map(([id, state]) => `${id}=${stateText(parsed(state))}`).join(" ") : "";
 
 // One cell's worth of a payload: its shape, so a row can be read without opening
 // it. Nothing is ∅, a list its length, an object its top-level keys, a scalar
@@ -92,12 +108,34 @@ class TraceList extends LitElement {
       background: var(--color-canvas-soft);
       min-width: 0;
     }
-    h2 {
-      margin: 0;
-      font-size: var(--text-subtitle);
-      line-height: var(--leading-tight);
-      font-weight: var(--weight-semibold);
-      color: var(--color-ink);
+    /* One thin row above the table: the count on the left, Clear on the right.
+       Clear empties what is shown, not what the trace fact keeps (3.1): it is the
+       console's clear button, and a reload shows the records again. */
+    .bar {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+    }
+    .clear {
+      font: inherit;
+      color: var(--color-body);
+      background: none;
+      border: 0;
+      padding: var(--space-2xs) var(--space-xs);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .clear:hover:enabled {
+      background: var(--color-surface-hover);
+    }
+    .clear:focus-visible {
+      outline: var(--focus-ring);
+    }
+    .clear:disabled {
+      color: var(--color-mute);
+      cursor: default;
     }
     .empty {
       margin: 0;
@@ -142,11 +180,15 @@ class TraceList extends LitElement {
       transform: rotate(90deg);
     }
     /* The long columns wrap at every width (they never fit a phone on one line);
-       the short columns stay nowrap. */
+       the short columns stay nowrap. overflow-wrap lets an unbreakable token (a
+       nested state, a long key list) break too, so the table's min-content width
+       never exceeds its container: the same table fits wherever the view is
+       placed, on its own stem page or on a stage beside a dock. */
     .route,
     .shape,
     .state {
       white-space: normal;
+      overflow-wrap: anywhere;
     }
     .state {
       font-size: var(--text-caption);
@@ -269,7 +311,12 @@ class TraceList extends LitElement {
     const { records, expanded } = snapshot.context;
     return html`
       <article class="card">
-        <h2>Bus traffic</h2>
+        <div class="bar">
+          <span class="count">${records.length} records</span>
+          <button class="clear" ?disabled=${!records.length} @click=${() => this.#actor.send({ type: "_clear" })}>
+            Clear
+          </button>
+        </div>
         ${records.length ? this.#table(records, expanded) : html`<p class="empty">No traffic yet.</p>`}
       </article>
     `;
@@ -302,7 +349,7 @@ class TraceList extends LitElement {
 
   #row(r, expanded) {
     const id = `${r.tab}:${r.seq}`;
-    const open = expanded === id;
+    const open = expanded.has(id);
     return html`
       <tr
         class="row ${open ? "open" : ""}"
