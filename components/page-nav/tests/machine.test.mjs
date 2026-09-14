@@ -29,7 +29,7 @@ const asker = (settings, log) => (target, name, payload) => {
   return Promise.resolve(
     settings === "error"
       ? { error: "no-answerer" }
-      : { nav: [], viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: false, ...settings },
+      : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, ...settings },
   );
 };
 
@@ -96,8 +96,8 @@ test("settings.changed re-applies the order (4.3, fourth rule)", async () => {
     type: "settings.changed",
     nav: [{ path: "/design/notes", hidden: true }],
     viewportSwitchHidden: false,
-    layoutLockHidden: false,
-    layoutLocked: false,
+    layoutSwitchHidden: false,
+    arranging: true,
   });
   const c = actor.getSnapshot().context;
   assert.deepEqual(

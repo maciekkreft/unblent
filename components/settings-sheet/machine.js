@@ -50,13 +50,13 @@ const setHidden = (context, path, hidden) => {
   return edited(withNav(context.settings, rows));
 };
 
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: false };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true };
 
 const adopt = (event) => ({
   nav: event.nav.map((r) => ({ ...r })),
   viewportSwitchHidden: event.viewportSwitchHidden,
-  layoutLockHidden: event.layoutLockHidden,
-  layoutLocked: event.layoutLocked,
+  layoutSwitchHidden: event.layoutSwitchHidden,
+  arranging: event.arranging,
 });
 
 export const machine = setup({
@@ -128,9 +128,9 @@ export const machine = setup({
             edited({ ...context.settings, viewportSwitchHidden: !context.settings.viewportSwitchHidden }),
           ),
         },
-        _toggleLock: {
+        _toggleLayout: {
           actions: emit(({ context }) =>
-            edited({ ...context.settings, layoutLockHidden: !context.settings.layoutLockHidden }),
+            edited({ ...context.settings, layoutSwitchHidden: !context.settings.layoutSwitchHidden }),
           ),
         },
         _reset: { actions: emit(() => edited({ ...DEFAULT })) },

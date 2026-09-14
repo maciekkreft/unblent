@@ -277,19 +277,59 @@ for (const engine of ENGINES) {
       await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
       await page.waitForFunction(() => document.querySelector("dock-desk")?.shadowRoot?.querySelector(".stage"));
 
-      // Both views are the desk's children (8): the page composes, dock-desk lays out.
+      // The three views are the desk's children (8): the page composes, dock-desk
+      // lays out.
       const children = await page.evaluate(() =>
         [...document.querySelector("dock-desk").children].map((c) => c.localName),
       );
-      assert.ok(children.includes("note-editor") && children.includes("note-list"), "both are dock-desk children");
+      assert.ok(
+        ["note-editor", "note-list", "trace-list"].every((n) => children.includes(n)),
+        "editor, list and trace are dock-desk children",
+      );
 
-      // The stage starts with both as tabs, in page order, by their labels.
+      // The page declares side="right" on Trace and the desk is fresh, so the desk
+      // seeds it into the right dock while the editor and list stay stage tabs.
       const tabs = await page.evaluate(() =>
         [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.stage [role="tab"]')].map((b) =>
           b.textContent.trim(),
         ),
       );
       assert.deepEqual(tabs, ["Editor", "Notes"]);
+      const rightTabs = await page.evaluate(() =>
+        [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .strip [role="tab"]')].map(
+          (b) => b.textContent.trim(),
+        ),
+      );
+      assert.deepEqual(rightTabs, ["Trace"], "Trace opens docked on the right");
+
+      // The editor is the shown stage tab; its status line proves it has rendered.
+      await page.waitForFunction(
+        () => document.querySelector("note-editor")?.shadowRoot?.querySelector(".status"),
+      );
+      // A group's body is a flex column (fix 2), so height="fill" fills it: the editor
+      // host is as tall as the stage body and its status sits at the body's bottom,
+      // within one --space-md (16px), not stranded under the first line.
+      const fill = await page.evaluate(() => {
+        const desk = document.querySelector("dock-desk");
+        const body = desk.shadowRoot.querySelector('.body[data-side="stage"]').getBoundingClientRect();
+        const editor = document.querySelector("note-editor");
+        const host = editor.getBoundingClientRect();
+        const status = editor.shadowRoot.querySelector(".status").getBoundingClientRect();
+        return { bodyH: body.height, hostH: host.height, gap: body.bottom - status.bottom };
+      });
+      assert.ok(Math.abs(fill.hostH - fill.bodyH) <= 1, `the editor fills the stage body, saw ${fill.hostH} vs ${fill.bodyH}`);
+      assert.ok(fill.gap >= -1 && fill.gap <= 16, `the status sits at the body's bottom, gap ${fill.gap}px`);
+
+      // note-list carries no title of its own (fix 4): the frame names it, and its
+      // head holds only the one "New note" action.
+      const listHead = await page.evaluate(() => {
+        const root = document.querySelector("note-list").shadowRoot;
+        const buttons = [...root.querySelectorAll(".head button")];
+        return { hasTitle: Boolean(root.querySelector(".title")), count: buttons.length, label: buttons[0]?.getAttribute("aria-label") };
+      });
+      assert.equal(listHead.hasTitle, false, "the list carries no title of its own");
+      assert.equal(listHead.count, 1, "the head holds exactly one action");
+      assert.equal(listHead.label, "New note");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

@@ -102,4 +102,28 @@ for (const engine of ENGINES) {
       await browser.close();
     }
   });
+
+  test(`page-nav hosts a slotted control in the bar in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
+      // The bar renders a slot, and the page's <layout-switch> is assigned into it
+      // (right-aligned) and renders its own button — the control lives in the bar.
+      await page.waitForFunction(
+        () => document.querySelector("page-nav")?.shadowRoot?.querySelector(".controls slot"),
+      );
+      await page.waitForFunction(
+        () => document.querySelector("page-nav > layout-switch")?.shadowRoot?.querySelector("button"),
+      );
+      const slotted = await page.evaluate(() => {
+        const control = document.querySelector("page-nav > layout-switch");
+        const slot = document.querySelector("page-nav").shadowRoot.querySelector(".controls slot");
+        return control.assignedSlot === slot;
+      });
+      assert.ok(slotted, "layout-switch is assigned into page-nav's controls slot");
+    } finally {
+      await browser.close();
+    }
+  });
 }

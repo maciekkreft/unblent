@@ -2,12 +2,11 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { machine } from "./machine.js";
-import locked from "./events/layout.locked.json" with { type: "json" };
+import switched from "./events/layout.switched.json" with { type: "json" };
 
-// Icon names are literals (7.6), so the icon check can read them: a closed padlock
-// for the locked layout, an open one for the unlocked.
-const LOCKED = icon("lock");
-const UNLOCKED = icon("lock-open");
+// Icon names are literals (7.6), so the icon check can read them: one glyph for the
+// layout, a pressed toggle when arranging is on.
+const LAYOUT = icon("layout");
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -19,7 +18,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
-      events: { "layout.locked": locked },
+      events: { "layout.switched": switched },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -38,34 +37,34 @@ class ActorController {
   }
 }
 
-class LayoutLock extends LitElement {
+class LayoutSwitch extends LitElement {
   static styles = css`
-    /* Fixed to the window's bottom-left, the mirror of viewport-switch at the
-       bottom-right. Visible on touch devices too: a locked layout matters on a
-       phone. */
+    /* An inline control living in the nav bar (slotted into page-nav), flush with
+       the links rather than a floating pill: no surface of its own, the bar carries
+       it. Visible on touch devices too: arranging matters on a phone. */
     :host {
-      position: fixed;
-      inset: auto auto var(--space-md) var(--space-md);
-      display: flex;
-      padding: var(--space-2xs);
-      background: var(--color-canvas-soft);
-      border: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-full);
-      box-shadow: var(--shadow-card);
+      display: inline-flex;
+      align-items: center;
       font-size: var(--text-body);
     }
     :host([hidden]) {
       display: none;
     }
+    /* A tight pill hugging one 1em glyph. font-size is set here, not left to the
+       button's UA default (13.3px in Chromium), so the icon reads at --text-body
+       like every other icon in every engine, and the pill is not a big ring around
+       a small mark. */
     button {
       border: none;
       background: none;
       cursor: pointer;
-      padding: var(--space-2xs) var(--space-xs);
+      padding: var(--space-xs);
       border-radius: var(--radius-full);
       color: var(--color-body);
+      font-size: var(--text-body);
       display: inline-flex;
       align-items: center;
+      justify-content: center;
     }
     button:hover {
       background: var(--color-surface-hover);
@@ -74,8 +73,11 @@ class LayoutLock extends LitElement {
     button:focus-visible {
       outline: var(--focus-ring);
     }
+    /* Pressed = arranging: a lone button whose state must read at a glance, so it
+       fills with the accent rather than viewport-switch's fainter surface-active. */
     button[aria-pressed="true"] {
-      color: var(--color-ink);
+      background: var(--color-accent-subtle);
+      color: var(--color-accent-active);
     }
     button svg {
       display: block;
@@ -87,24 +89,24 @@ class LayoutLock extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
-    // No settings on the page means no lock: the switch leaves the page.
+    // No settings on the page means no arranging: the switch leaves the page.
     if (snapshot.matches("failed")) {
       this.hidden = true;
       return nothing;
     }
-    const { locked, hidden } = snapshot.context;
+    const { arranging, hidden } = snapshot.context;
     // Reflect the settings choice onto this switch's own host, so it leaves the
-    // page when hidden (the desk stays locked regardless).
+    // page when hidden (arranging stays off regardless).
     this.hidden = hidden;
     if (hidden) return nothing;
-    const label = locked ? "Unlock the layout" : "Lock the layout";
+    const label = "Arrange the layout";
     return html`
-      <button aria-pressed=${locked ? "true" : "false"} aria-label=${label} title=${label}
+      <button aria-pressed=${arranging ? "true" : "false"} aria-label=${label} title=${label}
         @click=${() => this.#actor.send({ type: "_toggle" })}>
-        ${locked ? LOCKED : UNLOCKED}
+        ${LAYOUT}
       </button>
     `;
   }
 }
 
-customElements.define("layout-lock", LayoutLock);
+customElements.define("layout-switch", LayoutSwitch);

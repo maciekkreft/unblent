@@ -1,20 +1,21 @@
 import { setup, assign, emit, fromPromise } from "xstate";
 
-// A view component (3.1): the switch that locks or unlocks the desk layout. It
-// owns no fact; whether the desk is locked, and whether this switch is shown,
-// belong to `settings`, reached by one query for the starting picture and
+// A view component (3.1): the switch that turns arranging the desk layout on and
+// off. It owns no fact; whether the desk is being arranged, and whether this switch
+// is shown, belong to `settings`, reached by one query for the starting picture and
 // settings.changed after (4.3, fourth rule). No settings on the page (the ask
-// replies no-answerer) means no lock, so the switch fails and renders nothing. The
-// gesture is emitted as layout.locked; `settings` decides (and refuses it while the
-// switch is hidden). The ask arrives through `input`, so the machine imports in Node.
+// replies no-answerer) means no arranging, so the switch fails and renders nothing.
+// The gesture is emitted as layout.switched; `settings` decides (and refuses it
+// while the switch is hidden). The ask arrives through `input`, so the machine
+// imports in Node.
 export const machine = setup({
   actors: {
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
 }).createMachine({
-  id: "layout-lock",
-  meta: { kind: "view", emits: ["layout.locked"], attributes: [], asks: ["settings: read"] },
-  context: ({ input }) => ({ ask: input.ask, locked: false, hidden: false }),
+  id: "layout-switch",
+  meta: { kind: "view", emits: ["layout.switched"], attributes: [], asks: ["settings: read"] },
+  context: ({ input }) => ({ ask: input.ask, arranging: true, hidden: false }),
   initial: "loading",
   states: {
     loading: {
@@ -26,8 +27,8 @@ export const machine = setup({
           {
             target: "ready",
             actions: assign({
-              locked: ({ event }) => event.output.layoutLocked,
-              hidden: ({ event }) => event.output.layoutLockHidden,
+              arranging: ({ event }) => event.output.arranging,
+              hidden: ({ event }) => event.output.layoutSwitchHidden,
             }),
           },
         ],
@@ -39,7 +40,7 @@ export const machine = setup({
         // Leading underscore (7.2): the user's click, never routed. The gesture is
         // emitted as-is; `settings` decides whether it changes anything.
         _toggle: {
-          actions: emit(({ context }) => ({ type: "layout.locked", locked: !context.locked })),
+          actions: emit(({ context }) => ({ type: "layout.switched", arranging: !context.arranging })),
         },
       },
     },
@@ -49,8 +50,8 @@ export const machine = setup({
     // The fact's news (4.3, fourth rule): adopt it whoever caused the change.
     "settings.changed": {
       actions: assign({
-        locked: ({ event }) => event.layoutLocked,
-        hidden: ({ event }) => event.layoutLockHidden,
+        arranging: ({ event }) => event.arranging,
+        hidden: ({ event }) => event.layoutSwitchHidden,
       }),
     },
   },

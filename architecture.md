@@ -261,6 +261,8 @@ Suppose the build order is: `notes` + `note-editor`, then `note-list`, then `spl
 
 Each later component used only contracts that already existed, and the components page (section 8) showed which ones were available before it was built. This is the Zettelkasten property made concrete: a new note points at old notes; old notes do not change.
 
+A page may declare a view's home side with a `side="left|right|bottom"` attribute on a `dock-desk` child, read like the `label` convention (neither is a `dock-desk` tag attribute). `dock-desk` seeds the initial layout from the declared sides only when the `dock` fact has no stored arrangement; the first user gesture stores a layout, and that stored layout wins thereafter. The layout fact stays owned by `dock` — `dock-desk` only chooses a starting picture when the fact has none.
+
 ---
 
 ## 7. Contracts
@@ -281,9 +283,9 @@ note.opened           owner: note-editor    { id }
 conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
 dock.changed          owner: dock           { stage, docks }
-layout.locked         owner: layout-lock    { locked }
-settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutLockHidden, layoutLocked }
-settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutLockHidden, layoutLocked }
+layout.switched       owner: layout-switch  { arranging }
+settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging }
+settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutSwitchHidden, arranging }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null }
 trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
@@ -312,7 +314,7 @@ catalog: contracts       → { events: [{ name, owner, schema, consumers }], que
 trace: list              → { records: [record] }
 viewport: read           → { viewport }
 dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
-settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutLockHidden, layoutLocked }
+settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.

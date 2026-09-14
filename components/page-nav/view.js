@@ -63,6 +63,14 @@ class PageNav extends LitElement {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
     }
+    /* Right-aligned home for page controls slotted into the bar (e.g. layout-switch),
+       pushed clear of the links; wraps with them when the row is too narrow. */
+    .controls {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
     .failed {
       margin: 0;
       padding: var(--space-sm) var(--space-md);
@@ -85,6 +93,7 @@ class PageNav extends LitElement {
             <a href=${p.path} aria-current=${p.path === current ? "page" : nothing}>${p.title}</a>
           `,
         )}
+        <span class="controls"><slot></slot></span>
       </nav>
     `;
   }

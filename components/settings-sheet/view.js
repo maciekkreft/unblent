@@ -216,10 +216,10 @@ class SettingsSheet extends LitElement {
         <label>
           <input
             type="checkbox"
-            .checked=${!settings.layoutLockHidden}
-            @change=${() => this.#actor.send({ type: "_toggleLock" })}
+            .checked=${!settings.layoutSwitchHidden}
+            @change=${() => this.#actor.send({ type: "_toggleLayout" })}
           />
-          Layout lock shown
+          Layout switch shown
         </label>
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>Reset to defaults</button>

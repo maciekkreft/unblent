@@ -58,18 +58,16 @@ class NoteList extends LitElement {
       flex-direction: column;
       min-height: 0;
     }
+    /* The frame the list sits in names it (a desk tab, a page title), so the list
+       carries no title of its own; the band holds only the one action. */
     .head {
       flex: none;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: var(--space-sm);
-      padding: var(--space-sm) var(--space-md);
+      padding: var(--space-xs) var(--space-sm);
       border-bottom: var(--border-width) solid var(--color-border);
-    }
-    .title {
-      font-weight: var(--weight-semibold);
-      color: var(--color-ink);
     }
     /* Always visible, never hover-only, so it works by touch and is discoverable. */
     .new {
@@ -198,7 +196,6 @@ class NoteList extends LitElement {
     const focusId = this.#focusRow(rows, open);
     return html`
       <div class="head">
-        <span class="title">Notes</span>
         <button class="new" aria-label="New note" title="New note" @click=${() => this.#actor.send({ type: "_new" })}>
           ${icon("plus")}
         </button>

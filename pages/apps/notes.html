@@ -33,15 +33,16 @@
     <script type="module" src="/static/components/dock-desk/view.js"></script>
     <script type="module" src="/static/components/note-list/view.js"></script>
     <script type="module" src="/static/components/note-editor/view.js"></script>
-    <script type="module" src="/static/components/layout-lock/view.js"></script>
+    <script type="module" src="/static/components/layout-switch/view.js"></script>
+    <script type="module" src="/static/components/trace-list/view.js"></script>
   </head>
   <body>
-    <page-nav></page-nav>
+    <page-nav><layout-switch></layout-switch></page-nav>
     <dock-desk>
       <note-editor label="Editor" follows height="fill"></note-editor>
       <note-list label="Notes"></note-list>
+      <trace-list label="Trace" side="right"></trace-list>
     </dock-desk>
     <viewport-switch></viewport-switch>
-    <layout-lock></layout-lock>
   </body>
 </html>

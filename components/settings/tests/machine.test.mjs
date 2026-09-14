@@ -19,13 +19,13 @@ const read = (actor) => {
   return reply;
 };
 
-test("garbage parses to defaults", () => {
+test("garbage parses to defaults, arranging on", () => {
   const { actor } = start("not json");
   assert.deepEqual(read(actor), {
     nav: [],
     viewportSwitchHidden: false,
-    layoutLockHidden: false,
-    layoutLocked: false,
+    layoutSwitchHidden: false,
+    arranging: true,
   });
 });
 
@@ -39,37 +39,56 @@ test("settings.edited dedupes nav by path and applies the invariant", () => {
       { path: "/b", hidden: false },
     ],
     viewportSwitchHidden: false,
-    layoutLockHidden: true,
-    layoutLocked: false,
+    layoutSwitchHidden: true,
+    arranging: true,
   });
   const s = read(actor);
   assert.deepEqual(s.nav, [
     { path: "/a", hidden: true },
     { path: "/b", hidden: false },
   ]);
-  assert.equal(s.layoutLocked, true, "a hidden lock forces layoutLocked");
+  assert.equal(s.arranging, false, "a hidden switch forces arranging off");
   assert.equal(emitted.length, 1);
   assert.equal(saved.length, 1);
   assert.deepEqual({ ...emitted[0], type: undefined }, { ...s, type: undefined });
 });
 
-test("layout.locked toggles the lock and emits", () => {
-  const { actor, emitted } = start(null);
-  actor.send({ type: "layout.locked", locked: true });
-  assert.equal(read(actor).layoutLocked, true);
-  assert.equal(emitted.length, 1);
-  actor.send({ type: "layout.locked", locked: false });
-  assert.equal(read(actor).layoutLocked, false);
+test("unhiding the switch keeps arranging off until the switch turns it on", () => {
+  const { actor, emitted } = start(
+    JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: true, arranging: false }),
+  );
+  // The sheet unhides, sending back the arranging it last saw (off).
+  actor.send({ type: "settings.edited", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: false });
+  assert.equal(read(actor).arranging, false, "unhiding does not turn arranging back on");
+  actor.send({ type: "layout.switched", arranging: true });
+  assert.equal(read(actor).arranging, true);
   assert.equal(emitted.length, 2);
 });
 
-test("a hidden switch ignores layout.locked", () => {
+test("layout.switched toggles arranging and emits", () => {
+  const { actor, emitted } = start(null);
+  actor.send({ type: "layout.switched", arranging: false });
+  assert.equal(read(actor).arranging, false);
+  assert.equal(emitted.length, 1);
+  actor.send({ type: "layout.switched", arranging: true });
+  assert.equal(read(actor).arranging, true);
+  assert.equal(emitted.length, 2);
+});
+
+test("a hidden switch ignores layout.switched", () => {
   const { actor, emitted } = start(
-    JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutLockHidden: true, layoutLocked: true }),
+    JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: true, arranging: false }),
   );
-  actor.send({ type: "layout.locked", locked: false });
-  assert.equal(read(actor).layoutLocked, true, "the desk stays locked while the switch is hidden");
+  actor.send({ type: "layout.switched", arranging: true });
+  assert.equal(read(actor).arranging, false, "the desk stays unarrangeable while the switch is hidden");
   assert.equal(emitted.length, 0);
+});
+
+test("layout.switched on a no-op emits and saves nothing", () => {
+  const { actor, saved, emitted } = start(null);
+  actor.send({ type: "layout.switched", arranging: true });
+  assert.equal(emitted.length, 0, "arranging is already on by default");
+  assert.equal(saved.length, 0);
 });
 
 test("a repeat write emits and saves nothing", () => {
@@ -77,8 +96,8 @@ test("a repeat write emits and saves nothing", () => {
   const same = {
     nav: [],
     viewportSwitchHidden: false,
-    layoutLockHidden: false,
-    layoutLocked: false,
+    layoutSwitchHidden: false,
+    arranging: true,
   };
   actor.send({ type: "settings.edited", ...same });
   assert.equal(emitted.length, 0);

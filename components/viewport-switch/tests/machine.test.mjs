@@ -19,7 +19,7 @@ const asker = (viewport, settings, log) => (target, name, payload) => {
   if (target === "viewport") return Promise.resolve(viewport);
   return Promise.resolve(settings);
 };
-const shown = { viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: false, nav: [] };
+const shown = { viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, nav: [] };
 
 test("asks viewport then settings and becomes ready, shown by default", async () => {
   const log = [];

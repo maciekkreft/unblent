@@ -24,10 +24,10 @@
         }
       },
       "viewportSwitchHidden": { "type": "boolean" },
-      "layoutLockHidden": { "type": "boolean" },
-      "layoutLocked": { "type": "boolean" }
+      "layoutSwitchHidden": { "type": "boolean" },
+      "arranging": { "type": "boolean" }
     },
-    "required": ["nav", "viewportSwitchHidden", "layoutLockHidden", "layoutLocked"],
+    "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging"],
     "additionalProperties": false
   }
 }

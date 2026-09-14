@@ -54,12 +54,23 @@ const clickTab = (page, group, label) =>
     },
     { group, label },
   );
-const clickAction = (page, label) =>
-  page.evaluate((label) => {
-    const b = document.querySelector("dock-desk").shadowRoot.querySelector(`.action[aria-label="${label}"]`);
-    if (!b) throw new Error(`no action "${label}"`);
-    b.click();
-  }, label);
+// Three docks now share the "Fold"/"Unfold" labels, so an action is found within
+// a scope: a group's strip is `.stage` or `.dock.<side> .panel`, a rail `.dock.<side> .rail`.
+const clickAction = (page, scope, label) =>
+  page.evaluate(
+    ({ scope, label }) => {
+      const b = document.querySelector("dock-desk").shadowRoot.querySelector(`${scope} .action[aria-label="${label}"]`);
+      if (!b) throw new Error(`no action "${label}" in ${scope}`);
+      b.click();
+    },
+    { scope, label },
+  );
+// The computed transform of a group's fold glyph, to check its orientation.
+const foldTransform = (page, scope) =>
+  page.evaluate((scope) => {
+    const svg = document.querySelector("dock-desk").shadowRoot.querySelector(`${scope} .fold svg`);
+    return svg ? getComputedStyle(svg).transform : null;
+  }, scope);
 const actionLabels = (page, group) =>
   page.evaluate(
     (group) =>
@@ -131,18 +142,53 @@ const switchOnTop = (page) =>
     const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
     return el === sw || sw.contains(el) ? "top" : "covered";
   });
-// The layout lock, a light-DOM switch beside the desk (task "Layout lock"). Its
+// The mirror of switchOnTop for the layout switch, fixed at the bottom-left.
+const layoutSwitchOnTop = (page) =>
+  page.evaluate(() => {
+    const sw = document.querySelector("layout-switch");
+    const r = sw.getBoundingClientRect();
+    if (getComputedStyle(sw).display === "none" || r.width === 0) return "hidden";
+    const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return el === sw || sw.contains(el) ? "top" : "covered";
+  });
+// A corner pill's box in the window, with the window size: the pills are lifted
+// clear of the folded-rail band rather than padding the rails aside (fix 3).
+const pillBox = (page, name) =>
+  page.evaluate((name) => {
+    const r = document.querySelector(name).getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, ih: innerHeight, iw: innerWidth };
+  }, name);
+// Whether a folded rail's first tab is clear of the corner pills: elementFromPoint
+// at its centre resolves to the desk (the light-DOM host), not a pill over it.
+const railTabUncovered = (page, side) =>
+  page.evaluate((side) => {
+    const desk = document.querySelector("dock-desk");
+    const tab = desk.shadowRoot.querySelector(`.dock.${side} .rail [role="tab"]`);
+    const r = tab.getBoundingClientRect();
+    const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return el === desk || desk.contains(el);
+  }, side);
+// The rendered width of a strip action's glyph and the layout pill's glyph: the
+// pill's icon must read at the same size as every other icon (fix 1).
+const glyphWidths = (page) =>
+  page.evaluate(() => {
+    const strip = document.querySelector("dock-desk").shadowRoot.querySelector(".stage .action svg");
+    const pill = document.querySelector("layout-switch").shadowRoot.querySelector("svg");
+    return { strip: strip.getBoundingClientRect().width, pill: pill.getBoundingClientRect().width };
+  });
+// The layout switch, a light-DOM toggle beside the desk (task "Layout switch"). Its
 // button lives in its own shadow root; when settings hides it the host is display:none.
-const clickLock = (page) =>
-  page.evaluate(() => document.querySelector("layout-lock").shadowRoot.querySelector("button").click());
-const lockPressed = (page) =>
-  page.evaluate(() => document.querySelector("layout-lock").shadowRoot.querySelector("button")?.getAttribute("aria-pressed"));
-const lockGone = (page) =>
-  page.evaluate(() => getComputedStyle(document.querySelector("layout-lock")).display === "none");
-const hideLockOnSettings = (page) =>
+// Pressed = arranging.
+const clickSwitch = (page) =>
+  page.evaluate(() => document.querySelector("layout-switch").shadowRoot.querySelector("button").click());
+const switchPressed = (page) =>
+  page.evaluate(() => document.querySelector("layout-switch").shadowRoot.querySelector("button")?.getAttribute("aria-pressed"));
+const switchGone = (page) =>
+  page.evaluate(() => getComputedStyle(document.querySelector("layout-switch")).display === "none");
+const hideSwitchOnSettings = (page) =>
   page.evaluate(() => {
     const labels = [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".switches label")];
-    labels.find((l) => l.textContent.includes("Layout lock")).querySelector("input").click();
+    labels.find((l) => l.textContent.includes("Layout switch")).querySelector("input").click();
   });
 const railWidth = (page) =>
   page.evaluate(() =>
@@ -221,6 +267,22 @@ for (const engine of ENGINES) {
       assert.ok(await shadowHas(page, ".stage .action svg path"), "actions are icons");
       assert.ok((await windowOverflow(page)) <= 1, "the page does not scroll with nothing docked");
 
+      // The layout pill's glyph reads at the same size as a strip icon (fix 1): a
+      // tight pill around one 1em mark, not a big ring around a small one.
+      const glyphs = await glyphWidths(page);
+      assert.ok(
+        Math.abs(glyphs.pill - glyphs.strip) <= 0.5,
+        `the layout glyph matches a strip icon, saw ${glyphs.pill} vs ${glyphs.strip}`,
+      );
+
+      // Both corner pills are lifted a rail's height (--space-xl, 40px) off the
+      // bottom, so a folded dock's rail — that tall, along an edge — never passes
+      // under them and no rail has to pad its tabs aside (fix 3).
+      for (const pill of ["layout-switch", "viewport-switch"]) {
+        const b = await pillBox(page, pill);
+        assert.ok(b.ih - b.bottom >= 40 - 1, `${pill} clears the folded-rail band, saw ${(b.ih - b.bottom).toFixed(1)}px`);
+      }
+
       // Open Trace; at a mid width the staged trace table must fit the stage.
       await clickTab(page, ".stage", "Trace");
       await until(async () => (await selected(page, ".stage")) === "Trace");
@@ -232,7 +294,7 @@ for (const engine of ENGINES) {
 
       // Dock Trace right: the right strip shows Trace as its one, selected tab;
       // Trace leaves the stage, which moves on to Tokens.
-      await clickAction(page, "Dock Trace right");
+      await clickAction(page, ".stage", "Dock Trace right");
       await until(async () => (await shadowHas(page, ".dock.right")));
       assert.deepEqual(await tabsOf(page, ".dock.right .panel"), [{ label: "Trace", selected: true }]);
       assert.deepEqual(await labels(page, ".stage"), ["Tokens", "Contracts", "Components"]);
@@ -242,8 +304,10 @@ for (const engine of ENGINES) {
         "Move Trace left",
         "Move Trace bottom",
         "Return Trace to the stage",
-        "Fold the right dock",
+        "Fold",
       ]);
+      // The right dock's fold glyph is mirrored so its thin bar sits on the edge.
+      assert.equal(await foldTransform(page, ".dock.right .panel"), "matrix(-1, 0, 0, 1, 0, 0)", "the right fold glyph is mirrored");
       assert.ok((await windowOverflow(page)) <= 1, "the page does not scroll once docked");
       assert.equal(await switchOnTop(page), "top", "the viewport switch is not covered by the dock");
 
@@ -260,7 +324,7 @@ for (const engine of ENGINES) {
       // Dock Contracts too: two tabs on the right, the newcomer shown, one body.
       await clickTab(page, ".stage", "Contracts");
       await until(async () => (await selected(page, ".stage")) === "Contracts");
-      await clickAction(page, "Dock Contracts right");
+      await clickAction(page, ".stage", "Dock Contracts right");
       await until(async () => (await labels(page, ".dock.right .panel")).length === 2);
       assert.equal(await selected(page, ".dock.right .panel"), "Contracts");
       assert.deepEqual(await shown(page, ".dock.right"), ["contract-list"]);
@@ -306,7 +370,7 @@ for (const engine of ENGINES) {
       // amount, and the rail names the tabs.
       const open = await rect(page, ".dock.right");
       const stageOpen = await rect(page, ".stage");
-      await clickAction(page, "Fold the right dock");
+      await clickAction(page, ".dock.right .panel", "Fold");
       const rail = await railWidth(page);
       await until(async () => (await rect(page, ".dock.right")).width <= rail + 1.01);
       assert.ok(open.width > rail * 5, "the open dock is far wider than its rail");
@@ -350,8 +414,15 @@ for (const engine of ENGINES) {
       // Move Contracts to the bottom: a bottom dock opens showing it; the right
       // dock is left with Trace shown, and stays put while the bottom one enters.
       const rightWidth = (await rect(page, ".dock.right")).width;
-      await clickAction(page, "Move Contracts bottom");
+      await clickAction(page, ".dock.right .panel", "Move Contracts bottom");
       await until(async () => (await shadowHas(page, ".dock.bottom")));
+      // The bottom dock's fold glyph is turned down, unlike a side dock's.
+      assert.notEqual(await foldTransform(page, ".dock.bottom .panel"), "none", "the bottom fold glyph is turned");
+      assert.notEqual(
+        await foldTransform(page, ".dock.bottom .panel"),
+        "matrix(-1, 0, 0, 1, 0, 0)",
+        "the bottom glyph is rotated, not mirrored",
+      );
       assert.ok(
         (await leastWidth(page, ".dock.right")) >= rightWidth - 1,
         "the right dock does not replay its slide when a view moves out of it",
@@ -366,7 +437,7 @@ for (const engine of ENGINES) {
       assert.ok((await windowOverflow(page)) <= 1, "the page still does not scroll");
 
       // Return Contracts to the stage: it is a stage tab again, and the one shown.
-      await clickAction(page, "Return Contracts to the stage");
+      await clickAction(page, ".dock.bottom .panel", "Return Contracts to the stage");
       await until(async () => !(await shadowHas(page, ".dock.bottom")));
       assert.equal(await selected(page, ".stage"), "Contracts");
       assert.deepEqual(await shown(page, ".stage"), ["contract-list"]);
@@ -375,7 +446,7 @@ for (const engine of ENGINES) {
       for (const label of ["Contracts", "Tokens", "Components"]) {
         await clickTab(page, ".stage", label);
         await until(async () => (await selected(page, ".stage")) === label);
-        await clickAction(page, `Dock ${label} left`);
+        await clickAction(page, ".stage", `Dock ${label} left`);
         await until(async () => !(await labels(page, ".stage")).includes(label));
       }
       assert.ok(await shadowHas(page, ".stage .empty svg"), "the empty stage names the return icon");
@@ -385,7 +456,7 @@ for (const engine of ENGINES) {
       // Every view on one side: the strip is narrower than its tabs, and the
       // selected one, the newcomer, is scrolled into the strip rather than left
       // behind the actions.
-      await clickAction(page, "Move Trace left");
+      await clickAction(page, ".dock.right .panel", "Move Trace left");
       await until(async () => (await labels(page, ".dock.left .panel")).length === 4);
       assert.equal(await selected(page, ".dock.left .panel"), "Trace");
       await until(async () => selectedInView(page, ".dock.left"), 1500).catch(() =>
@@ -396,6 +467,14 @@ for (const engine of ENGINES) {
       await until(async () => selectedInView(page, ".dock.left"), 1500).catch(() =>
         assert.fail("selecting the first tab scrolls the strip back"),
       );
+
+      // Fold the left dock: its rail reads bottom-up, so its first tab lands at the
+      // bottom-left, where the layout pill floats. The lifted pill leaves it clear
+      // (fix 3).
+      await clickAction(page, ".dock.left .panel", "Fold");
+      await until(async () => (await rect(page, ".dock.left")).width <= (await railWidth(page)) + 1.01);
+      assert.equal(await layoutSwitchOnTop(page), "top", "the layout switch stays clickable beside the left rail");
+      assert.ok(await railTabUncovered(page, "left"), "the left rail's first tab is not under the layout pill");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `dock-${engine.name}.png`), fullPage: true });
@@ -412,14 +491,19 @@ for (const engine of ENGINES) {
       phone: true,
       layout: {
         stage: "token-sheet",
-        docks: { right: { open: true, views: ["trace-list"] }, bottom: { open: false, views: ["contract-list"] } },
+        docks: { left: { open: true, views: ["trace-list"] }, bottom: { open: false, views: ["contract-list"] } },
       },
     });
     try {
       await until(async () => (await shadowHas(page, ".dock.bottom")));
+      // Both sheets enter with a slide; wait until each has settled before
+      // measuring, so a mid-slide height never fails an assertion under load.
+      const settled = await railWidth(page);
+      await until(async () => (await rect(page, ".dock.left")).height > settled * 3);
+      await until(async () => Math.abs((await rect(page, ".dock.bottom")).height - settled) <= 2);
 
-      // No sideways scroll inside the phone screen; each dock is a sheet under the
-      // stage, inside the frame; a folded one is just its strip.
+      // No sideways scroll inside the phone screen; every dock, whatever its side,
+      // is a sheet under the stage, inside the frame; a folded one is just its strip.
       const overflow = await page.evaluate(() => document.body.scrollWidth - document.body.clientWidth);
       assert.ok(overflow <= 1, `no horizontal overflow, saw ${overflow}px`);
       const body = await page.evaluate(() => {
@@ -427,19 +511,38 @@ for (const engine of ENGINES) {
         return { left: r.left, right: r.right, bottom: r.bottom };
       });
       const stage = await rect(page, ".stage");
-      const right = await rect(page, ".dock.right");
+      const left = await rect(page, ".dock.left");
       const bottom = await rect(page, ".dock.bottom");
-      for (const d of [right, bottom]) {
+      for (const d of [left, bottom]) {
         assert.ok(d.left >= body.left - 1 && d.right <= body.right + 1 && d.bottom <= body.bottom + 1, "inside the frame");
         assert.ok(d.top >= stage.bottom - 1, "under the stage");
         assert.ok(Math.abs(d.width - stage.width) <= 1, "full width");
       }
       assert.ok(Math.abs(bottom.height - (await railWidth(page))) <= 2, "a folded sheet is its strip");
-      assert.ok(right.height > bottom.height * 3, "an open sheet shows its body");
+      assert.ok(left.height > bottom.height * 3, "an open sheet shows its body");
       assert.ok(await visible(page, "trace-list"), "the docked trace reads on the phone");
-      assert.ok(stage.height > right.height / 3, "the stage keeps a readable height");
+      assert.ok(stage.height > left.height / 3, "the stage keeps a readable height");
 
-      // Unfold from the strip: the sheet opens on its tab.
+      // The reported case: a left dock is a bottom sheet here, so its fold glyph is
+      // turned down like every other sheet, not left as it would be on the desk.
+      assert.notEqual(await foldTransform(page, ".dock.left .panel"), "none", "the fold glyph is turned on a phone side sheet");
+
+      // Fold the left sheet from its strip: it collapses to just its strip.
+      const strip = await railWidth(page);
+      await clickAction(page, ".dock.left .panel", "Fold");
+      await until(async () => (await rect(page, ".dock.left")).height <= strip + 2);
+      assert.ok(Math.abs((await rect(page, ".dock.left")).height - strip) <= 2, "a folded left sheet is its strip");
+      // The panel hides once the slide ends (its visibility is delayed to the still
+      // end), so wait for it rather than reading at the height boundary.
+      await until(async () => !(await visible(page, "trace-list")), 1000).catch(() =>
+        assert.fail("the folded sheet hides its body"),
+      );
+      // Unfold it from the rail: it reopens on its tab.
+      await clickAction(page, ".dock.left .rail", "Unfold");
+      await until(async () => (await rect(page, ".dock.left")).height > strip * 3);
+      assert.ok(await visible(page, "trace-list"), "the left sheet reopens");
+
+      // Unfold the bottom sheet from its strip tab too.
       await clickTab(page, ".dock.bottom .rail", "Contracts");
       await until(async () => (await rect(page, ".dock.bottom")).height > bottom.height * 3);
       assert.ok(await visible(page, "contract-list"));
@@ -454,7 +557,7 @@ for (const engine of ENGINES) {
     }
   });
 
-  test(`the layout lock bars every arrange control, and a hidden lock keeps the desk locked in ${engine.name}`, async () => {
+  test(`the layout switch bars arranging but never folding, and a hidden switch keeps arranging off in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, {
       layout: {
         stage: "token-sheet",
@@ -463,18 +566,19 @@ for (const engine of ENGINES) {
     });
     try {
       await until(async () => await shadowHas(page, ".dock.right"));
-      // Unlocked: the arrange and fold controls are there, the lock reads unlocked.
-      assert.ok(await shadowHas(page, ".stage .action"), "the stage has arrange actions when unlocked");
-      assert.ok(await shadowHas(page, ".dock.right .action"), "the dock has actions when unlocked");
-      assert.equal(await lockPressed(page), "false");
+      // Arranging on: the arrange controls are there, the switch reads pressed.
+      assert.ok(await shadowHas(page, ".stage .action:not(.fold)"), "the stage has arrange actions when arranging");
+      assert.ok(await shadowHas(page, ".dock.right .panel .action:not(.fold)"), "the dock has arrange actions when arranging");
+      assert.equal(await switchPressed(page), "true");
 
-      // Lock: every .action disappears (stage and docks), the lock reads locked,
-      // and the desk keeps its tabs.
-      await clickLock(page);
-      await until(async () => (await lockPressed(page)) === "true");
-      await until(async () => !(await shadowHas(page, ".action")));
-      assert.deepEqual(await labels(page, ".stage"), ["Tokens", "Components"], "stage tabs remain while locked");
-      assert.deepEqual(await labels(page, ".dock.right .panel"), ["Trace", "Contracts"], "dock tabs remain while locked");
+      // Turn arranging off: every arrange action disappears (stage and docks), the
+      // switch reads unpressed, the desk keeps its tabs, and the fold stays.
+      await clickSwitch(page);
+      await until(async () => (await switchPressed(page)) === "false");
+      await until(async () => !(await shadowHas(page, ".action:not(.fold)")));
+      assert.deepEqual(await labels(page, ".stage"), ["Tokens", "Components"], "stage tabs remain while not arranging");
+      assert.deepEqual(await labels(page, ".dock.right .panel"), ["Trace", "Contracts"], "dock tabs remain");
+      assert.deepEqual(await actionLabels(page, ".dock.right .panel"), ["Fold"], "only the fold control remains");
       // A rail tab still unfolds (via _activate): switch the dock's shown tab.
       await clickTab(page, ".dock.right .panel", "Contracts");
       await until(async () => (await selected(page, ".dock.right .panel")) === "Contracts");
@@ -482,25 +586,37 @@ for (const engine of ENGINES) {
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `dock-locked-${engine.name}.png`), fullPage: true });
 
-      // Unlock: the controls come back.
-      await clickLock(page);
-      await until(async () => (await lockPressed(page)) === "false");
-      await until(async () => await shadowHas(page, ".dock.right .action"));
+      // Folding is daily use, not arranging: fold to the rail and unfold back while
+      // arranging is off.
+      const open = await rect(page, ".dock.right");
+      await clickAction(page, ".dock.right .panel", "Fold");
+      const rail = await railWidth(page);
+      await until(async () => (await rect(page, ".dock.right")).width <= rail + 1.01);
+      await clickAction(page, ".dock.right .rail", "Unfold");
+      await until(async () => Math.abs((await rect(page, ".dock.right")).width - open.width) < 1);
 
-      // Hide the lock on /design/settings: the desk is locked regardless, and the
-      // lock switch leaves the page.
+      // Turn arranging back on: the controls come back.
+      await clickSwitch(page);
+      await until(async () => (await switchPressed(page)) === "true");
+      await until(async () => await shadowHas(page, ".dock.right .panel .action:not(.fold)"));
+
+      // Hide the switch on /design/settings: the desk is not arrangeable, and the
+      // switch leaves the page.
       await page.goto(`${BASE_URL}/design/settings`, { waitUntil: "networkidle" });
       await page.waitForFunction(() => document.querySelector("settings-sheet")?.shadowRoot?.querySelector(".row"));
-      await hideLockOnSettings(page);
+      await hideSwitchOnSettings(page);
       await until(async () =>
-        page.evaluate(() => JSON.parse(localStorage.getItem("settings") || "{}").layoutLockHidden === true),
+        page.evaluate(() => JSON.parse(localStorage.getItem("settings") || "{}").layoutSwitchHidden === true),
       );
 
       await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
       await ready(page);
       await until(async () => await shadowHas(page, ".dock.right"));
-      assert.ok(await lockGone(page), "the layout lock is hidden");
-      await until(async () => !(await shadowHas(page, ".action")), 2000);
+      assert.ok(await switchGone(page), "the layout switch is hidden");
+      await until(async () => !(await shadowHas(page, ".action:not(.fold)")), 2000);
+      // Folding still works with the switch hidden.
+      await clickAction(page, ".dock.right .panel", "Fold");
+      await until(async () => (await rect(page, ".dock.right")).width <= (await railWidth(page)) + 1.01);
 
       await page.evaluate(() => localStorage.clear());
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);

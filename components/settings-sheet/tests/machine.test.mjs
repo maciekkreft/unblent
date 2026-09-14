@@ -15,7 +15,7 @@ const start = (settings, current = "/a") => {
     Promise.resolve(
       target === "pages"
         ? { pages: PAGES }
-        : { nav: [], viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: false, ...settings },
+        : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, ...settings },
     );
   const actor = createActor(machine, { input: { ask, current } });
   const emitted = [];
@@ -83,8 +83,8 @@ test("the switch toggles flip their flag", async () => {
   const { actor, emitted } = await start();
   actor.send({ type: "_toggleViewport" });
   assert.equal(emitted[0].viewportSwitchHidden, true);
-  actor.send({ type: "_toggleLock" });
-  assert.equal(emitted[1].layoutLockHidden, true);
+  actor.send({ type: "_toggleLayout" });
+  assert.equal(emitted[1].layoutSwitchHidden, true);
 });
 
 test("_reset emits the defaults", async () => {
@@ -94,8 +94,8 @@ test("_reset emits the defaults", async () => {
     type: "settings.edited",
     nav: [],
     viewportSwitchHidden: false,
-    layoutLockHidden: false,
-    layoutLocked: false,
+    layoutSwitchHidden: false,
+    arranging: true,
   });
 });
 
@@ -105,8 +105,8 @@ test("settings.changed is adopted (4.3, fourth rule)", async () => {
     type: "settings.changed",
     nav: [{ path: "/c", hidden: false }],
     viewportSwitchHidden: true,
-    layoutLockHidden: false,
-    layoutLocked: false,
+    layoutSwitchHidden: false,
+    arranging: true,
   });
   assert.equal(actor.getSnapshot().context.settings.viewportSwitchHidden, true);
   assert.deepEqual(actor.getSnapshot().context.settings.nav, [{ path: "/c", hidden: false }]);

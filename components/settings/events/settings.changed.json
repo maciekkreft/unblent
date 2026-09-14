@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user's page preferences are now these: the navigation order and which pages are hidden, whether the viewport switch and the layout lock are shown, and whether the desk layout is locked.",
+  "description": "The user's page preferences are now these: the navigation order and which pages are hidden, whether the viewport switch and the layout switch are shown, and whether the desk layout is being arranged.",
   "type": "object",
   "properties": {
     "nav": {
@@ -17,9 +17,9 @@
       }
     },
     "viewportSwitchHidden": { "type": "boolean", "description": "The Desk|Phone viewport switch is hidden." },
-    "layoutLockHidden": { "type": "boolean", "description": "The layout lock switch is hidden; while hidden the desk is locked regardless." },
-    "layoutLocked": { "type": "boolean", "description": "The desk layout is locked: no arrange or fold controls." }
+    "layoutSwitchHidden": { "type": "boolean", "description": "The layout switch is hidden; while hidden the desk is not arrangeable." },
+    "arranging": { "type": "boolean", "description": "The desk layout is being arranged: the arrange controls are shown." }
   },
-  "required": ["nav", "viewportSwitchHidden", "layoutLockHidden", "layoutLocked"],
+  "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging"],
   "additionalProperties": false
 }

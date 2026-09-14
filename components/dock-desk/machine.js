@@ -72,6 +72,22 @@ const reconcile = (layout, views) => {
   return { stage, docks };
 };
 
+// A desk the user has never arranged: nothing staged, nothing docked.
+const isEmpty = (layout) => !layout.stage && SIDES.every((s) => !layout.docks?.[s]);
+
+// The starting picture a page declares (6.4): each view with a valid `side` lands
+// there (open), in child order; the rest stay stage tabs; the stage takes the
+// first undocked view. `active` is left absent, so each side shows its first tab.
+const seed = (views) => {
+  const docks = {};
+  for (const v of views)
+    if (SIDES.includes(v.side)) docks[v.side] = side(true, [...(docks[v.side]?.views ?? []), v.name]);
+  return { stage: firstFree(views, docks), docks };
+};
+
+// Adopt the fact's layout, or the page's declared default when it has none.
+const adopt = (layout, views) => (isEmpty(layout) ? seed(views) : reconcile(layout, views));
+
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
 const isDocked = ({ context, event }) => dockedNames(context.docks).includes(event.name);
@@ -86,7 +102,7 @@ export const machine = setup({
   meta: { kind: "view", emits: ["dock.arranged"], attributes: [], asks: ["dock: read", "settings: read"] },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
-  context: ({ input }) => ({ ask: input.ask, views: input.views, stage: null, docks: {}, locked: false }),
+  context: ({ input }) => ({ ask: input.ask, views: input.views, stage: null, docks: {}, arranging: true }),
   initial: "loading",
   states: {
     loading: {
@@ -97,22 +113,22 @@ export const machine = setup({
           { guard: ({ event }) => Boolean(event.output.error), target: "failed" },
           {
             target: "loadingSettings",
-            actions: assign(({ context, event }) => reconcile(event.output, context.views)),
+            actions: assign(({ context, event }) => adopt(event.output, context.views)),
           },
         ],
         onError: { target: "failed" },
       },
     },
-    // Whether the desk is locked belongs to `settings`; a page without it (the ask
-    // replies no-answerer) keeps the desk unlocked, exactly as before settings
-    // existed.
+    // Whether the desk is being arranged belongs to `settings`; a page without it
+    // (the ask replies no-answerer) keeps the desk arrangeable, exactly as before
+    // settings existed.
     loadingSettings: {
       invoke: {
         src: "settings",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "ready", actions: assign({ locked: ({ event }) => event.output.layoutLocked }) },
+          { target: "ready", actions: assign({ arranging: ({ event }) => event.output.arranging }) },
         ],
         onError: { target: "ready" },
       },
@@ -129,10 +145,10 @@ export const machine = setup({
           actions: emit(({ context, event }) => arranged(event.name, context.docks)),
         },
         // From the stage to an edge: the stage moves on to the first free view,
-        // which may be none. Arranging is barred while the desk is locked (7.5's
-        // settings): the decision lives in the actor, so a stray gesture does nothing.
+        // which may be none. Only offered while arranging (7.5's settings): the
+        // decision lives in the actor, so a stray gesture does nothing.
         _dock: {
-          guard: ({ context, event }) => !context.locked && isStageTab({ context, event }) && SIDES.includes(event.side),
+          guard: ({ context, event }) => context.arranging && isStageTab({ context, event }) && SIDES.includes(event.side),
           actions: emit(({ context, event }) => {
             const docks = addTo(context.docks, event.side, event.name);
             const stage = context.stage === event.name ? firstFree(context.views, docks) : context.stage;
@@ -142,12 +158,12 @@ export const machine = setup({
         // Back to the stage, and shown there: the returned view is what the user
         // asked to see.
         _undock: {
-          guard: ({ context, event }) => !context.locked && isDocked({ context, event }),
+          guard: ({ context, event }) => context.arranging && isDocked({ context, event }),
           actions: emit(({ context, event }) => arranged(event.name, removeFrom(context.docks, event.name))),
         },
         _move: {
           guard: ({ context, event }) =>
-            !context.locked && isDocked({ context, event }) && SIDES.includes(event.side) && sideOf(context.docks, event.name) !== event.side,
+            context.arranging && isDocked({ context, event }) && SIDES.includes(event.side) && sideOf(context.docks, event.name) !== event.side,
           actions: emit(({ context, event }) =>
             arranged(context.stage, addTo(removeFrom(context.docks, event.name), event.side, event.name)),
           ),
@@ -163,12 +179,14 @@ export const machine = setup({
             }),
           ),
         },
+        // Folding is daily use, not a layout change: it is always allowed, whether
+        // or not the desk is being arranged.
         _fold: {
-          guard: ({ context, event }) => !context.locked && Boolean(context.docks[event.side]),
+          guard: ({ context, event }) => Boolean(context.docks[event.side]),
           actions: emit(({ context, event }) => arranged(context.stage, setOpen(context.docks, event.side, false))),
         },
         _unfold: {
-          guard: ({ context, event }) => !context.locked && Boolean(context.docks[event.side]),
+          guard: ({ context, event }) => Boolean(context.docks[event.side]),
           actions: emit(({ context, event }) => arranged(context.stage, setOpen(context.docks, event.side, true))),
         },
       },
@@ -188,12 +206,12 @@ export const machine = setup({
     // The fact's news (4.3, fourth rule): adopt it whoever caused the change. The
     // only place the layout is assigned once ready.
     "dock.changed": {
-      actions: assign(({ context, event }) => reconcile(event, context.views)),
+      actions: assign(({ context, event }) => adopt(event, context.views)),
     },
-    // The lock is a settings fact: adopt it, so a stray gesture past a hidden
-    // control still does nothing (the guards read context.locked).
+    // Arranging is a settings fact: adopt it, so a stray gesture past a hidden
+    // control still does nothing (the guards read context.arranging).
     "settings.changed": {
-      actions: assign({ locked: ({ event }) => event.layoutLocked }),
+      actions: assign({ arranging: ({ event }) => event.arranging }),
     },
   },
 });

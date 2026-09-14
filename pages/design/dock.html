@@ -35,10 +35,10 @@
     <script type="module" src="/static/components/contract-list/view.js"></script>
     <script type="module" src="/static/components/component-list/view.js"></script>
     <script type="module" src="/static/components/trace-list/view.js"></script>
-    <script type="module" src="/static/components/layout-lock/view.js"></script>
+    <script type="module" src="/static/components/layout-switch/view.js"></script>
   </head>
   <body>
-    <page-nav></page-nav>
+    <page-nav><layout-switch></layout-switch></page-nav>
     <dock-desk>
       <token-sheet label="Tokens"></token-sheet>
       <contract-list label="Contracts"></contract-list>
@@ -46,6 +46,5 @@
       <trace-list label="Trace"></trace-list>
     </dock-desk>
     <viewport-switch></viewport-switch>
-    <layout-lock></layout-lock>
   </body>
 </html>

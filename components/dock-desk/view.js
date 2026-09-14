@@ -15,9 +15,10 @@ const SEND = {
   bottom: { glyph: icon("arrow-line-down"), label: "bottom" },
 };
 const RETURN = icon("arrows-in-simple");
-// Fold points at the edge the dock recedes to; unfold points back into the desk.
-const FOLD = { left: icon("caret-double-left"), right: icon("caret-double-right"), bottom: icon("caret-double-down") };
-const UNFOLD = { left: icon("caret-double-right"), right: icon("caret-double-left"), bottom: icon("caret-double-up") };
+// One toggle glyph for folding, whichever way a dock recedes; CSS orients it per
+// side (mirrored on the right, turned down on the bottom, turned down on every
+// sheet on the phone). Fold and unfold are the same glyph in the same place.
+const FOLD = icon("sidebar-simple");
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -33,6 +34,7 @@ class ActorController {
     const views = [...this.host.children].map((child) => ({
       name: child.localName,
       label: child.getAttribute("label") ?? child.localName,
+      side: child.getAttribute("side") ?? undefined,
     }));
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), views },
@@ -91,10 +93,15 @@ class DockDesk extends LitElement {
       display: flex;
       flex-direction: column;
     }
+    /* A group's body lays out its view as the document body does (base.css), so a
+       view's height="fill" fills a dock or the stage exactly as it fills a page.
+       Slots are display: contents, so the slotted host is the flex item. */
     .body {
       flex: 1;
       min-height: 0;
       overflow: auto;
+      display: flex;
+      flex-direction: column;
     }
     /* One strip, four groups (Norman: one conceptual model). Tabs, then the
        actions for the shown tab, then on an edge the fold; every control is
@@ -170,6 +177,15 @@ class DockDesk extends LitElement {
     .action svg {
       display: block;
     }
+    /* One fold glyph, oriented per side: the left needs nothing, the right is
+       mirrored, the bottom is turned down. The rail reorients it back where the
+       rail itself is turned (below). */
+    .right .fold svg {
+      transform: scaleX(-1);
+    }
+    .bottom .fold svg {
+      transform: rotate(-90deg);
+    }
     .empty {
       margin: 0;
       padding: var(--space-xl) var(--space-md);
@@ -243,9 +259,11 @@ class DockDesk extends LitElement {
       background: var(--color-canvas-soft);
       font-size: var(--text-sm);
       visibility: hidden;
+      opacity: 0;
     }
     .folded .rail {
       visibility: visible;
+      opacity: 1;
     }
     .rail [role="tablist"] {
       flex-direction: inherit;
@@ -253,8 +271,8 @@ class DockDesk extends LitElement {
     }
     /* Labels stand upright on a side rail: a vertical writing mode turns the
        strip's own row into a column. The left rail is turned so it reads from the
-       bottom up, as a spine does; its caret is turned back so it still points into
-       the desk. */
+       bottom up, as a spine does; its fold glyph is turned back so it reads the
+       same as on the strip. */
     .left .rail,
     .right .rail {
       writing-mode: vertical-rl;
@@ -265,7 +283,7 @@ class DockDesk extends LitElement {
     .left .rail .action {
       transform: rotate(180deg);
     }
-    /* The unfold caret sits at the top of either rail, where the fold was. */
+    /* The unfold button sits at the top of either rail, where the fold was. */
     .right .rail .action {
       order: -1;
     }
@@ -277,13 +295,25 @@ class DockDesk extends LitElement {
         width var(--duration-slide) var(--ease),
         height var(--duration-slide) var(--ease);
     }
-    .settled .panel,
-    .settled .rail {
+    /* The rail fades in as its group recedes rather than popping in on the last
+       frame, so a left dock's vertical spine dissolves up over the collapsing strip
+       instead of flashing into place. The panel keeps its plain swap (opaque while
+       it slides, hidden after): fading it too would leave its body counting as
+       visible mid-transition. Visibility flips only at the still ends, for
+       hit-testing and assistive tech: on fold the rail turns visible at once and
+       fades up from transparent; on unfold it stays visible, fades out, then hides
+       after the slide (the delay). */
+    .settled .panel {
       transition: visibility 0s;
     }
-    .settled .folded .panel,
+    .settled .folded .panel {
+      transition: visibility 0s var(--duration-slide);
+    }
+    .settled .rail {
+      transition: opacity var(--duration-slide) var(--ease), visibility 0s var(--duration-slide);
+    }
     .settled .folded .rail {
-      transition-delay: var(--duration-slide);
+      transition: opacity var(--duration-slide) var(--ease), visibility 0s;
     }
     /* A side that has just been docked to slides in from its edge: drawn once at
        nothing, then released to its size (updated()). A class the view sets rather
@@ -361,6 +391,12 @@ class DockDesk extends LitElement {
         transform: none;
         order: 0;
       }
+      /* Every dock is a bottom sheet here, so every fold glyph shows the bottom
+         orientation whatever side the dock belongs to. */
+      .left .fold svg,
+      .right .fold svg {
+        transform: rotate(-90deg);
+      }
       .settled .dock.entering.left,
       .settled .dock.entering.right {
         width: auto;
@@ -386,11 +422,11 @@ class DockDesk extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading") || snapshot.matches("loadingSettings")) return nothing;
     const ready = snapshot.matches("ready");
-    const { views, stage, docks, locked } = snapshot.context;
+    const { views, stage, docks, arranging } = snapshot.context;
     const labelOf = (name) => views.find((v) => v.name === name)?.label ?? name;
     const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
     const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
-    const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, locked) : nothing);
+    const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);
 
     return html`
       <div class="desk ${this.#settled ? "settled" : ""}">
@@ -399,16 +435,16 @@ class DockDesk extends LitElement {
           <section class="stage">
             <div class="strip">
               ${this.#tablist("Stage", tabs, stage, labelOf, (name) => this.#send("_open", name))}
-              ${ready && stage && !locked ? this.#actions("stage", stage, labelOf) : nothing}
+              ${ready && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
             </div>
             <div class="body" data-side="stage">
               ${stage
                 ? tabs.map((name) => html`<slot name=${name} ?hidden=${name !== stage}></slot>`)
-                : locked
-                  ? html`<p class="empty">Everything is docked. Unlock the layout to bring a view back.</p>`
-                  : html`<p class="empty">
+                : arranging
+                  ? html`<p class="empty">
                       Everything is docked. Use ${RETURN} in a dock to bring a view back.
-                    </p>`}
+                    </p>`
+                  : html`<p class="empty">Everything is docked. Turn on arranging to bring a view back.</p>`}
             </div>
           </section>
           ${dock("right")}
@@ -480,9 +516,9 @@ class DockDesk extends LitElement {
     `;
   }
 
-  // A locked desk shows no arrange, fold or unfold control; the tabs stay, so a
-  // rail tab still unfolds its side through _activate.
-  #dock(side, dock, labelOf, locked) {
+  // A desk that is not being arranged shows no arrange control; folding stays, so
+  // the fold and unfold buttons are always rendered (one glyph, oriented by CSS).
+  #dock(side, dock, labelOf, arranging) {
     const active = dock.views.includes(dock.active) ? dock.active : dock.views[0];
     const show = (name) => this.#send("_activate", name, side);
     const group = `${side[0].toUpperCase()}${side.slice(1)} dock`;
@@ -492,10 +528,8 @@ class DockDesk extends LitElement {
         <div class="panel">
           <div class="strip">
             ${this.#tablist(group, dock.views, active, labelOf, show)}
-            ${locked ? nothing : this.#actions(side, active, labelOf)}
-            ${locked
-              ? nothing
-              : this.#action(FOLD[side], `Fold the ${side} dock`, () => this.#send("_fold", undefined, side))}
+            ${arranging ? this.#actions(side, active, labelOf) : nothing}
+            ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
           </div>
           <div class="body" data-side=${side}>
             ${dock.views.map((name) => html`<slot name=${name} ?hidden=${name !== active}></slot>`)}
@@ -503,11 +537,20 @@ class DockDesk extends LitElement {
         </div>
         <div class="rail">
           ${this.#tablist(group, dock.views, active, labelOf, show)}
-          ${locked
-            ? nothing
-            : this.#action(UNFOLD[side], `Unfold the ${side} dock`, () => this.#send("_unfold", undefined, side))}
+          ${this.#fold("Unfold", "false", () => this.#send("_unfold", undefined, side))}
         </div>
       </aside>
+    `;
+  }
+
+  // The fold toggle: one glyph in the strip (expanded) and on the rail (folded),
+  // oriented per side by CSS. The label loses the side name; the side reads from
+  // the dock the button sits in.
+  #fold(label, expanded, act) {
+    return html`
+      <button class="action fold" aria-label=${label} title=${label} aria-expanded=${expanded} @click=${act}>
+        ${FOLD}
+      </button>
     `;
   }
 
