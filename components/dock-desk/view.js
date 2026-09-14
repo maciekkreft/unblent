@@ -384,13 +384,13 @@ class DockDesk extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loading")) return nothing;
+    if (!snapshot || snapshot.matches("loading") || snapshot.matches("loadingSettings")) return nothing;
     const ready = snapshot.matches("ready");
-    const { views, stage, docks } = snapshot.context;
+    const { views, stage, docks, locked } = snapshot.context;
     const labelOf = (name) => views.find((v) => v.name === name)?.label ?? name;
     const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
     const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
-    const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf) : nothing);
+    const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, locked) : nothing);
 
     return html`
       <div class="desk ${this.#settled ? "settled" : ""}">
@@ -399,14 +399,16 @@ class DockDesk extends LitElement {
           <section class="stage">
             <div class="strip">
               ${this.#tablist("Stage", tabs, stage, labelOf, (name) => this.#send("_open", name))}
-              ${ready && stage ? this.#actions("stage", stage, labelOf) : nothing}
+              ${ready && stage && !locked ? this.#actions("stage", stage, labelOf) : nothing}
             </div>
             <div class="body" data-side="stage">
               ${stage
                 ? tabs.map((name) => html`<slot name=${name} ?hidden=${name !== stage}></slot>`)
-                : html`<p class="empty">
-                    Everything is docked. Use ${RETURN} in a dock to bring a view back.
-                  </p>`}
+                : locked
+                  ? html`<p class="empty">Everything is docked. Unlock the layout to bring a view back.</p>`
+                  : html`<p class="empty">
+                      Everything is docked. Use ${RETURN} in a dock to bring a view back.
+                    </p>`}
             </div>
           </section>
           ${dock("right")}
@@ -478,7 +480,9 @@ class DockDesk extends LitElement {
     `;
   }
 
-  #dock(side, dock, labelOf) {
+  // A locked desk shows no arrange, fold or unfold control; the tabs stay, so a
+  // rail tab still unfolds its side through _activate.
+  #dock(side, dock, labelOf, locked) {
     const active = dock.views.includes(dock.active) ? dock.active : dock.views[0];
     const show = (name) => this.#send("_activate", name, side);
     const group = `${side[0].toUpperCase()}${side.slice(1)} dock`;
@@ -488,8 +492,10 @@ class DockDesk extends LitElement {
         <div class="panel">
           <div class="strip">
             ${this.#tablist(group, dock.views, active, labelOf, show)}
-            ${this.#actions(side, active, labelOf)}
-            ${this.#action(FOLD[side], `Fold the ${side} dock`, () => this.#send("_fold", undefined, side))}
+            ${locked ? nothing : this.#actions(side, active, labelOf)}
+            ${locked
+              ? nothing
+              : this.#action(FOLD[side], `Fold the ${side} dock`, () => this.#send("_fold", undefined, side))}
           </div>
           <div class="body" data-side=${side}>
             ${dock.views.map((name) => html`<slot name=${name} ?hidden=${name !== active}></slot>`)}
@@ -497,7 +503,9 @@ class DockDesk extends LitElement {
         </div>
         <div class="rail">
           ${this.#tablist(group, dock.views, active, labelOf, show)}
-          ${this.#action(UNFOLD[side], `Unfold the ${side} dock`, () => this.#send("_unfold", undefined, side))}
+          ${locked
+            ? nothing
+            : this.#action(UNFOLD[side], `Unfold the ${side} dock`, () => this.#send("_unfold", undefined, side))}
         </div>
       </aside>
     `;

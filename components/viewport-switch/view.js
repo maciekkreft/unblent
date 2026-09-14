@@ -80,6 +80,11 @@ class ViewportSwitch extends LitElement {
         display: none;
       }
     }
+    /* Hidden by settings: the author rule beats :host's own display (7.5's document
+       check only flags document.* writes, and this writes the switch's own host). */
+    :host([hidden]) {
+      display: none;
+    }
   `;
 
   #actor = new ActorController(this);
@@ -87,7 +92,11 @@ class ViewportSwitch extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !snapshot.matches("ready")) return nothing;
-    const { viewport } = snapshot.context;
+    const { viewport, hidden } = snapshot.context;
+    // Reflect the settings choice onto this switch's own host, so it leaves the
+    // page when hidden and nothing renders behind it.
+    this.hidden = hidden;
+    if (hidden) return nothing;
     return html`
       ${VIEWPORTS.map(
         (v) => html`

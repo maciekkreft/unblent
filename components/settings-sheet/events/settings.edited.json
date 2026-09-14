@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user edited their page preferences: the whole settings, like dock.arranged. layoutLocked may be present or absent (the sheet sends what it last saw); settings applies its invariant.",
+  "type": "object",
+  "properties": {
+    "nav": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "hidden": { "type": "boolean" }
+        },
+        "required": ["path", "hidden"],
+        "additionalProperties": false
+      }
+    },
+    "viewportSwitchHidden": { "type": "boolean" },
+    "layoutLockHidden": { "type": "boolean" },
+    "layoutLocked": { "type": "boolean" }
+  },
+  "required": ["nav", "viewportSwitchHidden", "layoutLockHidden"],
+  "additionalProperties": false
+}

@@ -79,13 +79,14 @@ const isDocked = ({ context, event }) => dockedNames(context.docks).includes(eve
 export const machine = setup({
   actors: {
     read: fromPromise(({ input }) => input.ask("dock", "read", {})),
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
 }).createMachine({
   id: "dock-desk",
-  meta: { kind: "view", emits: ["dock.arranged"], attributes: [], asks: ["dock: read"] },
+  meta: { kind: "view", emits: ["dock.arranged"], attributes: [], asks: ["dock: read", "settings: read"] },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
-  context: ({ input }) => ({ ask: input.ask, views: input.views, stage: null, docks: {} }),
+  context: ({ input }) => ({ ask: input.ask, views: input.views, stage: null, docks: {}, locked: false }),
   initial: "loading",
   states: {
     loading: {
@@ -95,11 +96,25 @@ export const machine = setup({
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "failed" },
           {
-            target: "ready",
+            target: "loadingSettings",
             actions: assign(({ context, event }) => reconcile(event.output, context.views)),
           },
         ],
         onError: { target: "failed" },
+      },
+    },
+    // Whether the desk is locked belongs to `settings`; a page without it (the ask
+    // replies no-answerer) keeps the desk unlocked, exactly as before settings
+    // existed.
+    loadingSettings: {
+      invoke: {
+        src: "settings",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
+          { target: "ready", actions: assign({ locked: ({ event }) => event.output.layoutLocked }) },
+        ],
+        onError: { target: "ready" },
       },
     },
     // The dock fact answered: every gesture emits the whole layout and the desk
@@ -114,9 +129,10 @@ export const machine = setup({
           actions: emit(({ context, event }) => arranged(event.name, context.docks)),
         },
         // From the stage to an edge: the stage moves on to the first free view,
-        // which may be none.
+        // which may be none. Arranging is barred while the desk is locked (7.5's
+        // settings): the decision lives in the actor, so a stray gesture does nothing.
         _dock: {
-          guard: ({ context, event }) => isStageTab({ context, event }) && SIDES.includes(event.side),
+          guard: ({ context, event }) => !context.locked && isStageTab({ context, event }) && SIDES.includes(event.side),
           actions: emit(({ context, event }) => {
             const docks = addTo(context.docks, event.side, event.name);
             const stage = context.stage === event.name ? firstFree(context.views, docks) : context.stage;
@@ -126,12 +142,12 @@ export const machine = setup({
         // Back to the stage, and shown there: the returned view is what the user
         // asked to see.
         _undock: {
-          guard: isDocked,
+          guard: ({ context, event }) => !context.locked && isDocked({ context, event }),
           actions: emit(({ context, event }) => arranged(event.name, removeFrom(context.docks, event.name))),
         },
         _move: {
           guard: ({ context, event }) =>
-            isDocked({ context, event }) && SIDES.includes(event.side) && sideOf(context.docks, event.name) !== event.side,
+            !context.locked && isDocked({ context, event }) && SIDES.includes(event.side) && sideOf(context.docks, event.name) !== event.side,
           actions: emit(({ context, event }) =>
             arranged(context.stage, addTo(removeFrom(context.docks, event.name), event.side, event.name)),
           ),
@@ -148,11 +164,11 @@ export const machine = setup({
           ),
         },
         _fold: {
-          guard: ({ context, event }) => Boolean(context.docks[event.side]),
+          guard: ({ context, event }) => !context.locked && Boolean(context.docks[event.side]),
           actions: emit(({ context, event }) => arranged(context.stage, setOpen(context.docks, event.side, false))),
         },
         _unfold: {
-          guard: ({ context, event }) => Boolean(context.docks[event.side]),
+          guard: ({ context, event }) => !context.locked && Boolean(context.docks[event.side]),
           actions: emit(({ context, event }) => arranged(context.stage, setOpen(context.docks, event.side, true))),
         },
       },
@@ -173,6 +189,11 @@ export const machine = setup({
     // only place the layout is assigned once ready.
     "dock.changed": {
       actions: assign(({ context, event }) => reconcile(event, context.views)),
+    },
+    // The lock is a settings fact: adopt it, so a stray gesture past a hidden
+    // control still does nothing (the guards read context.locked).
+    "settings.changed": {
+      actions: assign({ locked: ({ event }) => event.layoutLocked }),
     },
   },
 });

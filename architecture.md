@@ -281,6 +281,9 @@ note.opened           owner: note-editor    { id }
 conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
 dock.changed          owner: dock           { stage, docks }
+layout.locked         owner: layout-lock    { locked }
+settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutLockHidden, layoutLocked }
+settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutLockHidden, layoutLocked }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null }
 trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
@@ -309,6 +312,7 @@ catalog: contracts       → { events: [{ name, owner, schema, consumers }], que
 trace: list              → { records: [record] }
 viewport: read           → { viewport }
 dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
+settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutLockHidden, layoutLocked }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
@@ -356,7 +360,7 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 1. **Tokens page.** Shows the design tokens and the icons, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
 3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
-4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
+4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`; `settings` with `settings-sheet`), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others. A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.

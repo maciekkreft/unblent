@@ -17,14 +17,19 @@ function settle(ask, { views = VIEWS } = {}) {
   actor.on("dock.arranged", (e) => emitted.push(e));
   return new Promise((resolve) => {
     actor.subscribe((s) => {
-      if (!s.matches("loading")) resolve({ actor, emitted, snapshot: s });
+      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, snapshot: s });
     });
     actor.start();
   });
 }
 
 const layout = (ctx) => ({ stage: ctx.stage, docks: ctx.docks });
-const stored = (value) => () => Promise.resolve(value);
+// The dock read answers `value`; the settings read answers an unlocked desk by
+// default, or `settings` when a test locks it.
+const stored = (value, settings = {}) => (target) =>
+  target === "settings"
+    ? Promise.resolve({ nav: [], viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: false, ...settings })
+    : Promise.resolve(value);
 
 test("the starting picture is reconciled to the children present", async () => {
   // Unknown names dropped, a docked view is never the stage, the stored stage kept.
@@ -196,6 +201,40 @@ test("dock.changed is adopted (4.3, fourth rule)", async () => {
     stage: "token-sheet",
     docks: { bottom: { open: true, views: ["trace-list"] } },
   });
+});
+
+test("a locked desk bars arranging and folding, but tabs still switch", async () => {
+  const { actor, emitted } = await settle(
+    stored(
+      { stage: "token-sheet", docks: { right: { open: true, views: ["trace-list", "contract-list"] } } },
+      { layoutLocked: true },
+    ),
+  );
+  assert.equal(actor.getSnapshot().context.locked, true);
+  actor.send({ type: "_dock", name: "token-sheet", side: "left" });
+  actor.send({ type: "_undock", name: "trace-list" });
+  actor.send({ type: "_move", name: "trace-list", side: "bottom" });
+  actor.send({ type: "_fold", side: "right" });
+  actor.send({ type: "_unfold", side: "right" });
+  assert.deepEqual(emitted, [], "no arrange or fold gesture is honoured while locked");
+
+  // Viewing is not arranging: a rail tab still shows its tab and unfolds its side.
+  actor.send({ type: "_activate", name: "contract-list", side: "right" });
+  assert.equal(emitted.length, 1, "a rail tab still unfolds its side (_activate)");
+  assert.equal(emitted[0].docks.right.active, "contract-list");
+});
+
+test("settings.changed locks and unlocks the desk (4.3, fourth rule)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "token-sheet", docks: { right: { open: true, views: ["trace-list"] } } }),
+  );
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: true });
+  assert.equal(actor.getSnapshot().context.locked, true);
+  actor.send({ type: "_undock", name: "trace-list" });
+  assert.deepEqual(emitted, [], "locked after settings.changed");
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutLockHidden: false, layoutLocked: false });
+  actor.send({ type: "_undock", name: "trace-list" });
+  assert.equal(emitted.length, 1, "unlocked again");
 });
 
 test("in failed, _open switches the stage locally", async () => {

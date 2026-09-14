@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine } from "./machine.js";
+import { machine, visible } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -75,12 +75,12 @@ class PageNav extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loading")) return nothing;
+    if (!snapshot || snapshot.matches("loadingPages") || snapshot.matches("loadingSettings")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">pages unavailable</p>`;
-    const { pages, current } = snapshot.context;
+    const { pages, nav, current } = snapshot.context;
     return html`
       <nav aria-label="Pages">
-        ${pages.map(
+        ${visible(pages, nav, current).map(
           (p) => html`
             <a href=${p.path} aria-current=${p.path === current ? "page" : nothing}>${p.title}</a>
           `,

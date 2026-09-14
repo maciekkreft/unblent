@@ -131,6 +131,19 @@ const switchOnTop = (page) =>
     const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
     return el === sw || sw.contains(el) ? "top" : "covered";
   });
+// The layout lock, a light-DOM switch beside the desk (task "Layout lock"). Its
+// button lives in its own shadow root; when settings hides it the host is display:none.
+const clickLock = (page) =>
+  page.evaluate(() => document.querySelector("layout-lock").shadowRoot.querySelector("button").click());
+const lockPressed = (page) =>
+  page.evaluate(() => document.querySelector("layout-lock").shadowRoot.querySelector("button")?.getAttribute("aria-pressed"));
+const lockGone = (page) =>
+  page.evaluate(() => getComputedStyle(document.querySelector("layout-lock")).display === "none");
+const hideLockOnSettings = (page) =>
+  page.evaluate(() => {
+    const labels = [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".switches label")];
+    labels.find((l) => l.textContent.includes("Layout lock")).querySelector("input").click();
+  });
 const railWidth = (page) =>
   page.evaluate(() =>
     parseFloat(getComputedStyle(document.querySelector("dock-desk").shadowRoot.querySelector(".strip")).height),
@@ -435,6 +448,61 @@ for (const engine of ENGINES) {
       await page.screenshot({ path: resolve(SCREENSHOTS, `dock-phone-${engine.name}.png`), fullPage: true });
 
       await clean(page);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`the layout lock bars every arrange control, and a hidden lock keeps the desk locked in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, {
+      layout: {
+        stage: "token-sheet",
+        docks: { right: { open: true, views: ["trace-list", "contract-list"], active: "trace-list" } },
+      },
+    });
+    try {
+      await until(async () => await shadowHas(page, ".dock.right"));
+      // Unlocked: the arrange and fold controls are there, the lock reads unlocked.
+      assert.ok(await shadowHas(page, ".stage .action"), "the stage has arrange actions when unlocked");
+      assert.ok(await shadowHas(page, ".dock.right .action"), "the dock has actions when unlocked");
+      assert.equal(await lockPressed(page), "false");
+
+      // Lock: every .action disappears (stage and docks), the lock reads locked,
+      // and the desk keeps its tabs.
+      await clickLock(page);
+      await until(async () => (await lockPressed(page)) === "true");
+      await until(async () => !(await shadowHas(page, ".action")));
+      assert.deepEqual(await labels(page, ".stage"), ["Tokens", "Components"], "stage tabs remain while locked");
+      assert.deepEqual(await labels(page, ".dock.right .panel"), ["Trace", "Contracts"], "dock tabs remain while locked");
+      // A rail tab still unfolds (via _activate): switch the dock's shown tab.
+      await clickTab(page, ".dock.right .panel", "Contracts");
+      await until(async () => (await selected(page, ".dock.right .panel")) === "Contracts");
+
+      mkdirSync(SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: resolve(SCREENSHOTS, `dock-locked-${engine.name}.png`), fullPage: true });
+
+      // Unlock: the controls come back.
+      await clickLock(page);
+      await until(async () => (await lockPressed(page)) === "false");
+      await until(async () => await shadowHas(page, ".dock.right .action"));
+
+      // Hide the lock on /design/settings: the desk is locked regardless, and the
+      // lock switch leaves the page.
+      await page.goto(`${BASE_URL}/design/settings`, { waitUntil: "networkidle" });
+      await page.waitForFunction(() => document.querySelector("settings-sheet")?.shadowRoot?.querySelector(".row"));
+      await hideLockOnSettings(page);
+      await until(async () =>
+        page.evaluate(() => JSON.parse(localStorage.getItem("settings") || "{}").layoutLockHidden === true),
+      );
+
+      await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
+      await ready(page);
+      await until(async () => await shadowHas(page, ".dock.right"));
+      assert.ok(await lockGone(page), "the layout lock is hidden");
+      await until(async () => !(await shadowHas(page, ".action")), 2000);
+
+      await page.evaluate(() => localStorage.clear());
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

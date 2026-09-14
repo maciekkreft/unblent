@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user asked to lock (true) or unlock (false) the desk layout.",
+  "type": "object",
+  "properties": {
+    "locked": { "type": "boolean", "description": "The desk layout should be locked." }
+  },
+  "required": ["locked"],
+  "additionalProperties": false
+}
