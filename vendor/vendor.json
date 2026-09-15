@@ -7,7 +7,19 @@
       "dexie": "/static/vendor/dexie/dexie.mjs",
       "bus": "/static/bus/bus.js",
       "store": "/static/store/store.js",
-      "icons": "/static/tokens/icons.js"
+      "icons": "/static/tokens/icons.js",
+      "@codemirror/state": "/static/vendor/@codemirror/state/dist/index.js",
+      "@codemirror/view": "/static/vendor/@codemirror/view/dist/index.js",
+      "@codemirror/commands": "/static/vendor/@codemirror/commands/dist/index.js",
+      "@codemirror/language": "/static/vendor/@codemirror/language/dist/index.js",
+      "@codemirror/search": "/static/vendor/@codemirror/search/dist/index.js",
+      "@replit/codemirror-vim": "/static/vendor/@replit/codemirror-vim/dist/index.js",
+      "@lezer/common": "/static/vendor/@lezer/common/dist/index.js",
+      "@lezer/highlight": "/static/vendor/@lezer/highlight/dist/index.js",
+      "@marijn/find-cluster-break": "/static/vendor/@marijn/find-cluster-break/src/index.js",
+      "style-mod": "/static/vendor/style-mod/src/style-mod.js",
+      "w3c-keyname": "/static/vendor/w3c-keyname/index.js",
+      "crelt": "/static/vendor/crelt/index.js"
     }
   },
   "packages": [
@@ -67,6 +79,126 @@
       "files": {
         "inter/InterVariable.woff2": "693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3",
         "inter/LICENSE.txt": "262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a"
+      }
+    },
+    {
+      "name": "@codemirror/state",
+      "version": "6.5.2",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.5.2/dist/index.js",
+      "files": {
+        "@codemirror/state/dist/index.js": "5fd3894867384f7ecd1c13148abd01c1347c9796555e3ad8dbe41369328f2f37",
+        "@codemirror/state/LICENSE": "05c6130cda97e7600ca91427a41e8a065efcf82365fc0293e7de80faec494c07"
+      }
+    },
+    {
+      "name": "@codemirror/view",
+      "version": "6.38.1",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@codemirror/view@6.38.1/dist/index.js",
+      "files": {
+        "@codemirror/view/dist/index.js": "d5f906106985a899c5185bb100bbb867eb234b09f19acf2a909c90b94deddec3",
+        "@codemirror/view/LICENSE": "05c6130cda97e7600ca91427a41e8a065efcf82365fc0293e7de80faec494c07"
+      }
+    },
+    {
+      "name": "@codemirror/commands",
+      "version": "6.8.1",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.8.1/dist/index.js",
+      "files": {
+        "@codemirror/commands/dist/index.js": "cc6b2b13ab34e663abf6abd94d7325ea0942326176a2e8d1e86cfbd3b327bfb8",
+        "@codemirror/commands/LICENSE": "05c6130cda97e7600ca91427a41e8a065efcf82365fc0293e7de80faec494c07"
+      }
+    },
+    {
+      "name": "@codemirror/language",
+      "version": "6.11.0",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@codemirror/language@6.11.0/dist/index.js",
+      "files": {
+        "@codemirror/language/dist/index.js": "a0cdc1f0bfe75588ad0c723fbf28f0931567e5403b8b97d9428ed7d7f3e31390",
+        "@codemirror/language/LICENSE": "05c6130cda97e7600ca91427a41e8a065efcf82365fc0293e7de80faec494c07"
+      }
+    },
+    {
+      "name": "@codemirror/search",
+      "version": "6.5.11",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@codemirror/search@6.5.11/dist/index.js",
+      "files": {
+        "@codemirror/search/dist/index.js": "f1211f68340a04741c516007819d917c1843cab2a72523a34c1352dc84e13f78",
+        "@codemirror/search/LICENSE": "05c6130cda97e7600ca91427a41e8a065efcf82365fc0293e7de80faec494c07"
+      }
+    },
+    {
+      "name": "@replit/codemirror-vim",
+      "version": "6.3.0",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@replit/codemirror-vim@6.3.0/dist/index.js",
+      "files": {
+        "@replit/codemirror-vim/dist/index.js": "6fefe847dc3cfcc816ce5033cc2bdd61473f5e50aca5552cc1f2cb11d0ae0337",
+        "@replit/codemirror-vim/LICENSE": "aa8f65819a471c1a25fb3c0816c5a75e45f009b7899d292ee3cc70d9dbdd8f7e"
+      }
+    },
+    {
+      "name": "@lezer/common",
+      "version": "1.2.3",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@lezer/common@1.2.3/dist/index.js",
+      "files": {
+        "@lezer/common/dist/index.js": "cb55187b5a7d83f02f7493e125b41653e1d7160e0dedf8761f44b6c6d2f8e08f",
+        "@lezer/common/LICENSE": "568902fb66eaf1f11750e966b33fd7b5d7c618e65af09f35ef843635bcf5f1ba"
+      }
+    },
+    {
+      "name": "@lezer/highlight",
+      "version": "1.2.1",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@lezer/highlight@1.2.1/dist/index.js",
+      "files": {
+        "@lezer/highlight/dist/index.js": "c630530aa33c3e49544272f91f3a59b46602e5bbcc81e19750a825b1abb481a4",
+        "@lezer/highlight/LICENSE": "568902fb66eaf1f11750e966b33fd7b5d7c618e65af09f35ef843635bcf5f1ba"
+      }
+    },
+    {
+      "name": "@marijn/find-cluster-break",
+      "version": "1.0.2",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/@marijn/find-cluster-break@1.0.2/src/index.js",
+      "files": {
+        "@marijn/find-cluster-break/src/index.js": "b388956e964931f9de2e984e0f236f88c33c1e2e7f34f83d01f3676e6c47b616",
+        "@marijn/find-cluster-break/LICENSE": "9360b00fdd091f05c783b568bdd46c679c41b72415599252de98949462ea1acb"
+      }
+    },
+    {
+      "name": "style-mod",
+      "version": "4.1.2",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/style-mod@4.1.2/src/style-mod.js",
+      "files": {
+        "style-mod/src/style-mod.js": "43690e452046d6a355a1a9211c1b48aab605613ab63c0aff13f585e742e66c83",
+        "style-mod/LICENSE": "cb4474e26547397169061d3586c00022cda5330a1b64fa13e872319f3b63aff1"
+      }
+    },
+    {
+      "name": "w3c-keyname",
+      "version": "2.2.8",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/w3c-keyname@2.2.8/index.js",
+      "files": {
+        "w3c-keyname/index.js": "b649dec4f01c7c5eb05be4641b5b698c6938231ee50b38e17a2f0f822ca3df2e",
+        "w3c-keyname/LICENSE": "869c30f368eb08735e779027b9f4bc9fea2f39624351856aebe42741f0bc0884"
+      }
+    },
+    {
+      "name": "crelt",
+      "version": "1.0.6",
+      "licence": "MIT",
+      "source": "https://cdn.jsdelivr.net/npm/crelt@1.0.6/index.js",
+      "files": {
+        "crelt/index.js": "924800defa2bf95a0bfd16dde589ecebbcd9e36b03635274da84968c77a3721e",
+        "crelt/LICENSE": "23852ebf6aef7fadffc92514b3c5df163a8651f2c3ed0dbb494cb49d93bd5de5"
       }
     }
   ]

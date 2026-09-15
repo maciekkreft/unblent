@@ -17,7 +17,9 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // long paragraph on line two does not ride in every event.
 const subtitleOf = (body) => {
   const [, second = ""] = body.split("\n").filter((l) => l.trim() !== "");
-  return second.trim().slice(0, 120);
+  // Strip a level marker ("# "/"## "/"### ") a rich member writes, so a row's second
+  // line reads cleanly whichever editor saved it (note-editor/machine.js titleOf).
+  return second.replace(/^#{1,3} /, "").trim().slice(0, 120);
 };
 
 const listRow = ({ id, title, body, updatedAt }) => ({ id, title, subtitle: subtitleOf(body), updatedAt });

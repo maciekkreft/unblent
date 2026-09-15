@@ -153,10 +153,10 @@ for (const engine of ENGINES) {
       // plain editor, and its choice is stored under editors (Step 5, 3.6).
       await until(async () => (await editorSelect(page)) !== null);
       const sel = await editorSelect(page);
-      assert.deepEqual(sel.options, ["note-editor", "note-editor-rich"], "the role's members are listed");
+      assert.deepEqual(sel.options, ["note-editor", "note-editor-cm6"], "the role's members are listed");
       assert.equal(sel.value, "note-editor", "the plain editor is the default");
-      await pickEditor(page, "note-editor-rich");
-      await until(async () => (await stored(page)).editors?.["note-editor"] === "note-editor-rich");
+      await pickEditor(page, "note-editor-cm6");
+      await until(async () => (await stored(page)).editors?.["note-editor"] === "note-editor-cm6");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `settings-${engine.name}.png`), fullPage: true });
@@ -168,7 +168,7 @@ for (const engine of ENGINES) {
       assert.equal((await sheetRows(page)).find((r) => r.path === "/design/notes").shown, false);
       assert.equal(await navLinks(page).then((l) => l.includes("/design/notes")), false);
       assert.ok(await switchGone(page), "the viewport switch stays hidden across a reload");
-      await until(async () => (await editorSelect(page))?.value === "note-editor-rich");
+      await until(async () => (await editorSelect(page))?.value === "note-editor-cm6");
 
       // Reset restores the defaults everywhere.
       await clickReset(page);

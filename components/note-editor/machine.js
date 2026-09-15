@@ -21,7 +21,9 @@ const THROTTLE_MS = 200;
 // title and body. body is the whole text, so a reader shows body alone.
 export function titleOf(body) {
   const line = body.split("\n").find((l) => l.trim() !== "");
-  return line ? line.trim() : "";
+  // A level marker ("# "/"## "/"### ") from a rich member (note-editor-cm6) never
+  // shows in a title, so a note round-trips between the plain and rich editors.
+  return line ? line.replace(/^#{1,3} /, "").trim() : "";
 }
 
 const assignTyped = assign({ body: ({ event }) => event.body });
@@ -70,7 +72,7 @@ export const machine = setup({
   meta: {
     kind: "view",
     // The default member of the note-editor role (7.3): interchangeable with
-    // note-editor-rich, which shares this contract exactly.
+    // note-editor-cm6, which shares this contract exactly.
     role: "note-editor",
     emits: ["note.saved", "note.opened"],
     attributes: ["height", "follows"],

@@ -46,7 +46,7 @@
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
 
   /* App scale */
-  --text-heading: 1.5rem;      /* 24px — page titles */
+  --text-heading: 1.5rem;      /* 24px — page titles; a note's Title line (note-editor-cm6) */
   --text-subtitle: 1.25rem;    /* 20px — section headings, card titles */
   --text-body: 1rem;           /* 16px — default app text, chat messages */
   --text-sm: 0.875rem;         /* 14px — secondary UI text, labels */

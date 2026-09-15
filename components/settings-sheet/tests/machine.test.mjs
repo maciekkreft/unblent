@@ -11,7 +11,7 @@ const PAGES = [
 
 const COMPONENTS = [
   { name: "note-editor", role: "note-editor" },
-  { name: "note-editor-rich", role: "note-editor" },
+  { name: "note-editor-cm6", role: "note-editor" },
   { name: "notes", role: null },
 ];
 
@@ -110,16 +110,16 @@ test("_reset emits the defaults", async () => {
 
 test("catalog members are grouped by role", async () => {
   const { snapshot } = await start();
-  assert.deepEqual(snapshot.context.roles, { "note-editor": ["note-editor", "note-editor-rich"] });
+  assert.deepEqual(snapshot.context.roles, { "note-editor": ["note-editor", "note-editor-cm6"] });
 });
 
 test("_setEditor emits the whole settings with the role's choice set", async () => {
   const { actor, emitted } = await start();
-  actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor-rich" });
+  actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor-cm6" });
   assert.equal(emitted.length, 1);
-  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-rich" });
+  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-cm6" });
   // A second choice for another role would merge, not replace: start from the last.
-  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "note-editor": "note-editor-rich" } });
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "note-editor": "note-editor-cm6" } });
   actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor" });
   assert.deepEqual(emitted[1].editors, { "note-editor": "note-editor" });
 });

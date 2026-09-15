@@ -38,13 +38,13 @@ test("settings.edited carrying editors is adopted, sanitised, saved and re-emitt
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
-    editors: { "note-editor": "note-editor-rich", junk: 3 },
+    editors: { "note-editor": "note-editor-cm6", junk: 3 },
   });
   const s = read(actor);
-  assert.deepEqual(s.editors, { "note-editor": "note-editor-rich" }, "non-string values are dropped");
+  assert.deepEqual(s.editors, { "note-editor": "note-editor-cm6" }, "non-string values are dropped");
   assert.equal(emitted.length, 1);
   assert.equal(saved.length, 1);
-  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-rich" });
+  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-cm6" });
 });
 
 test("settings.edited dedupes nav by path and applies the invariant", () => {
