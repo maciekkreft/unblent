@@ -65,6 +65,15 @@ const clickAction = (page, scope, label) =>
     },
     { scope, label },
   );
+// The bar is the panel's handle: clicking bare bar space folds a strip or
+// unfolds a rail. Clicking the container element itself makes its own click the
+// target, clear of any tab or action button inside it.
+const clickBar = (page, scope) =>
+  page.evaluate((scope) => {
+    const el = document.querySelector("dock-desk").shadowRoot.querySelector(scope);
+    if (!el) throw new Error(`no bar ${scope}`);
+    el.click();
+  }, scope);
 // The computed transform of a group's fold glyph, to check its orientation.
 const foldTransform = (page, scope) =>
   page.evaluate((scope) => {
@@ -377,6 +386,22 @@ for (const engine of ENGINES) {
       assert.equal(await selected(page, ".dock.right .panel"), "Contracts");
       assert.ok(await visible(page, "contract-list"));
 
+      // The bar itself is the handle: bare strip space folds, bare rail space
+      // unfolds on the same tab, and a tab click only switches.
+      await clickBar(page, ".dock.right .panel .strip");
+      await until(async () => (await rect(page, ".dock.right")).width <= rail + 1.01);
+      await until(async () => !(await visible(page, "contract-list")), 1000).catch(() =>
+        assert.fail("clicking bare strip space folds the dock"),
+      );
+      await clickBar(page, ".dock.right .rail");
+      await until(async () => Math.abs((await rect(page, ".dock.right")).width - open.width) < 1);
+      assert.equal(await selected(page, ".dock.right .panel"), "Contracts", "the bar unfolds on the same tab");
+      assert.ok(await visible(page, "contract-list"), "clicking bare rail space unfolds the dock");
+      await clickTab(page, ".dock.right .panel", "Trace");
+      await until(async () => (await selected(page, ".dock.right .panel")) === "Trace");
+      assert.ok((await rect(page, ".dock.right")).width > rail * 5, "a tab switch does not fold the dock");
+      assert.ok(await visible(page, "trace-list"), "the panel stays open on a tab switch");
+
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
@@ -528,6 +553,14 @@ for (const engine of ENGINES) {
       await clickAction(page, ".dock.left .rail", "Unfold");
       await until(async () => (await rect(page, ".dock.left")).height > strip * 3);
       assert.ok(await visible(page, "trace-list"), "the left sheet reopens");
+
+      // The sheet header is a handle too: a tap on bare strip space folds it, a
+      // tap on the rail reopens it, the standard bottom-sheet gesture.
+      await clickBar(page, ".dock.left .panel .strip");
+      await until(async () => (await rect(page, ".dock.left")).height <= strip + 2);
+      await clickBar(page, ".dock.left .rail");
+      await until(async () => (await rect(page, ".dock.left")).height > strip * 3);
+      assert.ok(await visible(page, "trace-list"), "the sheet reopens from a bar tap");
 
       // Unfold the bottom sheet from its strip tab too.
       await clickTab(page, ".dock.bottom .rail", "Contracts");

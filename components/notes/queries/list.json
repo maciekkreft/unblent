@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Every note as a title and id, for a list.",
+    "description": "Every note as id, title, subtitle and time, for a list. subtitle is the note's second non-empty line, derived from the body (never stored).",
     "type": "object",
     "properties": {
       "notes": {
@@ -18,6 +18,7 @@
           "properties": {
             "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
             "title": { "type": "string" },
+            "subtitle": { "type": "string" },
             "updatedAt": { "type": "integer" }
           },
           "required": ["id", "title", "updatedAt"],

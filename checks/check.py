@@ -626,13 +626,160 @@ def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
-def run_tests() -> None:
+# --- Change-scoped selection (architecture.md 11) --------------------------------
+# The full run is the definition of done, but while iterating the edit loop and the
+# Stop hook may narrow it to the tests reachable from what changed: the changed
+# components, their one-hop bus partners, and the components sharing a page with
+# them. Any infrastructure change still runs everything. `affected` is None for the
+# full run, or the set of component names to test.
+
+_INFRA_DIRS = {"bus", "store", "checks", "vendor", "tokens", "server"}
+_INFRA_FILES = {".env", "requirements.txt"}
+_TAG = re.compile(r"<([a-z][\w]*-[\w-]*)[\s>]")
+
+
+def _page_compositions() -> list:
+    """Section 8: each page's composed view tags. The same regex the page check
+    reads, so the two cannot disagree about what a page holds."""
+    pages = []
+    for path in sorted(glob.glob("pages/**/*.html", root_dir=ROOT, recursive=True)):
+        pages.append(frozenset(_TAG.findall((ROOT / path).read_text())))
+    return pages
+
+
+def _interaction_graph(manifests: dict) -> dict:
+    """Section 7.3: who each component interacts with, from manifests alone. The
+    same rule as catalog/server/router.py `_link`, reimplemented because the check
+    cannot import a component. Undirected: a contract-preserving edit can only break
+    a component's own tests and those of its direct bus partners."""
+    recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    adj = {name: set() for name in recs}
+    for name, m in recs.items():
+        emits = set(m["meta"].get("emits", []))
+        consumes = set(m["consumes"])
+        for other, om in recs.items():
+            if other == name:
+                continue
+            if emits & set(om["consumes"]) or consumes & set(om["meta"].get("emits", [])):
+                adj[name].add(other)
+                adj[other].add(name)
+        for ask in m["meta"].get("asks", []):
+            target = ask.split(":", 1)[0].strip()
+            if target in recs and target != name:
+                adj[name].add(target)
+                adj[target].add(name)
+    return adj
+
+
+def affected_components(changed_paths: list, manifests: dict):
+    """The components whose tests a change can break, or None to run everything.
+    None on any infrastructure, structural, or unclassifiable change (7.3, 11)."""
+    known = {Path(p).parent.name for p in manifests}
+    seeds = set()
+    page_seeds = None
+    for cp in changed_paths:
+        cp = cp.replace("\\", "/").strip()
+        if not cp:
+            continue
+        parts = Path(cp).parts
+        top = parts[0]
+        if top in _INFRA_DIRS or cp in _INFRA_FILES:
+            return None
+        if top == "components":
+            # A fully deleted component leaves the manifests, so its name is
+            # unknown here: the graph it was part of changed, run everything.
+            if len(parts) < 2 or parts[1] not in known:
+                return None
+            seeds.add(parts[1])
+        elif top == "pages" and cp.endswith(".html"):
+            if page_seeds is None:
+                page_seeds = _page_compositions()
+            page = frozenset(_TAG.findall((ROOT / cp).read_text())) if (ROOT / cp).is_file() else frozenset()
+            seeds |= page
+        else:
+            return None
+    if not seeds:
+        return None
+    graph = _interaction_graph(manifests)
+    result = set(seeds)
+    for a in seeds:
+        result |= graph.get(a, set())
+    for tags in (page_seeds if page_seeds is not None else _page_compositions()):
+        if tags & seeds:
+            result |= tags
+    return result
+
+
+def _changed_paths_from_git() -> list:
+    """Repo-root-relative paths git sees changed against HEAD: staged, unstaged and
+    untracked. A rename's new name is what changed; its old name reads as a deletion,
+    which affected_components turns into a full run."""
+    paths = set()
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
+                            capture_output=True, text=True).stdout
+    for line in status.splitlines():
+        entry = line[3:] if len(line) > 3 else ""
+        if " -> " in entry:  # rename: keep the new name
+            entry = entry.split(" -> ", 1)[1]
+        if entry:
+            paths.add(entry.strip().strip('"'))
+    diff = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=ROOT,
+                          capture_output=True, text=True).stdout
+    paths.update(p for p in diff.splitlines() if p.strip())
+    return sorted(paths)
+
+
+def _resolve_only(value: str, manifests: dict) -> list:
+    """--only takes component names or paths, comma-separated. A bare component name
+    becomes its component directory; a path (with a slash, or a root file such as
+    architecture.md that the Stop hook records) passes through to be classified; a
+    token that is neither fails rather than silently narrowing."""
+    known = {Path(p).parent.name for p in manifests}
+    out = []
+    for token in value.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "/" not in token and token in known:
+            out.append(f"components/{token}/machine.js")
+        elif "/" in token or (ROOT / token).exists():
+            out.append(token)
+        else:
+            fail("checks/check.py", "--only", f"unknown component or path {token!r}; not one of {sorted(known)}")
+    return out
+
+
+def run_tests(affected=None) -> None:
+    # affected is None for the full run (the definition of done); a set of component
+    # names narrows to the tests reachable from a change (11). A narrowed run never
+    # touches infrastructure tests, since any infra change runs everything.
+    scoped = affected is not None
+
+    # Component tests split three ways, read once each so a rename cannot mis-sort:
+    # a browser test drives Playwright (`.launch(`), an api test hits the live server
+    # (UNBLENT_URL) without a browser, the rest are pure-Node actor tests. A scoped
+    # run keeps only the affected components (11).
+    comp_tests = sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT))
+    if scoped:
+        comp_tests = [f for f in comp_tests if Path(f).parts[1] in affected]
+    browser, api, pure = [], [], []
+    for f in comp_tests:
+        src = (ROOT / f).read_text()
+        if ".launch(" in src:
+            browser.append(f)
+        elif "UNBLENT_URL" in src:
+            api.append(f)
+        else:
+            pure.append(f)
+
     # The bus and the store are infrastructure, pure Node: their tests need neither
-    # the venv nor the server, so they run first and on their own. The budget is per
-    # test (11), so a file must not count as one: without isolation, node times each
-    # test alone rather than the file, whose lifetime includes the bus's own timers.
-    node_tests = sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) + \
-        sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT))
+    # the venv nor the server, and only an infra change (a full run) reaches them.
+    # The budget is per test (11), so a file must not count as one: without isolation,
+    # node times each test alone rather than the file, whose lifetime includes the
+    # bus's own timers.
+    node_tests = ([] if scoped else
+                  sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
+                  sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT))) + pure
     if node_tests:
         result = subprocess.run(
             ["node", "--import", "./checks/register.mjs", "--test",
@@ -640,7 +787,15 @@ def run_tests() -> None:
              *node_tests], cwd=ROOT,
         )
         if result.returncode != 0:
-            fail("bus/tests, store/tests", "node tests", "node --test reported failures")
+            fail("pure-node tests", "node tests", "node --test reported failures")
+
+    # server/tests is the entry's own; only an infra change (a full run) reaches it.
+    server_tests = [] if scoped else sorted(glob.glob("server/tests/*.test.py", root_dir=ROOT))
+
+    # The whole point of scoping: a change that touches no browser or api test never
+    # boots the server or Playwright, so a single-component actor edit is instant.
+    if not browser and not api and not server_tests:
+        return
 
     uvicorn = ROOT / ".venv" / "bin" / "uvicorn"
     if not uvicorn.exists():
@@ -648,11 +803,6 @@ def run_tests() -> None:
              f"{uvicorn} is missing; create the venv with "
              "`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`")
 
-    # Browser tests drive Playwright; server tests are stdlib HTTP against the entry.
-    browser_tests = sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT))
-    server_tests = sorted(glob.glob("server/tests/*.test.py", root_dir=ROOT))
-    if not browser_tests and not server_tests:
-        return
     port = _free_port()
     # Section 5, 3.4: the session router needs RP_ID, MAX_USERS and a data directory;
     # a throwaway one per run keeps the suite off the real data/ and its passkeys and
@@ -677,23 +827,22 @@ def run_tests() -> None:
             if result.returncode != 0:
                 fail(test, "server tests", "server-entry HTTP test reported failures")
 
-        if browser_tests:
-            if "PLAYWRIGHT_MODULE" not in env:
-                fail(".env", "browser tests",
-                     "PLAYWRIGHT_MODULE is not set; add PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs to .env")
-            # The loader lets a machine test import its actor (bare `xstate`); it is
-            # inert for the browser tests, whose only bare import is Playwright by path.
-            # One process for every file: node's default is a process per file,
-            # and sixteen start-ups alone cost ten seconds of wall clock. The flag
-            # is `--test-isolation=none` from Node 23.
+        # The loader lets a machine test import its actor (bare `xstate`); it is inert
+        # for the browser tests, whose only bare import is Playwright by path.
+        if api:
             result = subprocess.run(
                 ["node", "--import", "./checks/register.mjs", "--test",
                  "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
-                 *browser_tests],
-                cwd=ROOT, env=env,
+                 *api], cwd=ROOT, env=env,
             )
             if result.returncode != 0:
-                fail("components/*/tests", "browser tests", "node --test reported failures")
+                fail("components/*/tests api", "api tests", "node --test reported failures")
+
+        if browser:
+            if "PLAYWRIGHT_MODULE" not in env:
+                fail(".env", "browser tests",
+                     "PLAYWRIGHT_MODULE is not set; add PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs to .env")
+            _run_browser(browser, env)
     finally:
         server.terminate()
         try:
@@ -701,6 +850,38 @@ def run_tests() -> None:
         except subprocess.TimeoutExpired:
             server.kill()
         shutil.rmtree(data_dir, ignore_errors=True)
+
+
+def _run_browser(files: list, env: dict) -> None:
+    # CHECK_BROWSER_WORKERS parallel node processes over the one server (10, 11).
+    # Default 1 (serial): on this two-core host a second concurrent browser starves
+    # the first of CPU and pushes the heaviest tests (dock, notes save, layout
+    # switch) past the per-test five-second budget (11), so parallelism trades a
+    # ~1.4x speed-up for flakes and is opt-in. Raise it where cores are plentiful.
+    # Each worker's output is captured and printed only if it fails, so interleaved
+    # streams stay legible and attribution is per worker. `--test-isolation=none`
+    # runs a worker's files in one process; a process per file would cost ten
+    # seconds of start-ups alone.
+    workers = min(int(os.environ.get("CHECK_BROWSER_WORKERS", "1")), len(files)) or 1
+    chunks = [files[i::workers] for i in range(workers)]
+    procs = []
+    for chunk in chunks:
+        if not chunk:
+            continue
+        procs.append(subprocess.Popen(
+            ["node", "--import", "./checks/register.mjs", "--test",
+             "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
+             *chunk], cwd=ROOT, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        ))
+    failed = False
+    for proc in procs:
+        out, _ = proc.communicate()
+        if proc.returncode != 0:
+            failed = True
+            sys.stderr.write(out)
+    if failed:
+        fail("components/*/tests", "browser tests", "node --test reported failures")
 
 
 
@@ -718,11 +899,38 @@ def _enforce_budget(timings: list, budget: float, phase: str) -> None:
         slowest = ", ".join(f"{name} {t:.2f}s" for t, name in sorted(timings, reverse=True)[:3])
         fail("checks/check.py", "time budget (11)",
              f"{phase} took {total:.2f}s, budget {budget:.0f}s; slowest: {slowest}. "
-             "Optimise it, or move the slow part out of the fast phase so the after-edit hook stays instant.")
+             "Optimise it, or move the slow part out of the fast phase so the after-edit run stays instant.")
+
+
+def _only_value(argv: list) -> str:
+    if "--only" in argv:
+        i = argv.index("--only")
+        if i + 1 < len(argv):
+            return argv[i + 1]
+        fail("checks/check.py", "--only", "expects a value: --only <comma-separated components or paths>")
+    return ""
+
+
+USAGE = """The one check command (architecture.md 11).
+
+  after every edit      python3 checks/check.py --static
+                        every static rule, <1s
+  while iterating       python3 checks/check.py --changed
+                        static + tests reachable from your changes
+                        (or --only <components>)
+  before done           python3 checks/check.py
+                        every static rule + ALL tests
+"""
 
 
 def main() -> None:
-    static_only = "--static" in sys.argv[1:]
+    argv = sys.argv[1:]
+    if "--help" in argv or "-h" in argv:
+        print(USAGE)
+        return
+    static_only = "--static" in argv
+    changed = "--changed" in argv
+    only = _only_value(argv)
     timings = []
     _timed(timings, "vendor", check_vendor)
     _timed(timings, "layout", check_layout)
@@ -742,8 +950,19 @@ def main() -> None:
     if static_only:
         return
     report_unused_tokens()
-    _timed(timings, "tests", run_tests)
-    print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s")
+    # Bare check.py is the definition of done: affected stays None, everything runs.
+    # --changed / --only narrow to the tests reachable from what changed (11).
+    affected = None
+    if changed or only:
+        paths = []
+        if changed:
+            paths += _changed_paths_from_git()
+        if only:
+            paths += _resolve_only(only, manifests)
+        affected = affected_components(paths, manifests)
+    _timed(timings, "tests", run_tests, affected)
+    scope = "all" if affected is None else (", ".join(sorted(affected)) or "none")
+    print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s [tests: {scope}]")
 
 
 if __name__ == "__main__":

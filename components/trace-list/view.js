@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine } from "./machine.js";
+import { machine, runs } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -218,9 +218,24 @@ class TraceList extends LitElement {
     .name {
       color: var(--color-ink);
     }
+    /* The count of records a run stands for, so its one line still says how much
+       happened. */
+    .chip {
+      margin-left: var(--space-2xs);
+      padding: 0 var(--space-xs);
+      border-radius: var(--radius-full);
+      border: var(--border-width) solid var(--color-border);
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
     .num {
       text-align: right;
       color: var(--color-body-mid);
+    }
+    /* A run's member rows sit under its summary; the indent shows the nesting, so
+       an expanded run reads as a group rather than a flat list (discoverability). */
+    .member .num {
+      padding-left: var(--space-lg);
     }
     /* The expanded panel's footer: the absolute time and each recipient's resulting
        state, one per line, below the payload JSON. */
@@ -369,14 +384,46 @@ class TraceList extends LitElement {
             </tr>
           </thead>
           <tbody>
-            ${records.map((r) => this.#row(r, expanded, showTab))}
+            ${runs(records).map((run) =>
+              run.length === 1 ? this.#row(run[0], expanded, showTab) : this.#runRow(run, expanded, showTab),
+            )}
           </tbody>
         </table>
       </div>
     `;
   }
 
-  #row(r, expanded, showTab) {
+  // A run of same-signature records within RUN_GAP_MS collapses to one row so a
+  // burst is one line, not noise; the count above still reports every record,
+  // because the fact (`trace`) holds them all. Opening it shows its members.
+  #runRow(run, expanded, showTab) {
+    const first = run[0];
+    const last = run.at(-1);
+    const id = `run:${first.tab}:${first.seq}`;
+    const open = expanded.has(id);
+    return html`
+      <tr
+        class="row run ${open ? "open" : ""}"
+        aria-expanded=${open}
+        @click=${() => this.#actor.send({ type: "_toggle", id })}
+      >
+        <td class="num"><span class="caret">${icon("caret-right")}</span>#${first.seq}–#${last.seq}</td>
+        <td class="time">${time(first.at)}</td>
+        ${showTab ? html`<td class="tab">${first.tab.slice(-4)}</td>` : nothing}
+        <td class="kind">${kindLabel(first)}</td>
+        <td class="name">${first.name}<span class="chip">×${run.length}</span></td>
+        <td class="route">${first.from} → ${recipients(first)}</td>
+        <td class="outcome">
+          <span class=${OUTCOME_CLASS[first.outcome] ?? nothing}>${first.outcome}</span>
+          ${first.reason ? html` <span class="reason">${first.reason}</span>` : nothing}
+        </td>
+        <td class="shape">${summary(last.payload)}</td>
+      </tr>
+      ${open ? run.map((r) => this.#row(r, expanded, showTab, true)) : nothing}
+    `;
+  }
+
+  #row(r, expanded, showTab, member = false) {
     const id = `${r.tab}:${r.seq}`;
     const open = expanded.has(id);
     // The desk table (thead present) spans #, time, [tab], kind, name, route,
@@ -385,7 +432,7 @@ class TraceList extends LitElement {
     const lines = stateLines(r);
     return html`
       <tr
-        class="row ${open ? "open" : ""}"
+        class="row ${member ? "member" : ""} ${open ? "open" : ""}"
         aria-expanded=${open}
         @click=${() => this.#actor.send({ type: "_toggle", id })}
       >

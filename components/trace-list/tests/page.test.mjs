@@ -161,6 +161,54 @@ for (const engine of ENGINES) {
       );
       const desk = await overflow(page);
       assert.ok(desk.scrollWidth <= desk.clientWidth + 1, `the table fits a 900px desk, saw ${JSON.stringify(desk)}`);
+
+      // A burst folds into one run row (task 2). Three quick viewport switches land
+      // within the run gap, so their viewport.selected records read as one ×n line,
+      // expandable to its member rows.
+      await clickSwitch(page, "Phone");
+      await clickSwitch(page, "Desk");
+      await clickSwitch(page, "Phone");
+      const runOf = () =>
+        page.evaluate(() => {
+          const root = document.querySelector("trace-list").shadowRoot;
+          const tr = [...root.querySelectorAll("tbody tr.row.run")].find((r) =>
+            r.textContent.includes("viewport.selected"),
+          );
+          if (!tr) return null;
+          const m = tr.textContent.match(/×(\d+)/);
+          return m ? Number(m[1]) : null;
+        });
+      await page.waitForFunction(() => {
+        const root = document.querySelector("trace-list").shadowRoot;
+        const tr = [...root.querySelectorAll("tbody tr.row.run")].find((r) => r.textContent.includes("viewport.selected"));
+        return tr && Number((tr.textContent.match(/×(\d+)/) || [])[1]) >= 3;
+      });
+      const runCount = await runOf();
+      assert.ok(runCount >= 3, `the switches fold into one run, saw ×${runCount}`);
+
+      // Expanding the run shows its member rows, each carrying its own seq.
+      await page.evaluate(() => {
+        const root = document.querySelector("trace-list").shadowRoot;
+        [...root.querySelectorAll("tbody tr.row.run")]
+          .find((r) => r.textContent.includes("viewport.selected"))
+          .click();
+      });
+      await page.waitForFunction(
+        () => document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row.member").length >= 3,
+      );
+      const members = await page.evaluate(() =>
+        [...document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row.member")].map((tr) => tr.textContent),
+      );
+      assert.ok(members.every((t) => /#\d+/.test(t)), "each member row carries its seq");
+      assert.ok(
+        members.filter((t) => t.includes("viewport.selected")).length >= 3,
+        "the run's members are the switch's own events",
+      );
+
+      // Restore the desk so the stored choice does not leak into other tests.
+      await clickSwitch(page, "Desk");
+      await page.waitForFunction(() => document.documentElement.dataset.viewport === "desk");
+
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

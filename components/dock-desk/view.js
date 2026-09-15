@@ -119,6 +119,7 @@ class DockDesk extends LitElement {
     }
     .dock .strip {
       background: var(--color-canvas-soft);
+      cursor: pointer;
     }
     [role="tablist"] {
       flex: 1;
@@ -248,9 +249,14 @@ class DockDesk extends LitElement {
     .folded .panel {
       visibility: hidden;
     }
+    /* The rail is the folded strip: it lies on the receding edge at the folded
+       size, not across the whole dock. Spanning the dock (inset: 0) only looks
+       right once folded, when the dock has shrunk to that size; mid-slide the
+       dock is still wide and a centred spine drifts into the middle of the band
+       and flashes there as it fades. Pinned to the edge, the spine stays on the
+       edge throughout the slide. Each side sets its own anchor below. */
     .rail {
       position: absolute;
-      inset: 0;
       box-sizing: border-box;
       display: flex;
       align-items: center;
@@ -258,6 +264,7 @@ class DockDesk extends LitElement {
       padding: var(--space-sm) 0;
       background: var(--color-canvas-soft);
       font-size: var(--text-sm);
+      cursor: pointer;
       visibility: hidden;
       opacity: 0;
     }
@@ -276,9 +283,16 @@ class DockDesk extends LitElement {
     .left .rail,
     .right .rail {
       writing-mode: vertical-rl;
+      top: 0;
+      bottom: 0;
+      width: var(--space-xl);
     }
     .left .rail {
+      left: 0;
       transform: rotate(180deg);
+    }
+    .right .rail {
+      right: 0;
     }
     .left .rail .action {
       transform: rotate(180deg);
@@ -288,6 +302,10 @@ class DockDesk extends LitElement {
       order: -1;
     }
     .bottom .rail {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--space-xl);
       padding: 0 var(--space-sm);
     }
     .settled .dock {
@@ -385,6 +403,12 @@ class DockDesk extends LitElement {
         writing-mode: horizontal-tb;
         transform: none;
         padding: 0 var(--space-sm);
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: auto;
+        height: var(--space-xl);
       }
       .left .rail .action,
       .right .rail .action {
@@ -416,6 +440,14 @@ class DockDesk extends LitElement {
     if (name !== undefined) event.name = name;
     if (side !== undefined) event.side = side;
     this.#actor.send(event);
+  }
+
+  // A click on the bar toggles the panel, unless it landed on a control the bar
+  // holds: tabs, actions and the fold glyph keep their own behaviour, so only
+  // bare bar space folds or unfolds.
+  #bar(event, act) {
+    if (event.target.closest("button")) return;
+    act();
   }
 
   render() {
@@ -523,10 +555,16 @@ class DockDesk extends LitElement {
     const show = (name) => this.#send("_activate", name, side);
     const group = `${side[0].toUpperCase()}${side.slice(1)} dock`;
     const entering = this.#present.has(side) ? "" : "entering";
+    // Norman: the bar itself is the panel's handle, so the whole strip folds and
+    // the whole rail unfolds, one conceptual model on the desk and on the phone
+    // sheet. A click on a control inside the bar (a tab, an action, the glyph)
+    // keeps its own behaviour; only bare bar space toggles.
+    const fold = (event) => this.#bar(event, () => this.#send("_fold", undefined, side));
+    const unfold = (event) => this.#bar(event, () => this.#send("_unfold", undefined, side));
     return html`
       <aside class="dock ${side} ${dock.open ? "" : "folded"} ${entering}" data-side=${side} aria-label=${group}>
         <div class="panel">
-          <div class="strip">
+          <div class="strip" @click=${fold}>
             ${this.#tablist(group, dock.views, active, labelOf, show)}
             ${arranging ? this.#actions(side, active, labelOf) : nothing}
             ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
@@ -535,7 +573,7 @@ class DockDesk extends LitElement {
             ${dock.views.map((name) => html`<slot name=${name} ?hidden=${name !== active}></slot>`)}
           </div>
         </div>
-        <div class="rail">
+        <div class="rail" @click=${unfold}>
           ${this.#tablist(group, dock.views, active, labelOf, show)}
           ${this.#fold("Unfold", "false", () => this.#send("_unfold", undefined, side))}
         </div>

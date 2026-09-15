@@ -211,7 +211,7 @@ class SettingsSheet extends LitElement {
             .checked=${!settings.viewportSwitchHidden}
             @change=${() => this.#actor.send({ type: "_toggleViewport" })}
           />
-          Desk|Phone switch shown
+          Viewport switch shown
         </label>
         <label>
           <input

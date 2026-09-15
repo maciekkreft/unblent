@@ -76,3 +76,44 @@ test("GET since a cursor returns only what changed after it", async () => {
   assert.deepEqual(after.notes, []);
   assert.equal(after.cursor, all.cursor);
 });
+
+test("a delete is a versioned write that states no base, and the pull carries it", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  await put(id, { title: "a", body: "b", baseVersion: null }, cookie);
+  // No baseVersion, yet accepted: a delete always wins (5).
+  const gone = await (await put(id, { title: "a", body: "b", deleted: true }, cookie)).json();
+  assert.equal(gone.version, 2);
+  assert.equal(gone.deleted, true);
+  const all = await (await list(0, cookie)).json();
+  const row = all.notes.find((n) => n.id === id);
+  assert.equal(row.deleted, true, "the tombstone rides the pull like any change");
+});
+
+test("a second delete is idempotent: same version, no new write", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  await put(id, { title: "a", body: "b", baseVersion: null }, cookie);
+  const first = await (await put(id, { title: "a", body: "b", deleted: true }, cookie)).json();
+  const again = await (await put(id, { title: "a", body: "b", deleted: true }, cookie)).json();
+  assert.equal(again.version, first.version);
+  assert.equal(again.updatedAt, first.updatedAt);
+});
+
+test("an edit onto a tombstone loses: a 409 carrying the deleted record", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  await put(id, { title: "a", body: "b", baseVersion: null }, cookie);
+  await put(id, { title: "a", body: "b", deleted: true }, cookie);
+  const res = await put(id, { title: "revive", body: "me", baseVersion: 1 }, cookie);
+  assert.equal(res.status, 409);
+  const { note } = await res.json();
+  assert.equal(note.deleted, true);
+});
+
+test("a delete for an unknown id is born a tombstone at version 1", async () => {
+  const cookie = cookieFor(freshUser());
+  const born = await (await put(noteId(9), { title: "a", body: "b", deleted: true }, cookie)).json();
+  assert.equal(born.version, 1);
+  assert.equal(born.deleted, true);
+});

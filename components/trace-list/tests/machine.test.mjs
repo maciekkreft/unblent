@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine } from "../machine.js";
+import { machine, runs, RUN_GAP_MS } from "../machine.js";
 
 // The actor is driven with a fake ask, the shape the bus's `ask` returns (4.2).
 function settle(actor) {
@@ -93,4 +93,48 @@ test("clear empties what is shown; later traffic is shown again", async () => {
   assert.equal(actor.getSnapshot().context.expanded.size, 0);
   actor.send({ type: "trace.recorded", ...rec({ seq: 2, at: 2000 }) });
   assert.deepEqual(actor.getSnapshot().context.records.map((r) => r.seq), [2]);
+});
+
+// --- runs(): folding a burst into one line ---------------------------------------
+
+test("an interleaved burst within the gap folds into runs by signature", () => {
+  // A typing run: note.saved and note.changed alternate, 100 ms apart.
+  const records = [];
+  for (let i = 0; i < 3; i += 1) {
+    records.push(rec({ seq: i * 2 + 1, at: 1000 + i * 200, name: "note.saved", from: "note-editor", to: ["notes"] }));
+    records.push(rec({ seq: i * 2 + 2, at: 1100 + i * 200, name: "note.changed", from: "notes", to: ["note-editor"] }));
+  }
+  const grouped = runs(records);
+  assert.equal(grouped.length, 2, "two runs, one per signature");
+  assert.deepEqual(grouped.map((g) => g.length), [3, 3]);
+  assert.equal(grouped[0][0].name, "note.saved", "listed where its first record fell");
+  assert.equal(grouped[1][0].name, "note.changed");
+});
+
+test("a gap longer than RUN_GAP_MS splits a run; exactly the gap does not", () => {
+  const within = runs([rec({ seq: 1, at: 1000 }), rec({ seq: 2, at: 1000 + RUN_GAP_MS })]);
+  assert.deepEqual(within.map((g) => g.length), [2], "a record exactly the gap later joins");
+  const beyond = runs([rec({ seq: 1, at: 1000 }), rec({ seq: 2, at: 1001 + RUN_GAP_MS })]);
+  assert.deepEqual(beyond.map((g) => g.length), [1, 1], "a record past the gap opens a new run");
+});
+
+test("a differing field is its own run even inside the gap", () => {
+  for (const field of [{ outcome: "ignored" }, { from: "elsewhere" }, { to: ["someone"] }, { tab: "01BBBBBBBBBBBBBBBBBB" }]) {
+    const grouped = runs([rec({ seq: 1, at: 1000 }), rec({ seq: 2, at: 1050, ...field })]);
+    assert.deepEqual(grouped.map((g) => g.length), [1, 1], `a different ${Object.keys(field)[0]} is a separate run`);
+  }
+});
+
+test("a lone record is a run of one; no records is no runs", () => {
+  assert.deepEqual(runs([rec()]).map((g) => g.length), [1]);
+  assert.deepEqual(runs([]), []);
+});
+
+test("a run's row id toggles like any other", async () => {
+  const ask = () => Promise.resolve({ records: [rec()] });
+  const actor = createActor(machine, { input: { ask } });
+  await settle(actor);
+  const id = "run:01AAAAAAAAAAAAAAAAAA:1";
+  actor.send({ type: "_toggle", id });
+  assert.ok(actor.getSnapshot().context.expanded.has(id));
 });

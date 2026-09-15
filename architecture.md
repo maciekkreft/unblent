@@ -161,9 +161,10 @@ For replicated fact components:
 - The browser side keeps a cache in IndexedDB and an **outbox**: records changed locally and not yet acknowledged by the server. A row is deleted the moment the server acknowledges it. The outbox is the only thing in the browser that must not be lost.
 - A record changed locally is marked *pending* until acknowledged. Views may show this.
 - The fact component drains the outbox whenever it can, coalescing by record id so three offline edits become one write.
-- On page load and whenever the tab regains focus, it first drains the outbox, then pulls what changed on the server. This is how work started on a MacBook continues on an iPhone and back: no live stream, no manual refresh.
+- On page load and whenever the tab regains focus, it first drains the outbox, then pulls what changed on the server. A save drains once typing has paused, without a pull, and a tab going to the background drains at once, so another device finds the latest copy. This is how work started on a MacBook continues on an iPhone and back: no live stream, no manual refresh.
 - Every record carries a **version**, assigned by the server. A write states the version it was based on. The server rejects a write based on a stale version, and the fact component emits a `conflicted` event carrying both copies, so a view can show them rather than silently losing one. This is what makes it safe to leave a tab open on one device and continue on another. Simultaneous editing on two devices is not a goal.
 - Ids are generated in the browser (ULIDs), and server writes are idempotent upserts, so retries and duplicates are harmless.
+- A deletion is a write like any other: the record stays as a **tombstone** (a `deleted` flag), versioned and pulled like a change, so a pulling device learns the note is gone; it is never purged. A delete carries no base version and is not refused for a stale one — a delete always wins, and an edit that reaches the server after a delete comes back as a conflict rather than reviving the note. The fact keeps the tombstone's title and body, so what was deleted can still be shown or restored later.
 
 On the server, each replicated fact component has **one SQLite file per user**: `data/<user>/<component>.db`. The session resolves the user, the component's router resolves the file, and neither the schema nor the browser ever mentions users. The backend is written as if for a single user. Litestream streams every file continuously to object storage; the architecture never sees it, and restoring is one command.
 
@@ -259,7 +260,7 @@ sequenceDiagram
 
 Suppose the build order is: `notes` + `note-editor`, then `note-list`, then `split-view`, then `chat`, then `note-reader`.
 
-- `note-list` queries `notes: list` on start, subscribes to `note.changed` and `note.deleted`, emits `note.selected`. Nothing existing changes.
+- `note-list` queries `notes: list` on start, subscribes to `note.changed` and `note.deleted`, emits `note.selected` and, when a note's undo window runs out, `note.discarded`. Nothing existing changes.
 - `split-view` is nearly pure declaration: two slots, and a `follows` attribute that turns `note.selected` into a `load(id)` command on the chosen slot.
 - `chat` queries `notes` and `llm`, emits `turn.submitted`, which `conversations` consumes. Nothing existing changes.
 - `note-reader` subscribes to `note.selected`, queries `notes: read(id)`. Nothing existing changes.
@@ -280,10 +281,11 @@ Every event has a name, an owner, and a JSON Schema for its payload, kept in the
 
 ```
 note.saved            owner: note-editor    { id, title, body, baseVersion }
-note.changed          owner: notes          { id, title, body, version, pending, updatedAt }
+note.changed          owner: notes          { id, title, subtitle, body, version, pending, updatedAt }
 note.deleted          owner: notes          { id }
 note.conflicted       owner: notes          { id, mine, theirs }
 note.selected         owner: note-list      { id }
+note.discarded        owner: note-list      { id }
 note.opened           owner: note-editor    { id }
 conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
@@ -313,7 +315,7 @@ Every command a component accepts, and every query a fact component answers, is 
 ```
 note-editor#n: focus
 note-editor#n: load(id)
-notes: list              → { notes: [{ id, title, updatedAt }] }
+notes: list              → { notes: [{ id, title, subtitle, updatedAt }] }
 notes: read(id)          → { note } | { error: "not-found" }
 llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }

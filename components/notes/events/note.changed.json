@@ -5,6 +5,7 @@
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
     "title": { "type": "string" },
+    "subtitle": { "type": "string" },
     "body": { "type": "string" },
     "version": { "type": "integer", "minimum": 1 },
     "pending": { "type": "boolean" },

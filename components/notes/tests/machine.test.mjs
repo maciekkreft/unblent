@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
 import { machine } from "../machine.js";
 
-// The network debounce window (notes/machine.js); a SimulatedClock drives it
-// without waiting real time, the way note-editor's throttle test does.
-const SYNC_DEBOUNCE_MS = 500;
+// The idle window the network waits for (notes/machine.js); a SimulatedClock drives
+// it without waiting real time, the way note-editor's throttle test does.
+const SYNC_IDLE_MS = 2000;
 
 // The actor is where decisions live (3.2): it is driven with a fake store, clock,
 // session ask, and sync api — the shapes fact.js builds for real. Anonymous
@@ -51,7 +51,7 @@ function fakeApi(impl = {}) {
     puts,
     pulls,
     put: async (row) => {
-      const out = impl.put ? impl.put(row) : { id: row.id, title: row.title, body: row.body, version: (row.baseVersion || 0) + 1, updatedAt: 900 };
+      const out = impl.put ? impl.put(row) : { id: row.id, title: row.title, body: row.body, version: (row.baseVersion || 0) + 1, updatedAt: 900, deleted: Boolean(row.deleted) };
       if (out && out.throw) throw new Error("offline");
       puts.push(row);
       return out;
@@ -63,26 +63,56 @@ function fakeApi(impl = {}) {
   };
 }
 
+// A sync api whose put can be held in flight, to observe what a trigger arriving
+// mid-sync does. hold() before a sync makes its put wait; release() lets it finish.
+function gatedApi() {
+  const puts = [];
+  const pulls = [];
+  let gate = null;
+  return {
+    puts,
+    pulls,
+    hold: () => {
+      let resolve;
+      gate = { promise: new Promise((r) => (resolve = r)), resolve };
+    },
+    release: () => {
+      if (gate) (gate.resolve(), (gate = null));
+    },
+    put: async (row) => {
+      puts.push(row);
+      if (gate) await gate.promise;
+      return { id: row.id, title: row.title, body: row.body, version: (row.baseVersion || 0) + 1, updatedAt: 900 };
+    },
+    pull: async (since) => {
+      pulls.push(since);
+      return { notes: [], cursor: since };
+    },
+  };
+}
+
 function start(store, { now = clock(), api, ask } = {}) {
   const simClock = new SimulatedClock();
   const actor = createActor(machine, { input: { store, now, api, ask }, clock: simClock });
   const changed = [];
   const conflicted = [];
+  const deleted = [];
   actor.on("note.changed", (e) => changed.push(e));
   actor.on("note.conflicted", (e) => conflicted.push(e));
+  actor.on("note.deleted", (e) => deleted.push(e));
   actor.start();
-  return { actor, changed, conflicted, clock: simClock };
+  return { actor, changed, conflicted, deleted, clock: simClock };
 }
 
-// Let the debounce window elapse so a raised _sync reaches the network.
+// Let the idle window elapse so a save-triggered drain reaches the network.
 async function drain(clock) {
-  clock.increment(SYNC_DEBOUNCE_MS);
+  clock.increment(SYNC_IDLE_MS);
   await flush();
 }
 
-// Wait until the machine reaches ready, then let any sync raised on entry run
-// through the debounce window (clock given for signed-in starts).
-async function ready(actor, clock) {
+// Wait until the machine reaches ready. A load or sign-in syncs at once (no idle
+// wait), so a flush settles that initial sync without touching the clock.
+async function ready(actor) {
   await new Promise((resolve) => {
     if (actor.getSnapshot().matches("ready")) return resolve();
     const sub = actor.subscribe((snap) => {
@@ -93,7 +123,6 @@ async function ready(actor, clock) {
     });
   });
   await flush();
-  if (clock) await drain(clock);
 }
 
 function askQuery(actor, name, payload = {}) {
@@ -115,7 +144,7 @@ test("queued queries are answered in order after the store loads (anonymous)", a
   await ready(actor);
   const [listReply, readReply] = await Promise.all([list, read]);
   assert.deepEqual(order, ["list", "read"]);
-  assert.deepEqual(listReply, { notes: [{ id: ID, title: "T", updatedAt: 5 }] });
+  assert.deepEqual(listReply, { notes: [{ id: ID, title: "T", subtitle: "", updatedAt: 5 }] });
   assert.equal(readReply.note.version, 3);
   assert.equal(readReply.note.pending, false);
 });
@@ -135,10 +164,11 @@ test("anonymous: a new note is announced at version 1, pending false, and never 
   const api = fakeApi();
   const { actor, changed } = start(fakeStore(), { api });
   await ready(actor);
-  actor.send({ type: "note.saved", id: ID, title: "Hi", body: "there", baseVersion: null });
+  actor.send({ type: "note.saved", id: ID, title: "Hi", body: "Hi\nthere", baseVersion: null });
   await flush();
+  // subtitle is derived from the body's second non-empty line, on every note.changed.
   assert.deepEqual(changed, [
-    { type: "note.changed", id: ID, title: "Hi", body: "there", version: 1, updatedAt: 101, pending: false },
+    { type: "note.changed", id: ID, title: "Hi", subtitle: "there", body: "Hi\nthere", version: 1, updatedAt: 101, pending: false },
   ]);
   assert.equal(api.puts.length, 0, "anonymous never writes to the server");
   assert.equal(api.pulls.length, 0, "anonymous never pulls");
@@ -163,7 +193,8 @@ test("signed in: a save is pending, queued in the outbox, then acknowledged by t
   const store = fakeStore();
   const api = fakeApi();
   const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock); // initial sync (pull since 0) settles
+  await ready(actor); // initial sync (pull since 0) settles
+  assert.equal(api.pulls.length, 1, "signing in pulls at once");
   changed.length = 0;
 
   actor.send({ type: "note.saved", id: ID, title: "Hi", body: "there", baseVersion: null });
@@ -185,7 +216,7 @@ test("signed in but offline: edits coalesce into one outbox row keeping the firs
   const store = fakeStore([{ id: ID, title: "A", body: "a", version: 4, updatedAt: 5 }]);
   const api = fakeApi({ put: () => ({ throw: true }) }); // offline: every write fails
   const { actor, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock);
+  await ready(actor);
 
   actor.send({ type: "note.saved", id: ID, title: "B", body: "b", baseVersion: 4 });
   await flush();
@@ -198,11 +229,11 @@ test("signed in but offline: edits coalesce into one outbox row keeping the firs
   assert.equal(row.baseVersion, 4, "the base of the first unsynced edit");
 });
 
-test("signed in: saves within the debounce window are one sync of one coalesced row", async () => {
+test("signed in: saves within the idle window are one drain of one coalesced row", async () => {
   const store = fakeStore();
   const api = fakeApi();
   const { actor, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock); // initial sync settles
+  await ready(actor); // initial sync settles
   api.puts.length = 0;
   api.pulls.length = 0;
 
@@ -213,14 +244,14 @@ test("signed in: saves within the debounce window are one sync of one coalesced 
   await flush();
   actor.send({ type: "note.saved", id: ID, title: "v3", body: "3", baseVersion: null });
   await flush();
-  assert.equal(api.pulls.length, 0, "nothing hits the network before the window ends");
+  assert.equal(api.puts.length, 0, "nothing hits the network before the window ends");
 
   await drain(clock);
-  // One sync invocation (one pull) draining one coalesced row (one put): the
-  // fact debounced the network, not the news (4.3).
-  assert.equal(api.pulls.length, 1, "one sync for the whole run");
+  // One drain of one coalesced row (one put) after the pause; a save-triggered
+  // drain does not pull: the fact debounced the network, not the news (4.3, 5).
   assert.equal(api.puts.length, 1, "one coalesced write");
   assert.equal(api.puts[0].body, "3", "carrying the latest text");
+  assert.equal(api.pulls.length, 0, "a save-triggered drain does not pull");
 });
 
 test("signed in: the outbox drains in id order once online", async () => {
@@ -228,7 +259,7 @@ test("signed in: the outbox drains in id order once online", async () => {
   let offline = true;
   const api = fakeApi({ put: (row) => (offline ? { throw: true } : { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900 }) });
   const { actor, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock);
+  await ready(actor);
 
   actor.send({ type: "note.saved", id: ID2, title: "two", body: "2", baseVersion: null });
   await flush();
@@ -238,9 +269,8 @@ test("signed in: the outbox drains in id order once online", async () => {
   assert.equal(store.outbox.size, 2);
 
   offline = false;
-  actor.send({ type: "_sync" });
+  actor.send({ type: "_sync", pull: true }); // a tab-focus, back online
   await flush();
-  await drain(clock);
   assert.deepEqual(api.puts.map((r) => r.id), [ID, ID2], "sorted by id");
   assert.equal(store.outbox.size, 0);
 });
@@ -249,7 +279,7 @@ test("signed in: a 409 adopts the server's copy and surfaces the conflict", asyn
   const store = fakeStore([{ id: ID, title: "mine", body: "m", version: 1, updatedAt: 5 }]);
   const api = fakeApi({ put: () => ({ conflict: true, note: { id: ID, title: "theirs", body: "t", version: 7, updatedAt: 800 } }) });
   const { actor, changed, conflicted, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock);
+  await ready(actor);
   changed.length = 0;
 
   actor.send({ type: "note.saved", id: ID, title: "mine2", body: "m2", baseVersion: 1 });
@@ -267,7 +297,7 @@ test("signed in: a 401 drops the session and stops", async () => {
   const store = fakeStore();
   const api = fakeApi({ put: () => ({ error: "unauthorized" }) });
   const { actor, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock);
+  await ready(actor);
 
   actor.send({ type: "note.saved", id: ID, title: "x", body: "y", baseVersion: null });
   await flush();
@@ -279,7 +309,7 @@ test("signed in: a pull adopts newer records and advances the cursor", async () 
   const store = fakeStore();
   const api = fakeApi({ pull: () => ({ notes: [{ id: ID, title: "server", body: "s", version: 4, updatedAt: 700 }], cursor: 9 }) });
   const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
-  await ready(actor, clock);
+  await ready(actor);
 
   assert.equal(changed.at(-1).title, "server");
   assert.equal(changed.at(-1).version, 4);
@@ -297,8 +327,296 @@ test("sign-in enqueues the anonymous cache and drains it to the account", async 
 
   actor.send({ type: "session.changed", userId: "u1" });
   await flush();
-  await drain(clock);
   assert.equal(api.puts.length, 1, "the anonymous note is pushed to the account on sign-in");
   assert.equal(api.puts[0].id, ID);
+  assert.equal(api.pulls.length, 1, "sign-in pulls at once");
   assert.equal(actor.getSnapshot().context.userId, "u1");
+});
+
+// --- The idle window and the immediate triggers ----------------------------------
+
+test("signed in: typing never drains; the outbox waits for a pause", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  api.puts.length = 0;
+  api.pulls.length = 0;
+
+  // A run of saves, each well inside the 2 s window: every save restarts it.
+  actor.send({ type: "note.saved", id: ID, title: "v0", body: "0", baseVersion: null });
+  await flush();
+  for (let i = 1; i <= 4; i += 1) {
+    clock.increment(1500);
+    actor.send({ type: "note.saved", id: ID, title: `v${i}`, body: String(i), baseVersion: null });
+    await flush();
+  }
+  assert.equal(api.puts.length, 0, "no drain while typing, 6 s of it");
+
+  clock.increment(SYNC_IDLE_MS - 1);
+  await flush();
+  assert.equal(api.puts.length, 0, "still none a tick before the window ends");
+  clock.increment(1);
+  await flush();
+  assert.equal(api.puts.length, 1, "one drain once typing paused for the window");
+  assert.equal(api.puts[0].body, "4", "carrying the latest text");
+  assert.equal(api.pulls.length, 0, "and it did not pull");
+});
+
+test("a bare _sync drains a queued row at once, without pulling (a hidden tab)", async () => {
+  const store = fakeStore();
+  let offline = true;
+  const api = fakeApi({ put: (row) => (offline ? { throw: true } : { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900 }) });
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  api.pulls.length = 0;
+
+  actor.send({ type: "note.saved", id: ID, title: "x", body: "x", baseVersion: null });
+  await flush();
+  await drain(clock); // the window ends; the drain fails offline, the row stays
+  assert.equal(store.outbox.size, 1);
+
+  offline = false;
+  api.puts.length = 0;
+  actor.send({ type: "_sync", pull: false }); // the tab goes hidden
+  await flush();
+  assert.equal(api.puts.length, 1, "the queued row drains at once, no idle wait");
+  assert.equal(api.pulls.length, 0, "a hidden-tab drain does not pull");
+  assert.equal(store.outbox.size, 0);
+});
+
+test("a bare _sync with an empty outbox is a no-op", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  api.puts.length = 0;
+  api.pulls.length = 0;
+
+  actor.send({ type: "_sync", pull: false });
+  assert.ok(actor.getSnapshot().matches({ ready: "idle" }), "stays idle, nothing to do");
+  await flush();
+  assert.equal(api.puts.length, 0);
+  assert.equal(api.pulls.length, 0);
+});
+
+test("a focus syncs and pulls at once, even with an empty outbox", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  const before = api.pulls.length; // the sign-in pull
+
+  actor.send({ type: "_sync", pull: true }); // the tab regains focus
+  assert.ok(actor.getSnapshot().matches({ ready: "syncing" }), "syncs at once");
+  await flush();
+  assert.equal(api.pulls.length, before + 1, "a focus pulls");
+});
+
+test("a save arriving mid-sync waits out the idle window before draining", async () => {
+  const store = fakeStore();
+  const api = gatedApi();
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  api.puts.length = 0;
+  api.pulls.length = 0;
+
+  api.hold();
+  actor.send({ type: "note.saved", id: ID, title: "one", body: "1", baseVersion: null });
+  await flush();
+  await drain(clock); // the window ends; the drain starts and hangs on the held put
+  assert.equal(api.puts.length, 1, "the drain is in flight");
+  assert.ok(actor.getSnapshot().matches({ ready: "syncing" }));
+
+  actor.send({ type: "note.saved", id: ID, title: "two", body: "2", baseVersion: null });
+  await flush();
+  api.release();
+  await flush();
+  assert.equal(api.puts.length, 1, "no second drain the instant the first finishes");
+  assert.ok(actor.getSnapshot().matches({ ready: "debouncing" }), "the mid-sync edit waits out the window");
+
+  await drain(clock);
+  assert.equal(api.puts.length, 2, "it drains after the window");
+  assert.equal(api.puts[1].body, "2", "the mid-sync text");
+  assert.equal(api.pulls.length, 0, "no save-triggered drain pulled");
+});
+
+test("a focus arriving mid-sync resyncs at once, carrying the pull", async () => {
+  const store = fakeStore();
+  const api = gatedApi();
+  const { actor } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  api.puts.length = 0;
+  api.pulls.length = 0;
+
+  api.hold();
+  actor.send({ type: "note.saved", id: ID, title: "x", body: "x", baseVersion: null });
+  await flush();
+  actor.send({ type: "_sync", pull: true }); // a focus starts the sync, its put held
+  await flush();
+  assert.ok(actor.getSnapshot().matches({ ready: "syncing" }));
+  assert.equal(api.pulls.length, 0, "the pull waits behind the held put");
+
+  actor.send({ type: "_sync", pull: true }); // a second focus, mid-sync
+  await flush();
+  api.release();
+  await flush();
+  // The first sync pulled once; the mid-sync focus resynced at once (no idle wait)
+  // and pulled again, its outbox already drained.
+  assert.equal(api.pulls.length, 2, "the mid-sync focus synced again immediately");
+});
+
+// --- Deletion: tombstones (5) ----------------------------------------------------
+
+test("anonymous: a discard tombstones the note, announces it gone, and hides it", async () => {
+  const store = fakeStore([{ id: ID, title: "A", body: "a", version: 2, updatedAt: 5 }]);
+  const api = fakeApi();
+  const { actor, changed, deleted } = start(store, { api });
+  await ready(actor);
+
+  actor.send({ type: "note.discarded", id: ID });
+  await flush();
+  assert.equal(store.notes.get(ID).deleted, true, "the record stays as a tombstone");
+  assert.equal(store.notes.get(ID).version, 3, "a delete mints the next version");
+  assert.deepEqual(deleted, [{ type: "note.deleted", id: ID }]);
+  assert.equal(changed.length, 0, "a tombstone never rides note.changed");
+  assert.equal(api.puts.length, 0, "anonymous never writes to the server");
+  assert.deepEqual(await askQuery(actor, "list"), { notes: [] }, "the list excludes it");
+  assert.deepEqual(await askQuery(actor, "read", { id: ID }), { error: "not-found" });
+});
+
+test("a discard of an unknown or already-deleted note does nothing", async () => {
+  const store = fakeStore([{ id: ID, title: "A", body: "a", version: 1, updatedAt: 5, deleted: true }]);
+  const { actor, deleted } = start(store);
+  await ready(actor);
+  actor.send({ type: "note.discarded", id: ID2 }); // unknown
+  actor.send({ type: "note.discarded", id: ID }); // already a tombstone
+  await flush();
+  assert.equal(deleted.length, 0);
+});
+
+test("signed in: a discard queues a delete, the api sends it, the ack clears it, no change", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor, changed, deleted, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  // A saved, acknowledged note to delete.
+  actor.send({ type: "note.saved", id: ID, title: "A", body: "a", baseVersion: null });
+  await flush();
+  await drain(clock);
+  changed.length = 0;
+  api.puts.length = 0;
+
+  actor.send({ type: "note.discarded", id: ID });
+  await flush();
+  assert.equal(store.outbox.get(ID).deleted, true, "the outbox row is a delete");
+  assert.deepEqual(deleted, [{ type: "note.deleted", id: ID }]);
+  assert.equal(changed.length, 0, "the tombstone does not ride note.changed");
+
+  await drain(clock);
+  assert.equal(api.puts.length, 1);
+  assert.equal(api.puts[0].deleted, true, "the delete travels to the server");
+  assert.equal(store.outbox.size, 0, "the ack clears the outbox row");
+  assert.equal(store.notes.get(ID).deleted, true, "and the record is still a tombstone");
+  assert.equal(changed.length, 0, "the ack of a delete emits no note.changed");
+});
+
+test("a save after a discard is dropped: a delete always wins", async () => {
+  const store = fakeStore([{ id: ID, title: "A", body: "a", version: 2, updatedAt: 5, deleted: true }]);
+  const api = fakeApi();
+  const { actor, changed } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  api.puts.length = 0;
+
+  actor.send({ type: "note.saved", id: ID, title: "revive", body: "me", baseVersion: 2 });
+  await flush();
+  assert.equal(changed.length, 0, "nothing announced");
+  assert.equal(store.outbox.size, 0, "nothing queued");
+});
+
+test("a pulled tombstone announces the deletion of a note this device was showing", async () => {
+  const store = fakeStore([{ id: ID, title: "A", body: "a", version: 1, updatedAt: 5 }]);
+  const api = fakeApi({ pull: () => ({ notes: [{ id: ID, title: "A", body: "a", version: 2, updatedAt: 700, deleted: true }], cursor: 9 }) });
+  const { actor, changed, deleted } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  assert.deepEqual(deleted, [{ type: "note.deleted", id: ID }]);
+  assert.equal(changed.length, 0, "a pulled tombstone is not a change");
+  assert.equal(store.notes.get(ID).deleted, true);
+});
+
+test("a pulled tombstone for an unknown note is stored silently", async () => {
+  const store = fakeStore();
+  const api = fakeApi({ pull: () => ({ notes: [{ id: ID, title: "A", body: "a", version: 2, updatedAt: 700, deleted: true }], cursor: 9 }) });
+  const { actor, changed, deleted } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  assert.equal(deleted.length, 0, "no note was on screen to announce gone");
+  assert.equal(changed.length, 0);
+  assert.equal(store.notes.get(ID).deleted, true);
+});
+
+test("a live pull never resurrects a local tombstone", async () => {
+  const store = fakeStore([{ id: ID, title: "A", body: "a", version: 3, updatedAt: 5, deleted: true }]);
+  const api = fakeApi({ pull: () => ({ notes: [{ id: ID, title: "A", body: "a", version: 2, updatedAt: 700, deleted: false }], cursor: 9 }) });
+  const { actor, changed } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  assert.equal(store.notes.get(ID).deleted, true, "the tombstone stands");
+  assert.equal(changed.length, 0);
+});
+
+test("sign-in enqueues an anonymous tombstone so the deletion becomes the account's", async () => {
+  const store = fakeStore([{ id: ID, title: "A", body: "a", version: 2, updatedAt: 5, deleted: true }]);
+  const api = fakeApi();
+  const { actor } = start(store, { api, ask: askUser(null) });
+  await ready(actor);
+
+  actor.send({ type: "session.changed", userId: "u1" });
+  await flush();
+  assert.equal(api.puts.length, 1);
+  assert.equal(api.puts[0].deleted, true, "the tombstone uploads as a delete");
+});
+
+test("a 409 whose server copy is a tombstone adopts the delete and surfaces the lost edit", async () => {
+  const store = fakeStore();
+  let deletedOnServer = false;
+  const api = fakeApi({
+    put: (row) => {
+      if (!deletedOnServer) {
+        deletedOnServer = true; // the first write wins the create; the note is then deleted elsewhere
+        return { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900, deleted: false };
+      }
+      return { conflict: true, note: { id: row.id, title: "A", body: "a", version: 5, updatedAt: 800, deleted: true } };
+    },
+  });
+  const { actor, changed, conflicted, deleted, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  // First save creates it (acked live).
+  actor.send({ type: "note.saved", id: ID, title: "A", body: "a", baseVersion: null });
+  await flush();
+  await drain(clock);
+  changed.length = 0;
+  deleted.length = 0;
+
+  // A later edit collides with a delete made on another device. The edit shows
+  // optimistically (one pending note.changed) before the sync reveals the conflict.
+  actor.send({ type: "note.saved", id: ID, title: "mine", body: "edit", baseVersion: 1 });
+  await flush();
+  changed.length = 0; // from here, only what the conflict resolution emits
+  await drain(clock);
+  assert.equal(conflicted.length, 1, "the lost edit is surfaced");
+  assert.equal(conflicted[0].theirs.deleted, undefined, "the deleted flag never rides note.conflicted");
+  assert.deepEqual(deleted, [{ type: "note.deleted", id: ID }], "and the note is announced gone");
+  assert.equal(changed.length, 0, "a won delete resolves as gone, not changed");
+  assert.equal(store.notes.get(ID).deleted, true);
+});
+
+test("a discard queued while the store is loading is applied once ready", async () => {
+  let resolveAll;
+  const store = fakeStore();
+  store.all = () => new Promise((r) => (resolveAll = () => r([{ id: ID, title: "A", body: "a", version: 1, updatedAt: 5 }])));
+  const { actor, deleted } = start(store);
+  actor.send({ type: "note.discarded", id: ID });
+  resolveAll();
+  await ready(actor);
+  assert.deepEqual(deleted, [{ type: "note.deleted", id: ID }]);
+  assert.equal(store.notes.get(ID).deleted, true);
 });

@@ -132,7 +132,7 @@ for (const engine of ENGINES) {
       assert.equal((await sheetRows(page)).find((r) => r.path === "/design/notes").shown, false);
 
       // Hide the viewport switch: stored, and the switch leaves the page.
-      await clickSwitch(page, "Desk|Phone");
+      await clickSwitch(page, "Viewport switch");
       await until(async () => (await stored(page)).viewportSwitchHidden === true);
       await until(async () => switchGone(page));
 

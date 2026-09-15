@@ -60,6 +60,7 @@ body {
     max-height: calc(100dvh - var(--space-xl));
     overflow-x: hidden;
     overflow-y: auto;
+    padding-top: calc(32px + var(--space-md));
     border-radius: 44px;
     box-shadow:
       0 0 0 2px #000000,
@@ -67,17 +68,24 @@ body {
       0 0 0 16px #17171b,
       0 24px 70px -16px rgba(0, 0, 0, 0.55);
   }
-  /* Sticky so the content scrolls beneath the island, as on iOS; the margins
-     reserve a status strip so the first content clears it. */
+  /* Fixed to the frame, not to the scrolling body: a direct flex child of the
+     scroller cannot be sticky (zero travel), so the island rode off on scroll.
+     The frame is centred and height-capped, so its top is derivable; the island
+     sits a status strip below it, and the body padding-top clears the first
+     content, which then scrolls beneath, as on iOS. */
   html[data-viewport="phone"] body::before {
     content: "";
-    position: sticky;
-    top: var(--space-sm);
+    position: fixed;
+    top: calc(
+      (100dvh - min(var(--viewport-phone-tall), 100dvh - var(--space-xl))) / 2 +
+        var(--space-sm)
+    );
+    left: 50%;
+    transform: translateX(-50%);
     z-index: 1;
     display: block;
     width: 116px;
     height: 32px;
-    margin: var(--space-sm) auto var(--space-md);
     border-radius: var(--radius-full);
     background: #000000;
   }

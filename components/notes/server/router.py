@@ -23,6 +23,11 @@ def _connect(user_id: str) -> sqlite3.Connection:
     connection = sqlite3.connect(user_dir(user_id) / "notes.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    # schema.sql is replayed per connect, but CREATE IF NOT EXISTS never adds a column
+    # to an existing table, so a db from before tombstones is migrated here (5).
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(notes)")}
+    if "deleted" not in columns:
+        connection.executescript("ALTER TABLE notes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
     return connection
 
 
@@ -38,7 +43,14 @@ def _record(row: sqlite3.Row) -> dict:
         "body": row["body"],
         "version": row["version"],
         "updatedAt": row["updated_at"],
+        "deleted": bool(row["deleted"]),
     }
+
+
+def _reread(connection: sqlite3.Connection, note_id: str) -> dict:
+    # The written row read back, so a reply always carries the full record (deleted
+    # included) from one place rather than reassembling it at each write site.
+    return _record(connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone())
 
 
 @router.put("/{note_id}")
@@ -47,18 +59,36 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
     title = payload.get("title", "")
     body = payload.get("body", "")
     base = payload.get("baseVersion")
+    deleted = bool(payload.get("deleted", False))
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
         if row is None:
             # A new id is an idempotent upsert of the browser's own ULID (5), not a
-            # conflict: it continues from the base the client held, or 1.
+            # conflict: it continues from the base the client held, or 1. A tombstone
+            # can be born here too, when an anonymous note deleted before its first
+            # upload arrives already gone.
             version = (base or 0) + 1
             connection.execute(
-                "INSERT INTO notes (id, title, body, version, updated_at, seq) VALUES (?, ?, ?, ?, ?, ?)",
-                (note_id, title, body, version, now, _next_seq(connection)),
+                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (note_id, title, body, version, now, _next_seq(connection), int(deleted)),
             )
-            return {"id": note_id, "title": title, "body": body, "version": version, "updatedAt": now}
+            return _reread(connection, note_id)
+        # A delete always wins (5): it states no base and is not refused for a stale
+        # one. A second delete is idempotent, returning the tombstone unchanged.
+        if deleted:
+            if row["deleted"]:
+                return _record(row)
+            version = row["version"] + 1
+            connection.execute(
+                "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, deleted = 1 WHERE id = ?",
+                (title, body, version, now, _next_seq(connection), note_id),
+            )
+            return _reread(connection, note_id)
+        # An edit onto a tombstone loses to the delete: the deletion is the newer fact,
+        # so it comes back as a conflict carrying the tombstone (5), never a revival.
+        if row["deleted"]:
+            return JSONResponse({"note": _record(row)}, status_code=409)
         # A write must state the version it was based on (5): a mismatch is a
         # conflict carrying the server's copy, so a view can show both.
         if base != row["version"]:
@@ -72,7 +102,7 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
             "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ? WHERE id = ?",
             (title, body, version, now, _next_seq(connection), note_id),
         )
-        return {"id": note_id, "title": title, "body": body, "version": version, "updatedAt": now}
+        return _reread(connection, note_id)
 
 
 @router.get("")

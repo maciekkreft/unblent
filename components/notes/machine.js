@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, enqueueActions } from "xstate";
+import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 
 // The fact component that owns the notes (3.1), replicated (5): local-first, the
 // single place a note lives in the browser, syncing to the per-user server when
@@ -10,10 +10,30 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // a side effect — the store, the clock, the network, the ask — arrives through
 // input, so this stays a pure definition importable in Node.
 
-const listRow = ({ id, title, updatedAt }) => ({ id, title, updatedAt });
+// The note is one text whose title is its first non-empty line and whose subtitle is
+// the second (note-editor/machine.js titleOf, the Notes.app convention). The subtitle
+// travels on every note.changed and in the list reply so a row shows two lines without
+// ever holding the body (4.3, third rule); it is derived, never stored, and capped so a
+// long paragraph on line two does not ride in every event.
+const subtitleOf = (body) => {
+  const [, second = ""] = body.split("\n").filter((l) => l.trim() !== "");
+  return second.trim().slice(0, 120);
+};
+
+const listRow = ({ id, title, body, updatedAt }) => ({ id, title, subtitle: subtitleOf(body), updatedAt });
+
+// The one place a note.changed is built, so its subtitle is derived once (5 emit sites).
+const changed = (record, pending) => ({ type: "note.changed", ...record, subtitle: subtitleOf(record.body), pending });
+
+// A tombstone is a real record kept for the pull (5), but it is not a note anyone
+// reads or lists, and its `deleted` flag must never ride note.changed or a read reply
+// (both additionalProperties:false). So the queries exclude it and note.changed is
+// never built from it (applyDiscard and applySync below emit note.deleted instead).
+const visible = (record) => record && !record.deleted;
 
 function replyList(context, reply) {
   const notes = [...context.notes.values()]
+    .filter(visible)
     .map(listRow)
     .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
   reply({ notes });
@@ -22,7 +42,7 @@ function replyList(context, reply) {
 function replyRead(context, id, reply) {
   const stored = context.notes.get(id);
   // pending reports the record has a local change the server has not acknowledged (5).
-  reply(stored ? { note: { ...stored, pending: context.outbox.has(id) } } : { error: "not-found" });
+  reply(visible(stored) ? { note: { ...stored, pending: context.outbox.has(id) } } : { error: "not-found" });
 }
 
 // The user's gesture (4.3, fifth rule). Anonymous: local minting, announced with
@@ -32,6 +52,10 @@ function replyRead(context, id, reply) {
 function applySave(context, event, enqueue) {
   const { id, title, body, baseVersion } = event;
   const current = context.notes.get(id);
+
+  // A delete always wins (5): once a note is a tombstone, a late save for it is
+  // dropped rather than reviving it. The server refuses the same edit with a 409.
+  if (current && current.deleted) return;
 
   if (context.userId == null) {
     if (current && baseVersion !== current.version) {
@@ -48,7 +72,7 @@ function applySave(context, event, enqueue) {
     const record = { id, title, body, version, updatedAt: context.now() };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
-    enqueue.emit({ type: "note.changed", ...record, pending: false });
+    enqueue.emit(changed(record, false));
     return;
   }
 
@@ -62,8 +86,44 @@ function applySave(context, event, enqueue) {
   const row = { id, title, body, baseVersion: existing ? existing.baseVersion : current ? current.version : null };
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
-  enqueue.emit({ type: "note.changed", ...record, pending: true });
-  enqueue.raise({ type: "_sync" });
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
+}
+
+// The user let a note's undo window run out (note-list emits note.discarded, 4.3
+// fifth rule): mark it a tombstone and announce it gone. A delete is a write like any
+// other (5) — anonymous it mints the next version locally; signed in it is cached,
+// queued in the outbox as a delete (baseVersion pinned like an edit), and synced. It
+// keeps the note's title and body, so the tombstone still holds what was deleted. It
+// never rides note.changed; the news is note.deleted, which every view already knows.
+function applyDiscard(context, event, enqueue) {
+  const { id } = event;
+  const current = context.notes.get(id);
+  if (!current || current.deleted) return;
+
+  if (context.userId == null) {
+    const record = { ...current, deleted: true, version: current.version + 1, updatedAt: context.now() };
+    context.notes.set(id, record);
+    enqueue(() => context.store.put(record).catch(() => {}));
+    enqueue.emit({ type: "note.deleted", id });
+    return;
+  }
+
+  const record = { ...current, deleted: true, updatedAt: context.now() };
+  context.notes.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  const existing = context.outbox.get(id);
+  const row = {
+    id,
+    title: current.title,
+    body: current.body,
+    baseVersion: existing ? existing.baseVersion : current.version,
+    deleted: true,
+  };
+  context.outbox.set(id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit({ type: "note.deleted", id });
+  enqueue.raise({ type: "_drain" });
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
@@ -71,18 +131,22 @@ function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.reply);
   else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
   else if (message.type === "note.saved") applySave(context, message, enqueue);
+  else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 
-// The window the network is coalesced over (4.3, third rule): a run of saves, a
-// tab-focus and a sign-in all ask to sync, and one drain at the window's end
-// carries the coalesced outbox instead of one PUT per throttled keystroke.
-const SYNC_DEBOUNCE_MS = 500;
+// The pause in typing the network waits for (4.3, third rule; 5): a save restarts
+// this window, so a run of saves drains once as one coalesced PUT after the typing
+// stops, never one PUT per throttled keystroke. A tab-focus, a sign-in or a tab
+// going hidden does not wait for it; they sync at once.
+const SYNC_IDLE_MS = 2000;
 
 export const machine = setup({
   guards: {
     syncable: ({ context }) => Boolean(context.userId) && context.api != null,
+    // A pull is always worth the round trip; a bare drain only when the outbox holds something.
+    needed: ({ context, event }) => Boolean(event.pull) || context.outbox.size > 0,
   },
   actors: {
     load: fromPromise(async ({ input }) => {
@@ -103,7 +167,7 @@ export const machine = setup({
     // machine does, 4.3). A network error stops it with what it had; 401 reports the
     // session is gone. The store deletes happen here so a drained row is durably gone.
     sync: fromPromise(async ({ input }) => {
-      const { api, store, rows, cursor } = input;
+      const { api, store, rows, cursor, pull } = input;
       const acks = [];
       const conflicts = [];
       for (const row of [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
@@ -122,6 +186,10 @@ export const machine = setup({
           await store.outboxDelete(row.id).catch(() => {});
         }
       }
+      // A save-triggered drain must not pull: nothing this device needs changed on
+      // the server, and a pull per pause in typing would be a poll (5). A pull runs
+      // only when a load, a tab-focus or a sign-in asked for it.
+      if (!pull) return { acks, conflicts };
       let pulled;
       try {
         pulled = await api.pull(cursor);
@@ -151,6 +219,10 @@ export const machine = setup({
     userId: null,
     cursor: 0,
     queued: [],
+    // The "owed" flags for a trigger that arrives mid-sync: resync means drain
+    // again, pull whether that next sync must also pull.
+    resync: false,
+    pull: false,
   }),
   initial: "loading",
   states: {
@@ -182,6 +254,7 @@ export const machine = setup({
         "list?": { actions: queue },
         "read?": { actions: queue },
         "note.saved": { actions: queue },
+        "note.discarded": { actions: queue },
       },
     },
     // The store is loaded; confirm who is signed in before flushing, so an early
@@ -197,7 +270,7 @@ export const machine = setup({
             enqueue.assign({ userId });
             for (const message of context.queued) flush(context, message, enqueue);
             enqueue.assign({ queued: [] });
-            if (userId) enqueue.raise({ type: "_sync" });
+            if (userId) enqueue.raise({ type: "_sync", pull: true });
           }),
         },
         onError: {
@@ -205,7 +278,7 @@ export const machine = setup({
           actions: enqueueActions(({ context, enqueue }) => {
             for (const message of context.queued) flush(context, message, enqueue);
             enqueue.assign({ queued: [] });
-            if (context.userId) enqueue.raise({ type: "_sync" });
+            if (context.userId) enqueue.raise({ type: "_sync", pull: true });
           }),
         },
       },
@@ -213,6 +286,7 @@ export const machine = setup({
         "list?": { actions: queue },
         "read?": { actions: queue },
         "note.saved": { actions: queue },
+        "note.discarded": { actions: queue },
       },
     },
     ready: {
@@ -221,6 +295,7 @@ export const machine = setup({
         "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
         "note.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
+        "note.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         // The fact's own news about who is signed in (4.3, fourth rule). A different
         // user resets the pull cursor (the cache is kept, to be pushed up); signing
         // in enqueues the cache so anonymous work becomes the account's, then syncs.
@@ -235,12 +310,15 @@ export const machine = setup({
               enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
               for (const note of context.notes.values()) {
                 if (!context.outbox.has(note.id)) {
+                  // A tombstone uploads as a delete, so an anonymous deletion becomes
+                  // the account's too (5).
                   const row = { id: note.id, title: note.title, body: note.body, baseVersion: note.version };
+                  if (note.deleted) row.deleted = true;
                   context.outbox.set(note.id, row);
                   enqueue(() => context.store.outboxPut(row).catch(() => {}));
                 }
               }
-              enqueue.raise({ type: "_sync" });
+              enqueue.raise({ type: "_sync", pull: true });
             }
           }),
         },
@@ -248,50 +326,58 @@ export const machine = setup({
       states: {
         idle: {
           on: {
-            _sync: { guard: "syncable", target: "debouncing" },
+            // A save opens the idle window; a focus, sign-in or hidden tab syncs at once.
+            _drain: { guard: "syncable", target: "debouncing" },
+            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
           },
         },
-        // The network debounce (4.3): a save, a tab-focus or a sign-in opens the
-        // window; further _sync inside it are targetless so the window is bounded,
-        // not restarted (the editor's throttle construction), and the one drain at
-        // its end carries whatever the outbox coalesced. Signed out mid-window, the
-        // fallback returns to idle rather than sync with no user.
+        // The idle window (4.3, 5): a _drain reenters this state, so its exit cancels
+        // the after timer and its entry re-arms it, which restarts the window; the
+        // drain waits until typing has paused for the whole window. A focus, sign-in
+        // or hidden tab (_sync) does not wait. Signed out mid-window, the fallback
+        // returns to idle rather than sync with no user.
         debouncing: {
           on: {
-            _sync: {},
+            _drain: { target: "debouncing", reenter: true },
+            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
           },
           after: {
-            [SYNC_DEBOUNCE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
+            [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
           },
         },
         syncing: {
-          entry: assign({ resync: false }),
+          entry: assign({ resync: false, pull: false }),
           invoke: {
             src: "sync",
-            input: ({ context }) => ({
+            // pull comes from the triggering event, not context: the entry assign
+            // above runs before the input resolves and would otherwise wipe it.
+            input: ({ context, event }) => ({
               api: context.api,
               store: context.store,
               rows: [...context.outbox.values()],
               cursor: context.cursor,
+              pull: Boolean(event.pull),
             }),
             onDone: {
               target: "idle",
               actions: [
                 enqueueActions(({ context, event, enqueue }) => applySync(context, event.output, enqueue)),
-                // A gesture that arrived mid-sync left a row, or a _sync was asked
-                // for again: drain once more, unless the session went away or the
-                // network failed (retry then waits for the next trigger).
+                // A trigger that arrived mid-sync is owed a follow-up, unless the
+                // session went away or the network failed (retry waits for the next
+                // trigger). A focus mid-sync (resync) syncs at once carrying its pull;
+                // a save mid-sync (a leftover row) waits out the idle window.
                 enqueueActions(({ context, event, enqueue }) => {
                   const { authFailed, networkError } = event.output;
                   if (authFailed || networkError) return;
-                  if (context.resync || context.outbox.size > 0) enqueue.raise({ type: "_sync" });
+                  if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
+                  else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
                 }),
               ],
             },
             onError: { target: "idle" },
           },
           on: {
-            _sync: { actions: assign({ resync: true }) },
+            _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
           },
         },
       },
@@ -313,10 +399,13 @@ function applySync(context, output, enqueue) {
 
   for (const ack of acks) {
     const row = context.outbox.get(ack.id);
-    // The row is fully drained when it still holds the text the server acknowledged;
-    // a newer edit during the sync leaves a newer row, so it stays pending and the
-    // outbox base advances to the version just assigned.
-    const drained = row && row.title === ack.title && row.body === ack.body;
+    const isDelete = Boolean((row && row.deleted) || ack.deleted);
+    // The row is fully drained when the server holds what it acknowledged; a newer
+    // edit during the sync leaves a newer row, so it stays pending and the outbox base
+    // advances. A delete has no newer edit (a tombstone refuses further saves), so a
+    // matching ack always drains it — its text differs from the server's, so it is the
+    // deleted flag, not the body, that decides.
+    const drained = row && (isDelete ? Boolean(ack.deleted) : row.title === ack.title && row.body === ack.body);
     if (drained) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
@@ -334,34 +423,60 @@ function applySync(context, output, enqueue) {
       version: ack.version,
       updatedAt: ack.updatedAt,
     };
+    // A tombstone stays a tombstone and never rides note.changed; the list already
+    // dropped it on the note.deleted that the discard emitted.
+    if (isDelete) record.deleted = true;
     context.notes.set(ack.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
-    enqueue.emit({ type: "note.changed", ...record, pending: !drained });
+    if (!isDelete) enqueue.emit(changed(record, !drained));
   }
 
   for (const conflict of conflicts) {
     context.outbox.delete(conflict.id);
     enqueue(() => context.store.outboxDelete(conflict.id).catch(() => {}));
     const theirs = conflict.theirs;
+    const wasVisible = visible(context.notes.get(conflict.id));
     const record = { id: conflict.id, title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt };
+    if (theirs.deleted) record.deleted = true;
     context.notes.set(conflict.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
+    // The edit was rejected either way, so a view is owed the conflict (the lost edit
+    // is worth a future notice, even for a delete). theirs is built field by field, so
+    // a deleted flag never rides note.conflicted.
     enqueue.emit({
       type: "note.conflicted",
       id: conflict.id,
       mine: { title: conflict.mine.title, body: conflict.mine.body, baseVersion: conflict.mine.baseVersion },
       theirs: { title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt },
     });
-    enqueue.emit({ type: "note.changed", ...record, pending: false });
+    // A delete won, so the note is gone (note.deleted), not changed; otherwise the
+    // server's copy is the new note.
+    if (theirs.deleted) {
+      if (wasVisible) enqueue.emit({ type: "note.deleted", id: conflict.id });
+    } else {
+      enqueue.emit(changed(record, false));
+    }
   }
 
   for (const note of pulled) {
     const current = context.notes.get(note.id);
     if (current && note.version <= current.version) continue;
+    // A delete always wins (5): a live copy from the server never resurrects a local
+    // tombstone, even at a higher version (the server refuses such a revival anyway).
+    if (current && current.deleted && !note.deleted) continue;
     const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt };
+    if (note.deleted) {
+      record.deleted = true;
+      context.notes.set(note.id, record);
+      enqueue(() => context.store.put(record).catch(() => {}));
+      // Tell views only when a note they were showing has gone; a tombstone pulled for
+      // a note this device never had is stored silently.
+      if (visible(current)) enqueue.emit({ type: "note.deleted", id: note.id });
+      continue;
+    }
     context.notes.set(note.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
-    enqueue.emit({ type: "note.changed", ...record, pending: context.outbox.has(note.id) });
+    enqueue.emit(changed(record, context.outbox.has(note.id)));
   }
 
   if (newCursor !== undefined) {

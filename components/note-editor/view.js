@@ -137,10 +137,7 @@ class NoteEditor extends LitElement {
     if (snapshot.matches("blank")) return "New note";
     if (snapshot.matches("failed")) return "notes unavailable";
     if (snapshot.matches({ editing: "dirty" })) return "Unsaved";
-    if (snapshot.matches({ editing: "clean" })) {
-      const { baseVersion } = snapshot.context;
-      return baseVersion != null ? `Saved · v${baseVersion}` : "Saved";
-    }
+    if (snapshot.matches({ editing: "clean" })) return "Saved";
     return "";
   }
 

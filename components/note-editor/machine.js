@@ -104,6 +104,14 @@ export const machine = setup({
       actions: assign({ id: ({ event }) => event.id, body: "", baseVersion: null, sent: null }),
     },
     focus: { actions: ({ context }) => context.focus() },
+    // The fact's news that the open note is gone (4.3, fourth rule): fall back to the
+    // empty page, where a keystroke starts a fresh note. A deletion of another note is
+    // left to the bus to record as ignored.
+    "note.deleted": {
+      guard: ({ context, event }) => event.id === context.id,
+      target: ".empty",
+      actions: assign({ id: null, body: "", baseVersion: null, sent: null }),
+    },
     // The fact's news (4.3, fourth rule). Guarded so a change for another id is left
     // to the bus to record as ignored.
     "note.changed": [

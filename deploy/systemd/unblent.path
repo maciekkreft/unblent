@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch /opt/unblent/.env and restart the app so it re-reads EnvironmentFile
+
+[Path]
+PathModified=/opt/unblent/.env
+Unit=unblent-env-reload.service
+
+[Install]
+WantedBy=multi-user.target

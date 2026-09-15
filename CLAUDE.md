@@ -10,8 +10,8 @@ The architecture is the spec. If a request conflicts with it, name the section a
   then wait, the same as for a conflict.
 - Smallest scope first: one component or one piece of infrastructure per task.
   Decisions and contracts are agreed before any code (section 9, step 2).
-- `python3 checks/check.py --static` after every edit; the full run before
-  reporting done.
+- Run `python3 checks/check.py --help` for what to run when; the bare full run
+  (`python3 checks/check.py`) must pass before reporting done.
 - Ask before changing `tokens/tokens.css`, `tokens/icons.js`, an event, the document facts list (7.5), or `architecture.md`. Propose, then wait.
 - Comments say why, or cite an architecture section. Never what the code does, never history.
 - UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step).

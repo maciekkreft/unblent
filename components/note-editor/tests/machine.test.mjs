@@ -272,3 +272,26 @@ test("typing in blank saves under the loaded id with a null base", async () => {
   clock.increment(THROTTLE_MS);
   assert.deepEqual(saved, [{ type: "note.saved", id: ID2, title: "made", body: "made\nhere", baseVersion: null }]);
 });
+
+test("the open note being deleted falls back to the empty page", async () => {
+  const { actor } = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  actor.send({ type: "load", id: ID });
+  await tick();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+
+  actor.send({ type: "note.deleted", id: ID });
+  const s = actor.getSnapshot();
+  assert.equal(s.value, "empty", "the deleted note is no longer shown");
+  assert.equal(s.context.id, null);
+  assert.equal(s.context.body, "");
+});
+
+test("a deletion of another note leaves the open one alone", async () => {
+  const { actor } = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  actor.send({ type: "load", id: ID });
+  await tick();
+  actor.send({ type: "note.deleted", id: ID2 });
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" }, "still showing the open note");
+  assert.equal(s.context.id, ID);
+});

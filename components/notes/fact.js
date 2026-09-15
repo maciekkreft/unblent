@@ -14,13 +14,21 @@ import read from "./queries/read.json" with { type: "json" };
 // retries on the next trigger (5).
 const store = openNotes();
 
+// keepalive lets a PUT finish after the page is gone, which is what makes the
+// hidden-tab drain reach the server (5); the browser caps keepalive bodies at 64
+// KiB in total, so it is asked for only while hidden and only for a small note,
+// leaving room for other in-flight requests.
+const KEEPALIVE_MAX_BYTES = 32 * 1024;
+
 const api = {
   async put(row) {
+    const body = JSON.stringify({ title: row.title, body: row.body, baseVersion: row.baseVersion, deleted: Boolean(row.deleted) });
     const res = await fetch(`/api/notes/${row.id}`, {
       method: "PUT",
       credentials: "same-origin",
       headers: { "content-type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ title: row.title, body: row.body, baseVersion: row.baseVersion }),
+      body,
+      keepalive: document.visibilityState === "hidden" && new TextEncoder().encode(body).length <= KEEPALIVE_MAX_BYTES,
     });
     if (res.status === 401) return { error: "unauthorized" };
     if (res.status === 409) return { conflict: true, note: (await res.json()).note };
@@ -44,10 +52,11 @@ const actor = mount(machine, {
   queries: { list, read },
 });
 
-// On mount the machine already reconciles; on focus, reconcile again (5): this is
-// how an edit made on another device arrives. Reading visibilityState is a read of
-// the document, allowed to any component; the machine only receives the message.
-document.addEventListener(
-  "visibilitychange",
-  () => document.visibilityState === "visible" && actor.send({ type: "_sync" }),
+// On mount the machine already reconciles; a tab regaining focus reconciles again,
+// drain then pull, which is how an edit made on another device arrives; a tab going
+// hidden drains without a pull, so another device finds the latest copy (5). Reading
+// visibilityState is a read of the document, allowed to any component; the machine
+// only receives the message.
+document.addEventListener("visibilitychange", () =>
+  actor.send({ type: "_sync", pull: document.visibilityState === "visible" }),
 );

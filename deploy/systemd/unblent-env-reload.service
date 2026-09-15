@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart the app when /opt/unblent/.env changes (triggered by unblent.path)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl restart unblent.service

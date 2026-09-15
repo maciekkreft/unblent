@@ -23,6 +23,28 @@ const fromEvent = (event) => {
   return record;
 };
 
+// A burst reads as one line. A typing run interleaves note.saved and note.changed,
+// so folding only adjacent duplicates would fold nothing; instead records with the
+// same signature no further apart than the gap are one run, listed where the first
+// fell. Pure, so it is tested in Node and the view stays decision-free (3.2).
+export const RUN_GAP_MS = 1000;
+const signature = (r) => [r.tab, r.kind, r.name, r.from, r.to.join(","), r.outcome].join("|");
+export function runs(records) {
+  const out = [];
+  const open = new Map();
+  for (const r of records) {
+    const k = signature(r);
+    const run = open.get(k);
+    if (run && r.at - run.at(-1).at <= RUN_GAP_MS) run.push(r);
+    else {
+      const fresh = [r];
+      open.set(k, fresh);
+      out.push(fresh);
+    }
+  }
+  return out;
+}
+
 export const machine = setup({
   actors: {
     list: fromPromise(({ input }) => input.ask("trace", "list", {})),

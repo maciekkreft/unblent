@@ -1,13 +1,19 @@
-import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
+import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 
 // The view component that lists the notes and lets one be picked (6.4): it owns only
 // UI state — the rows it is showing, which one the editor has open, and a draft id
-// the + minted that has no row yet — and points at `notes`, which owns the fact. It
-// asks notes: list for the starting picture and follows note.changed / note.deleted
-// after (4.3, fourth rule); it never decides which row is open, it learns that from
-// note.opened, so the highlighted row is always the note the editor is showing. The
-// ask and mint arrive through input, so this stays a pure definition importable in
-// Node.
+// with no row yet — and points at `notes`, which owns the fact. It asks notes: list
+// for the starting picture and follows note.changed / note.deleted after (4.3,
+// fourth rule); it never decides which row is open, it learns that from note.opened,
+// so the highlighted row is always the note the editor is showing. The ask and mint
+// arrive through input, so this stays a pure definition importable in Node.
+//
+// The next note the user would write is always the first row (the blank page on top
+// of the pad, as in Notes.app), so `draft` is always a minted id with no row yet.
+// Picking it opens a blank editor under that id; when the user types, note.changed
+// brings the real row and a fresh draft is minted above it. The list never creates a
+// note — a fact learns of creation from a gesture (4.3, fifth rule) — it only holds
+// the name a note will take.
 
 // Newest first: updatedAt descending, id as the tiebreak, the same order notes uses
 // in its list reply (notes.replyList), so a row keeps its place across a re-sort.
@@ -17,8 +23,16 @@ const sorted = (notes) => [...notes].sort(order);
 // Fold one changed note into the rows: replace the row with its id if present, else
 // add it, then re-sort. Only the fields a row shows are kept (a note.changed carries
 // the whole note, 4.3, third rule).
-const upsert = (notes, { id, title, updatedAt }) =>
-  sorted([...notes.filter((n) => n.id !== id), { id, title, updatedAt }]);
+const upsert = (notes, { id, title, subtitle, updatedAt }) =>
+  sorted([...notes.filter((n) => n.id !== id), { id, title, subtitle, updatedAt }]);
+
+// A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
+// context immutable; the view re-renders on every snapshot regardless).
+const without = (set, id) => {
+  const next = new Set(set);
+  next.delete(id);
+  return next;
+};
 
 export const machine = setup({
   actors: {
@@ -26,17 +40,25 @@ export const machine = setup({
   },
 }).createMachine({
   id: "note-list",
-  meta: { kind: "view", emits: ["note.selected"], attributes: [], asks: ["notes: list"] },
+  meta: { kind: "view", emits: ["note.selected", "note.discarded"], attributes: [], asks: ["notes: list"] },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
+    // How long a discarded row can be brought back (the --duration-undo token, read
+    // in the view and passed in so the machine stays importable in Node). The delete
+    // is not a fact until this window ends (delayed delete): stop it and nothing was
+    // emitted, so a fact is never "deleted" while a row still offers Undo.
+    undoMs: input.undoMs,
     notes: [],
     // The note the editor is showing, learned from note.opened, never set on a
     // gesture: the list does not decide what is open.
     open: null,
-    // An id the + minted that has no row yet: shown as a placeholder row until
-    // note.changed brings the real row (or another note is opened).
-    draft: null,
+    // The ids counting down to a discard, each with its own cancelable timer (below).
+    // A row here shows struck through with an Undo where its trash was.
+    discarding: new Set(),
+    // The next note's id, always present: the first row, blank until the user types
+    // and note.changed brings its real row, whereupon a fresh one is minted.
+    draft: input.mint(),
   }),
   initial: "loading",
   states: {
@@ -62,42 +84,66 @@ export const machine = setup({
   on: {
     // The fact's news (4.3, fourth rule), followed in any state so a change that
     // races the starting query is not lost. A change for the draft's id means the
-    // real row has arrived, so the placeholder is dropped.
+    // draft became a real note, so a fresh next-note id is minted above it.
     "note.changed": {
       actions: assign({
         notes: ({ context, event }) => upsert(context.notes, event),
-        draft: ({ context, event }) => (context.draft === event.id ? null : context.draft),
+        draft: ({ context, event }) => (context.draft === event.id ? context.mint() : context.draft),
       }),
     },
-    // Owned by notes, emitted by nobody yet (delete is a later task); consumed so the
-    // list is right the day it is.
+    // The fact confirms a note is gone (this device's own discard on elapse, or
+    // another device's, 4.3 fourth rule): drop the row, unhighlight it if it was open,
+    // and clear any countdown still standing for it.
     "note.deleted": {
-      actions: assign({ notes: ({ context, event }) => context.notes.filter((n) => n.id !== event.id) }),
-    },
-    // The editor announced the note it now shows (6.4). Highlight that row; a
-    // different id opened means the + draft was abandoned, so drop it.
-    "note.opened": {
-      actions: assign({
-        open: ({ event }) => event.id,
-        draft: ({ context, event }) => (context.draft && context.draft !== event.id ? null : context.draft),
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        enqueue.assign({
+          notes: ({ context }) => context.notes.filter((n) => n.id !== event.id),
+          open: ({ context }) => (context.open === event.id ? null : context.open),
+          discarding: ({ context }) => without(context.discarding, event.id),
+        });
+        if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
       }),
+    },
+    // The trash on a row, or a swipe past its threshold (5): begin the undo window.
+    // Nothing is emitted yet; only its elapse makes the delete a fact.
+    _discard: {
+      guard: ({ context, event }) => context.notes.some((n) => n.id === event.id) && !context.discarding.has(event.id),
+      actions: enqueueActions(({ event, enqueue }) => {
+        enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
+        enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });
+      }),
+    },
+    // Undo, or a click anywhere on a counting-down row: cancel the window, emit nothing.
+    _undo: {
+      guard: ({ context, event }) => context.discarding.has(event.id),
+      actions: enqueueActions(({ event, enqueue }) => {
+        enqueue.cancel(`undo:${event.id}`);
+        enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
+      }),
+    },
+    // The window ran out (the timer above): now the delete is a fact (note.discarded),
+    // which notes turns into a tombstone and the note.deleted that removes the row.
+    _elapsed: {
+      guard: ({ context, event }) => context.discarding.has(event.id),
+      actions: enqueueActions(({ event, enqueue }) => {
+        enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
+        enqueue.emit({ type: "note.discarded", id: event.id });
+      }),
+    },
+    // The editor announced the note it now shows (6.4): highlight that row. The
+    // draft is untouched — the next-note row stands whatever else is open, and its
+    // id is only a name, so opening it again lands the editor in blank all the same.
+    "note.opened": {
+      actions: assign({ open: ({ event }) => event.id }),
     },
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
-    // that exists or the pending draft, never a stale id.
+    // that exists or the next-note draft, never a stale id. `open` is not set here;
+    // it follows the editor's note.opened, the same for the draft as any other row.
     _pick: {
       guard: ({ context, event }) =>
-        context.notes.some((n) => n.id === event.id) || context.draft === event.id,
+        !context.discarding.has(event.id) &&
+        (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
       actions: emit(({ event }) => ({ type: "note.selected", id: event.id })),
-    },
-    // The + : mint an id, hold it as the draft (the placeholder row), and select it,
-    // so an editor that follows opens a blank note under that id (6.4). `open` is not
-    // set here; it follows the editor's note.opened, the same as any other pick.
-    _new: {
-      actions: enqueueActions(({ context, enqueue }) => {
-        const id = context.mint();
-        enqueue.assign({ draft: id });
-        enqueue.emit({ type: "note.selected", id });
-      }),
     },
   },
 });

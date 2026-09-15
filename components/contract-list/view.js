@@ -135,17 +135,21 @@ class ContractList extends LitElement {
       width: 30%;
     }
     th.type {
-      width: 60%;
+      width: 56%;
     }
     th.req {
-      width: 10%;
+      width: 14%;
     }
     td.field {
       color: var(--color-ink);
     }
+    /* The req column holds only a centered check or the word "req"; keep it from
+       breaking mid-word the way overflow-wrap: anywhere would at phone width. */
     .req {
       text-align: center;
       color: var(--color-accent);
+      overflow-wrap: normal;
+      white-space: nowrap;
     }
     .nofields {
       margin: 0;
