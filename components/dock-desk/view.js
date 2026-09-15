@@ -91,6 +91,14 @@ class DockDesk extends LitElement {
       display: flex;
       flex-direction: column;
       height: 100%;
+      /* The containing block for a phone drawer and its scrim, both absolute. */
+      position: relative;
+    }
+    /* The scrim only exists on the phone, where a side dock overlays the stage as
+       a drawer (@container below). On the desk a side dock sits beside the stage,
+       so the scrim stays out of the way. */
+    .scrim {
+      display: none;
     }
     .row {
       flex: 1;
@@ -258,6 +266,7 @@ class DockDesk extends LitElement {
     }
     .folded .panel {
       visibility: hidden;
+      opacity: 0;
     }
     /* The rail is the folded strip: it lies on the receding edge at the folded
        size, not across the whole dock. Spanning the dock (inset: 0) only looks
@@ -323,19 +332,20 @@ class DockDesk extends LitElement {
         width var(--duration-slide) var(--ease),
         height var(--duration-slide) var(--ease);
     }
-    /* The rail fades in as its group recedes rather than popping in on the last
-       frame, so a left dock's vertical spine dissolves up over the collapsing strip
-       instead of flashing into place. The panel keeps its plain swap (opaque while
-       it slides, hidden after): fading it too would leave its body counting as
-       visible mid-transition. Visibility flips only at the still ends, for
-       hit-testing and assistive tech: on fold the rail turns visible at once and
-       fades up from transparent; on unfold it stays visible, fades out, then hides
-       after the slide (the delay). */
+    /* Panel and rail cross-dissolve as the group recedes, rather than the panel
+       sliding opaque while the rail fades in: right-pinned strip controls (the
+       actions and the fold) otherwise ride the shrinking edge across the whole
+       band and flash as a row of icons sweeping the emptying dock. Fading the
+       panel out as it recedes dissolves that sweep into the rail fading up.
+       Visibility flips only at the still ends, for hit-testing and assistive tech:
+       on fold the rail turns visible at once and fades up while the panel fades
+       down and then hides; on unfold the panel is visible at once and fades up
+       while the rail fades down and then hides (the delay). */
     .settled .panel {
-      transition: visibility 0s;
+      transition: opacity var(--duration-slide) var(--ease), visibility 0s;
     }
     .settled .folded .panel {
-      transition: visibility 0s var(--duration-slide);
+      transition: opacity var(--duration-slide) var(--ease), visibility 0s var(--duration-slide);
     }
     .settled .rail {
       transition: opacity var(--duration-slide) var(--ease), visibility 0s var(--duration-slide);
@@ -357,7 +367,8 @@ class DockDesk extends LitElement {
     @media (prefers-reduced-motion: reduce) {
       .settled .dock,
       .settled .panel,
-      .settled .rail {
+      .settled .rail,
+      .settled .scrim {
         transition: none;
       }
       .settled .strip [role="tablist"] {
@@ -371,70 +382,68 @@ class DockDesk extends LitElement {
        admits only tokens for lengths that place a box, and a container breakpoint is
        neither. Range syntax: WebKit ≥ 16.4 and Chromium support it. */
     @container (width < 45rem) {
-      /* One column: the row dissolves so the stage and all three sheets share
-         the height, each sheet giving way down to its strip before the stage
-         shrinks below a readable minimum. */
-      .row {
-        display: contents;
-      }
-      .stage {
-        order: 0;
-        flex: 1 1 0;
-        min-height: calc(var(--space-2xl) * 2);
-      }
-      .dock,
+      /* A side dock keeps only a rail's width in flow, open or folded, so the
+         stage never loses more than a rail and nothing reflows when a drawer
+         opens: it stays the vertical edge rail it is on the desk (base rules), and
+         opening it floats its panel over the stage as a drawer instead of
+         widening in flow. */
       .dock.left,
       .dock.right {
-        order: 1;
+        width: var(--space-xl);
+      }
+      /* Opening a side dock lifts the whole dock out of the row and over the
+         stage, anchored to the desk, keeping its own canvas, edge border and
+         clipping (base .dock); its panel fills it. The row's slot collapses
+         behind the drawer, so the reflow is never seen. */
+      .dock.left:not(.folded),
+      .dock.right:not(.folded) {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: calc(100% - var(--space-2xl));
+        box-shadow: var(--shadow-card);
+        z-index: 2;
+      }
+      .dock.left:not(.folded) {
+        left: 0;
+      }
+      .dock.right:not(.folded) {
+        right: 0;
+      }
+      .dock.left:not(.folded) .panel,
+      .dock.right:not(.folded) .panel {
+        width: 100%;
+      }
+      /* A bottom dock stays a sheet below the stage, giving way to its strip
+         before the stage shrinks below a readable minimum. */
+      .dock.bottom {
         flex: 0 1 auto;
-        width: auto;
-        height: calc(var(--space-2xl) * 5);
         min-height: var(--space-xl);
         max-height: calc(var(--viewport-phone-tall) / 2);
+      }
+      /* The scrim dims the peeking stage while a drawer is open (.on, set by the
+         view) and is the forgiving close target; it fades with the drawer and
+         sits under the panel, over the stage. */
+      .scrim {
         display: block;
-        border-left: 0;
-        border-right: 0;
-        border-top: var(--border-width) solid var(--color-border);
+        position: absolute;
+        inset: 0;
+        background: var(--color-scrim);
+        z-index: 1;
+        opacity: 0;
+        visibility: hidden;
       }
-      .dock.folded,
-      .dock.left.folded,
-      .dock.right.folded {
-        width: auto;
-        height: var(--space-xl);
+      .scrim.on {
+        opacity: 1;
+        visibility: visible;
       }
-      .panel,
-      .left .panel,
-      .right .panel {
-        width: 100%;
-        height: 100%;
+      .settled .scrim {
+        transition:
+          opacity var(--duration-slide) var(--ease),
+          visibility 0s var(--duration-slide);
       }
-      .left .rail,
-      .right .rail {
-        writing-mode: horizontal-tb;
-        transform: none;
-        padding: 0 var(--space-sm);
-        top: auto;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        width: auto;
-        height: var(--space-xl);
-      }
-      .left .rail .action,
-      .right .rail .action {
-        transform: none;
-        order: 0;
-      }
-      /* Every dock is a bottom sheet here, so every fold glyph shows the bottom
-         orientation whatever side the dock belongs to. */
-      .left .fold svg,
-      .right .fold svg {
-        transform: rotate(-90deg);
-      }
-      .settled .dock.entering.left,
-      .settled .dock.entering.right {
-        width: auto;
-        height: 0;
+      .settled .scrim.on {
+        transition: opacity var(--duration-slide) var(--ease);
       }
     }
   `;
@@ -469,6 +478,11 @@ class DockDesk extends LitElement {
     const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
     const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
     const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);
+    // On the phone a side dock overlays the stage as a drawer (@container below);
+    // the scrim dims the stage still peeking beside it, and tapping it folds the
+    // drawer back to its rail — the forgiving close, one step, no new gesture.
+    const drawers = ["left", "right"].filter((s) => docks[s]?.open);
+    const closeDrawers = () => drawers.forEach((s) => this.#send("_fold", undefined, s));
 
     return html`
       <div class="desk ${this.#settled ? "settled" : ""}">
@@ -492,6 +506,7 @@ class DockDesk extends LitElement {
           ${dock("right")}
         </div>
         ${dock("bottom")}
+        <div class="scrim ${drawers.length ? "on" : ""}" @click=${closeDrawers}></div>
       </div>
     `;
   }

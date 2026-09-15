@@ -498,7 +498,7 @@ for (const engine of ENGINES) {
     }
   });
 
-  test(`the docks are bottom sheets on the phone in ${engine.name}`, async () => {
+  test(`a side dock is a scrim drawer and a bottom dock a sheet on the phone in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, {
       phone: true,
       layout: {
@@ -507,17 +507,20 @@ for (const engine of ENGINES) {
       },
     });
     try {
-      await until(async () => (await shadowHas(page, ".dock.bottom")));
-      // Both sheets enter with a slide; wait until each has settled before
-      // measuring, so a mid-slide height never fails an assertion under load.
-      const settled = await railWidth(page);
-      await until(async () => (await rect(page, ".dock.left")).height > settled * 3);
-      await until(async () => Math.abs((await rect(page, ".dock.bottom")).height - settled) <= 2);
+      await until(async () => await shadowHas(page, ".dock.bottom"));
+      const strip = await railWidth(page);
+      // The open left dock enters as a drawer floating over the stage; wait until
+      // it has slid to its overlay width before measuring.
+      await until(async () => (await rect(page, ".dock.left")).width > strip * 3);
 
-      // No sideways scroll inside the phone screen; every dock, whatever its side,
-      // is a sheet under the stage, inside the frame; a folded one is just its strip.
-      const overflow = await page.evaluate(() => document.body.scrollWidth - document.body.clientWidth);
-      assert.ok(overflow <= 1, `no horizontal overflow, saw ${overflow}px`);
+      const scrim = () =>
+        page.evaluate(() => {
+          const s = document.querySelector("dock-desk").shadowRoot.querySelector(".scrim");
+          return { on: s.classList.contains("on"), visible: getComputedStyle(s).visibility === "visible" };
+        });
+      const position = (sel) =>
+        page.evaluate((sel) => getComputedStyle(document.querySelector("dock-desk").shadowRoot.querySelector(sel)).position, sel);
+
       const body = await page.evaluate(() => {
         const r = document.body.getBoundingClientRect();
         return { left: r.left, right: r.right, bottom: r.bottom };
@@ -525,47 +528,56 @@ for (const engine of ENGINES) {
       const stage = await rect(page, ".stage");
       const left = await rect(page, ".dock.left");
       const bottom = await rect(page, ".dock.bottom");
-      for (const d of [left, bottom]) {
-        assert.ok(d.left >= body.left - 1 && d.right <= body.right + 1 && d.bottom <= body.bottom + 1, "inside the frame");
-        assert.ok(d.top >= stage.bottom - 1, "under the stage");
-        assert.ok(Math.abs(d.width - stage.width) <= 1, "full width");
-      }
-      assert.ok(Math.abs(bottom.height - (await railWidth(page))) <= 2, "a folded sheet is its strip");
-      assert.ok(left.height > bottom.height * 3, "an open sheet shows its body");
-      assert.ok(await visible(page, "trace-list"), "the docked trace reads on the phone");
-      assert.ok(stage.height > left.height / 3, "the stage keeps a readable height");
 
-      // The reported case: a left dock is a bottom sheet here, so its fold glyph is
-      // turned down like every other sheet, not left as it would be on the desk.
-      assert.notEqual(await foldTransform(page, ".dock.left .panel"), "none", "the fold glyph is turned on a phone side sheet");
+      // No sideways scroll inside the phone screen.
+      const overflow = await page.evaluate(() => document.body.scrollWidth - document.body.clientWidth);
+      assert.ok(overflow <= 1, `no horizontal overflow, saw ${overflow}px`);
 
-      // Fold the left sheet from its strip: it collapses to just its strip.
-      const strip = await railWidth(page);
-      await clickAction(page, ".dock.left .panel", "Fold");
-      await until(async () => (await rect(page, ".dock.left")).height <= strip + 2);
-      assert.ok(Math.abs((await rect(page, ".dock.left")).height - strip) <= 2, "a folded left sheet is its strip");
-      // The panel hides once the slide ends (its visibility is delayed to the still
-      // end), so wait for it rather than reading at the height boundary.
-      await until(async () => !(await visible(page, "trace-list")), 1000).catch(() =>
-        assert.fail("the folded sheet hides its body"),
+      // The left dock is a drawer: it floats over the stage from the left edge,
+      // not under it, leaving the stage peeking on the right, with the scrim
+      // dimming the peek.
+      assert.equal(await position(".dock.left"), "absolute", "an open side dock overlays the stage");
+      assert.ok(left.top <= stage.top + 1, "the drawer covers the stage, it is not under it");
+      assert.ok(left.left <= body.left + 1, "the left drawer sits on the left edge");
+      assert.ok(left.right < stage.right - 1, "the drawer leaves a slice of the stage peeking");
+      const s1 = await scrim();
+      assert.ok(s1.on && s1.visible, "the scrim dims the peeking stage");
+      assert.ok(await visible(page, "trace-list"), "the docked trace reads in the drawer");
+
+      // The bottom dock stays a sheet: under the stage, full width, folded here to
+      // just its strip (it started closed).
+      assert.ok(bottom.top >= stage.bottom - 1, "the bottom dock is under the stage");
+      assert.ok(Math.abs(bottom.width - stage.width) <= 1, "the bottom sheet is full width");
+      assert.ok(Math.abs(bottom.height - strip) <= 2, "a folded bottom sheet is its strip");
+      assert.ok(
+        bottom.left >= body.left - 1 && bottom.right <= body.right + 1 && bottom.bottom <= body.bottom + 1,
+        "inside the frame",
       );
-      // Unfold it from the rail: it reopens on its tab.
-      await clickAction(page, ".dock.left .rail", "Unfold");
-      await until(async () => (await rect(page, ".dock.left")).height > strip * 3);
-      assert.ok(await visible(page, "trace-list"), "the left sheet reopens");
 
-      // The sheet header is a handle too: a tap on bare strip space folds it, a
-      // tap on the rail reopens it, the standard bottom-sheet gesture.
-      await clickBar(page, ".dock.left .panel .strip");
-      await until(async () => (await rect(page, ".dock.left")).height <= strip + 2);
-      await clickBar(page, ".dock.left .rail");
-      await until(async () => (await rect(page, ".dock.left")).height > strip * 3);
-      assert.ok(await visible(page, "trace-list"), "the sheet reopens from a bar tap");
+      // Tap the scrim to close the drawer: it folds to an edge rail in the flow,
+      // with the stage beside it and the scrim cleared (the forgiving close).
+      await clickBar(page, ".scrim");
+      await until(async () => (await rect(page, ".dock.left")).width <= strip + 2);
+      const folded = await rect(page, ".dock.left");
+      assert.equal(await position(".dock.left"), "relative", "a folded side dock is back in the flow");
+      assert.ok(Math.abs(folded.width - strip) <= 2, "a folded side dock is an edge rail");
+      const stageFolded = await rect(page, ".stage");
+      assert.ok(Math.abs(stageFolded.left - folded.right) <= 1, "the stage sits beside the rail, not under it");
+      assert.ok(!(await scrim()).on, "the scrim clears once no drawer is open");
+      await until(async () => !(await visible(page, "trace-list")), 1000).catch(() =>
+        assert.fail("the folded drawer hides its body"),
+      );
 
-      // Unfold the bottom sheet from its strip tab too.
+      // With no drawer over it, the bottom sheet still works: unfold it on its tab.
       await clickTab(page, ".dock.bottom .rail", "Contracts");
-      await until(async () => (await rect(page, ".dock.bottom")).height > bottom.height * 3);
-      assert.ok(await visible(page, "contract-list"));
+      await until(async () => (await rect(page, ".dock.bottom")).height > strip * 3);
+      assert.ok(await visible(page, "contract-list"), "the bottom sheet opens on its tab");
+
+      // Tap the rail to reopen the drawer, scrim and all.
+      await clickBar(page, ".dock.left .rail");
+      await until(async () => (await rect(page, ".dock.left")).width > strip * 3);
+      assert.ok((await scrim()).on, "the scrim returns with the drawer");
+      assert.ok(await visible(page, "trace-list"), "the drawer reopens from a rail tap");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `dock-phone-${engine.name}.png`), fullPage: true });

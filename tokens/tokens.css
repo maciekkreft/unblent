@@ -38,6 +38,9 @@
   --color-border: light-dark(#e8e3db, #322b25);
   --color-border-strong: light-dark(#d0cabe, #473f37);
 
+  /* Scrim: dims the stage a drawer overlays, darkening in both schemes. */
+  --color-scrim: light-dark(rgba(32, 21, 21, 0.32), rgba(0, 0, 0, 0.5));
+
   /* === TYPOGRAPHY === */
 
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
