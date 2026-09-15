@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "focus takes no arguments: put the cursor in this editor.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

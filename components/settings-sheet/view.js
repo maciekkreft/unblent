@@ -128,6 +128,22 @@ class SettingsSheet extends LitElement {
       gap: var(--space-xs);
       margin-bottom: var(--space-lg);
     }
+    label.select {
+      justify-content: space-between;
+      white-space: normal;
+    }
+    select {
+      font: inherit;
+      color: var(--color-body);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-xs);
+      cursor: pointer;
+    }
+    select:focus-visible {
+      outline: var(--focus-ring);
+    }
     button.reset {
       font: inherit;
       color: var(--color-body);
@@ -151,11 +167,40 @@ class SettingsSheet extends LitElement {
 
   #actor = new ActorController(this);
 
+  // A component or role name read as a label: "note-editor" → "Note editor".
+  #label(name) {
+    const words = name.replace(/-/g, " ");
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+
+  // One swap select per role (3.6, 7.3): the members to choose from, the default
+  // (the member whose tag equals the role) first, the current choice selected.
+  #roleSelect(role, members, settings) {
+    const chosen = settings.editors[role] ?? role;
+    const options = [...members].sort((a, b) => (a === role ? -1 : b === role ? 1 : a.localeCompare(b)));
+    return html`
+      <label class="select">
+        ${this.#label(role)}
+        <select @change=${(e) => this.#actor.send({ type: "_setEditor", role, component: e.target.value })}>
+          ${options.map(
+            (name) => html`<option value=${name} ?selected=${name === chosen}>${this.#label(name)}</option>`,
+          )}
+        </select>
+      </label>
+    `;
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loadingPages") || snapshot.matches("loadingSettings")) return nothing;
+    if (
+      !snapshot ||
+      snapshot.matches("loadingPages") ||
+      snapshot.matches("loadingSettings") ||
+      snapshot.matches("loadingCatalog")
+    )
+      return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current } = snapshot.context;
+    const { pages, settings, current, roles } = snapshot.context;
     const rows = merge(pages, settings.nav);
     return html`
       <h2>Pages</h2>
@@ -221,6 +266,7 @@ class SettingsSheet extends LitElement {
           />
           Layout switch shown
         </label>
+        ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>Reset to defaults</button>
     `;

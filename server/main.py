@@ -19,6 +19,7 @@ COMPONENTS = ROOT / "components"
 TOKENS = ROOT / "tokens"
 BUS = ROOT / "bus"
 STORE = ROOT / "store"
+COMPOSER = ROOT / "composer"
 PAGES_DESIGN = ROOT / "pages" / "design"
 PAGES_APPS = ROOT / "pages" / "apps"
 
@@ -76,6 +77,9 @@ app.mount("/static/tokens", RevalidatingStaticFiles(directory=TOKENS), name="tok
 app.mount("/static/bus", ComponentStaticFiles(directory=BUS), name="bus")
 # The store interface (11.1), served like the bus; its tests/ 404 the same way.
 app.mount("/static/store", ComponentStaticFiles(directory=STORE), name="store")
+# The composer (3.6), the second shared infrastructure a page composes with; its
+# tests/ 404 the same way as the bus's.
+app.mount("/static/composer", ComponentStaticFiles(directory=COMPOSER), name="composer")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])

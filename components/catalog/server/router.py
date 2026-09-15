@@ -48,6 +48,7 @@ def _records(manifests: dict) -> list:
             "shape": meta.get("shape") if is_fact else None,
             "owns": meta.get("owns") if is_fact else None,
             "attributes": meta.get("attributes") if not is_fact else None,
+            "role": meta.get("role") if not is_fact else None,
             "emits": meta["emits"],
             "consumes": manifest["consumes"],
             "accepts": manifest["accepts"],

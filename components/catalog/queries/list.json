@@ -24,6 +24,7 @@
                 "shape": { "type": ["string", "null"] },
                 "owns": { "type": ["string", "null"] },
                 "attributes": { "type": ["array", "null"], "items": { "type": "string" } },
+                "role": { "type": ["string", "null"] },
                 "emits": { "type": "array", "items": { "type": "string" } },
                 "consumes": { "type": "array", "items": { "type": "string" } },
                 "accepts": { "type": "array", "items": { "type": "string" } },

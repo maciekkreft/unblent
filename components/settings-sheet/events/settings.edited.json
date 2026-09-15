@@ -17,7 +17,11 @@
     },
     "viewportSwitchHidden": { "type": "boolean" },
     "layoutSwitchHidden": { "type": "boolean" },
-    "arranging": { "type": "boolean" }
+    "arranging": { "type": "boolean" },
+    "editors": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    }
   },
   "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden"],
   "additionalProperties": false

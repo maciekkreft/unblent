@@ -50,24 +50,41 @@ const setHidden = (context, path, hidden) => {
   return edited(withNav(context.settings, rows));
 };
 
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {} };
 
 const adopt = (event) => ({
   nav: event.nav.map((r) => ({ ...r })),
   viewportSwitchHidden: event.viewportSwitchHidden,
   layoutSwitchHidden: event.layoutSwitchHidden,
   arranging: event.arranging,
+  editors: { ...(event.editors ?? {}) },
 });
+
+// The role a member fills, keyed by tag for the default and by data-role for a
+// swapped-in member; the sheet only needs the members of a role to list them.
+const membersByRole = (components) => {
+  const roles = {};
+  for (const c of components ?? []) {
+    if (c.role) (roles[c.role] ??= []).push(c.name);
+  }
+  return roles;
+};
 
 export const machine = setup({
   actors: {
     pages: fromPromise(({ input }) => input.ask("pages", "list", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    catalog: fromPromise(({ input }) => input.ask("catalog", "list", {})),
   },
 }).createMachine({
   id: "settings-sheet",
-  meta: { kind: "view", emits: ["settings.edited"], attributes: [], asks: ["pages: list", "settings: read"] },
-  context: ({ input }) => ({ ask: input.ask, current: input.current, pages: [], settings: { ...DEFAULT } }),
+  meta: {
+    kind: "view",
+    emits: ["settings.edited"],
+    attributes: [],
+    asks: ["pages: list", "settings: read", "catalog: list"],
+  },
+  context: ({ input }) => ({ ask: input.ask, current: input.current, pages: [], settings: { ...DEFAULT }, roles: {} }),
   initial: "loadingPages",
   states: {
     loadingPages: {
@@ -87,9 +104,23 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "failed" },
-          { target: "ready", actions: assign({ settings: ({ event }) => adopt(event.output) }) },
+          { target: "loadingCatalog", actions: assign({ settings: ({ event }) => adopt(event.output) }) },
         ],
         onError: { target: "failed" },
+      },
+    },
+    // The catalog names the role members to offer in each swap select; it is
+    // optional, so a page without it, or an offline catalog, leaves roles empty
+    // and the sheet simply shows no swap selects.
+    loadingCatalog: {
+      invoke: {
+        src: "catalog",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
+          { target: "ready", actions: assign({ roles: ({ event }) => membersByRole(event.output.components) }) },
+        ],
+        onError: { target: "ready" },
       },
     },
     // Every gesture emits the whole settings; the sheet adopts it back through
@@ -131,6 +162,16 @@ export const machine = setup({
         _toggleLayout: {
           actions: emit(({ context }) =>
             edited({ ...context.settings, layoutSwitchHidden: !context.settings.layoutSwitchHidden }),
+          ),
+        },
+        // Choose the implementation for a swappable role (3.6, 7.3): the whole
+        // settings with this role's choice set, like every other gesture here.
+        _setEditor: {
+          actions: emit(({ context, event }) =>
+            edited({
+              ...context.settings,
+              editors: { ...context.settings.editors, [event.role]: event.component },
+            }),
           ),
         },
         _reset: { actions: emit(() => edited({ ...DEFAULT })) },

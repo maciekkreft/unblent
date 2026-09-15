@@ -32,7 +32,10 @@ class ActorController {
     // of this element's own light DOM, and the machine only sees name and label.
     // The label falls back to the tag name when the child declares none.
     const views = [...this.host.children].map((child) => ({
-      name: child.localName,
+      // A view is keyed by its role, not its tag, so a composer swap (3.6, 12)
+      // keeps its dock slot: the chosen member carries data-role, the page default
+      // is named by its tag.
+      name: child.getAttribute("data-role") ?? child.localName,
       label: child.getAttribute("label") ?? child.localName,
       side: child.getAttribute("side") ?? undefined,
     }));
@@ -41,10 +44,17 @@ class ActorController {
       events: { "dock.arranged": arranged },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    // The composer (3.6) swaps a role element in place; a view keyed by role
+    // stays the same docked view (12), so a re-render re-assigns the new element
+    // to its slot (updated()). A child list change is the one thing outside the
+    // actor that must redraw the desk.
+    this.observer = new MutationObserver(() => this.host.requestUpdate());
+    this.observer.observe(this.host, { childList: true });
   }
 
   hostDisconnected() {
     this.subscription?.unsubscribe();
+    this.observer?.disconnect();
     unmount(this.actor);
   }
 
@@ -606,7 +616,7 @@ class DockDesk extends LitElement {
   updated() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return;
-    const child = (name) => [...this.children].find((c) => c.localName === name);
+    const child = (name) => [...this.children].find((c) => (c.getAttribute("data-role") ?? c.localName) === name);
     // Reading a width commits the docks' new sizes before any slot is reassigned:
     // a dock that opened, or entered at nothing, starts its slide now, whereas
     // WebKit rebuilds the tree on a reassignment and would draw it at its end.

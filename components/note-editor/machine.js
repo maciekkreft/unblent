@@ -69,6 +69,9 @@ export const machine = setup({
   id: "note-editor",
   meta: {
     kind: "view",
+    // The default member of the note-editor role (7.3): interchangeable with
+    // note-editor-rich, which shares this contract exactly.
+    role: "note-editor",
     emits: ["note.saved", "note.opened"],
     attributes: ["height", "follows"],
     asks: ["notes: list", "notes: read"],

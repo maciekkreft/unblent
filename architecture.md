@@ -111,7 +111,13 @@ Authentication is one more fact component: `session`. Its server module runs the
 
 ### 3.5 Pages
 
-A page is an HTML file the browser loads: an import map and a list of component tags, nothing else. There are five kinds, described in section 8, and an app is one of them.
+A page is an HTML file the browser loads: an import map and a list of component tags, nothing else. The tags are the page's *default* composition (3.6). There are five kinds, described in section 8, and an app is one of them.
+
+### 3.6 The composer
+
+A page's tags are the default composition, not the final one. The **composer** is the second piece of shared infrastructure after the bus: loaded once per page, it reads which implementation the user chose for each swappable **role** (7.3) and mounts that one in place of the page's default, re-swapping when the choice changes. Besides a document fact (7.5) it is the only thing allowed to change the page after load, and it changes only role-bearing elements, in place — never `html`, `head`, or `title`.
+
+Like any asker it queries `settings: read` for the starting picture and follows `settings.changed` after (4.3); being infrastructure rather than a component, it may import a chosen variant's `view.js` by URL to define it. A swap removes the default element — whose actor unmounts cleanly on disconnect, leaving nothing on the bus — and inserts the chosen one with the same attributes and DOM position, so the view keeps its place in the dock (12).
 
 ---
 
@@ -291,8 +297,8 @@ conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
 dock.changed          owner: dock           { stage, docks }
 layout.switched       owner: layout-switch  { arranging }
-settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging }
-settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutSwitchHidden, arranging }
+settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
+settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null, registrationOpen }
 session.refused       owner: session        { reason }  reason ∈ cancelled | registration-closed | unknown-credential | unavailable
@@ -324,7 +330,7 @@ catalog: contracts       → { events: [{ name, owner, schema, consumers }], que
 trace: list              → { records: [record] }
 viewport: read           → { viewport }
 dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
-settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging }
+settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
 session: read            → { userId: string | null, registrationOpen: boolean }
 ```
 
@@ -339,6 +345,7 @@ A component's manifest is not written by hand. It is read from the actor's defin
 - **consumes**, **accepts**, **answers**: derived from what the actor's machine handles.
 - **emits** and **asks**: the two things that cannot be discovered by inspection, so they are declared as metadata on the machine itself, next to the handlers. `emits` lists event names; `asks` lists `"target: query"` strings. The bus refuses any emit or ask not on its list, so the declarations cannot go stale without the code failing.
 - **kind**, **shape**, **attributes**, and **owns**: metadata on the same machine. **shape** (section 3.1's storage shapes) and **owns**, a short lowercase noun phrase naming the fact, belong to fact components only; **attributes**, the ones the tag understands, to view components only.
+- **role** (view components, optional): a lowercase name for a slot of interchangeable implementations — `note-editor`, `note-editor-rich`, and a future `note-editor-vim` all declare `role: "note-editor"`. Members of a role share a contract (same emits, asks, accepts, answers), so one stands in for another; the composer (3.6) uses the role to know which are alternatives, and a page's tag for a role is its default.
 - **status** is not declared. A component is *built* when its browser entry exists (`view.js` or `fact.js`), *planned* when it has only `machine.js` and `events/`.
 
 From manifests alone the system computes, for every component, the components it interacts with: for each consumed event, who emits it; for each emitted event, who consumes it; for each query, who answers it.
@@ -368,7 +375,7 @@ The glyphs views may use: the third shared vocabulary, beside the events (7.1) a
 
 ## 8. Pages
 
-A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` whose `src` is a built component's browser entry, `view.js` or `fact.js`, under `/static/components/`, with no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). Five kinds, in increasing order of composition:
+A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` whose `src` is a built component's browser entry, `view.js` or `fact.js`, under `/static/components/`, or the composer under `/static/composer/`, with no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). The tags are the page's default composition; where a tag fills a role (7.3) and the page loads the composer, the composer (3.6) may mount a different implementation the user chose, in place, and a role's default tag needs only its own `view.js` loaded — the composer imports other members on demand. Five kinds, in increasing order of composition:
 
 1. **Tokens page.** Shows the design tokens and the icons, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
@@ -428,9 +435,9 @@ Deliberately not used: a global state store, a micro-frontend framework, a messa
 
 ## 11. Enforcement
 
-The system is maintained by coding agents, so the rules are not advice. Every violation fails immediately, and one `check` command is the definition of done.
+The system is maintained by coding agents, so the rules are not advice. Every violation fails immediately, and one `check` command is the definition of done: a bare `check.py`, every static rule plus every test, is what must pass before a task ends.
 
-The check has two phases: the fast phase (every static rule) runs after every edit, and the full run (fast phase plus tests) runs before a task ends. Each has a time budget that does not grow with the system: the fast phase within one second in total, and every test within five seconds on its own. Exceeding a budget is itself a failure, naming the slowest rules or the slow test, so the fast phase stays fast enough to run constantly and a slow test is found by name rather than hidden in a total.
+The check has two phases: the fast phase (every static rule) runs after every edit, and the full run (fast phase plus all tests) is the task-end gate. While iterating, the full run may be narrowed for faster feedback: `check.py --changed` (paths derived from `git` against `HEAD`) or `--only <components>` runs the fast phase plus just the tests reachable from the changed components — their one-hop bus-interaction partners and the components that share a page with them — while any infrastructure change (`bus`, `store`, `checks`, `vendor`, `tokens`, the `server` entry, `.env`, or `requirements.txt`) still runs everything. These narrowed modes speed the edit loop and back the Stop hook, but they are not the definition of done: the bare full run is. Each phase has a time budget that does not grow with the system: the fast phase within one second in total, and every test within five seconds on its own. Exceeding a budget is itself a failure, naming the slowest rules or the slow test, so the fast phase stays fast enough to run constantly and a slow test is found by name rather than hidden in a total.
 
 ### 11.1 Directory per component, front and back
 
@@ -469,6 +476,7 @@ tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6
 pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
 checks/          check.py, the one check command
 bus/             the bus (built once)
+composer/        the composer (3.6), loaded once per page; tests/ never served
 store/           the store interface; tests/ never served
 deploy/          systemd unit, litestream.yml (section 5) and anything else the host needs; never served
 data/            per-user SQLite files (section 5), gitignored
@@ -481,6 +489,7 @@ Static serving is namespaced so the future app can own `/`:
 |---|---|
 | `/static/vendor/…`, `/static/components/…`, `/static/tokens/…` | those directories, `Cache-Control: no-cache` |
 | `/static/bus/…` | the bus, `Cache-Control: no-cache`; its `tests/` are never served |
+| `/static/composer/…` | the composer, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/static/store/…` | the store interface, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/design/<name>` | `pages/design/<name>.html`, 404 if missing |
 | `/apps/<name>` | `pages/apps/<name>.html`, 404 if missing |
@@ -495,7 +504,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 
 | Rule | Enforced by |
 |---|---|
-| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, `store`, or `icons`. A server module may import the standard library, the packages named in `requirements.txt`, `server.user` (the entry's user infrastructure), or a relative module inside its own `server/` |
+| Components never touch each other | Import check, JavaScript and Python: every import specifier is either a relative path that stays inside the component's own directory (no `..`), or a bare specifier the page's import map resolves — a vendored name from `vendor/vendor.json`, or `bus`, `store`, or `icons`. A server module may import the standard library, the packages named in `requirements.txt`, `server.user` (the entry's user infrastructure), or a relative module inside its own `server/`. The composer, like the bus, is infrastructure outside `components/`: a page may load it, and it may import a role member's `view.js` by its `/static/components/…/view.js` URL |
 | Everything goes through the bus | Same check; there is no other importable channel |
 | Events match their contract | The bus validates every emitted event against the schema registry at runtime and throws on unknown names or invalid payloads |
 | Queries match their contract | The bus registers each answered query's schema at mount and validates payload and reply at runtime |
@@ -512,7 +521,9 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
 | Manifests are well-formed | Manifest check: every machine imports in Node, its id equals its directory name, `kind` and `emits` are present and valid, `shape` and `owns` are present on fact components only, `attributes` on view components only, and `status` is absent because it is derived |
 | A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `fact.js`, `store.js`, `events/`, `queries/`, `commands/`, `server/`, `tests/`; a view has no `fact.js`, store, server or `queries/`, a fact has no `view.js`; `view.js` defines the element named after its directory; a component with a browser entry has tests |
-| Pages compose only what exists | Page check: every custom element on a page is a built view whose `view.js` the page loads, every loaded `view.js` is used, and every loaded `fact.js` belongs to a fact component |
+| Pages compose only what exists | Page check: every custom element on a page is a built view whose `view.js` the page loads, every loaded `view.js` is used, and every loaded `fact.js` belongs to a fact component; the composer script is allowed, and a role's default tag needs only its own `view.js` loaded |
+| Roles are coherent | Role check: every component declaring a role exposes the same contract (emits, asks, accepts, answers), so a swap cannot surprise a neighbour |
+| The composer stays in its lane | Composer check: the composer changes only role-bearing elements, in place, and never `html`, `head`, or `title` |
 | Only document facts write to the document | Document check: no file under `components/` writes to `document` (its root element, `body`, `head`, or `title`) except the `fact.js` of a component listed in section 7.5, and that one writes only its own `data-<name>` attribute |
 | The layout is what the document says | Layout check: every top-level directory appears in the listing in 11.1 |
 | The check stays fast | Time budget: the fast phase within one second in total, every test within five seconds on its own; exceeding either fails and names the slowest rules or the slow test |
@@ -535,6 +546,8 @@ The architecture document describes the rules; the checks are what make them rea
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
+- **Swapping composition.** The composer (3.6) changes which implementation fills a role, in place; the replaced actor unmounts cleanly. A swappable view keeps its dock slot because the dock layout identifies it by its role, not its tag — the one place `dock`/`dock-desk` must key on role. Whether that touches the `dock.changed` schema or stays internal is settled when the composer is built (§9 step 2).
+
 ---
 
 ## 13. Vocabulary
@@ -548,6 +561,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Server module**: the server side of a fact component, in the same directory.
 - **Outbox**: local changes not yet acknowledged by the server.
 - **Bus**: the shared infrastructure that routes events, commands, and queries, and validates them.
+- **Composer**: the shared infrastructure that mounts the user's chosen implementation for each role in place of the page's default, and re-swaps when the choice changes.
+- **Role**: a name for a slot of interchangeable view implementations sharing a contract; the composer mounts the chosen one.
 - **Event**: a broadcast fact, past tense, not persisted.
 - **Command**: an addressed instruction; no reply.
 - **Query**: an addressed question to a fact component; always a reply, matched by correlation id.

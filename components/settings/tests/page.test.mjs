@@ -97,6 +97,19 @@ async function open(engine, { phone = false } = {}) {
 
 const clean = (page) => page.evaluate(() => localStorage.clear());
 
+// The Note editor swap select (Step 5), read from the sheet's shadow root.
+const editorSelect = (page) =>
+  page.evaluate(() => {
+    const sel = document.querySelector("settings-sheet").shadowRoot.querySelector("label.select select");
+    return sel ? { options: [...sel.options].map((o) => o.value), value: sel.value } : null;
+  });
+const pickEditor = (page, value) =>
+  page.evaluate((value) => {
+    const sel = document.querySelector("settings-sheet").shadowRoot.querySelector("label.select select");
+    sel.value = value;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
   test(`the settings sheet reorders, hides, and its choices survive a reload in ${engine.name}`, async () => {
@@ -136,6 +149,15 @@ for (const engine of ENGINES) {
       await until(async () => (await stored(page)).viewportSwitchHidden === true);
       await until(async () => switchGone(page));
 
+      // The Note editor select lists the note-editor role's members, defaults to the
+      // plain editor, and its choice is stored under editors (Step 5, 3.6).
+      await until(async () => (await editorSelect(page)) !== null);
+      const sel = await editorSelect(page);
+      assert.deepEqual(sel.options, ["note-editor", "note-editor-rich"], "the role's members are listed");
+      assert.equal(sel.value, "note-editor", "the plain editor is the default");
+      await pickEditor(page, "note-editor-rich");
+      await until(async () => (await stored(page)).editors?.["note-editor"] === "note-editor-rich");
+
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `settings-${engine.name}.png`), fullPage: true });
 
@@ -146,10 +168,12 @@ for (const engine of ENGINES) {
       assert.equal((await sheetRows(page)).find((r) => r.path === "/design/notes").shown, false);
       assert.equal(await navLinks(page).then((l) => l.includes("/design/notes")), false);
       assert.ok(await switchGone(page), "the viewport switch stays hidden across a reload");
+      await until(async () => (await editorSelect(page))?.value === "note-editor-rich");
 
       // Reset restores the defaults everywhere.
       await clickReset(page);
       await until(async () => (await stored(page)).nav.length === 0);
+      await until(async () => (await editorSelect(page))?.value === "note-editor");
       await until(async () => (await sheetRows(page))[0].path === "/design/tokens");
       await until(async () => (await navLinks(page)).includes("/design/notes"));
       await until(async () => !(await switchGone(page)));

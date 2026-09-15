@@ -18,8 +18,13 @@
     },
     "viewportSwitchHidden": { "type": "boolean", "description": "The Desk|Phone viewport switch is hidden." },
     "layoutSwitchHidden": { "type": "boolean", "description": "The layout switch is hidden; while hidden the desk is not arrangeable." },
-    "arranging": { "type": "boolean", "description": "The desk layout is being arranged: the arrange controls are shown." }
+    "arranging": { "type": "boolean", "description": "The desk layout is being arranged: the arrange controls are shown." },
+    "editors": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Chosen implementation per swappable role: role -> component."
+    }
   },
-  "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging"],
+  "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging", "editors"],
   "additionalProperties": false
 }

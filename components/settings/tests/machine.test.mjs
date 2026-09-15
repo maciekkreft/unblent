@@ -26,7 +26,25 @@ test("garbage parses to defaults, arranging on", () => {
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
+    editors: {},
   });
+});
+
+test("settings.edited carrying editors is adopted, sanitised, saved and re-emitted", () => {
+  const { actor, saved, emitted } = start(null);
+  actor.send({
+    type: "settings.edited",
+    nav: [],
+    viewportSwitchHidden: false,
+    layoutSwitchHidden: false,
+    arranging: true,
+    editors: { "note-editor": "note-editor-rich", junk: 3 },
+  });
+  const s = read(actor);
+  assert.deepEqual(s.editors, { "note-editor": "note-editor-rich" }, "non-string values are dropped");
+  assert.equal(emitted.length, 1);
+  assert.equal(saved.length, 1);
+  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-rich" });
 });
 
 test("settings.edited dedupes nav by path and applies the invariant", () => {

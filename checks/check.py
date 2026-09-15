@@ -143,6 +143,8 @@ def check_manifests(manifests: dict) -> None:
                 fail(path, "manifest check (7.3)", "a fact component's meta.owns must be a non-empty string naming the fact")
             if "attributes" in meta:
                 fail(path, "manifest check (7.3)", "a fact component has no attributes")
+            if "role" in meta:
+                fail(path, "manifest check (7.3)", "a fact component has no role (7.3)")
         else:
             if "shape" in meta:
                 fail(path, "manifest check (7.3)", "a view component has no shape")
@@ -150,6 +152,93 @@ def check_manifests(manifests: dict) -> None:
                 fail(path, "manifest check (7.3)", "a view component owns no fact")
             if not isinstance(meta.get("attributes"), list):
                 fail(path, "manifest check (7.3)", "a view component's meta.attributes must be a list, empty if none")
+            # role is optional (7.3): a lowercase name for a slot of interchangeable
+            # implementations. Validated only when present.
+            if "role" in meta:
+                role = meta["role"]
+                if not (isinstance(role, str) and role and role == role.lower()):
+                    fail(path, "manifest check (7.3)", "meta.role must be a non-empty lowercase string")
+
+
+# --- Role check (architecture.md 7.3, 11.2) --------------------------------------
+
+def check_roles(manifests: dict) -> None:
+    """Section 11.2, roles are coherent: every view declaring a role exposes the
+    same contract, so the composer can swap one member for another without
+    surprising a neighbour. The four the manifest names — emits, asks, accepts,
+    answers — are compared as sorted sets."""
+    groups = {}
+    for path, manifest in manifests.items():
+        role = manifest["meta"].get("role")
+        if role:
+            groups.setdefault(role, []).append((path, manifest))
+    for role, members in groups.items():
+        if len(members) < 2:
+            continue
+        def contract(m):
+            return (
+                tuple(sorted(set(m["meta"].get("emits", [])))),
+                tuple(sorted(set(m["meta"].get("asks", [])))),
+                tuple(sorted(set(m["accepts"]))),
+                tuple(sorted(set(m["answers"]))),
+            )
+        first_path, first = members[0]
+        want = contract(first)
+        for path, manifest in members[1:]:
+            if contract(manifest) != want:
+                fail(path, "role check (11.2)",
+                     f"role {role!r} members must share one contract (emits, asks, accepts, answers); "
+                     f"{Path(path).parent.name} differs from {Path(first_path).parent.name}")
+
+
+# --- Composer checks (architecture.md 3.6, 11.2) ---------------------------------
+
+# The composer is the one thing outside components/ that may cross a component
+# boundary, and only to import a role member's view.js by its URL (11.2).
+_COMPOSER_DYNAMIC = re.compile(r"""\bimport\s*\(\s*([`'"])([^`'"]+)\1""")
+_COMPOSER_VIEW_URL = re.compile(r"^/static/components/(?:[\w-]+|\$\{[^}]+\})/view\.js$")
+
+
+def check_composer_imports() -> None:
+    """Section 11.2: the composer imports bus, store or icons and vendored names,
+    stays inside composer/ for relative paths, and reaches across a component
+    boundary only through a dynamic import of a role member's view.js URL."""
+    for path in sorted(glob.glob("composer/*.js", root_dir=ROOT)):
+        file = ROOT / path
+        src = _strip_comments(file.read_text())
+        dynamic = {m.group(2) for m in _COMPOSER_DYNAMIC.finditer(src)}
+        statics = set(_STATIC_IMPORT.findall(src))
+        for spec in sorted(statics | dynamic):
+            if spec in dynamic and _COMPOSER_VIEW_URL.match(spec):
+                continue
+            if spec.startswith("."):
+                if ".." in spec.split("/"):
+                    fail(path, "composer import check (11.2)",
+                         f'relative import "{spec}" escapes composer/')
+                target = (file.parent / spec).resolve()
+                if file.parent not in target.parents and target != file.parent:
+                    fail(path, "composer import check (11.2)",
+                         f'relative import "{spec}" leaves composer/')
+            elif spec.startswith("/"):
+                fail(path, "composer import check (11.2)",
+                     f'absolute import "{spec}" is only allowed as a dynamic import of a '
+                     "role member's /static/components/<name>/view.js")
+            elif spec not in ALLOWED_BARE:
+                fail(path, "composer import check (11.2)",
+                     f'bare import "{spec}" is not a vendored name, bus, store, or icons')
+
+
+def check_composer() -> None:
+    """Section 11.2, the composer stays in its lane: it changes only role-bearing
+    elements, in place, and never writes the document root, body, head or title."""
+    for path in sorted(glob.glob("composer/*.js", root_dir=ROOT)):
+        src = _strip_comments((ROOT / path).read_text())
+        for m in _DOC_OTHER.finditer(src):
+            fail(path, "composer check (11.2)",
+                 f"writes to document.{m.group(1)}; the composer never touches the document (3.6)")
+        for m in _DOC_ELEMENT_WRITE.finditer(src):
+            fail(path, "composer check (11.2)",
+                 f"writes to document.documentElement.{m.group(1)}; the composer changes only role elements (3.6)")
 
 
 # --- Component check (architecture.md 11.1) --------------------------------------
@@ -390,8 +479,10 @@ class PageChecker(HTMLParser):
                     self._fail("importmap <script> must not have a src")
             elif self._script_type == "module":
                 src = self._script_src or ""
-                if not src.startswith("/static/components/"):
-                    self._fail(f"module <script> src {src!r} is not under /static/components/")
+                # A page may load a built component's browser entry, or the composer
+                # (3.6), the one shared infrastructure a page composes with (8).
+                if not src.startswith("/static/components/") and src != "/static/composer/composer.js":
+                    self._fail(f"module <script> src {src!r} is not under /static/components/ or the composer")
             else:
                 self._fail(f"<script> type must be importmap or module, got {self._script_type!r}")
             return
@@ -936,9 +1027,12 @@ def main() -> None:
     _timed(timings, "layout", check_layout)
     manifests = _timed(timings, "manifests", read_manifests)
     _timed(timings, "manifest check", check_manifests, manifests)
+    _timed(timings, "role check", check_roles, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
     _timed(timings, "contract check", check_contracts, manifests)
     _timed(timings, "imports", check_imports)
+    _timed(timings, "composer imports", check_composer_imports)
+    _timed(timings, "composer", check_composer)
     _timed(timings, "python imports", check_python_imports)
     _timed(timings, "store check", check_store, manifests)
     _timed(timings, "pages", check_pages)

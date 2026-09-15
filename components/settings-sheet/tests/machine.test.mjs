@@ -9,13 +9,21 @@ const PAGES = [
   { path: "/c", title: "C", kind: "app" },
 ];
 
-// Drive the actor with a fake ask (4.2): pages first, then settings.
+const COMPONENTS = [
+  { name: "note-editor", role: "note-editor" },
+  { name: "note-editor-rich", role: "note-editor" },
+  { name: "notes", role: null },
+];
+
+// Drive the actor with a fake ask (4.2): pages, then settings, then catalog.
 const start = (settings, current = "/a") => {
   const ask = (target) =>
     Promise.resolve(
       target === "pages"
         ? { pages: PAGES }
-        : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, ...settings },
+        : target === "catalog"
+          ? { components: COMPONENTS }
+          : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
     );
   const actor = createActor(machine, { input: { ask, current } });
   const emitted = [];
@@ -96,7 +104,24 @@ test("_reset emits the defaults", async () => {
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
+    editors: {},
   });
+});
+
+test("catalog members are grouped by role", async () => {
+  const { snapshot } = await start();
+  assert.deepEqual(snapshot.context.roles, { "note-editor": ["note-editor", "note-editor-rich"] });
+});
+
+test("_setEditor emits the whole settings with the role's choice set", async () => {
+  const { actor, emitted } = await start();
+  actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor-rich" });
+  assert.equal(emitted.length, 1);
+  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-rich" });
+  // A second choice for another role would merge, not replace: start from the last.
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "note-editor": "note-editor-rich" } });
+  actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor" });
+  assert.deepEqual(emitted[1].editors, { "note-editor": "note-editor" });
 });
 
 test("settings.changed is adopted (4.3, fourth rule)", async () => {

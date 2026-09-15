@@ -8,13 +8,14 @@ import { setup, assign, emit } from "xstate";
 // settings.changed after. The store arrives through `input`, so the machine is a
 // pure definition importable in Node.
 
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {} };
 
 // Sanitise any candidate into the contract shape (7.2): nav a list of
 // { path: string, hidden: boolean } deduped by path (a page is listed once);
-// booleans coerced with === true. Then the invariant: a hidden switch means the
-// desk is not arrangeable, so hiding the switch turns arranging off; arranging is
-// on by default and unknown/old fields fall to that.
+// editors a role -> component map keeping only string values; booleans coerced
+// with === true. Then the invariant: a hidden switch means the desk is not
+// arrangeable, so hiding the switch turns arranging off; arranging is on by
+// default and unknown/old fields fall to that.
 const clean = (value) => {
   const v = value && typeof value === "object" ? value : {};
   const nav = [];
@@ -28,12 +29,19 @@ const clean = (value) => {
       }
     }
   }
+  const editors = {};
+  if (v.editors && typeof v.editors === "object") {
+    for (const [role, component] of Object.entries(v.editors)) {
+      if (typeof component === "string") editors[role] = component;
+    }
+  }
   const layoutSwitchHidden = v.layoutSwitchHidden === true;
   return {
     nav,
     viewportSwitchHidden: v.viewportSwitchHidden === true,
     layoutSwitchHidden,
     arranging: v.arranging !== false && !layoutSwitchHidden,
+    editors,
   };
 };
 
@@ -47,11 +55,18 @@ const parse = (stored) => {
 
 const sameNav = (a, b) => a.length === b.length && a.every((r, i) => r.path === b[i].path && r.hidden === b[i].hidden);
 
+// A shallow role -> component comparison: same keys, same chosen component.
+const sameEditors = (a, b) => {
+  const ak = Object.keys(a);
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k]);
+};
+
 const same = (a, b) =>
   sameNav(a.nav, b.nav) &&
   a.viewportSwitchHidden === b.viewportSwitchHidden &&
   a.layoutSwitchHidden === b.layoutSwitchHidden &&
-  a.arranging === b.arranging;
+  a.arranging === b.arranging &&
+  sameEditors(a.editors, b.editors);
 
 export const machine = setup({}).createMachine({
   id: "settings",

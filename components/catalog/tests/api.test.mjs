@@ -53,7 +53,7 @@ test("GET /api/catalog/contracts pivots the schema files into the vocabulary", a
   assert.equal(scheme.schema.$schema, "https://json-schema.org/draft/2020-12/schema");
 
   const byKey = Object.fromEntries(queries.map((q) => [`${q.target}: ${q.name}`, q]));
-  assert.deepEqual(byKey["catalog: list"].askers, ["component-list"]);
+  assert.deepEqual(byKey["catalog: list"].askers, ["component-list", "settings-sheet"]);
   assert.deepEqual(byKey["pages: list"].askers, ["page-nav", "settings-sheet"]);
   assert.ok("payload" in byKey["catalog: contracts"] && "reply" in byKey["catalog: contracts"]);
   assert.deepEqual(byKey["catalog: contracts"].askers, ["contract-list"]);

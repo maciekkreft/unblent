@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user paused: the whole draft, and the version it was based on (null for a note this editor just minted).",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "title": { "type": "string" },
+    "body": { "type": "string" },
+    "baseVersion": { "type": ["integer", "null"], "minimum": 1 }
+  },
+  "required": ["id", "title", "body", "baseVersion"],
+  "additionalProperties": false
+}
