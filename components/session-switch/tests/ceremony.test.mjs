@@ -63,8 +63,9 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
     await ready(page);
     assert.equal((await switchState(page)).title, "Create account");
 
-    // A free slot: the click registers. The solid accent glyph appears and
-    // session.changed reaches the switch (the trace records the delivery).
+    // A free slot admits the first user: with no known passkey, sign-in resolves
+    // to a fresh account. The solid accent glyph appears and session.changed
+    // reaches the switch (the trace records the delivery).
     await clickSwitch(page);
     await until(async () => (await switchState(page))?.cls === "here");
     assert.equal((await switchState(page)).title, "Sign out");

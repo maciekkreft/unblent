@@ -46,20 +46,21 @@ test("read? answers from the cache before any network (4.3)", async () => {
   assert.equal(calls.me, 0);
 });
 
-test("signin registers while a slot is free, else logs in", async () => {
-  const open = fakeApi({ register: { userId: "u1", registrationOpen: false } });
+test("signin logs in with an existing passkey rather than registering (5)", async () => {
+  // A shared passkey on a second device: login succeeds, so no duplicate account.
+  const open = fakeApi({ login: { userId: "u1", registrationOpen: true } });
   const a = start({ userId: null, registrationOpen: true, logoutOwed: false }, open.api);
   a.actor.send({ type: "signin.requested" });
   await flush();
-  assert.equal(open.calls.register, 1);
-  assert.equal(open.calls.login, 0);
+  assert.equal(open.calls.login, 1);
+  assert.equal(open.calls.register, 0);
   assert.equal(context(a.actor).userId, "u1");
-  assert.equal(context(a.actor).registrationOpen, false);
   assert.deepEqual(a.events, [
-    { type: "session.changed", userId: "u1", registrationOpen: false },
+    { type: "session.changed", userId: "u1", registrationOpen: true },
   ]);
   assert.equal(a.saved.at(-1).userId, "u1");
 
+  // A full registry: login is still the only ceremony tried.
   const closed = fakeApi({ login: { userId: "u2", registrationOpen: false } });
   const b = start({ userId: null, registrationOpen: false, logoutOwed: false }, closed.api);
   b.actor.send({ type: "signin.requested" });
@@ -71,20 +72,55 @@ test("signin registers while a slot is free, else logs in", async () => {
   ]);
 });
 
-test("a refused ceremony emits session.refused with the reason, leaving the user unchanged", async () => {
-  for (const reason of ["cancelled", "registration-closed", "unavailable"]) {
-    const { api } = fakeApi({ register: { error: reason } });
+test("signin falls back to register when no passkey signs in and a slot is free", async () => {
+  // cancelled (empty prompt or user cancel) and unknown-credential (a passkey the
+  // registry forgot) both mean no account: with a slot free, create one.
+  for (const reason of ["cancelled", "unknown-credential"]) {
+    const api = fakeApi({ login: { error: reason }, register: { userId: "u1", registrationOpen: false } });
+    const a = start({ userId: null, registrationOpen: true, logoutOwed: false }, api.api);
+    a.actor.send({ type: "signin.requested" });
+    await flush();
+    assert.equal(api.calls.login, 1);
+    assert.equal(api.calls.register, 1);
+    assert.equal(context(a.actor).userId, "u1");
+    assert.deepEqual(a.events, [
+      { type: "session.changed", userId: "u1", registrationOpen: false },
+    ]);
+  }
+});
+
+test("a failed login never registers when the registry is full", async () => {
+  for (const reason of ["cancelled", "unknown-credential"]) {
+    const api = fakeApi({ login: { error: reason } });
+    const a = start({ userId: null, registrationOpen: false, logoutOwed: false }, api.api);
+    a.actor.send({ type: "signin.requested" });
+    await flush();
+    assert.equal(api.calls.register, 0);
+    assert.deepEqual(a.events, [{ type: "session.refused", reason }]);
+    assert.equal(context(a.actor).userId, null);
+  }
+});
+
+test("an unavailable login is a refusal, never a fallback to register", async () => {
+  const api = fakeApi({ login: { error: "unavailable" } });
+  const a = start({ userId: null, registrationOpen: true, logoutOwed: false }, api.api);
+  a.actor.send({ type: "signin.requested" });
+  await flush();
+  assert.equal(api.calls.register, 0);
+  assert.deepEqual(a.events, [{ type: "session.refused", reason: "unavailable" }]);
+  assert.equal(context(a.actor).userId, null);
+});
+
+test("a refused register surfaces its reason, leaving the user unchanged", async () => {
+  // login fails first so the fallback register is reached; its error is what shows.
+  for (const reason of ["registration-closed", "unavailable"]) {
+    const { api } = fakeApi({ login: { error: "cancelled" }, register: { error: reason } });
     const a = start({ userId: null, registrationOpen: true, logoutOwed: false }, api);
     a.actor.send({ type: "signin.requested" });
     await flush();
     assert.deepEqual(a.events, [{ type: "session.refused", reason }]);
     assert.equal(context(a.actor).userId, null);
   }
-  const { api } = fakeApi({ login: { error: "unknown-credential" } });
-  const a = start({ userId: null, registrationOpen: false, logoutOwed: false }, api);
-  a.actor.send({ type: "signin.requested" });
-  await flush();
-  assert.deepEqual(a.events, [{ type: "session.refused", reason: "unknown-credential" }]);
 });
 
 test("offline sign-out flips at once, keeps the debt, and ignores a still-signed-in server", async () => {

@@ -42,12 +42,20 @@ const persist = ({ context }) =>
 
 export const machine = setup({
   actors: {
-    // Sign in: register while a slot is free and nobody is signed in, else log in
-    // (the plan's one decision, on the cached picture). Returns { userId,
-    // registrationOpen } or { error }.
-    authenticate: fromPromise(({ input }) =>
-      input.registrationOpen && !input.userId ? input.api.register() : input.api.login(),
-    ),
+    // Sign in. Prefer an existing passkey so a shared one signs into its account
+    // instead of minting a duplicate on a second device (5); register only when
+    // nothing can sign in and a slot is free. cancelled covers both an empty
+    // prompt and a user cancel (WebAuthn conflates them, 12); unknown-credential
+    // is a passkey the registry no longer holds — either, with a slot, means no
+    // account, so create. unavailable is a network fault, not a missing account,
+    // so it is left to refuse. Returns { userId, registrationOpen } or { error }.
+    authenticate: fromPromise(async ({ input }) => {
+      const result = await input.api.login();
+      if (!result.error) return result;
+      const recoverable = result.error === "cancelled" || result.error === "unknown-credential";
+      if (recoverable && input.registrationOpen) return input.api.register();
+      return result;
+    }),
     // Clear the session on the server. Returns { error } when it could not (offline).
     logout: fromPromise(({ input }) => input.api.logout()),
     // Who am I, per the server. When a sign-out is owed, retry it first and report
@@ -106,7 +114,6 @@ export const machine = setup({
         input: ({ context }) => ({
           api: context.api,
           registrationOpen: context.registrationOpen,
-          userId: context.userId,
         }),
         onDone: [
           {
