@@ -310,7 +310,7 @@ viewport.selected     owner: viewport-switch { viewport }
 viewport.changed      owner: viewport       { viewport }
 ```
 
-Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. If a change cannot be additive, it is a new event with a new name.
+Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. Nor is a shape ever **narrowed**: a `type` may not lose an alternative, an `enum` or `const` may not lose a value, a `oneOf`/`anyOf` may not lose a branch, and `additionalProperties` may not go from open to closed. The same holds for query payloads and replies (7.2) and command payloads. If a change cannot be additive, it is a new event with a new name.
 
 Because the vocabulary is shared, it is not grown casually: **adding an event, or changing an event schema, needs explicit permission from the user first**, even when the change is additive. The proposal names the event, its owner, its payload, and the component that needs it; nothing is written until it is approved. The same holds for the design tokens (section 7.4).
 
@@ -475,7 +475,7 @@ components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
 tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
 pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
-checks/          check.py, the one check command
+checks/          check.py, the one check command; tests/ its own unit tests, never served
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
 store/           the store interface; tests/ never served
@@ -512,7 +512,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Contracts are written down | Contract check: every declared emit has `events/<name>.json`, every answered query `queries/<name>.json`, every accepted command `commands/<name>.json`; each parses as JSON Schema with the draft stated; no schema file without its declaration or handler |
 | Only declared events are emitted | The bus refuses an emit whose name is not in the emitter's declared list |
 | Only fact components answer queries | The bus refuses to route a query to a view component |
-| Contracts only grow | Schema compatibility check against the previous commit: fails on removed, renamed, or new required fields; prints the affected components from the manifests |
+| Contracts only grow | Schema compatibility check of the working tree against `HEAD`, over every `events/`, `queries/` and `commands/` schema: fails on a removed or renamed field, a new required field, a narrowed `type`, a removed `enum`/`const` value, a removed `oneOf`/`anyOf` branch, `additionalProperties` closing, or a schema file removed while its component remains; names the path inside the schema and the components affected, from the manifests |
 | One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
 | Pages contain no logic | Page check: only an import map and tags, and exactly one `meta[name=kind]` naming one of the five kinds of section 8 |
 | Tokens only | Style check: views use no colour, spacing, size, or type value that is not a token, in both `css` templates and the inline `style` attributes of `html` templates. Size means any property that places or sizes a box: width, height, inset, grid tracks, border width. Percentages, `fr`, and unitless factors in `calc()` are relative and allowed |

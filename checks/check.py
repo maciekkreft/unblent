@@ -326,6 +326,207 @@ def check_contracts(manifests: dict) -> None:
                     _check_draft(schema_path, schema, "the schema")
 
 
+# --- Schema compatibility check (architecture.md 7.1, 7.2, 11.2) -----------------
+
+_SCHEMA_GLOBS = [
+    "components/*/events/*.json",
+    "components/*/queries/*.json",
+    "components/*/commands/*.json",
+]
+
+
+def _schema_changes() -> list:
+    """Section 11.2: the schema files git sees changed against HEAD, staged or not,
+    as (status, path) with status 'M' or 'D'. --no-renames so a rename reads as a
+    delete plus an add, which at the contract level is a removal and an addition. An
+    add is additive and ignored. A non-repo or a repo with no HEAD yields nothing, so
+    the rule is silent where there is no previous commit to compare against."""
+    result = subprocess.run(
+        ["git", "diff", "--name-status", "--no-renames", "HEAD", "--", *_SCHEMA_GLOBS],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+    changes = []
+    for line in result.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 2:
+            continue
+        status, path = parts[0].strip(), parts[1].strip()
+        if status in ("M", "D"):
+            changes.append((status, path))
+    return changes
+
+
+def _types(schema: dict) -> set:
+    """The `type` keyword as a set, whether a string or a list."""
+    t = schema.get("type")
+    if isinstance(t, str):
+        return {t}
+    if isinstance(t, list):
+        return set(t)
+    return set()
+
+
+def schema_breaks(old: object, new: object, path: str = "") -> list:
+    """Section 7.1: the ways one schema may not shrink relative to an older one,
+    each as a line naming where inside the schema it happened. A pure structural
+    diff, keyword-aware, descending only where both sides are schema objects. A
+    boolean schema (`true`/`false`) is a schema: `true` accepts anything, so a
+    narrowing to an object or to `false` is a break."""
+    breaks = []
+    here = path or "(root)"
+
+    # A boolean schema on either side: only true -> anything-narrower breaks.
+    if isinstance(old, bool) or isinstance(new, bool):
+        if old is True and new is not True:
+            breaks.append(f"{here}: schema narrowed from accept-anything (true)")
+        return breaks
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return breaks
+
+    old_props = old.get("properties", {})
+    new_props = new.get("properties", {}) if isinstance(new.get("properties"), dict) else {}
+    if isinstance(old_props, dict):
+        for name in old_props:
+            if name not in new_props:
+                breaks.append(f"{here}/properties/{name}: field removed or renamed")
+            else:
+                breaks += schema_breaks(old_props[name], new_props[name],
+                                        f"{here}/properties/{name}")
+
+    old_req = set(old.get("required", []))
+    new_req = set(new.get("required", []))
+    for name in sorted(new_req - old_req):
+        breaks.append(f"{here}/required: new required field {name!r}")
+
+    old_types, new_types = _types(old), _types(new)
+    if old_types and new_types:
+        lost = old_types - new_types
+        if lost:
+            breaks.append(f"{here}/type: type narrowed, lost {sorted(lost)}")
+
+    if "enum" in old and "enum" in new:
+        lost = [v for v in old["enum"] if v not in new["enum"]]
+        if lost:
+            breaks.append(f"{here}/enum: value(s) removed {lost}")
+
+    if "const" in old and old.get("const") != new.get("const"):
+        breaks.append(f"{here}/const: const changed")
+
+    for key in ("oneOf", "anyOf", "allOf"):
+        if key in old and isinstance(old[key], list):
+            new_list = new.get(key) if isinstance(new.get(key), list) else []
+            if len(new_list) < len(old[key]):
+                breaks.append(f"{here}/{key}: branch removed "
+                              f"({len(old[key])} -> {len(new_list)})")
+            for i in range(min(len(old[key]), len(new_list))):
+                breaks += schema_breaks(old[key][i], new_list[i], f"{here}/{key}/{i}")
+
+    if "items" in old:
+        breaks += schema_breaks(old["items"], new.get("items", True), f"{here}/items")
+
+    for container in ("$defs", "patternProperties"):
+        old_c = old.get(container)
+        if isinstance(old_c, dict):
+            new_c = new.get(container) if isinstance(new.get(container), dict) else {}
+            for name, sub in old_c.items():
+                if name not in new_c:
+                    breaks.append(f"{here}/{container}/{name}: removed")
+                else:
+                    breaks += schema_breaks(sub, new_c[name], f"{here}/{container}/{name}")
+
+    old_ap, new_ap = old.get("additionalProperties"), new.get("additionalProperties")
+    if new_ap is False and old_ap is not False:
+        breaks.append(f"{here}/additionalProperties: closed (was open)")
+    elif isinstance(old_ap, dict):
+        breaks += schema_breaks(old_ap, new_ap if new_ap is not None else True,
+                                f"{here}/additionalProperties")
+
+    return breaks
+
+
+def _contract_parties(manifests: dict) -> dict:
+    """Section 7.3: who a contract's change affects, from manifests alone. For an
+    event, its emitters and consumers; for a query, its answerer and askers; for a
+    command, only the acceptor, since nothing records who sends one. Reimplemented
+    like _interaction_graph because the check cannot import a component (11.2)."""
+    recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    parties = {"events": {}, "queries": {}, "commands": {}}
+    for name, m in recs.items():
+        for ev in m["meta"].get("emits", []):
+            parties["events"].setdefault(ev, {"emitters": set(), "consumers": set()})["emitters"].add(name)
+        for ev in m["consumes"]:
+            parties["events"].setdefault(ev, {"emitters": set(), "consumers": set()})["consumers"].add(name)
+        for q in m["answers"]:
+            parties["queries"].setdefault(q, {"answerers": set(), "askers": set()})["answerers"].add(name)
+        for ask in m["meta"].get("asks", []):
+            q = ask.split(":", 1)[1].strip() if ":" in ask else ask.strip()
+            parties["queries"].setdefault(q, {"answerers": set(), "askers": set()})["askers"].add(name)
+        for cmd in m["accepts"]:
+            parties["commands"].setdefault(cmd, {"acceptors": set()})["acceptors"].add(name)
+    return parties
+
+
+def _affected_line(kind: str, name: str, parties: dict) -> str:
+    """One 'affected: … → …' line naming the components a break touches."""
+    if kind == "events":
+        p = parties["events"].get(name, {})
+        emit = ", ".join(sorted(p.get("emitters", []))) or "?"
+        cons = ", ".join(sorted(p.get("consumers", []))) or "none"
+        return f"affected: emitted by {emit} → consumed by {cons}"
+    if kind == "queries":
+        p = parties["queries"].get(name, {})
+        ans = ", ".join(sorted(p.get("answerers", []))) or "?"
+        ask = ", ".join(sorted(p.get("askers", []))) or "none"
+        return f"affected: answered by {ans} → asked by {ask}"
+    p = parties["commands"].get(name, {})
+    acc = ", ".join(sorted(p.get("acceptors", []))) or "?"
+    return f"affected: accepted by {acc} (senders are not recorded)"
+
+
+def check_schema_compat(manifests: dict) -> None:
+    """Section 7.1, 11.2: a contract only grows. Every changed events/, queries/ or
+    commands/ schema is compared against HEAD; a removed or renamed field, a new
+    required field, a narrowed type, a lost enum/const value, a dropped oneOf branch,
+    additionalProperties closing, or a schema deleted while its component remains,
+    each fails, naming the path inside the schema and the components affected."""
+    parties = _contract_parties(manifests)
+    known = {Path(p).parent.name for p in manifests}
+    for status, path in _schema_changes():
+        parts = Path(path).parts
+        if len(parts) != 4:
+            continue
+        _, comp, kind, filename = parts
+        name = filename[:-5] if filename.endswith(".json") else filename
+        if status == "D":
+            if comp in known:
+                fail(path, "schema compatibility (11.2)",
+                     f"schema removed while component {comp!r} remains; a contract only grows. "
+                     f"{_affected_line(kind, name, parties)}")
+            continue
+        old_text = subprocess.run(
+            ["git", "show", f"HEAD:{path}"], cwd=ROOT, capture_output=True, text=True,
+        )
+        if old_text.returncode != 0:
+            continue
+        try:
+            old = json.loads(old_text.stdout)
+            new = json.loads((ROOT / path).read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if kind == "queries":
+            breaks = []
+            for key in ("payload", "reply"):
+                if key in old:
+                    breaks += schema_breaks(old[key], new.get(key, {}), key)
+        else:
+            breaks = schema_breaks(old, new)
+        if breaks:
+            detail = "; ".join(breaks) + f". {_affected_line(kind, name, parties)}"
+            fail(path, "schema compatibility (11.2)", detail)
+
+
 # --- Import check (architecture.md 11.2) -----------------------------------------
 
 _STATIC_IMPORT = re.compile(
@@ -880,6 +1081,14 @@ def run_tests(affected=None) -> None:
         if result.returncode != 0:
             fail("pure-node tests", "node tests", "node --test reported failures")
 
+    # checks/tests is the check's own unit tests (11.1): pure stdlib, no server and no
+    # browser, so a checks-only change stays cheap. Only an infra change reaches them.
+    checks_tests = [] if scoped else sorted(glob.glob("checks/tests/*.test.py", root_dir=ROOT))
+    for test in checks_tests:
+        result = subprocess.run([sys.executable, test], cwd=ROOT)
+        if result.returncode != 0:
+            fail(test, "checks tests", "check unit test reported failures")
+
     # server/tests is the entry's own; only an infra change (a full run) reaches it.
     server_tests = [] if scoped else sorted(glob.glob("server/tests/*.test.py", root_dir=ROOT))
 
@@ -1033,6 +1242,7 @@ def main() -> None:
     _timed(timings, "role check", check_roles, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
     _timed(timings, "contract check", check_contracts, manifests)
+    _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "imports", check_imports)
     _timed(timings, "composer imports", check_composer_imports)
     _timed(timings, "composer", check_composer)
