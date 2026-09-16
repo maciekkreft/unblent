@@ -105,6 +105,7 @@ def _contracts(records: list) -> dict:
                 "name": name,
                 "payload": schema["payload"],
                 "reply": schema["reply"],
+                "supersededBy": schema.get("supersededBy", []),
                 "askers": sorted(o["name"] for o in records if f"{owner}: {name}" in o["asks"]),
             })
         for name in record["accepts"]:

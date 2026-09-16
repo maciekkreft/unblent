@@ -28,5 +28,6 @@
     },
     "required": ["notes"],
     "additionalProperties": false
-  }
+  },
+  "supersededBy": ["note.changed", "note.deleted"]
 }

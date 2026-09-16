@@ -57,6 +57,8 @@ test("GET /api/catalog/contracts pivots the schema files into the vocabulary", a
   assert.deepEqual(byKey["pages: list"].askers, ["page-nav", "settings-sheet"]);
   assert.ok("payload" in byKey["catalog: contracts"] && "reply" in byKey["catalog: contracts"]);
   assert.deepEqual(byKey["catalog: contracts"].askers, ["contract-list"]);
+  assert.deepEqual(byKey["notes: read"].supersededBy, ["note.changed", "note.deleted"]);
+  assert.deepEqual(byKey["catalog: list"].supersededBy, []);
 
   const cmd = Object.fromEntries(commands.map((c) => [`${c.target}: ${c.name}`, c]));
   assert.ok("payload" in cmd["note-editor: focus"]);

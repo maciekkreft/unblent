@@ -16,5 +16,6 @@
     },
     "required": ["userId", "registrationOpen"],
     "additionalProperties": false
-  }
+  },
+  "supersededBy": ["session.changed"]
 }

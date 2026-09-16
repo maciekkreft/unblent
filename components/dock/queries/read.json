@@ -112,5 +112,6 @@
       "docks"
     ],
     "additionalProperties": false
-  }
+  },
+  "supersededBy": ["dock.changed"]
 }

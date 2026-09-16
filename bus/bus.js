@@ -10,8 +10,14 @@ import { ulid } from "ulid";
 const mounted = new Map(); // id → actor, so a second mount of an id can be refused
 const machines = new Map(); // id → machine, so `ask` can read the target's kind and handlers
 const registry = new Map(); // event name → schema, so every emit is validated (3.3)
-const queryRegistry = new Map(); // "target: name" → { payload, reply }, so every query is validated (3.3, 7.2)
+const queryRegistry = new Map(); // "target: name" → { payload, reply, supersededBy }, so every query is validated (3.3, 7.2)
 const subscribers = new Map();
+// Section 4.2: while an asker's query is open, the events its schema declares as
+// superseding the answer are held for that asker alone, so it sees the starting
+// picture before anything that follows it. Keyed by asker id, because `ask` only
+// sees `machine.config.id` and `forward` matches through `idOf`. Transient routing
+// state, not an event log (3.3): a hold ends at the reply or at `unanswered`.
+const holds = new Map(); // asker id → { open: Map<cid, string[]>, queue: [{ event, name, from, fromKind }] }
 
 // Section 3.3, 10: the bus's one tap. A listener is called synchronously with a
 // record of every routing decision. The bus still keeps nothing; the `trace` fact
@@ -77,6 +83,90 @@ function subscribe(name, actor) {
   set.add(actor);
 }
 
+// Section 4.2, the hold. `holdersOf` gives the open correlation ids under which
+// `askerId` is holding event `name` (empty when none); `openHold` opens one for a
+// query; `release` closes one and delivers what no other open cid still holds, in
+// order; `deliverReleased` delivers one held event and records it; `dropHolds`
+// discards an unmounted asker's queue.
+function holdRec(askerId) {
+  let h = holds.get(askerId);
+  if (!h) holds.set(askerId, (h = { open: new Map(), queue: [] }));
+  return h;
+}
+
+function holdersOf(askerId, name) {
+  const h = holds.get(askerId);
+  const cids = [];
+  if (h) for (const [cid, names] of h.open) if (names.includes(name)) cids.push(cid);
+  return cids;
+}
+
+function openHold(askerId, cid, names) {
+  holdRec(askerId).open.set(cid, names);
+}
+
+function deliverReleased(askerId, entry, cid) {
+  const actor = mounted.get(askerId);
+  const can = actor ? actor.getSnapshot().can(entry.event) : false;
+  const place = reserve();
+  try {
+    if (actor) delivering(() => actor.send(entry.event));
+  } finally {
+    record(
+      {
+        kind: "event",
+        name: entry.name,
+        from: entry.from,
+        fromKind: entry.fromKind,
+        to: [askerId],
+        ignored: can ? [] : [askerId],
+        outcome: can ? "delivered" : "ignored",
+        reason: `released after reply ${cid}`,
+        payload: entry.event,
+        states: actor ? { [askerId]: JSON.stringify(actor.getSnapshot().value) } : {},
+      },
+      place,
+    );
+  }
+}
+
+// Idempotent: a cid never opened, or already released, is a no-op. The queue is
+// walked in place so an entry still held under another open cid stays and order is
+// preserved.
+function release(askerId, cid) {
+  const h = holds.get(askerId);
+  if (!h || !h.open.has(cid)) return;
+  h.open.delete(cid);
+  let i = 0;
+  while (i < h.queue.length) {
+    const entry = h.queue[i];
+    if (holdersOf(askerId, entry.name).length) {
+      i++;
+      continue;
+    }
+    h.queue.splice(i, 1);
+    deliverReleased(askerId, entry, cid);
+  }
+  if (h.open.size === 0 && h.queue.length === 0) holds.delete(askerId);
+}
+
+function dropHolds(askerId) {
+  const h = holds.get(askerId);
+  if (!h) return;
+  for (const entry of h.queue)
+    record({
+      kind: "event",
+      name: entry.name,
+      from: entry.from,
+      fromKind: entry.fromKind,
+      to: [askerId],
+      outcome: "dropped",
+      reason: "asker unmounted while held",
+      payload: entry.event,
+    });
+  holds.delete(askerId);
+}
+
 // Runs inside the emitter's `actor.on("*")` listener. A throw here surfaces as an
 // uncaught error (XState rethrows listener errors asynchronously), which is the
 // point: an undeclared or unknown emit must fail loudly, not pass silently.
@@ -98,13 +188,20 @@ function forward(machine, emitter, event) {
   // Section 4.1: an event names no target; it reaches every subscriber but never
   // returns to the one that emitted it. A recipient whose current state does not
   // handle the event is `ignored` (its `can` is false); the bus still sends it, so
-  // the actor, not the bus, decides (section 4, fourth rule).
+  // the actor, not the bus, decides (section 4, fourth rule). A recipient holding
+  // this event (4.2) is not sent it now: it is queued and released after the reply,
+  // so `ignored`, `outcome`, and `states` are computed over `sent` alone.
   const set = subscribers.get(name);
   const recipients = set ? [...set].filter((a) => a !== emitter) : [];
-  const ignored = recipients.filter((a) => !a.getSnapshot().can(event));
+  const held = recipients.filter((a) => holdersOf(idOf(a), name).length);
+  const sent = recipients.filter((a) => !held.includes(a));
+  const ignored = sent.filter((a) => !a.getSnapshot().can(event));
   const outcome =
-    recipients.length === 0 ? "dropped" : ignored.length === recipients.length ? "ignored" : "delivered";
-  const reason = outcome === "dropped" ? "no subscriber" : outcome === "ignored" ? "no recipient handles it" : null;
+    recipients.length === 0 ? "dropped" : sent.length > 0 && ignored.length === sent.length ? "ignored" : "delivered";
+  const base = outcome === "dropped" ? "no subscriber" : outcome === "ignored" ? "no recipient handles it" : null;
+  const heldClauses = held.flatMap((a) => holdersOf(idOf(a), name).map((cid) => `held for ${idOf(a)} until reply ${cid}`));
+  const reason = [base, ...heldClauses].filter(Boolean).join("; ") || null;
+  for (const a of held) holdRec(idOf(a)).queue.push({ event, name, from, fromKind });
   // The record is completed after delivery, so it can carry each recipient's
   // resulting state (section 10). A throw inside a recipient must not lose it: the
   // finally writes the record, then the throw propagates so a failing handler still
@@ -112,7 +209,7 @@ function forward(machine, emitter, event) {
   const place = reserve();
   try {
     delivering(() => {
-      for (const actor of recipients) actor.send(event);
+      for (const actor of sent) actor.send(event);
     });
   } finally {
     record(
@@ -126,7 +223,7 @@ function forward(machine, emitter, event) {
         outcome,
         reason,
         payload: event,
-        states: Object.fromEntries(recipients.map((a) => [idOf(a), JSON.stringify(a.getSnapshot().value)])),
+        states: Object.fromEntries(sent.map((a) => [idOf(a), JSON.stringify(a.getSnapshot().value)])),
       },
       place,
     );
@@ -151,6 +248,14 @@ export function mount(machine, { input, events = {}, queries = {} } = {}) {
     const schema = queries[name];
     if (!schema || typeof schema !== "object" || !("payload" in schema) || !("reply" in schema))
       throw new Error(`mount ${id}: no { payload, reply } schema passed for answered query "${name}"`);
+    // Section 4.2: each superseding event must be one this fact emits, so a hold can
+    // only ever release what the fact would have announced anyway. Absent key is [].
+    const superseded = schema.supersededBy ?? [];
+    if (!Array.isArray(superseded))
+      throw new Error(`mount ${id}: supersededBy for query "${name}" must be an array`);
+    for (const ev of superseded)
+      if (!(machine.config.meta?.emits ?? []).includes(ev))
+        throw new Error(`mount ${id}: query "${name}" is superseded by "${ev}", not in meta.emits`);
     queryRegistry.set(`${id}: ${name}`, schema);
   }
   const actor = createActor(machine, { input });
@@ -171,6 +276,7 @@ export function unmount(actor) {
   actor.stop();
   for (const [id, a] of mounted) {
     if (a === actor) {
+      dropHolds(id); // 4.2: a held event whose asker is gone is dropped, not delivered.
       mounted.delete(id);
       machines.delete(id);
     }
@@ -184,7 +290,9 @@ export function unmount(actor) {
 // errors and throw, like an undeclared emit: an ask the asker did not declare in
 // `meta.asks`, and a query aimed at a view (4.3, rule two). Two cases are honest
 // replies, because a reply always comes: nobody mounted under the target's name,
-// or a target that does not handle the query.
+// or a target that does not handle the query. While the ask is open the bus holds
+// the events the query's schema names as superseding its answer, for this asker
+// alone, and releases them after the reply lands (4.2).
 export function ask(machine, target, name, payload = {}) {
   const asks = machine.config.meta?.asks ?? [];
   const key = `${target}: ${name}`;
@@ -214,6 +322,11 @@ export function ask(machine, target, name, payload = {}) {
     record({ kind: "query", name, from, fromKind, to, outcome: "unknown-query", cid, payload });
     return Promise.resolve({ error: "unknown-query" });
   }
+  // Section 4.2: the hold opens only past the four non-holding exits, so a refused or
+  // unanswerable query holds nothing, and it opens before the answerer is sent to,
+  // so an event the answerer emits while handling this query is inside the window.
+  const superseded = queryRegistry.get(key).supersededBy ?? [];
+  if (superseded.length) openHold(from, cid, superseded);
   // The query's schema is registered (`queryRegistry.get(key)`); payload and reply
   // validation against it lands with the JSON Schema validator (7.2, section 10),
   // the same task that adds payload validation to events. Registration now is what
@@ -231,6 +344,7 @@ export function ask(machine, target, name, payload = {}) {
       if (answered) return;
       timedOut = true;
       record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
+      release(from, cid); // 4.2: no reply is coming for now, so stop holding; the promise stays pending.
     }, UNANSWERED_MS);
     const reply = (value) => {
       if (answered) return;
@@ -238,6 +352,10 @@ export function ask(machine, target, name, payload = {}) {
       clearTimeout(timer);
       record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
       resolve(value);
+      // 4.2: a macrotask always runs after XState's `fromPromise` continuation (one
+      // microtask), so the asker's onDone adopts the reply before the held events
+      // land. Anything emitted between resolve and here is still held until release.
+      setTimeout(() => release(from, cid), 0);
     };
     // Completed after delivery, so it carries the answerer's resulting state
     // (section 10); its place is reserved before, so a synchronous answerer's reply,

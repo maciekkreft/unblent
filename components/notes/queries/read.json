@@ -40,5 +40,6 @@
         "additionalProperties": false
       }
     ]
-  }
+  },
+  "supersededBy": ["note.changed", "note.deleted"]
 }

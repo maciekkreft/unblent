@@ -36,6 +36,7 @@
                 "name": { "type": "string" },
                 "payload": { "type": "object" },
                 "reply": { "type": "object" },
+                "supersededBy": { "type": "array", "items": { "type": "string" } },
                 "askers": { "type": "array", "items": { "type": "string" } }
               },
               "required": ["target", "name", "payload", "reply", "askers"],
@@ -66,5 +67,6 @@
         "additionalProperties": false
       }
     ]
-  }
+  },
+  "supersededBy": []
 }

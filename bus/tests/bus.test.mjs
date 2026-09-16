@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createMachine, emit } from "xstate";
+import { createMachine, emit, setup, fromPromise } from "xstate";
 import { mount, unmount, ask, tap } from "bus";
 
 // The bus is infrastructure, not a component, so it is tested here rather than
@@ -446,4 +446,282 @@ test("tap records unanswered after the timeout, then replied on a late reply", a
   assert.equal(late.reason, "late");
   sub();
   unmount(f);
+});
+
+// Held replies (4.2): a query's schema names the events that supersede its answer;
+// the bus holds those for the asker while the ask is open and releases them, in
+// order, after the reply. `holdFact` parks its reply so a test controls when the
+// answer lands, and emits `thing.changed` (superseding) or `other.changed` (not) on
+// internal bumps. `holdAsker` declares the ask and records what the bus delivers.
+const HSCHEMA = { payload: {}, reply: {}, supersededBy: ["thing.changed"] };
+const settle = () => new Promise((r) => setTimeout(r, 0));
+const TRACE_KEYS = new Set([
+  "at", "cid", "from", "fromKind", "ignored", "kind", "name", "outcome", "payload", "reason", "seq", "states", "tab", "to",
+]);
+
+function holdFact(id, box) {
+  return createMachine({
+    id,
+    meta: { kind: "fact", shape: "local-only", emits: ["thing.changed", "other.changed"], owns: "a held fact" },
+    on: {
+      "read?": {
+        actions: ({ event }) => {
+          (box.replies ??= []).push(event.reply);
+        },
+      },
+      bump: { actions: emit(({ event }) => ({ type: "thing.changed", value: event.value })) },
+      bumpOther: { actions: emit({ type: "other.changed" }) },
+    },
+  });
+}
+
+function holdAsker(id, received, asks) {
+  return createMachine({
+    id,
+    meta: { kind: "view", emits: [], attributes: [], asks },
+    on: {
+      "thing.changed": { actions: ({ event }) => received.push(event) },
+      "other.changed": { actions: ({ event }) => received.push(event) },
+    },
+  });
+}
+
+// An XState asker as a real view (4.3, fourth rule): initial `loading`, an invoke
+// asking the fact, `thing.changed` handled only in the named state, `onDone` moving
+// to `ready`. It is what the hold protects — before it, an event landing during
+// `loading` was ignored.
+function xstateAsker(id, target, received, handledIn) {
+  const handler = { "thing.changed": { actions: ({ event }) => received.push(event) } };
+  return setup({ actors: { q: fromPromise(({ input }) => input.ask(target, "read", {})) } }).createMachine({
+    id,
+    meta: { kind: "view", emits: [], attributes: [], asks: [`${target}: read`] },
+    context: ({ input }) => ({ ask: input.ask }),
+    initial: "loading",
+    states: {
+      loading: {
+        invoke: { src: "q", input: ({ context }) => ({ ask: context.ask }), onDone: "ready", onError: "ready" },
+        on: handledIn === "loading" ? handler : {},
+      },
+      ready: { on: handledIn === "ready" ? handler : {} },
+    },
+  });
+}
+
+test("mount refuses a supersededBy naming an event the fact does not emit", () => {
+  assert.throws(
+    () => mount(holdFact("hbad", {}), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: { payload: {}, reply: {}, supersededBy: ["nope.changed"] } } }),
+    /not in meta\.emits/,
+  );
+});
+
+test("mount accepts declared supersededBy names and an absent key", () => {
+  const f = mount(holdFact("hok", {}), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  unmount(f);
+  const g = mount(holdFact("hok2", {}), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: { payload: {}, reply: {} } } });
+  unmount(g);
+});
+
+test("a superseding event is held until after the reply; other subscribers get it at once", async () => {
+  const box = {};
+  const received = [];
+  const other = [];
+  const f = mount(holdFact("hf", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha", received, ["hf: read"]);
+  const a = mount(am, {});
+  const o = mount(consumer("ho", other, "thing.changed"), {});
+  const pending = ask(am, "hf", "read", {});
+  f.send({ type: "bump", value: 1 });
+  assert.equal(other.length, 1); // not an asker: delivered now
+  assert.equal(received.length, 0); // held
+  box.replies[0]({ ok: true });
+  await pending;
+  await settle();
+  assert.equal(received.length, 1);
+  unmount(f);
+  unmount(a);
+  unmount(o);
+});
+
+test("an event not in supersededBy reaches the asker during the ask", async () => {
+  const box = {};
+  const received = [];
+  const f = mount(holdFact("hf2", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha2", received, ["hf2: read"]);
+  const a = mount(am, {});
+  ask(am, "hf2", "read", {});
+  f.send({ type: "bumpOther" });
+  assert.equal(received.length, 1); // other.changed does not supersede read
+  box.replies[0]({});
+  await settle();
+  unmount(f);
+  unmount(a);
+});
+
+test("held events release in their original order", async () => {
+  const box = {};
+  const received = [];
+  const f = mount(holdFact("hf3", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha3", received, ["hf3: read"]);
+  const a = mount(am, {});
+  ask(am, "hf3", "read", {});
+  f.send({ type: "bump", value: 1 });
+  f.send({ type: "bump", value: 2 });
+  assert.equal(received.length, 0);
+  box.replies[0]({});
+  await settle();
+  assert.deepEqual(received.map((e) => e.value), [1, 2]);
+  unmount(f);
+  unmount(a);
+});
+
+test("an event emitted between the reply and the release is held too", async () => {
+  const box = {};
+  const received = [];
+  const f = mount(holdFact("hf4", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha4", received, ["hf4: read"]);
+  const a = mount(am, {});
+  ask(am, "hf4", "read", {});
+  box.replies[0]({}); // schedules release as a macrotask
+  f.send({ type: "bump", value: 9 }); // still inside the window, synchronously
+  assert.equal(received.length, 0);
+  await settle();
+  assert.deepEqual(received.map((e) => e.value), [9]);
+  unmount(f);
+  unmount(a);
+});
+
+test("two open asks naming the event release it on the last reply", async () => {
+  const box = {};
+  const received = [];
+  const f = mount(holdFact("hf5", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha5", received, ["hf5: read"]);
+  const a = mount(am, {});
+  ask(am, "hf5", "read", {});
+  ask(am, "hf5", "read", {});
+  f.send({ type: "bump", value: 1 });
+  box.replies[0]({});
+  await settle();
+  assert.equal(received.length, 0); // second ask still holds it
+  box.replies[1]({});
+  await settle();
+  assert.equal(received.length, 1);
+  unmount(f);
+  unmount(a);
+});
+
+test("an unanswered query releases at once and a late reply holds nothing", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const box = {};
+  const received = [];
+  const f = mount(holdFact("hf6", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha6", received, ["hf6: read"]);
+  const a = mount(am, {});
+  ask(am, "hf6", "read", {});
+  t.mock.timers.tick(5000); // unanswered → release now
+  f.send({ type: "bump", value: 1 });
+  assert.equal(received.length, 1); // no hold remains
+  box.replies[0]({}); // late reply, holds nothing
+  f.send({ type: "bump", value: 2 });
+  assert.equal(received.length, 2);
+  unmount(f);
+  unmount(a);
+});
+
+test("an unknown query holds nothing", async () => {
+  const box = {};
+  const received = [];
+  const f = mount(holdFact("hf7", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha7", received, ["hf7: missing"]);
+  const a = mount(am, {});
+  const reply = await ask(am, "hf7", "missing", {});
+  assert.deepEqual(reply, { error: "unknown-query" });
+  f.send({ type: "bump", value: 1 });
+  assert.equal(received.length, 1); // delivered at once
+  unmount(f);
+  unmount(a);
+});
+
+test("unmount while holding drops the queued events and records it", async () => {
+  const box = {};
+  const received = [];
+  const { records, sub } = collect();
+  const f = mount(holdFact("hf8", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha8", received, ["hf8: read"]);
+  const a = mount(am, {});
+  ask(am, "hf8", "read", {});
+  f.send({ type: "bump", value: 1 });
+  unmount(a);
+  const dropped = records.find((r) => r.outcome === "dropped");
+  assert.equal(dropped.name, "thing.changed");
+  assert.equal(dropped.reason, "asker unmounted while held");
+  assert.deepEqual(dropped.to, ["ha8"]);
+  assert.equal(received.length, 0);
+  sub();
+  unmount(f);
+});
+
+test("the tap records the held emission and the release with the exact reasons", async () => {
+  const box = {};
+  const received = [];
+  const { records, sub } = collect();
+  const f = mount(holdFact("hf9", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const am = holdAsker("ha9", received, ["hf9: read"]);
+  const a = mount(am, {});
+  ask(am, "hf9", "read", {});
+  const cid = records.find((r) => r.kind === "query" && r.name === "read").cid;
+  f.send({ type: "bump", value: 1 });
+  const emitRec = records.find((r) => r.kind === "event" && r.name === "thing.changed");
+  assert.equal(emitRec.reason, `held for ha9 until reply ${cid}`);
+  assert.deepEqual(emitRec.to, ["ha9"]); // recipient kept in `to`
+  box.replies[0]({});
+  await settle();
+  const releaseRec = records.filter((r) => r.kind === "event" && r.name === "thing.changed").at(-1);
+  assert.equal(releaseRec.reason, `released after reply ${cid}`);
+  assert.deepEqual(releaseRec.to, ["ha9"]);
+  assert.equal(releaseRec.outcome, "delivered");
+  for (const r of records) for (const k of Object.keys(r)) assert.ok(TRACE_KEYS.has(k), `record key ${k} is in trace.recorded`);
+  sub();
+  unmount(f);
+  unmount(a);
+});
+
+test("a released event the asker's state passes on is recorded ignored", async () => {
+  const received = [];
+  const box = {};
+  const { records, sub } = collect();
+  const f = mount(holdFact("hf10", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  // Handles thing.changed only in `loading`; by release time it is in `ready`.
+  const m = xstateAsker("ha10", "hf10", received, "loading");
+  const a = mount(m, { input: { ask: (target, name, payload) => ask(m, target, name, payload) } });
+  f.send({ type: "bump", value: 1 });
+  await settle(); // let the invoke's ask run and open its hold
+  f.send({ type: "bump", value: 2 });
+  box.replies.at(-1)({}); // reply → onDone → ready
+  await settle();
+  const rel = records.filter((r) => r.kind === "event" && r.reason?.startsWith("released")).at(-1);
+  assert.equal(rel.outcome, "ignored");
+  assert.deepEqual(rel.ignored, ["ha10"]);
+  sub();
+  unmount(f);
+  unmount(a);
+});
+
+test("an XState asker sees a superseding event after the reply, in ready not ignored in loading", async () => {
+  const received = [];
+  const box = {};
+  const { records, sub } = collect();
+  const f = mount(holdFact("hf11", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const m = xstateAsker("ha11", "hf11", received, "ready");
+  const a = mount(m, { input: { ask: (target, name, payload) => ask(m, target, name, payload) } });
+  await settle(); // invoke asks, hold opens
+  f.send({ type: "bump", value: 5 }); // lands during loading — would be ignored before the hold
+  assert.equal(received.length, 0);
+  box.replies.at(-1)({}); // reply → ready
+  await settle();
+  assert.deepEqual(received.map((e) => e.value), [5]); // delivered in ready
+  const noIgnore = records.some((r) => r.kind === "event" && r.outcome === "ignored" && r.to.includes("ha11"));
+  assert.equal(noIgnore, false);
+  sub();
+  unmount(f);
+  unmount(a);
 });

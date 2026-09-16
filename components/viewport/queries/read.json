@@ -15,5 +15,6 @@
     },
     "required": ["viewport"],
     "additionalProperties": false
-  }
+  },
+  "supersededBy": ["viewport.changed"]
 }

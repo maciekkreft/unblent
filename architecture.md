@@ -99,7 +99,7 @@ A component's **manifest** (section 7.3) is not a separate file: it is read from
 
 ### 3.3 The bus
 
-The one shared piece of infrastructure, built once. It carries events, commands, and queries (section 4), routes each to the right mailboxes, validates every event, and every query's payload and reply, against the contract registry, refuses emits a component has not declared, and knows nothing about what any event means. It keeps nothing: there is no event log. Facts persist in fact components; the bus is only how the news travels.
+The one shared piece of infrastructure, built once. It carries events, commands, and queries (section 4), routes each to the right mailboxes, validates every event, and every query's payload and reply, against the contract registry, refuses emits a component has not declared, and knows nothing about what any event means. It keeps nothing: there is no event log. The one thing it holds is transient routing state, not retention: an event an asker's open query declares as superseding its answer (4.2), kept only until that query's reply lands. Facts persist in fact components; the bus is only how the news travels.
 
 The bus has one tap: a listener called synchronously with a record of every routing decision, an event or a query and its outcome. The bus still keeps nothing; the `trace` fact component keeps the session's records.
 
@@ -144,6 +144,8 @@ A query is a message carrying the target address, the query name, its payload, a
 
 In the browser this is `ask(machine, target, name, payload)` on the bus: it returns a promise that settles when the reply reaches the asker's mailbox, and a machine consumes it through `fromPromise`, the function arriving through `input`, so the machine stays importable in Node. A query to a target nobody mounted is replied to at once with `{ error: "no-answerer" }`; one the target does not answer with `{ error: "unknown-query" }`. A query aimed at a view, or one the asker did not declare (section 7.3), is refused.
 
+A query's schema names, in `supersededBy`, the events that supersede its answer. While the ask is open the bus holds those events for the asker alone and releases them, in order, once the reply has landed, so the asker sees the starting picture first and everything after it after. The hold ends at the reply, or at `unanswered` if none comes; it never starts for a refused query or one no fact answers. Other subscribers are never delayed: an event held for one asker reaches everyone else at once. This is what makes the first half of the fourth rule (4.3) true by construction.
+
 ### 4.3 The five rules
 
 **Every fact has exactly one owner.** If two components need the notes, one of them is `notes` and the other asks it. There is no shared database in the browser and no copy that can drift.
@@ -152,7 +154,7 @@ In the browser this is `ask(machine, target, name, payload)` on the bus: it retu
 
 **Events are self-contained.** `note.saved` carries the whole note, not an id that forces the consumer to ask. This costs duplication and buys isolation. Volume is not a concern: inside the browser a whole note per event is free, and the view that produces changes coalesces at source, so an editor emits `note.saved` at a short throttle while the user types and at once on blur, never per keystroke. The fact component announces each one immediately; what it debounces is the network (section 5), not the news.
 
-**Query for the starting picture, subscribe for everything after.** A view that queries `notes: read(id)` must also listen to `note.changed`, and must treat any later event with a newer version as authoritative. Nothing may assume some other component finished reacting first.
+**Query for the starting picture, subscribe for everything after.** A view that queries `notes: read(id)` must also listen to `note.changed`, and must treat any later event with a newer version as authoritative. The bus makes the first half true by construction: an event the query names as superseding its answer is held for the asker until the reply lands (4.2), so an event that races the starting query is not lost. Version comparison remains for a later event that comes from elsewhere — another device's edit pulled by `notes`, after the hold is long closed. Nothing may assume some other component finished reacting first.
 
 **A fact component learns what the user did from events.** A view where the user acted emits the gesture as an event (`note.saved`, `viewport.selected`); the fact component that owns the concept consumes it. Commands address views: one instance among several, or an instruction that is not a fact (`focus`, `load(id)`).
 
@@ -336,7 +338,7 @@ session: read            → { userId: string | null, registrationOpen: boolean 
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
 
-A query's payload and reply shapes are JSON Schemas in the answerer's `queries/<name>.json`, as `{ payload, reply }`; a command's payload shape is in the acceptor's `commands/<name>.json`. The bus validates a query's payload on delivery and its reply before it reaches the asker, so a query schema cannot go stale, the same as an event's.
+A query's payload and reply shapes are JSON Schemas in the answerer's `queries/<name>.json`, as `{ payload, reply, supersededBy }`, where `supersededBy` names the events that supersede the answer (4.2), an array the bus holds for the asker until the reply lands; a command's payload shape is in the acceptor's `commands/<name>.json`. The bus validates a query's payload on delivery and its reply before it reaches the asker, so a query schema cannot go stale, the same as an event's.
 
 ### 7.3 Manifest
 
@@ -428,7 +430,7 @@ Libraries are vendored as their official builds at pinned versions, copied verba
 
 Two pieces are wrapped behind our own small interfaces, because their surface is small and swapping is plausible: the **store** (Dexie now, could be SQLite in the browser) and the **bus** (`EventTarget` now, could be a worker). XState and Lit are not wrapped: they are the actor and view semantics, and a wrapper would be a thinner XState.
 
-**Tracing.** The bus taps every routing decision (section 3.3): who emitted or asked what, who received it, who ignored it because their state does not handle it, what was dropped for lack of a subscriber, refused for lack of a declaration, or never answered. The `trace` fact component keeps those records in memory since the page loaded, bridges tabs of the same origin over a `BroadcastChannel` so an inspector tab sees what an acting tab did, and prints one line per record to the console at debug level, so a person or an agent reading the console through Playwright has a complete, ordered transcript. `trace-list` shows the same record on the `trace` stem page. This is the primary debugging tool and it is meant to be used autonomously.
+**Tracing.** The bus taps every routing decision (section 3.3): who emitted or asked what, who received it, who ignored it because their state does not handle it, what was held for an asker until its reply and released after (4.2), what was dropped for lack of a subscriber, refused for lack of a declaration, or never answered. The `trace` fact component keeps those records in memory since the page loaded, bridges tabs of the same origin over a `BroadcastChannel` so an inspector tab sees what an acting tab did, and prints one line per record to the console at debug level, so a person or an agent reading the console through Playwright has a complete, ordered transcript. `trace-list` shows the same record on the `trace` stem page. This is the primary debugging tool and it is meant to be used autonomously.
 
 Deliberately not used: a global state store, a micro-frontend framework, a message broker, a bundler, any framework that wants to own the page.
 
@@ -449,7 +451,7 @@ components/
     store.js          IndexedDB cache + outbox, behind the store interface
     fact.js           browser entry: creates the actor with its inputs and mounts it on the bus
     events/           JSON Schema per event this component owns
-    queries/          JSON Schema per query this component answers: { payload, reply }
+    queries/          JSON Schema per query this component answers: { payload, reply, supersededBy }
     server/
       router.py       FastAPI router for /api/notes
       schema.sql      per-user SQLite schema and migrations
@@ -512,6 +514,8 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Contracts are written down | Contract check: every declared emit has `events/<name>.json`, every answered query `queries/<name>.json`, every accepted command `commands/<name>.json`; each parses as JSON Schema with the draft stated; no schema file without its declaration or handler |
 | Only declared events are emitted | The bus refuses an emit whose name is not in the emitter's declared list |
 | Only fact components answer queries | The bus refuses to route a query to a view component |
+| Replies land before what supersedes them | The bus holds a query's `supersededBy` events for the asker until the reply has landed, and refuses at mount a `supersededBy` naming an event the fact does not emit |
+| Askers follow what they ask | Supersession check: every query schema has a `supersededBy` list of the fact's own events, and every asker of a query consumes every event that supersedes it |
 | Contracts only grow | Schema compatibility check of the working tree against `HEAD`, over every `events/`, `queries/` and `commands/` schema: fails on a removed or renamed field, a new required field, a narrowed `type`, a removed `enum`/`const` value, a removed `oneOf`/`anyOf` branch, `additionalProperties` closing, or a schema file removed while its component remains; names the path inside the schema and the components affected, from the manifests |
 | One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
 | Pages contain no logic | Page check: only an import map and tags, and exactly one `meta[name=kind]` naming one of the five kinds of section 8 |
@@ -537,7 +541,7 @@ The architecture document describes the rules; the checks are what make them rea
 ## 12. Constraints and known edges
 
 - **No query between views.** If two views seem to need to talk, either one should emit an event the other listens to, or they are one view.
-- **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. Example: `note-reader` reacts to `note.selected` by querying `notes: read(id)` while the editor's throttled `note.saved` for the same note is still in flight; the reader gets the old body. Protection is the fourth rule of section 4: it also listens to `note.changed` and adopts the newer version.
+- **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. The read-then-event race is closed by the hold (4.2): `note-reader` reacts to `note.selected` by querying `notes: read(id)`, and a `note.changed` that lands while that read is open is held for the reader and delivered right after the reply, in order, so the reader never adopts the old body and then misses the new one. What remains an edge is reactions to the *same* event finishing in any order: nothing may assume another component reacted first (section 4, fourth rule). A later change from elsewhere — another device's edit pulled by `notes`, long after the hold closed — is still caught by version comparison.
 - **Remote-only facts fail offline.** That is by design: `llm` answers with an error and emits `llm.unavailable`; a view decides what to show.
 - **Three shared vocabularies.** The event registry, the design tokens and the icons are global schemas in disguise. All are kept small: events are additive-only, tokens are minimal, icons grow one glyph at a time, each approved by sight. All change only with permission, and all are reviewed on a page before use.
 - **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.

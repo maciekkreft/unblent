@@ -224,6 +224,10 @@ class ContractList extends LitElement {
         <dd>${q.target}</dd>
         <dt>askers</dt>
         <dd>${q.askers.length ? q.askers.join(", ") : "—"}</dd>
+        ${q.supersededBy?.length
+          ? html`<dt>superseded by</dt>
+              <dd>${q.supersededBy.join(", ")}</dd>`
+          : nothing}
       </dl>
       ${this.#shape("payload", q.payload)}
       ${this.#shape("reply", q.reply)}

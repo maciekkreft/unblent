@@ -33,5 +33,6 @@
     },
     "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging", "editors"],
     "additionalProperties": false
-  }
+  },
+  "supersededBy": ["settings.changed"]
 }

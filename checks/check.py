@@ -292,9 +292,10 @@ def _check_draft(path: str, schema: object, what: str) -> None:
 
 def check_contracts(manifests: dict) -> None:
     """Section 7.2: every declared emit has events/<name>.json, every answered
-    query queries/<name>.json ({ payload, reply }), every accepted command
-    commands/<name>.json; each schema states the draft, and a schema file with no
-    matching declaration or handler fails, so the contracts cannot drift."""
+    query queries/<name>.json ({ payload, reply }, with an optional supersededBy the
+    supersession check owns), every accepted command commands/<name>.json; each
+    schema states the draft, and a schema file with no matching declaration or
+    handler fails, so the contracts cannot drift."""
     for path, manifest in manifests.items():
         comp = ROOT / Path(path).parent
         rel = f"components/{comp.name}"
@@ -324,6 +325,55 @@ def check_contracts(manifests: dict) -> None:
                         _check_draft(schema_path, schema[key], key)
                 else:
                     _check_draft(schema_path, schema, "the schema")
+
+
+# --- Supersession check (architecture.md 4.2, 4.3, 11.2) -------------------------
+
+def supersession_breaks(recs: dict, schemas: dict) -> list:
+    """Section 4.2, 4.3: the decision, pure over dicts so a unit test can exercise it
+    without git or the tree. recs is {name: manifest}; schemas is {(owner, query):
+    schema_dict}. Every query names the events that supersede its answer in a
+    supersededBy list of strings; every name is one the owner emits; and every asker
+    of the query consumes every event that supersedes it, so "query for the start,
+    subscribe for the rest" holds by construction. Returns (owner, query, detail)
+    triples, one per break."""
+    out = []
+    for owner, q in sorted(schemas):
+        sup = schemas[(owner, q)].get("supersededBy")
+        if not isinstance(sup, list) or not all(isinstance(n, str) for n in sup):
+            out.append((owner, q, f"{owner}: {q} has no supersededBy list of event names"))
+            continue
+        emits = recs.get(owner, {}).get("meta", {}).get("emits", [])
+        for ev in sup:
+            if ev not in emits:
+                out.append((owner, q, f"{owner}: {q} is superseded by {ev}, which {owner} does not emit"))
+        for name in sorted(recs):
+            m = recs[name]
+            if f"{owner}: {q}" not in m["meta"].get("asks", []):
+                continue
+            for ev in sup:
+                if ev not in m["consumes"]:
+                    out.append((owner, q, f"{name} asks {owner}: {q} but does not consume {ev}, which supersedes it"))
+    return out
+
+
+def check_supersession(manifests: dict) -> None:
+    """Section 4.2, 4.3, 11.2: the bus holds a query's supersededBy events for the
+    asker until the reply lands; this rule makes the declaration answerable — every
+    superseding event is one the owner emits, and every asker of a query follows
+    what supersedes it. Reads the query schemas from the tree and defers the decision
+    to supersession_breaks."""
+    recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    schemas = {}
+    for path in manifests:
+        comp = ROOT / Path(path).parent
+        qdir = comp / "queries"
+        if not qdir.is_dir():
+            continue
+        for f in sorted(qdir.glob("*.json")):
+            schemas[(comp.name, f.stem)] = _parse_schema(f"components/{comp.name}/queries/{f.stem}.json", f)
+    for owner, q, detail in supersession_breaks(recs, schemas):
+        fail(f"components/{owner}/queries/{q}.json", "supersession check (11.2)", detail)
 
 
 # --- Schema compatibility check (architecture.md 7.1, 7.2, 11.2) -----------------
@@ -1242,6 +1292,7 @@ def main() -> None:
     _timed(timings, "role check", check_roles, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
     _timed(timings, "contract check", check_contracts, manifests)
+    _timed(timings, "supersession check", check_supersession, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "imports", check_imports)
     _timed(timings, "composer imports", check_composer_imports)
