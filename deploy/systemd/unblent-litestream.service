@@ -1,0 +1,25 @@
+[Unit]
+Description=Unblent litestream (per-user SQLite -> Cloudflare R2)
+Documentation=https://github.com/maciekkreft/unblent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Section 5: a dedicated service, apart from eval's litestream.service, so the
+# two apps' replication never share a config. The config watches data/ itself,
+# so nothing reloads it when a user appears.
+User=unblent
+Group=unblent
+WorkingDirectory=/opt/unblent
+# R2 credentials (LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY),
+# root-owned, never in git; systemd reads the file before dropping to unblent.
+EnvironmentFile=/etc/unblent-litestream/r2.env
+ExecStart=/usr/bin/litestream replicate -config /opt/unblent/deploy/litestream.yml
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
