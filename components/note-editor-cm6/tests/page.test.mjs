@@ -76,6 +76,7 @@ for (const engine of ENGINES) {
 
     test("edits under Vim: line one is a Title, \\2 makes a Heading, no markers in the buffer", async () => {
       const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
@@ -116,6 +117,7 @@ for (const engine of ENGINES) {
 
     test("the composer swaps cm6 in place, carrying a note written in the plain editor", async () => {
       const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
@@ -149,6 +151,7 @@ for (const engine of ENGINES) {
 
     test("cm6 mounts on the phone", async () => {
       const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);

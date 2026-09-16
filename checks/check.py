@@ -960,8 +960,11 @@ def _run_browser(files: list, env: dict) -> None:
         if not chunk:
             continue
         procs.append(subprocess.Popen(
-            ["node", "--import", "./checks/register.mjs", "--test",
-             "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
+            # checks/browsers.mjs is the browser rule (11.2): it fails any test that leaves
+            # a browser it launched open and closes it at once, so a timed-out test cannot
+            # leak one into the next and exhaust the host.
+            ["node", "--import", "./checks/register.mjs", "--import", "./checks/browsers.mjs",
+             "--test", "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
              *chunk], cwd=ROOT, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         ))

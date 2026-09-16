@@ -39,6 +39,7 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
   const browser = await chromium.launch({ chromiumSandbox: false });
   try {
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     const page = await context.newPage();
     const problems = [];
     page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
@@ -83,6 +84,7 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
     // exception. (Removing the virtual authenticator instead leaves the ceremony
     // waiting for one, so a bare context is the deterministic refusal.)
     const bare = await browser.newContext();
+    bare.setDefaultTimeout(4000);
     const barePage = await bare.newPage();
     const pageErrors = [];
     const bareLogs = [];

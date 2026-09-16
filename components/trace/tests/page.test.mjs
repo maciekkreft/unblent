@@ -17,7 +17,7 @@ const ENGINES = [
 // The format is machine.js's: `trace #<seq> <tab last 4> query list component-list → catalog …`.
 const LIST = /trace #\d+ (\S+) query list \S+ → catalog/;
 
-async function until(fn, timeout = 8000) {
+async function until(fn, timeout = 4000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     if (fn()) return;
@@ -33,6 +33,7 @@ for (const engine of ENGINES) {
   test(`a second tab's trace sees the first tab's traffic in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     const problems = [];
     const watch = (page, label) => {
       page.on("console", (msg) => {

@@ -44,6 +44,7 @@ for (const engine of ENGINES) {
   test(`the desk shows one child at a time in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const page = await browser.newPage();
+    page.setDefaultTimeout(4000);
     const problems = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") problems.push(`console error: ${msg.text()}`);

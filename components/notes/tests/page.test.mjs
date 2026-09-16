@@ -140,6 +140,7 @@ for (const engine of ENGINES) {
   test(`the note-editor saves through the notes fact in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     try {
       const problems = [];
       const debug = [];
@@ -252,6 +253,7 @@ for (const engine of ENGINES) {
   test(`the note-list highlights the open note and drives the editor in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     try {
       const problems = [];
       const debug = [];
@@ -384,6 +386,7 @@ for (const engine of ENGINES) {
   test(`the notes app composes the list and editor in a dock-desk in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     try {
       const problems = [];
       const page = await context.newPage();
@@ -467,6 +470,7 @@ for (const engine of ENGINES) {
     const userId = `notes-page-${Date.now()}`;
     const cookie = `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
     try {
       const problems = [];
@@ -531,6 +535,7 @@ for (const engine of ENGINES) {
     before(async () => {
       browser = await engine.launch();
       context = await browser.newContext();
+      context.setDefaultTimeout(4000);
     }, { timeout: 30000 });
     after(async () => {
       await browser?.close();

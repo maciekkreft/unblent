@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -54,9 +54,17 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // One browser per engine, a fresh context per test (11): the launch is the costly
+  // part on a small host, and a context keeps each test's storage its own.
+  describe(`page-nav in ${engine.name}`, { timeout: 120000 }, () => {
+    let browser;
+    before(async () => { browser = await engine.launch(); }, { timeout: 30000 });
+    after(async () => { await browser?.close(); }, { timeout: 15000 });
+
   test(`page-nav links every page and marks the current one in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    const page = await browser.newPage();
+    const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
+    const page = await context.newPage();
     const problems = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") problems.push(`console error: ${msg.text()}`);
@@ -99,13 +107,14 @@ for (const engine of ENGINES) {
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
   });
 
   test(`page-nav hosts a slotted control in the bar in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    const page = await browser.newPage();
+    const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
+    const page = await context.newPage();
     try {
       await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
       // The bar renders a slot, and the page's <layout-switch> is assigned into it
@@ -123,7 +132,8 @@ for (const engine of ENGINES) {
       });
       assert.ok(slotted, "layout-switch is assigned into page-nav's controls slot");
     } finally {
-      await browser.close();
+      await context.close();
     }
+  });
   });
 }

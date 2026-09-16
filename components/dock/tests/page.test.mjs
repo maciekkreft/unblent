@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -224,9 +224,9 @@ const ready = (page) =>
 
 // A page on the dock stem, optionally starting from a stored layout (3.1,
 // local-only: the fact reads localStorage), on the phone or the desk.
-async function open(engine, { layout, phone = false } = {}) {
-  const browser = await engine.launch();
+async function open(browser, { layout, phone = false } = {}) {
   const context = await browser.newContext();
+  context.setDefaultTimeout(4000);
   await context.addInitScript(
     ({ layout, phone, key }) => {
       if (phone) localStorage.setItem("viewport", "phone");
@@ -239,7 +239,7 @@ async function open(engine, { layout, phone = false } = {}) {
   await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
   if (phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
   await ready(page);
-  return { browser, page, problems };
+  return { context, page, problems };
 }
 
 const clean = (page) =>
@@ -251,10 +251,18 @@ const clean = (page) =>
 // WebKit first, then Chromium: a Safari-class engine is the stricter check. The
 // stem's story is told in four tests so each fits its own budget (11).
 for (const engine of ENGINES) {
+  // One browser per engine: launching is the costly part on a small host, so tests
+  // share it and each closes only its own context (11). The suite timeout exceeds the
+  // sum of its tests, each still bounded by the run's per-test budget.
+  describe(`dock in ${engine.name}`, { timeout: 120000 }, () => {
+    let browser;
+    before(async () => { browser = await engine.launch(); }, { timeout: 30000 });
+    after(async () => { await browser?.close(); }, { timeout: 15000 });
+
   test(`the desk is four tab groups: dock a view and switch its tabs in ${engine.name}`, async () => {
     // A stored layout with every view on the stage, so this test starts from the
     // all-staged picture rather than the side dock.html seeds (that is its own test).
-    const { browser, page, problems } = await open(engine, { layout: { stage: "token-sheet", docks: {} } });
+    const { context, page, problems } = await open(browser, { layout: { stage: "token-sheet", docks: {} } });
     try {
       const debug = [];
       page.on("console", (msg) => {
@@ -337,12 +345,12 @@ for (const engine of ENGINES) {
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
   });
 
   test(`a dock keeps its scroll, folds to its rail and unfolds on a tab in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, {
+    const { context, page, problems } = await open(browser, {
       layout: {
         stage: "token-sheet",
         docks: { right: { open: true, views: ["trace-list", "contract-list"], active: "trace-list" } },
@@ -405,12 +413,12 @@ for (const engine of ENGINES) {
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
   });
 
   test(`a docked view is kept across a reload, moves between edges and returns in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, {
+    const { context, page, problems } = await open(browser, {
       layout: {
         stage: "components",
         docks: { right: { open: true, views: ["trace-list", "contract-list"], active: "contract-list" } },
@@ -494,12 +502,12 @@ for (const engine of ENGINES) {
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
   });
 
   test(`a side dock is a scrim drawer and a bottom dock a sheet on the phone in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, {
+    const { context, page, problems } = await open(browser, {
       phone: true,
       layout: {
         stage: "token-sheet",
@@ -585,12 +593,12 @@ for (const engine of ENGINES) {
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
   });
 
   test(`the layout switch bars arranging but never folding, and a hidden switch keeps arranging off in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, {
+    const { context, page, problems } = await open(browser, {
       layout: {
         stage: "token-sheet",
         docks: { right: { open: true, views: ["trace-list", "contract-list"], active: "trace-list" } },
@@ -653,12 +661,12 @@ for (const engine of ENGINES) {
       await page.evaluate(() => localStorage.clear());
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
   });
 
   test(`a fresh desk seeds the side a page declares in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine);
+    const { context, page, problems } = await open(browser);
     try {
       // dock.html declares side="right" on Trace and the desk has no stored
       // arrangement, so it seeds Trace into the right dock while the rest stay stage
@@ -669,7 +677,8 @@ for (const engine of ENGINES) {
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
+  });
   });
 }

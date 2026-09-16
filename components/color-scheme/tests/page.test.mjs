@@ -74,6 +74,7 @@ for (const engine of ENGINES) {
     await still.close();
 
     const page = await browser.newPage();
+    page.setDefaultTimeout(4000);
     const problems = [];
     page.on("console", (msg) => {
       if (msg.type() === "error") problems.push(`console error: ${msg.text()}`);

@@ -86,6 +86,7 @@ async function open(engine, { phone = false } = {}) {
   // choices the sheet writes must then survive a reload on their own.
   const browser = await engine.launch();
   const context = await browser.newContext();
+  context.setDefaultTimeout(4000);
   if (phone) await context.addInitScript(() => localStorage.setItem("viewport", "phone"));
   const page = await context.newPage();
   const problems = watch(page);

@@ -61,6 +61,7 @@ for (const engine of ENGINES) {
     const browser = await engine.launch();
     try {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      context.setDefaultTimeout(4000);
       // The phone frame narrows the body (7.5), which is the honest signal the
       // desk's `@container (width < 45rem)` reads; a wide window with a coarse
       // pointer still draws the frame (base.css needs `pointer: fine`).
@@ -96,7 +97,7 @@ for (const engine of ENGINES) {
       // class, so the measurement is the folded size and not a mid-slide frame.
       await page.waitForFunction((rail) => {
         const d = document.querySelector("dock-desk").shadowRoot.querySelector(".dock.right");
-        return d.classList.contains("folded") && d.getBoundingClientRect().width <= rail + 2;
+        return d.classList.contains("folded") && d.getBoundingClientRect().width <= rail + 1;
       }, rail);
       const folded = await state(page);
       assert.equal(folded.dockPos, "relative", "a folded side dock sits in the flow, not over the stage");

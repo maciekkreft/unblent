@@ -42,6 +42,7 @@ for (const engine of ENGINES) {
   test(`the session switch shows the anonymous create-account control in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
     const page = await context.newPage();
     const problems = watch(page);
     try {
