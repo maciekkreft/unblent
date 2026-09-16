@@ -548,7 +548,7 @@ The architecture document describes the rules; the checks are what make them rea
 
 - **One user per browser.** Signing in adopts everything cached anonymously in that browser, so `notes` enqueues its whole cache to the account; a second account on the same browser is not a goal.
 
-- **No surface for a refused gesture yet.** `session.refused`, `note.conflicted` and `llm.unavailable` reach no view a user sees; a future `notice-stack` view would consume them and show dismissable notices. Until then the trace is where they show.
+- **A notice lives in its tab.** `notice-stack` consumes `session.refused` and `note.conflicted` and shows them as dismissable notices; a conflict offers Keep mine, which re-emits `note.saved` (the view where the user acted, section 4) so the user's copy survives what `notes` otherwise drops. It holds notices only as UI state: after a reload the conflict, and the copy it carried, are gone, because `notes` does not yet keep conflicts as a queryable fact. `llm.unavailable` joins the same table when `llm` exists.
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
