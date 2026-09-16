@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
-import { EditorState, StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
+import { EditorState, StateField, StateEffect, RangeSetBuilder, Prec } from "@codemirror/state";
 import { EditorView, Decoration, keymap, drawSelection } from "@codemirror/view";
 import { history, historyKeymap } from "@codemirror/commands";
 import { vim, Vim } from "@replit/codemirror-vim";
@@ -80,35 +80,58 @@ const levelTheme = EditorView.theme({
   "&": { height: "100%", color: "var(--color-ink)", backgroundColor: "transparent" },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": { fontFamily: "var(--font-sans)", lineHeight: "var(--leading-normal)", overflow: "auto" },
-  ".cm-content": { caretColor: "var(--color-accent)", padding: "0" },
+  // The caret at column 0 is drawn 0.6px left of the text, so .cm-content needs a
+  // sliver of side padding or the scroller's overflow clip eats it (an `o` cursor).
+  ".cm-content": { caretColor: "var(--color-accent)", padding: "0 var(--space-2xs)" },
   ".cm-line": { fontSize: "var(--text-body)", padding: "0" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
   ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
-  ".cm-fat-cursor": { background: "var(--color-accent-selection)" },
   // A modest Notes.app-style ladder: Title/Heading step down through the shared
   // heading tokens, and Subheading is body-sized, set apart by weight alone (7.4:
   // the type scale has no size between body and subtitle, so weight carries it).
+  // The spacing is padding, never margin: CM6 measures a line's box for its height
+  // map and Vim's j/k move by pixels through it, so a margin desyncs the map and
+  // makes a motion overshoot a level line.
   ".cm-line.cm-level-title": {
     fontSize: "var(--text-heading)",
     fontWeight: "var(--weight-semibold)",
     lineHeight: "var(--leading-tight)",
-    marginBottom: "var(--space-sm)",
+    paddingBottom: "var(--space-xs)",
   },
   ".cm-line.cm-level-heading": {
     fontSize: "var(--text-subtitle)",
     fontWeight: "var(--weight-semibold)",
     lineHeight: "var(--leading-tight)",
-    marginTop: "var(--space-lg)",
-    marginBottom: "var(--space-xs)",
+    paddingTop: "var(--space-sm)",
   },
   ".cm-line.cm-level-subheading": {
     fontSize: "var(--text-body)",
     fontWeight: "var(--weight-semibold)",
     lineHeight: "var(--leading-tight)",
-    marginTop: "var(--space-md)",
-    marginBottom: "var(--space-2xs)",
+    paddingTop: "var(--space-xs)",
   },
 });
+
+// The fat cursor. The vim plugin ships its own Prec.highest theme for it, so this
+// one both raises precedence and marks the competing properties !important to win
+// regardless of stylesheet order. Focused, it fills with the accent; unfocused, it
+// is hollowed from the inside with an inset shadow, which no edge clip can reach —
+// the plugin draws an outline outside an absolutely positioned span, and Safari
+// clips its top and left. The plugin's own colours are also not tokens.
+const fatCursorTheme = Prec.highest(
+  EditorView.theme({
+    ".cm-fat-cursor": {
+      background: "var(--color-accent) !important",
+      color: "var(--color-accent-text) !important",
+    },
+    "&:not(.cm-focused) .cm-fat-cursor": {
+      background: "none !important",
+      outline: "none !important",
+      color: "var(--color-ink) !important",
+      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
+    },
+  }),
+);
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -195,6 +218,8 @@ class NoteEditorCm6 extends LitElement {
       flex-wrap: wrap;
       align-items: baseline;
       gap: var(--space-sm) var(--space-md);
+      /* Match the sliver .cm-content adds so the status aligns with the text. */
+      padding-inline: var(--space-2xs);
       font-size: var(--text-caption);
       color: var(--color-mute);
     }
@@ -237,6 +262,7 @@ class NoteEditorCm6 extends LitElement {
       drawSelection(),
       levelField,
       levelTheme,
+      fatCursorTheme,
       history(),
       keymap.of(historyKeymap),
       EditorView.lineWrapping,

@@ -58,6 +58,43 @@ const lines = (page) =>
     return [...root.querySelectorAll(".cm-line")].map((l) => ({ text: l.textContent, className: l.className }));
   });
 
+// The line the normal-mode cursor sits on: the .cm-line whose box holds the top of
+// the vim fat cursor. Read from the DOM so the test needs no vendor import.
+const caretLine = (page) =>
+  page.evaluate(() => {
+    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const fat = root.querySelector(".cm-fat-cursor")?.getBoundingClientRect();
+    return [...root.querySelectorAll(".cm-line")].findIndex((l) => {
+      const r = l.getBoundingClientRect();
+      return fat && fat.top >= r.top - 1 && fat.top < r.bottom;
+    });
+  });
+
+// The insert caret CM6 draws, against the scroller that clips it.
+const insertCaret = (page) =>
+  page.evaluate(() => {
+    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const caret = root.querySelector(".cm-layer.cm-cursorLayer .cm-cursor")?.getBoundingClientRect();
+    const scroller = root.querySelector(".cm-scroller").getBoundingClientRect();
+    return caret ? { left: caret.left, height: caret.height, scrollerLeft: scroller.left } : null;
+  });
+
+// How the fat cursor and the level lines are drawn: the parts a screenshot cannot
+// assert deterministically.
+const drawn = (page) =>
+  page.evaluate(() => {
+    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const fat = root.querySelector(".cm-fat-cursor");
+    const fatStyle = fat && getComputedStyle(fat);
+    return {
+      fat: fatStyle ? { outlineStyle: fatStyle.outlineStyle, boxShadow: fatStyle.boxShadow } : null,
+      levelMargins: [...root.querySelectorAll('.cm-line[class*="cm-level-"]')].map((l) => {
+        const s = getComputedStyle(l);
+        return [s.marginTop, s.marginBottom];
+      }),
+    };
+  });
+
 const ENGINES = [
   { name: "webkit", launch: () => webkit.launch() },
   { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
@@ -145,6 +182,66 @@ for (const engine of ENGINES) {
       assert.equal(shown.map((l) => l.text).join("\n"), "Carried note\nsecond line", "the note carried across the swap");
       // A note the plain editor wrote has no markers, so cm6 shows it all as Body.
       assert.ok(!shown.some((l) => l.className.includes("cm-level-")), "unmarked lines load as Body");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    test("levels keep Vim motions exact and both cursors stay visible", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
+      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
+
+      await page.locator("note-editor-cm6 .cm-content").click();
+      await page.keyboard.press("i");
+      await page.keyboard.type("One\nTwo\nThree\nFour");
+      await page.keyboard.press("Escape");
+      await until(async () => (await lines(page)).length === 4);
+
+      // Vim moves j/k by pixels through CM6's height map, which measures a line's
+      // box and not its margins: a level must not change what j reaches.
+      await page.keyboard.press("g");
+      await page.keyboard.press("g");
+      const landed = [];
+      let from = await caretLine(page);
+      for (const [key, expect] of [["\\1", 1], ["\\2", 2], ["\\3", 3]]) {
+        await page.keyboard.type(key);
+        await until(async () => (await lines(page)).some((l) => l.className.includes("cm-level-")));
+        await page.keyboard.press("j");
+        await until(async () => (await caretLine(page)) !== from);
+        from = await caretLine(page);
+        landed.push([expect, from]);
+      }
+      await page.keyboard.press("k");
+      await until(async () => (await caretLine(page)) !== from);
+      landed.push([2, await caretLine(page)]);
+      assert.deepEqual(landed.map(([, got]) => got), landed.map(([want]) => want), `j/k landed on ${JSON.stringify(landed)}`);
+      const before = await drawn(page);
+      assert.ok(before.levelMargins.length >= 3, "three leveled lines");
+      assert.ok(before.levelMargins.every(([t, b]) => t === "0px" && b === "0px"), `level lines carry no margin, saw ${JSON.stringify(before.levelMargins)}`);
+
+      // o opens a line at column 0: the caret must lie inside the scroller's clip.
+      await page.keyboard.press("G");
+      await page.keyboard.press("o");
+      await until(async () => (await insertCaret(page))?.height > 0);
+      const caret = await insertCaret(page);
+      assert.ok(caret.left >= caret.scrollerLeft, `insert caret clipped: left ${caret.left} < scroller ${caret.scrollerLeft}`);
+
+      // An unfocused editor hollows the fat cursor from the inside, so no edge of
+      // it can be clipped; a focused one fills it.
+      await page.keyboard.press("Escape");
+      await until(async () => (await drawn(page)).fat !== null);
+      await page.evaluate(() => document.querySelector("note-editor-cm6").shadowRoot.querySelector(".cm-content").blur());
+      await until(async () => (await drawn(page)).fat?.boxShadow.includes("inset"));
+      const blurred = (await drawn(page)).fat;
+      assert.equal(blurred.outlineStyle, "none", "no outline on the unfocused fat cursor");
+      await page.locator("note-editor-cm6 .cm-content").click();
+      await until(async () => (await drawn(page)).fat?.boxShadow === "none");
+
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
