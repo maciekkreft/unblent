@@ -395,17 +395,62 @@ for (const engine of ENGINES) {
           const vp = document.querySelector("book-reader").shadowRoot.querySelector(".viewport").getBoundingClientRect();
           return { x: vp.x, y: vp.y, w: vp.width, h: vp.height };
         });
-        // A leftward swipe across the page turns forward — past the one-page first
-        // chapter, into the second.
-        const y = box.y + box.h / 2;
-        await page.mouse.move(box.x + box.w * 0.8, y);
-        await page.mouse.down();
-        for (let i = 1; i <= 6; i++) await page.mouse.move(box.x + box.w * 0.8 - i * 28, y);
-        await page.mouse.up();
+        // A leftward finger swipe across the page turns forward — past the one-page
+        // first chapter, into the second. Synthetic touch pointer events, since only
+        // a finger or pen swipes (a mouse selects) and Playwright's touchscreen has
+        // only tap().
+        await page.evaluate((b) => {
+          const vp = document.querySelector("book-reader").shadowRoot.querySelector(".viewport");
+          const y = b.y + b.h / 2;
+          const send = (type, x) => vp.dispatchEvent(new PointerEvent(type, { pointerId: 1, pointerType: "touch", isPrimary: true, button: 0, clientX: x, clientY: y, bubbles: true }));
+          send("pointerdown", b.x + b.w * 0.8);
+          for (let i = 1; i <= 6; i++) send("pointermove", b.x + b.w * 0.8 - i * 28);
+          send("pointerup", b.x + b.w * 0.8 - 6 * 28);
+        }, box);
         await waitChapter(page, "Chapter Two");
 
         mkdirSync(SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: resolve(SCREENSHOTS, `books-reader-phone-${engine.name}.png`) });
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test("a mouse drag selects text and does not turn", async () => {
+      const { page, problems } = await openAndRewind();
+      try {
+        const before = await rstate(page);
+        // Drag across a real line of text in the first block, so the gesture both
+        // selects and is long enough (>= SWIPE) to have turned before this change.
+        const box = await page.evaluate(() => {
+          const sr = document.querySelector("book-reader").shadowRoot;
+          const p = sr.querySelector(".strip p, .strip li, .strip h1, .strip h2");
+          const r = p.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        });
+        // Leftward, so before the change it would have turned forward off the
+        // one-page first chapter into the second.
+        const y = box.y + box.h / 2;
+        const step = Math.max(28, (box.w - 8) / 6);
+        await page.mouse.move(box.x + box.w - 4, y);
+        await page.mouse.down();
+        for (let i = 1; i <= 6; i++) await page.mouse.move(box.x + box.w - 4 - i * step, y);
+        await page.mouse.up();
+        const after = await rstate(page);
+        // A leftward drag of this length would have turned before the change; the
+        // mouse now selects instead, so the place is untouched.
+        assert.equal(after.chap, before.chap, "the chapter did not change");
+        assert.equal(after.page, before.page, "the page did not turn");
+        // The drag left a text selection (user-select: text on a fine pointer). Read
+        // by toString(): WebKit reports a shadow selection collapsed but its text
+        // present, so isCollapsed is not portable, its string is.
+        const selected = await page.evaluate(() => {
+          const sr = document.querySelector("book-reader").shadowRoot;
+          const sel = sr.getSelection ? sr.getSelection() : document.getSelection();
+          return (sel?.toString() ?? "").trim().length > 0;
+        });
+        assert.ok(selected, "the drag selected text instead of turning");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await page.close();

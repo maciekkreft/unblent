@@ -123,6 +123,15 @@ class BookReader extends LitElement {
         transition: none;
       }
     }
+    /* A mouse can select the text to copy it; a finger cannot, so a horizontal
+       finger drag stays the turn gesture and never starts a selection (the viewport's
+       user-select: none, above). The pointer handlers already refuse a mouse swipe. */
+    @media (hover: hover) and (pointer: fine) {
+      .strip {
+        user-select: text;
+        -webkit-user-select: text;
+      }
+    }
     @container (width < 45rem) {
       .page {
         padding-inline: var(--space-md);
@@ -583,7 +592,15 @@ class BookReader extends LitElement {
 
   #pointerdown(e) {
     if (e.button != null && e.button !== 0) return;
-    this.#drag = { pointerId: e.pointerId, x0: e.clientX, y0: e.clientY, width: e.currentTarget.getBoundingClientRect().width, dragging: false, abandoned: false };
+    this.#drag = {
+      pointerId: e.pointerId,
+      mouse: e.pointerType === "mouse",
+      x0: e.clientX,
+      y0: e.clientY,
+      width: e.currentTarget.getBoundingClientRect().width,
+      dragging: false,
+      abandoned: false,
+    };
   }
 
   #pointermove(e) {
@@ -596,7 +613,12 @@ class BookReader extends LitElement {
         d.abandoned = true; // a vertical drag is a scroll, not a page turn
         return;
       }
-      if (Math.abs(dx) > SLOP) d.dragging = true;
+      if (Math.abs(dx) > SLOP) {
+        // A mouse drag across the text is a selection, never a swipe; only a finger
+        // or a pen swipes. The mouse still turns from the edges and the footer.
+        if (d.mouse) d.abandoned = true;
+        else d.dragging = true;
+      }
     }
   }
 
@@ -610,7 +632,9 @@ class BookReader extends LitElement {
       else this.#prev();
       return;
     }
-    if (d.dragging) return; // a small drag that is neither a swipe nor a clean tap
+    if (d.dragging || d.abandoned) return; // a drag that is neither a swipe nor a clean tap
+    // A click that ends on a selection (a double-click on a word) is about the text.
+    if (d.mouse && !(this.shadowRoot.getSelection?.() ?? document.getSelection())?.isCollapsed) return;
     // A tap: the outer third on each side turns; the middle does nothing, so a reach
     // for a link or a figure is never a turn.
     const rel = (e.clientX - e.currentTarget.getBoundingClientRect().left) / d.width;
