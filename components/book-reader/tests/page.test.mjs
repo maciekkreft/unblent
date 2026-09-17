@@ -373,9 +373,22 @@ for (const engine of ENGINES) {
           const img = [...r.querySelectorAll(".strip img")].find((i) => /Smiling face emoji/.test(i.alt));
           if (!img) return null;
           const pre = img.closest("pre");
-          return { h: img.getBoundingClientRect().height, em: parseFloat(getComputedStyle(img).fontSize), preOverflow: pre.scrollWidth - pre.clientWidth };
+          const ps = getComputedStyle(pre);
+          return {
+            h: img.getBoundingClientRect().height,
+            em: parseFloat(getComputedStyle(img).fontSize),
+            preOverflow: pre.scrollWidth - pre.clientWidth,
+            face: ps.fontFamily,
+            size: parseFloat(ps.fontSize),
+            prose: parseFloat(getComputedStyle(r.querySelector(".strip p")).fontSize),
+            ground: ps.backgroundColor,
+          };
         });
         assert.ok(glyph, "the inline emoji image is on the page");
+        // A listing reads as code: the mono face, smaller than the prose, on its own ground.
+        assert.match(glyph.face, /monospace/, `a listing is set in the mono face (${glyph.face})`);
+        assert.ok(glyph.size < glyph.prose, `a listing (${glyph.size}) is smaller than the prose (${glyph.prose})`);
+        assert.notEqual(glyph.ground, "rgba(0, 0, 0, 0)", "a listing has its own ground");
         assert.ok(Math.abs(glyph.h - glyph.em) <= 1, `emoji height ${glyph.h} tracks the text size ${glyph.em}`);
         assert.ok(glyph.preOverflow <= 1, `the code line stays in the column (overflow ${glyph.preOverflow})`);
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);

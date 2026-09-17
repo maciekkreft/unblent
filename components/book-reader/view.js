@@ -182,6 +182,33 @@ class BookReader extends LitElement {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+    /* Code is told from prose by its face, and a listing by its own sunken block,
+       set smaller so fewer of its lines wrap. The padding stays inside max-width. */
+    .strip :is(pre, code) {
+      font-family: var(--font-mono);
+    }
+    .strip pre {
+      box-sizing: border-box;
+      margin-block: var(--space-md);
+      padding: var(--space-sm) var(--space-md);
+      font-size: var(--text-caption);
+      line-height: var(--leading-tight);
+      color: var(--color-ink);
+      background: var(--color-canvas-soft);
+      border-radius: var(--radius-sm);
+    }
+    /* A book may wrap every word of a listing in its own code element, so only code
+       in running text is tinted. */
+    .strip :not(pre) > code {
+      padding-inline: var(--space-2xs);
+      font-size: var(--text-sm);
+      color: var(--color-ink);
+      background: var(--color-canvas-soft);
+      border-radius: var(--radius-sm);
+    }
+    .strip pre img {
+      height: var(--text-caption);
+    }
     .strip :is(figure, table, pre) {
       break-inside: avoid;
     }

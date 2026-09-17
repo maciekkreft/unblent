@@ -44,6 +44,7 @@
   /* === TYPOGRAPHY === */
 
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; /* code in a book (book-reader) */
 
   /* App scale */
   --text-heading: 1.5rem;      /* 24px — page titles; a note's Title line (note-editor-cm6) */
