@@ -7,8 +7,9 @@ never depends on this running. Stdlib only.
 sample.epub is a minimal EPUB 3 with a nav.xhtml two-level TOC (no toc.ncx), a 1x1
 PNG cover and one figure image, and three chapters: one short, one long with an
 <h2 id="mid"> the TOC points at, and one exercising a code listing with an
-inline emoji image (the O'Reilly idiom: a 160px PNG in a <pre>), a figure, a table, a
-nested list, a <div> to unwrap and a <script> to drop. broken.epub is a zip with no
+inline emoji image (the O'Reilly idiom: a 160px PNG in a <pre>), a figure, an <h3>
+section and a second figure captioned with an <h6> (the O'Reilly idiom again), a
+table, a nested list, a <div> to unwrap and a <script> to drop. broken.epub is a zip with no
 META-INF/container.xml, so the importer rejects it (422, unreadable).
 """
 
@@ -161,6 +162,11 @@ CH2 = """<?xml version="1.0" encoding="utf-8"?>
         <li>Second</li>
       </ul>
     </div>
+    <h3>A Section</h3>
+    <figure>
+      <img src="images/fig.png" alt="A heading-captioned figure"/>
+      <h6>Figure 3-1. A heading caption (the O'Reilly idiom).</h6>
+    </figure>
     <script>window.dropped = true;</script>
   </body>
 </html>

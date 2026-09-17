@@ -132,11 +132,6 @@ class BookReader extends LitElement {
         -webkit-user-select: text;
       }
     }
-    @container (width < 45rem) {
-      .page {
-        padding-inline: var(--space-md);
-      }
-    }
     /* The book's own text in the app's type and tokens; the importer dropped its CSS
        (Decision 3). Everything is held to the page so nothing overflows a column. */
     .strip :is(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, figure, table) {
@@ -155,6 +150,20 @@ class BookReader extends LitElement {
     .strip :is(h1, h2, h3, h4, h5, h6) {
       break-after: avoid;
       margin-block: var(--space-lg) var(--space-md);
+    }
+    /* A narrow page (the phone) steps the headings down a size, so a section title
+       does not fill a column that holds five words a line. */
+    @container (width < 45rem) {
+      .page {
+        padding-inline: var(--space-md);
+      }
+      .strip :is(h1, h2) {
+        font-size: var(--text-subtitle);
+      }
+      .strip :is(h3, h4, h5, h6) {
+        font-size: var(--text-body);
+        font-weight: var(--weight-semibold);
+      }
     }
     .strip p {
       font-size: var(--text-body);
@@ -215,9 +224,16 @@ class BookReader extends LitElement {
     .strip figure {
       margin: var(--space-md) 0;
     }
-    .strip figcaption {
+    /* A book may caption a figure with a heading (the O'Reilly idiom: an h6 in the
+       figure), which is a caption, not a section: it follows its image, so there is
+       nothing after it to keep it with. */
+    .strip :is(figcaption, figure :is(h1, h2, h3, h4, h5, h6)) {
+      margin-block: var(--space-xs) 0;
       font-size: var(--text-caption);
+      font-weight: var(--weight-normal);
+      line-height: var(--leading-normal);
       color: var(--color-mute);
+      break-after: auto;
     }
     .strip table {
       border-collapse: collapse;

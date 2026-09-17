@@ -384,6 +384,23 @@ for (const engine of ENGINES) {
             ground: ps.backgroundColor,
           };
         });
+        // A book may caption a figure with a heading (the O'Reilly h6); it reads as a
+        // caption, not a section — the mute size of a <figcaption>, not a heading's.
+        const caps = await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          const one = (sel) => {
+            const el = r.querySelector(sel);
+            const cs = getComputedStyle(el);
+            return { size: parseFloat(cs.fontSize), weight: cs.fontWeight, color: cs.color };
+          };
+          return { fc: one(".strip figcaption"), h6: one(".strip figure h6"), h1: one(".strip h1"), prose: one(".strip p") };
+        });
+        assert.ok(Math.abs(caps.h6.size - caps.fc.size) <= 0.5, `a heading caption (${caps.h6.size}) is set like a figcaption (${caps.fc.size})`);
+        assert.ok(caps.h6.size < caps.prose.size, `a caption (${caps.h6.size}) is smaller than the prose (${caps.prose.size})`);
+        assert.equal(caps.h6.weight, "400", `a caption is not bold (${caps.h6.weight})`);
+        assert.equal(caps.h6.color, caps.fc.color, "a heading caption is muted like a figcaption");
+        // A real heading is still a heading at desk width: larger than the prose.
+        assert.ok(caps.h1.size > caps.prose.size, `a chapter heading (${caps.h1.size}) stays a heading (prose ${caps.prose.size})`);
         assert.ok(glyph, "the inline emoji image is on the page");
         // A listing reads as code: the mono face, smaller than the prose, on its own ground.
         assert.match(glyph.face, /monospace/, `a listing is set in the mono face (${glyph.face})`);
@@ -427,6 +444,20 @@ for (const engine of ENGINES) {
           send("pointerup", b.x + b.w * 0.8 - 6 * 28);
         }, box);
         await waitChapter(page, "Chapter Two");
+
+        // A narrow page steps a heading down (the @container rule): the chapter heading
+        // is smaller than the desk heading token, yet still larger than the prose.
+        const heads = await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          const px = (name) => parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) * 16;
+          return {
+            h1: parseFloat(getComputedStyle(r.querySelector(".strip h1")).fontSize),
+            prose: parseFloat(getComputedStyle(r.querySelector(".strip p")).fontSize),
+            deskHeading: px("--text-heading"),
+          };
+        });
+        assert.ok(heads.h1 < heads.deskHeading, `a phone heading (${heads.h1}) is stepped below the desk heading (${heads.deskHeading})`);
+        assert.ok(heads.h1 > heads.prose, `a phone heading (${heads.h1}) is still larger than the prose (${heads.prose})`);
 
         mkdirSync(SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: resolve(SCREENSHOTS, `books-reader-phone-${engine.name}.png`) });
