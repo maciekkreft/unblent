@@ -82,6 +82,12 @@ class BookReader extends LitElement {
       overflow: hidden;
       display: flex;
       justify-content: center;
+      /* A horizontal finger drag is the reader's own turn gesture, so it is not
+         surrendered to the browser as a pan; only a vertical drag scrolls. A press
+         never starts a text selection (the note-list .row idiom). */
+      touch-action: pan-y;
+      user-select: none;
+      -webkit-user-select: none;
     }
     /* The clip window, exactly one page wide (the reading measure), padded so the text
        sits in from the edge; its overflow hides the columns to either side. */
@@ -104,7 +110,11 @@ class BookReader extends LitElement {
       column-fill: auto;
       column-gap: var(--space-xl);
       transform: translateX(calc(-1 * var(--page, 0) * (100% + var(--space-xl))));
-      transition: transform var(--duration-fast) var(--ease);
+      /* The strip is a tall multi-column box; kept on its own compositor layer
+         between turns, a turn no longer begins by promoting and painting the whole
+         box (a stall that outran the slide in phone width). */
+      will-change: transform;
+      transition: transform var(--duration-slide) var(--ease);
       color: var(--color-body);
       line-height: var(--leading-normal);
     }

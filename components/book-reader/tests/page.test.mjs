@@ -59,7 +59,7 @@ const rstate = (page) => page.evaluate(foot);
 // A brief pause after a chapter loads, so its deferred re-measure has finished before
 // the next turn — the reader cancels that measure on a turn, and this keeps the test
 // clear of the narrow window where the two would race.
-const settle = () => new Promise((r) => setTimeout(r, 150));
+const settle = () => new Promise((r) => setTimeout(r, 350));
 const focusReader = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".reader").focus());
 const clickTile = (page) =>
   page.evaluate(() => {
