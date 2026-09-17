@@ -56,7 +56,7 @@ class BookReader extends LitElement {
       /* The reader is its own query container, so its measure narrows on the phone
          (the dock-desk convention); a container cannot restyle itself, the inner
          .strip reads the query. */
-      container-type: inline-size;
+      container: reader / inline-size;
     }
     :host([height="fill"]) {
       flex: 1;
@@ -99,6 +99,8 @@ class BookReader extends LitElement {
       padding-inline: var(--space-lg);
       box-sizing: border-box;
       overflow: hidden;
+      /* A container so the strip can name the page's width as 100cqw (below). */
+      container-type: inline-size;
     }
     /* The fragment, built outside Lit's template and appended once (view.js): a single
        tall column box, as wide as the page, whose overflow becomes further columns of
@@ -109,7 +111,10 @@ class BookReader extends LitElement {
       column-count: 1;
       column-fill: auto;
       column-gap: var(--space-xl);
-      transform: translateX(calc(-1 * var(--page, 0) * (100% + var(--space-xl))));
+      /* One page is the clip window's content width, 100cqw, not the strip's own
+         100%: WebKit resolves a transform's percentage against the pixel-snapped box,
+         so at a fractional width every page slid a fraction short of its column. */
+      transform: translateX(calc(-1 * var(--page, 0) * (100cqw + var(--space-xl))));
       /* The strip is a tall multi-column box; kept on its own compositor layer
          between turns, a turn no longer begins by promoting and painting the whole
          box (a stall that outran the slide in phone width). */
@@ -153,7 +158,7 @@ class BookReader extends LitElement {
     }
     /* A narrow page (the phone) steps the headings down a size, so a section title
        does not fill a column that holds five words a line. */
-    @container (width < 45rem) {
+    @container reader (width < 45rem) {
       .page {
         padding-inline: var(--space-md);
       }
@@ -415,12 +420,15 @@ class BookReader extends LitElement {
   // per layout; a hidden tab has no box, so a zero width means measure later.
   #measure() {
     const strip = this.#strip;
-    const width = strip.clientWidth;
+    // The fractional width, not clientWidth: a rounded pitch is half a pixel off per
+    // column, a whole page after a few hundred.
+    const box = strip.getBoundingClientRect();
+    const width = box.width;
     if (width <= 0) return false;
     const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
     // Each block is measured from the strip's own edge: the slide moves both alike, so
     // the measure holds whatever page is shown, even while a turn is still in motion.
-    const x0 = strip.getBoundingClientRect().left;
+    const x0 = box.left;
     this.#pageOf = [...strip.children].map((el) =>
       Math.max(0, Math.round((el.getBoundingClientRect().left - x0) / (width + gap))),
     );
@@ -447,7 +455,8 @@ class BookReader extends LitElement {
   #columnOf(rect) {
     const strip = this.#strip;
     const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
-    return Math.round((rect.left - strip.getBoundingClientRect().left) / (strip.clientWidth + gap));
+    const box = strip.getBoundingClientRect();
+    return Math.round((rect.left - box.left) / (box.width + gap));
   }
 
   // The text nodes of a block, with the running offset each one starts at, so a

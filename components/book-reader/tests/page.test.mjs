@@ -331,6 +331,34 @@ for (const engine of ENGINES) {
       }
     });
 
+    // WebKit resolves a transform's percentage against the pixel-snapped box, so a
+    // slide written in the strip's own 100% fell a fraction short of every column and
+    // the text crept sideways page by page. A fractional, narrow page makes it show.
+    test("a late page sits on its column at a fractional page width", async () => {
+      const { page, problems } = await openAndRewind();
+      try {
+        await page.keyboard.press("ArrowRight");
+        await waitPagesAtLeast(page, "Chapter Two", 3);
+        await page.evaluate(() => { document.querySelector("book-reader").shadowRoot.querySelector(".page").style.width = "200.5px"; });
+        await waitPagesAtLeast(page, "Chapter Two", 8);
+        await settle();
+        await page.keyboard.press("End");
+        await settle();
+        const { shown, off } = await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          const pg = r.querySelector(".page");
+          const left = pg.getBoundingClientRect().left + parseFloat(getComputedStyle(pg).paddingLeft);
+          const lefts = [...r.querySelector(".strip").children].flatMap((b) => [...b.getClientRects()].map((x) => x.left - left));
+          return { shown: Number(r.querySelector(".strip").style.getPropertyValue("--page")), off: lefts.reduce((a, x) => (Math.abs(x) < Math.abs(a) ? x : a), Infinity) };
+        });
+        assert.ok(shown >= 7, `the last page is a late one (page ${shown})`);
+        assert.ok(Math.abs(off) < 0.1, `the column sits on the page's edge (off by ${off}px on page ${shown})`);
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
     test("a jump from the contents lands on the chapter's first page without sliding", async () => {
       const { page, problems } = await openAndRewind();
       try {
