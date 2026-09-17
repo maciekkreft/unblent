@@ -38,6 +38,7 @@ const state = (page) =>
       dockPos: getComputedStyle(dock).position,
       dockWidth: Math.round(box(dock).width),
       folded: dock.classList.contains("folded"),
+      stageWidth: Math.round(box(stage).width),
       stageRight: Math.round(box(stage).right),
       hostRight: Math.round(box(el).right),
       scrimOn: scrim.classList.contains("on"),
@@ -91,8 +92,21 @@ for (const engine of ENGINES) {
       await page.screenshot({ path: resolve(SCREENSHOTS, `dock-desk-phone-drawer-${engine.name}.png`) });
 
       // A tap on the scrim folds the drawer back to its edge rail: the forgiving
-      // close, one step (Norman). The dock returns to the flow beside the stage.
+      // close, one step (Norman). The dock stays out of the flow and only narrows,
+      // so the stage holds one width through every frame of the slide.
       await clickInDesk(page, ".scrim");
+      const slide = await page.locator("dock-desk").evaluate(async (el, rail) => {
+        const dock = el.shadowRoot.querySelector(".dock.right");
+        const stage = el.shadowRoot.querySelector(".stage");
+        const widths = new Set();
+        const start = performance.now();
+        while (dock.getBoundingClientRect().width > rail + 1 && performance.now() - start < 2000) {
+          widths.add(Math.round(stage.getBoundingClientRect().width));
+          await new Promise((next) => requestAnimationFrame(next));
+        }
+        return [...widths];
+      }, rail);
+      assert.deepEqual(slide, [open.stageWidth], "the stage is never squeezed while the drawer folds");
       // The dock slides to the rail width; wait for it to settle, not just for the
       // class, so the measurement is the folded size and not a mid-slide frame.
       await page.waitForFunction((rail) => {
@@ -100,7 +114,8 @@ for (const engine of ENGINES) {
         return d.classList.contains("folded") && d.getBoundingClientRect().width <= rail + 1;
       }, rail);
       const folded = await state(page);
-      assert.equal(folded.dockPos, "relative", "a folded side dock sits in the flow, not over the stage");
+      assert.equal(folded.dockPos, "absolute", "a folded side dock stays out of the flow, on its gutter");
+      assert.equal(folded.stageWidth, open.stageWidth, "folding the drawer does not resize the stage");
       // Within a pixel: the rail's edge border rounds the border-box width.
       assert.ok(Math.abs(folded.dockWidth - rail) <= 1, "a folded side dock is a rail one token wide");
       assert.ok(Math.abs(folded.hostRight - folded.stageRight - rail) <= 1, "the stage sits beside the rail, not under it");
@@ -115,6 +130,7 @@ for (const engine of ENGINES) {
       const reopened = await state(page);
       assert.equal(reopened.dockPos, "absolute", "tapping the rail floats the drawer back over the stage");
       assert.ok(reopened.scrimOn, "the scrim returns with the drawer");
+      assert.equal(reopened.stageWidth, open.stageWidth, "opening the drawer does not resize the stage");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

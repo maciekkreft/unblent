@@ -382,37 +382,60 @@ class DockDesk extends LitElement {
        admits only tokens for lengths that place a box, and a container breakpoint is
        neither. Range syntax: WebKit ≥ 16.4 and Chromium support it. */
     @container (width < 45rem) {
-      /* A side dock keeps only a rail's width in flow, open or folded, so the
-         stage never loses more than a rail and nothing reflows when a drawer
-         opens: it stays the vertical edge rail it is on the desk (base rules), and
-         opening it floats its panel over the stage as a drawer instead of
-         widening in flow. */
+      /* A side dock is always out of the flow here, a rail or a drawer, anchored
+         to the row at its edge. The stage reserves the rail as a margin instead,
+         so the stage keeps one width whether a drawer is folded, open or
+         mid-slide, and only the dock's own width animates: a dock that re-entered
+         the flow on fold would squeeze the stage for the length of the slide. The
+         dock still spans from the true edge (left/right: 0 against the unpadded
+         row), so an open drawer covers its own rail with no strip left showing. */
+      .row {
+        position: relative;
+      }
+      .row:has(> .dock.left) .stage {
+        margin-left: var(--space-xl);
+      }
+      .row:has(> .dock.right) .stage {
+        margin-right: var(--space-xl);
+      }
       .dock.left,
       .dock.right {
-        width: var(--space-xl);
-      }
-      /* Opening a side dock lifts the whole dock out of the row and over the
-         stage, anchored to the desk, keeping its own canvas, edge border and
-         clipping (base .dock); its panel fills it. The row's slot collapses
-         behind the drawer, so the reflow is never seen. */
-      .dock.left:not(.folded),
-      .dock.right:not(.folded) {
         position: absolute;
         top: 0;
         bottom: 0;
+        width: var(--space-xl);
+        z-index: 0;
+      }
+      .dock.left {
+        left: 0;
+      }
+      .dock.right {
+        right: 0;
+      }
+      /* Opening a side dock widens it over the stage as a drawer, keeping its own
+         canvas, edge border and clipping (base .dock); its panel fills it. It
+         spans the row, so a bottom sheet stays whole below it, under the scrim. */
+      .dock.left:not(.folded),
+      .dock.right:not(.folded) {
         width: calc(100% - var(--space-2xl));
         box-shadow: var(--shadow-card);
         z-index: 2;
       }
-      .dock.left:not(.folded) {
-        left: 0;
-      }
-      .dock.right:not(.folded) {
-        right: 0;
-      }
       .dock.left:not(.folded) .panel,
       .dock.right:not(.folded) .panel {
         width: 100%;
+      }
+      /* A closing drawer stays above the fading scrim until it is a rail again. */
+      .settled .dock.folded {
+        transition:
+          width var(--duration-slide) var(--ease),
+          height var(--duration-slide) var(--ease),
+          z-index 0s var(--duration-slide);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .settled .dock.folded {
+          transition: none;
+        }
       }
       /* A bottom dock stays a sheet below the stage, giving way to its strip
          before the stage shrinks below a readable minimum. */

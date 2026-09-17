@@ -553,9 +553,10 @@ for (const engine of ENGINES) {
       assert.ok(await visible(page, "trace-list"), "the docked trace reads in the drawer");
 
       // The bottom dock stays a sheet: under the stage, full width, folded here to
-      // just its strip (it started closed).
+      // just its strip (it started closed). The stage reserves the side rail as a
+      // margin, so it is a rail narrower than the full-width sheet below it.
       assert.ok(bottom.top >= stage.bottom - 1, "the bottom dock is under the stage");
-      assert.ok(Math.abs(bottom.width - stage.width) <= 1, "the bottom sheet is full width");
+      assert.ok(Math.abs(bottom.width - (body.right - body.left)) <= 1, "the bottom sheet is full width");
       assert.ok(Math.abs(bottom.height - strip) <= 2, "a folded bottom sheet is its strip");
       assert.ok(
         bottom.left >= body.left - 1 && bottom.right <= body.right + 1 && bottom.bottom <= body.bottom + 1,
@@ -567,10 +568,11 @@ for (const engine of ENGINES) {
       await clickBar(page, ".scrim");
       await until(async () => (await rect(page, ".dock.left")).width <= strip + 2);
       const folded = await rect(page, ".dock.left");
-      assert.equal(await position(".dock.left"), "relative", "a folded side dock is back in the flow");
+      assert.equal(await position(".dock.left"), "absolute", "a folded side dock stays on its edge, out of the flow");
       assert.ok(Math.abs(folded.width - strip) <= 2, "a folded side dock is an edge rail");
       const stageFolded = await rect(page, ".stage");
       assert.ok(Math.abs(stageFolded.left - folded.right) <= 1, "the stage sits beside the rail, not under it");
+      assert.ok(Math.abs(stageFolded.width - stage.width) <= 1, "folding the drawer does not resize the stage");
       assert.ok(!(await scrim()).on, "the scrim clears once no drawer is open");
       await until(async () => !(await visible(page, "trace-list")), 1000).catch(() =>
         assert.fail("the folded drawer hides its body"),
