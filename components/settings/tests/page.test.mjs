@@ -90,7 +90,7 @@ async function open(engine, { phone = false } = {}) {
   if (phone) await context.addInitScript(() => localStorage.setItem("viewport", "phone"));
   const page = await context.newPage();
   const problems = watch(page);
-  await page.goto(`${BASE_URL}/design/settings`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_URL}/design/settings`);
   if (phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
   await ready(page);
   return { browser, page, problems };
@@ -163,7 +163,7 @@ for (const engine of ENGINES) {
       await page.screenshot({ path: resolve(SCREENSHOTS, `settings-${engine.name}.png`), fullPage: true });
 
       // Reload: the choices are kept (3.1, local-only).
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload();
       await ready(page);
       assert.equal((await sheetRows(page))[0].path, "/design/contracts", "order survives a reload");
       assert.equal((await sheetRows(page)).find((r) => r.path === "/design/notes").shown, false);

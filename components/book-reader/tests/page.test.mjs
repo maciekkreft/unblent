@@ -428,7 +428,13 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       await page.setViewportSize({ width: 1024, height: 768 });
       watch(page, problems);
-      await page.goto(`${BASE_URL}/apps/reader`, { waitUntil: "networkidle" });
+      // The cold sync GETs must land before the reload below, or the reload aborts them
+      // and the watch reports a cancelled request; waiters are armed before goto fires them.
+      const synced = Promise.all([
+        page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
+        page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
+      ]);
+      await page.goto(`${BASE_URL}/apps/reader`);
       // Every view mounted (its shadow root exists) and the dock offers a tab for each.
       const NAMES = ["book-reader", "book-shelf", "book-toc", "note-editor", "note-list"];
       await page.waitForFunction((names) => names.every((n) => document.querySelector(n)?.shadowRoot), NAMES, WAIT);
@@ -438,8 +444,9 @@ for (const engine of ENGINES) {
         return labels.every((l) => tabs.has(l));
       }, LABELS, WAIT);
       mkdirSync(SCREENSHOTS, { recursive: true });
+      await synced;
       await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload();
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot);
       await page.screenshot({ path: resolve(SCREENSHOTS, `reader-app-phone-${engine.name}.png`) });

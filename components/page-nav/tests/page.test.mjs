@@ -78,7 +78,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/tokens`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/design/tokens`);
       await page.waitForFunction(
         (n) => document.querySelector("page-nav")?.shadowRoot?.querySelectorAll("a").length === n,
         PATHS.length,
@@ -90,7 +90,7 @@ for (const engine of ENGINES) {
       await page.screenshot({ path: resolve(SCREENSHOTS, `page-nav-${engine.name}.png`) });
 
       await Promise.all([
-        page.waitForNavigation({ waitUntil: "networkidle" }),
+        page.waitForNavigation(),
         page.evaluate(() =>
           document
             .querySelector("page-nav")
@@ -116,7 +116,7 @@ for (const engine of ENGINES) {
     context.setDefaultTimeout(4000);
     const page = await context.newPage();
     try {
-      await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/design/dock`);
       // The bar renders a slot, and the page's <layout-switch> is assigned into it
       // (right-aligned) and renders its own button — the control lives in the bar.
       await page.waitForFunction(

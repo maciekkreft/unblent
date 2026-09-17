@@ -391,7 +391,7 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/apps/notes`);
       await page.waitForFunction(() => document.querySelector("dock-desk")?.shadowRoot?.querySelector(".stage"));
 
       // The three views are the desk's children (8): the page composes, dock-desk

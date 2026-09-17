@@ -75,7 +75,7 @@ for (const engine of ENGINES) {
       );
       page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
 
-      await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/design/dock`);
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await page.locator("dock-desk").waitFor();
 

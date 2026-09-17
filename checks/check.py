@@ -2,6 +2,8 @@
 """The one check command (architecture.md 11), stdlib only. `--static` is the fast phase."""
 
 import ast
+import contextlib
+import fcntl
 import glob
 import hashlib
 import http.client
@@ -27,6 +29,11 @@ ALLOWED_BARE = set(IMPORTMAP["imports"]) | {"bus", "store", "icons"}
 # while no single test may.
 STATIC_BUDGET_S = 1.0
 TEST_TIMEOUT_MS = 5000
+# Section 11: a test past half its budget has no headroom left for a loaded host.
+HEADROOM_MS = TEST_TIMEOUT_MS / 2
+# The task-end gate runs browser tests in WebKit (11). Every two-engine test names its
+# engine "in <engine>"; a Chromium-only test (the WebAuthn ceremony) does not, so it stays.
+SKIP_CHROMIUM = "--test-skip-pattern=in chromium"
 
 
 def _dotenv() -> dict:
@@ -1091,7 +1098,67 @@ def _resolve_only(value: str, manifests: dict) -> list:
     return out
 
 
-def run_tests(affected=None) -> None:
+@contextlib.contextmanager
+def _test_lock():
+    # Section 11: one test phase at a time on a host. The lock lives in the temp
+    # directory, not the tree, so every worktree of every session contends for the same one.
+    with open(Path(tempfile.gettempdir()) / "unblent-check.lock", "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("waiting: another check is running its tests on this host (11)", flush=True)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _node_test(files: list, env=None, extra=(), capture=False) -> subprocess.Popen:
+    """One `node --test` process over files, its per-test durations written beside it."""
+    fd, durations = tempfile.mkstemp(prefix="unblent-durations-", suffix=".jsonl")
+    os.close(fd)
+    proc = subprocess.Popen(
+        ["node", "--import", "./checks/register.mjs", *extra,
+         "--test", "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
+         "--test-reporter=spec", "--test-reporter-destination=stdout",
+         "--test-reporter=./checks/durations.mjs", f"--test-reporter-destination={durations}",
+         *files], cwd=ROOT, env=env,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None, text=True,
+    )
+    proc.durations = durations
+    return proc
+
+
+def headroom_warnings(rows: list) -> list:
+    """The warning line for every test past half its budget (11), worst first. Pure over
+    the duration rows so checks/tests can exercise it without a node run."""
+    lines = []
+    for row in sorted(rows, key=lambda r: -(r.get("ms") or 0)):
+        if (row.get("ms") or 0) > HEADROOM_MS:
+            try:
+                where = Path(row["file"]).relative_to(ROOT)
+            except (KeyError, ValueError):
+                where = row.get("file") or "?"
+            lines.append(f"warning: {where}: \"{row['name']}\" took {row['ms'] / 1000:.1f}s, over half "
+                         f"its {TEST_TIMEOUT_MS / 1000:.0f}s budget (11): no headroom on a loaded host")
+    return lines
+
+
+def _warn_headroom(proc: subprocess.Popen) -> None:
+    path = Path(proc.durations)
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    path.unlink(missing_ok=True)
+    for line in headroom_warnings(rows):
+        print(line, file=sys.stderr)
+
+
+def _run_node(files: list, env=None) -> bool:
+    proc = _node_test(files, env)
+    proc.wait()
+    _warn_headroom(proc)
+    return proc.returncode == 0
+
+
+def run_tests(affected=None, webkit_only=False) -> None:
     # affected is None for the full run (the definition of done); a set of component
     # names narrows to the tests reachable from a change (11). A narrowed run never
     # touches infrastructure tests, since any infra change runs everything.
@@ -1123,12 +1190,7 @@ def run_tests(affected=None) -> None:
                   sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
                   sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT))) + pure
     if node_tests:
-        result = subprocess.run(
-            ["node", "--import", "./checks/register.mjs", "--test",
-             "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
-             *node_tests], cwd=ROOT,
-        )
-        if result.returncode != 0:
+        if not _run_node(node_tests):
             fail("pure-node tests", "node tests", "node --test reported failures")
 
     # checks/tests is the check's own unit tests (11.1): pure stdlib, no server and no
@@ -1183,19 +1245,14 @@ def run_tests(affected=None) -> None:
         # The loader lets a machine test import its actor (bare `xstate`); it is inert
         # for the browser tests, whose only bare import is Playwright by path.
         if api:
-            result = subprocess.run(
-                ["node", "--import", "./checks/register.mjs", "--test",
-                 "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
-                 *api], cwd=ROOT, env=env,
-            )
-            if result.returncode != 0:
+            if not _run_node(api, env):
                 fail("components/*/tests api", "api tests", "node --test reported failures")
 
         if browser:
             if "PLAYWRIGHT_MODULE" not in env:
                 fail(".env", "browser tests",
                      "PLAYWRIGHT_MODULE is not set; add PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs to .env")
-            _run_browser(browser, env)
+            _run_browser(browser, env, webkit_only)
     finally:
         server.terminate()
         try:
@@ -1205,7 +1262,7 @@ def run_tests(affected=None) -> None:
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
-def _run_browser(files: list, env: dict) -> None:
+def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
     # CHECK_BROWSER_WORKERS parallel node processes over the one server (10, 11).
     # Default 1 (serial): on this two-core host a second concurrent browser starves
     # the first of CPU and pushes the heaviest tests (dock, notes save, layout
@@ -1221,18 +1278,15 @@ def _run_browser(files: list, env: dict) -> None:
     for chunk in chunks:
         if not chunk:
             continue
-        procs.append(subprocess.Popen(
-            # checks/browsers.mjs is the browser rule (11.2): it fails any test that leaves
-            # a browser it launched open and closes it at once, so a timed-out test cannot
-            # leak one into the next and exhaust the host.
-            ["node", "--import", "./checks/register.mjs", "--import", "./checks/browsers.mjs",
-             "--test", "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
-             *chunk], cwd=ROOT, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        ))
+        # checks/browsers.mjs is the browser rule (11.2): one browser per engine for the
+        # worker, and any test that leaves a context open fails and has it closed at once,
+        # so a timed-out test cannot leak pages into the next and exhaust the host.
+        extra = ["--import", "./checks/browsers.mjs"] + ([SKIP_CHROMIUM] if webkit_only else [])
+        procs.append(_node_test(chunk, env, extra, capture=True))
     failed = False
     for proc in procs:
         out, _ = proc.communicate()
+        _warn_headroom(proc)
         if proc.returncode != 0:
             failed = True
             sys.stderr.write(out)
@@ -1271,11 +1325,12 @@ USAGE = """The one check command (architecture.md 11).
 
   after every edit      python3 checks/check.py --static
                         every static rule, <1s
-  while iterating       python3 checks/check.py --changed
-                        static + tests reachable from your changes
-                        (or --only <components>)
-  before done           python3 checks/check.py
-                        every static rule + ALL tests
+  before done           python3 checks/check.py --changed
+                        static + tests reachable from your changes, browser
+                        tests in WebKit (or --only <components>)
+  before push           python3 checks/check.py
+                        every static rule + ALL tests, WebKit then Chromium;
+                        the pre-push hook in .githooks/ runs it
 """
 
 
@@ -1311,8 +1366,9 @@ def main() -> None:
     if static_only:
         return
     report_unused_tokens()
-    # Bare check.py is the definition of done: affected stays None, everything runs.
-    # --changed / --only narrow to the tests reachable from what changed (11).
+    # Bare check.py is the push gate: affected stays None, everything runs in both engines.
+    # --changed / --only are the task-end gate: the tests reachable from what changed, in
+    # WebKit (11).
     affected = None
     if changed or only:
         paths = []
@@ -1321,8 +1377,10 @@ def main() -> None:
         if only:
             paths += _resolve_only(only, manifests)
         affected = affected_components(paths, manifests)
-    _timed(timings, "tests", run_tests, affected)
+    with _test_lock():
+        _timed(timings, "tests", run_tests, affected, bool(changed or only))
     scope = "all" if affected is None else (", ".join(sorted(affected)) or "none")
+    scope += "; webkit" if changed or only else "; webkit, chromium"
     print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s [tests: {scope}]")
 
 

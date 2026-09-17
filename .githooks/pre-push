@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# The push gate (architecture.md 11): nothing is pushed red, so the bare check.py — every
+# test, WebKit then Chromium — runs here. The task-end gate (check.py --changed, WebKit) is
+# faster and runs while iterating; this is the wider net before code leaves the machine.
+# Wired by `git config core.hooksPath .githooks`, which is local config: re-run it in a fresh clone.
+exec python3 "$(git rev-parse --show-toplevel)/checks/check.py"

@@ -70,6 +70,20 @@ const caretLine = (page) =>
     });
   });
 
+// The line the caret comes to rest on after a motion, different from `from`. CM6 remeasures
+// line heights asynchronously after a level change, so a read taken mid-remeasure can name
+// the wrong line for a frame; require the reading to hold across two polls before trusting it.
+const restLine = async (page, from) => {
+  let prev = null;
+  await until(async () => {
+    const now = await caretLine(page);
+    const settled = now === prev && now !== from && now >= 0;
+    prev = now;
+    return settled;
+  });
+  return prev;
+};
+
 // The insert caret CM6 draws, against the scroller that clips it.
 const insertCaret = (page) =>
   page.evaluate(() => {
@@ -118,7 +132,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
       assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" });
 
@@ -160,7 +174,7 @@ for (const engine of ENGINES) {
       watch(page, problems);
 
       // Write and save on the page default (plain note-editor).
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
       assert.deepEqual(await slotted(page), { tag: "note-editor", role: null }, "default is the plain editor");
       await page.evaluate(() => {
@@ -173,7 +187,7 @@ for (const engine of ENGINES) {
 
       // Choose cm6 and reload: the composer mounts it in the same slot.
       await page.evaluate((v) => localStorage.setItem("settings", v), CM6);
-      await page.reload({ waitUntil: "networkidle" });
+      await page.reload();
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
       assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" }, "cm6 took the slot");
 
@@ -193,7 +207,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
 
       await page.locator("note-editor-cm6 .cm-content").click();
@@ -212,13 +226,12 @@ for (const engine of ENGINES) {
         await page.keyboard.type(key);
         await until(async () => (await lines(page)).some((l) => l.className.includes("cm-level-")));
         await page.keyboard.press("j");
-        await until(async () => (await caretLine(page)) !== from);
-        from = await caretLine(page);
+        from = await restLine(page, from);
         landed.push([expect, from]);
       }
       await page.keyboard.press("k");
-      await until(async () => (await caretLine(page)) !== from);
-      landed.push([2, await caretLine(page)]);
+      from = await restLine(page, from);
+      landed.push([2, from]);
       assert.deepEqual(landed.map(([, got]) => got), landed.map(([want]) => want), `j/k landed on ${JSON.stringify(landed)}`);
       const before = await drawn(page);
       assert.ok(before.levelMargins.length >= 3, "three leveled lines");
@@ -256,7 +269,7 @@ for (const engine of ENGINES) {
         localStorage.setItem("viewport", "phone");
         localStorage.setItem("settings", v);
       }, CM6);
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" });

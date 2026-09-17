@@ -236,7 +236,7 @@ async function open(browser, { layout, phone = false } = {}) {
   );
   const page = await context.newPage();
   const problems = watch(page);
-  await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE_URL}/design/dock`);
   if (phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
   await ready(page);
   return { context, page, problems };
@@ -642,14 +642,14 @@ for (const engine of ENGINES) {
 
       // Hide the switch on /design/settings: the desk is not arrangeable, and the
       // switch leaves the page.
-      await page.goto(`${BASE_URL}/design/settings`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/design/settings`);
       await page.waitForFunction(() => document.querySelector("settings-sheet")?.shadowRoot?.querySelector(".row"));
       await hideSwitchOnSettings(page);
       await until(async () =>
         page.evaluate(() => JSON.parse(localStorage.getItem("settings") || "{}").layoutSwitchHidden === true),
       );
 
-      await page.goto(`${BASE_URL}/design/dock`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/design/dock`);
       await ready(page);
       await until(async () => await shadowHas(page, ".dock.right"));
       assert.ok(await switchGone(page), "the layout switch is hidden");

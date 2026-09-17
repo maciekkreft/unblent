@@ -50,7 +50,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/contracts`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/design/contracts`);
       await page.waitForFunction(
         () => document.querySelector("contract-list")?.shadowRoot?.querySelectorAll(".card").length > 0,
       );
