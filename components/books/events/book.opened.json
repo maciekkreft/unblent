@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The book being read is now this one, or none (null): opened here, or on another device and pulled (5).",
+  "type": "object",
+  "properties": {
+    "id": { "type": ["string", "null"], "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

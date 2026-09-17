@@ -23,3 +23,13 @@ CREATE TABLE IF NOT EXISTS books (
     deleted          INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS books_seq ON books(seq);
+
+-- Which book this user is reading (architecture.md 5): one row, last write wins and
+-- never refused, so it carries no version and no seq. The pull returns it beside the
+-- rows, so a reload or another device opens what was being read. book_id may be null
+-- (nothing open); at is the server's clock, the only thing compared across devices.
+CREATE TABLE IF NOT EXISTS open (
+    one     INTEGER PRIMARY KEY CHECK (one = 1),
+    book_id TEXT,
+    at      INTEGER NOT NULL
+);

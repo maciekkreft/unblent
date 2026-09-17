@@ -1,0 +1,20 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "open takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The id of the book being read, or null when none is open.",
+    "type": "object",
+    "properties": {
+      "id": { "type": ["string", "null"], "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["book.opened", "book.deleted"]
+}

@@ -39,9 +39,10 @@ const bookReply = (over = {}) => ({
 // A book.changed carries the whole book (7.1); build one for the open id.
 const changedEvent = (over = {}) => ({ type: "book.changed", ...bookReply(over).book, ...over });
 
-function start({ read, chapter } = {}) {
+function start({ read, chapter, open } = {}) {
   const clock = new SimulatedClock();
   const ask = (target, name, payload) => {
+    if (name === "open") return Promise.resolve(open ?? { id: null });
     if (name === "read") return Promise.resolve(read ?? bookReply());
     if (name === "chapter") return Promise.resolve(chapter ? chapter(payload) : { title: "t", html: "<p>x</p>" });
     return Promise.resolve({});
@@ -53,10 +54,12 @@ function start({ read, chapter } = {}) {
   return { actor, progressed, clock };
 }
 
-// Open a book and settle in reading.ready.
+// Open a book and settle in reading.ready. The fact announces the open book with
+// book.opened, whether the user opened it here or another device did (4.3, fourth rule).
 async function open(opts) {
   const h = start(opts);
-  h.actor.send({ type: "book.selected", id: ID });
+  await flush(); // let the starting `books: open` ask settle (empty by default)
+  h.actor.send({ type: "book.opened", id: ID });
   await flush();
   return h;
 }
@@ -64,7 +67,7 @@ async function open(opts) {
 const state = (actor) => actor.getSnapshot().value;
 const ctx = (actor) => actor.getSnapshot().context;
 
-test("book.selected reads the book and opens it at its saved place", async () => {
+test("book.opened reads the book and opens it at its saved place", async () => {
   const { actor } = await open({ read: bookReply({ position: { chapter: 1, block: 4 } }) });
   assert.ok(actor.getSnapshot().matches({ reading: "ready" }), `expected reading.ready, got ${JSON.stringify(state(actor))}`);
   assert.equal(ctx(actor).chapter, 1, "opens the saved chapter");
@@ -172,11 +175,26 @@ test("the open book being deleted returns to the empty page", async () => {
   assert.equal(state(actor), "empty");
 });
 
-test("selecting another book switches to it", async () => {
+test("opening another book switches to it", async () => {
   const { actor } = await open();
-  actor.send({ type: "book.selected", id: ID2 });
+  actor.send({ type: "book.opened", id: ID2 });
   await flush();
   assert.ok(actor.getSnapshot().matches({ reading: "ready" }));
+});
+
+test("on load it asks which book is open and reopens it", async () => {
+  const h = start({ open: { id: ID }, read: bookReply({ position: { chapter: 2, block: 1 } }) });
+  await flush();
+  assert.ok(h.actor.getSnapshot().matches({ reading: "ready" }), `expected reading.ready, got ${JSON.stringify(state(h.actor))}`);
+  assert.equal(ctx(h.actor).chapter, 2, "reopens at the saved chapter");
+});
+
+test("book.opened with a null id empties the reader", async () => {
+  const { actor } = await open();
+  assert.ok(actor.getSnapshot().matches("reading"));
+  actor.send({ type: "book.opened", id: null });
+  await flush();
+  assert.equal(state(actor), "empty");
 });
 
 test("an unreachable server shows offline, and retry reloads the chapter", async () => {

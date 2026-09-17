@@ -44,6 +44,12 @@ const remove = (id, cookie) =>
     headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
     body: "{}",
   });
+const opened = (id, cookie) =>
+  fetch(`${BASE_URL}/api/books/${id}/opened`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: "{}",
+  });
 const pull = (since, cookie) =>
   fetch(`${BASE_URL}/api/books?since=${since}`, { headers: cookie ? { Cookie: cookie } : {} });
 const getChapter = (id, cv, index, cookie) =>
@@ -55,6 +61,7 @@ test("every route needs a signed-in user (401 without a cookie)", async () => {
   assert.equal((await importBook(ID, SAMPLE)).status, 401);
   assert.equal((await pull(0)).status, 401);
   assert.equal((await position(ID, { chapter: 0, block: 0 })).status, 401);
+  assert.equal((await opened(ID)).status, 401);
 });
 
 test("an import returns the row: chapter titles, a cover URL, and the resolved TOC", async () => {
@@ -143,6 +150,26 @@ test("GET since a cursor returns only what changed, tombstones included", async 
   const delta = await (await pull(all.cursor, cookie)).json();
   const gone = delta.books.find((b) => b.id === ID);
   assert.equal(gone.deleted, true, "the tombstone rides the pull like any change");
+});
+
+test("the open book is last write wins, never refused, and rides the pull", async () => {
+  const cookie = cookieFor(freshUser());
+  await importBook(ID, SAMPLE, cookie);
+  await importBook(ID2, SAMPLE, cookie);
+  // A fresh user has nothing open.
+  assert.deepEqual((await (await pull(0, cookie)).json()).open, { id: null, at: 0 });
+
+  const first = await (await opened(ID, cookie)).json();
+  assert.equal(first.id, ID);
+  assert.ok(first.at > 0, "the server stamps its own clock");
+  // Setting the open book is not a book write: it does not bump the book's version or
+  // the cursor, so it never provokes a book.changed on another device.
+  const before = await (await pull(0, cookie)).json();
+  const second = await (await opened(ID2, cookie)).json(); // last write wins
+  const afterPull = await (await pull(0, cookie)).json();
+  assert.equal(afterPull.open.id, ID2, "the pull carries the latest open");
+  assert.ok(second.at >= first.at);
+  assert.equal(afterPull.cursor, before.cursor, "opening a book does not advance the seq cursor");
 });
 
 test("a delete tombstones the row and purges the directory", async () => {

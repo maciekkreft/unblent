@@ -167,12 +167,33 @@ async def delete_book(book_id: str, user_id: str = Depends(require_user)):
     return result
 
 
+@router.put("/{book_id}/opened")
+async def set_open(book_id: str, user_id: str = Depends(require_user)):
+    # The open book is last write wins and never refused (like a position): the single
+    # row is upserted with the server's clock, whatever the book's own version. It is
+    # not part of the seq stream, so it never provokes a book.changed on another device.
+    now = int(time.time() * 1000)
+    with _connect(user_id) as connection:
+        connection.execute(
+            "INSERT INTO open (one, book_id, at) VALUES (1, ?, ?)"
+            " ON CONFLICT(one) DO UPDATE SET book_id = excluded.book_id, at = excluded.at",
+            (book_id, now),
+        )
+    return {"id": book_id, "at": now}
+
+
+def _open(connection: sqlite3.Connection) -> dict:
+    row = connection.execute("SELECT book_id, at FROM open WHERE one = 1").fetchone()
+    return {"id": row["book_id"], "at": row["at"]} if row else {"id": None, "at": 0}
+
+
 @router.get("")
 def pull(since: int = 0, user_id: str = Depends(require_user)):
     with _connect(user_id) as connection:
         rows = connection.execute("SELECT * FROM books WHERE seq > ? ORDER BY seq", (since,)).fetchall()
+        open_row = _open(connection)
     cursor = rows[-1]["seq"] if rows else since
-    return {"books": [_record(row) for row in rows], "cursor": cursor}
+    return {"books": [_record(row) for row in rows], "cursor": cursor, "open": open_row}
 
 
 def _content_ok(user_id: str, book_id: str, content_version: int) -> bool:

@@ -73,6 +73,13 @@ function replyRead(context, id, reply) {
   reply(visible(stored) ? { book: bookOf(stored, context.outbox.has(id)) } : { error: "not-found" });
 }
 
+// The open book (4.3): the id only when that book is still one this device can read, so
+// a tombstoned or pulled-away book never opens; null otherwise.
+function replyOpen(context, reply) {
+  const id = context.open.id;
+  reply({ id: visible(context.books.get(id)) ? id : null });
+}
+
 // A chapter is a file, so answering is a fetch. The reply is a callback, so the fetch
 // runs fire-and-forget alongside the machine rather than in a state: two chapters in
 // flight never wait on each other, and the machine's own flow is untouched. The
@@ -157,6 +164,23 @@ function applyProgress(context, event, enqueue) {
   enqueue.raise({ type: "_drain" });
 }
 
+// The user opened a book (book-shelf emits book.selected, 4.3 fifth rule): record it
+// as the open book, announce it (book.opened), and queue the single last-write-wins
+// outbox row so a reload or another device opens it too (5). An unknown or tombstoned
+// id, or the already-open one, is ignored. The book's own version is untouched.
+function applySelect(context, event, enqueue) {
+  const { id } = event;
+  if (!visible(context.books.get(id)) || context.open.id === id) return;
+  const open = { id, at: context.now() };
+  context.open = open;
+  enqueue(() => context.store.metaPut("open", open).catch(() => {}));
+  const row = { id: "open", kind: "open", book: id };
+  context.outbox.set("open", row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit({ type: "book.opened", id });
+  enqueue.raise({ type: "_drain" });
+}
+
 // The user let a book's undo window run out (book-shelf emits book.discarded, 4.3
 // fifth rule): tombstone it, queue a delete (which replaces any pending position,
 // Decision 6), announce it gone, and drain. The server purges the directory.
@@ -171,15 +195,32 @@ function applyDiscard(context, event, enqueue) {
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit({ type: "book.deleted", id });
+  // The open book was just deleted: nothing is open. The views empty on book.deleted;
+  // this keeps a later open? honest and stops a pull re-opening a tombstone.
+  if (context.open.id === id) forgetOpen(context, enqueue);
   enqueue.raise({ type: "_drain" });
+}
+
+// Clear the open book locally: no book is open, and the open outbox row (if it named
+// this book) goes, so a drain does not re-assert it. The server copy is left for the
+// next real open to overwrite; last write wins means an old open never resurfaces.
+function forgetOpen(context, enqueue) {
+  context.open = { id: null, at: context.now() };
+  enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
+  if (context.outbox.has("open")) {
+    context.outbox.delete("open");
+    enqueue(() => context.store.outboxDelete("open").catch(() => {}));
+  }
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue, self) {
   if (message.type === "list?") replyList(context, message.reply);
   else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
+  else if (message.type === "open?") replyOpen(context, message.reply);
   else if (message.type === "chapter?") answerChapter(context, message);
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
+  else if (message.type === "book.selected") applySelect(context, message, enqueue);
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
 }
@@ -201,13 +242,14 @@ export const machine = setup({
   actors: {
     load: fromPromise(async ({ input }) => {
       const { store } = input;
-      const [books, outbox, cursor, userId] = await Promise.all([
+      const [books, outbox, cursor, userId, open] = await Promise.all([
         store.all(),
         store.outboxAll(),
         store.metaGet("cursor"),
         store.metaGet("userId"),
+        store.metaGet("open"),
       ]);
-      return { books, outbox, cursor: cursor ?? 0, userId: userId ?? null };
+      return { books, outbox, cursor: cursor ?? 0, userId: userId ?? null, open: open ?? { id: null, at: 0 } };
     }),
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
     // One sync: drain the outbox in id order, then pull what changed since the
@@ -220,7 +262,12 @@ export const machine = setup({
       for (const row of [...rows].sort(byId)) {
         let result;
         try {
-          result = row.kind === "delete" ? await api.remove(row.id) : await api.position(row.id, row.chapter, row.block);
+          result =
+            row.kind === "delete"
+              ? await api.remove(row.id)
+              : row.kind === "open"
+                ? await api.opened(row.book)
+                : await api.position(row.id, row.chapter, row.block);
         } catch {
           return { acks, networkError: true };
         }
@@ -236,7 +283,7 @@ export const machine = setup({
         return { acks, networkError: true };
       }
       if (pulled.error === "unauthorized") return { acks, authFailed: true };
-      return { acks, pulled: pulled.books, newCursor: pulled.cursor };
+      return { acks, pulled: pulled.books, newCursor: pulled.cursor, pulledOpen: pulled.open };
     }),
   },
 }).createMachine({
@@ -244,7 +291,7 @@ export const machine = setup({
   meta: {
     kind: "fact",
     shape: "replicated",
-    emits: ["book.changed", "book.deleted", "book.refused"],
+    emits: ["book.changed", "book.deleted", "book.refused", "book.opened"],
     owns: "the books",
     asks: ["session: read"],
   },
@@ -258,6 +305,10 @@ export const machine = setup({
     revoke: input.revoke,
     userId: null,
     cursor: 0,
+    // The book being read and when it was last set (server time once acknowledged),
+    // beside the rows because it is one more last-write-wins value (5). id null when
+    // none is open; at 0 so any server open wins on a fresh device.
+    open: { id: null, at: 0 },
     queued: [],
     resync: false,
     pull: false,
@@ -275,6 +326,7 @@ export const machine = setup({
             outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.id, row])),
             cursor: ({ event }) => event.output.cursor,
             userId: ({ event }) => event.output.userId,
+            open: ({ event }) => event.output.open,
           }),
         },
         onError: {
@@ -283,6 +335,7 @@ export const machine = setup({
             for (const message of context.queued) {
               if (message.type === "list?") message.reply({ books: [] });
               else if (message.type === "read?") message.reply({ error: "not-found" });
+              else if (message.type === "open?") message.reply({ id: null });
               else if (message.type === "chapter?") message.reply({ error: "unavailable" });
             }
             enqueue.assign({ queued: [] });
@@ -292,9 +345,11 @@ export const machine = setup({
       on: {
         "list?": { actions: queue },
         "read?": { actions: queue },
+        "open?": { actions: queue },
         "chapter?": { actions: queue },
         "book.picked": { actions: queue },
         "book.progressed": { actions: queue },
+        "book.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
     },
@@ -326,9 +381,11 @@ export const machine = setup({
       on: {
         "list?": { actions: queue },
         "read?": { actions: queue },
+        "open?": { actions: queue },
         "chapter?": { actions: queue },
         "book.picked": { actions: queue },
         "book.progressed": { actions: queue },
+        "book.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
     },
@@ -337,8 +394,10 @@ export const machine = setup({
       on: {
         "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
+        "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
         "chapter?": { actions: ({ context, event }) => answerChapter(context, event) },
         "book.picked": { actions: enqueueActions(({ context, event, enqueue, self }) => applyPick(context, event, enqueue, self)) },
+        "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
         "_uploaded": { actions: enqueueActions(({ context, event, enqueue }) => applyUploaded(context, event, enqueue)) },
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
@@ -361,8 +420,9 @@ export const machine = setup({
               for (const record of context.books.values()) {
                 if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
               }
-              enqueue.assign({ books: new Map(), outbox: new Map() });
+              enqueue.assign({ books: new Map(), outbox: new Map(), open: { id: null, at: 0 } });
               enqueue(() => context.store.clear().catch(() => {}));
+              enqueue(() => context.store.metaPut("open", { id: null, at: 0 }).catch(() => {}));
             }
           }),
         },
@@ -418,6 +478,7 @@ export const machine = setup({
       on: {
         "list?": { actions: ({ event }) => event.reply({ books: [] }) },
         "read?": { actions: ({ event }) => event.reply({ error: "not-found" }) },
+        "open?": { actions: ({ event }) => event.reply({ id: null }) },
         "chapter?": { actions: ({ event }) => event.reply({ error: "unavailable" }) },
       },
     },
@@ -433,6 +494,18 @@ function applySync(context, output, enqueue) {
   const { acks = [], pulled = [], newCursor, authFailed } = output;
 
   for (const ack of acks) {
+    if (ack.kind === "open") {
+      // The open was acknowledged; adopt the server's time so a later pull's open is
+      // compared fairly. Only drain the outbox row if a newer open has not queued since.
+      context.open = { id: ack.row.id, at: ack.row.at };
+      enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
+      const queued = context.outbox.get("open");
+      if (!queued || queued.book === ack.row.id) {
+        context.outbox.delete("open");
+        enqueue(() => context.store.outboxDelete("open").catch(() => {}));
+      }
+      continue;
+    }
     if (ack.kind === "delete") {
       // The delete was announced already; drop the outbox row and keep the tombstone
       // at the server's version. The sync cleared the store; clear the in-memory Map too.
@@ -481,6 +554,19 @@ function applySync(context, output, enqueue) {
     context.books.set(book.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit(changed(record, context.outbox.has(book.id)));
+  }
+
+  // Another device's open, brought by the pull (5): adopt it only when it is newer by
+  // the server's clock and this device has no open of its own still to drain, so a
+  // local open in flight is never overrun. Announce it only when the open book changed,
+  // and only as an id this device can actually read (null otherwise, folded above).
+  const pulledOpen = output.pulledOpen;
+  if (pulledOpen && !context.outbox.has("open") && pulledOpen.at > context.open.at) {
+    const wasVisible = visible(context.books.get(context.open.id)) ? context.open.id : null;
+    context.open = { id: pulledOpen.id, at: pulledOpen.at };
+    enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
+    const id = visible(context.books.get(pulledOpen.id)) ? pulledOpen.id : null;
+    if (id !== wasVisible) enqueue.emit({ type: "book.opened", id });
   }
 
   if (newCursor !== undefined) {

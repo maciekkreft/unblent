@@ -47,6 +47,10 @@ const movedElsewhere = (args) =>
 
 export const machine = setup({
   actors: {
+    // Which book is open (4.3): the starting picture on load, so a reload reopens what
+    // was being read. book.opened is held for this ask until the reply lands
+    // (supersededBy), so an open that races the query is applied after it, in order.
+    open: fromPromise(({ input }) => input.ask("books", "open", {})),
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
     chapter: fromPromise(({ input }) => input.ask("books", "chapter", { id: input.id, chapter: input.chapter })),
   },
@@ -78,7 +82,7 @@ export const machine = setup({
     kind: "view",
     emits: ["book.progressed"],
     attributes: ["height"],
-    asks: ["books: read", "books: chapter"],
+    asks: ["books: open", "books: read", "books: chapter"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -94,14 +98,22 @@ export const machine = setup({
     pending: null,
     sent: null,
   }),
-  initial: "empty",
+  initial: "starting",
   on: {
-    // The user opened a book in the shelf (4.3, fifth rule). Read it for its metadata
-    // and saved position; a switch from another book drops the old context.
-    "book.selected": {
-      target: ".opening",
-      actions: assign({ id: ({ event }) => event.id, book: null, html: "", pending: null, sent: null, chapter: 0 }),
-    },
+    // The open book changed (4.3, fourth rule): the fact says which book is open now,
+    // whether the user opened it here, or on another device and this tab pulled it.
+    // A book id reads it at its saved position; null empties the reader.
+    "book.opened": [
+      {
+        guard: ({ event }) => event.id != null,
+        target: ".opening",
+        actions: assign({ id: ({ event }) => event.id, book: null, html: "", pending: null, sent: null, chapter: 0 }),
+      },
+      {
+        target: ".empty",
+        actions: assign({ id: null, book: null, html: "", pending: null, sent: null, chapter: 0 }),
+      },
+    ],
     // The fact's news that the open book is gone (4.3, fourth rule): back to the empty
     // page. A deletion of another book is left to the bus to record as ignored.
     "book.deleted": {
@@ -111,6 +123,23 @@ export const machine = setup({
     },
   },
   states: {
+    // On load, ask which book is open and reopen it; none, or a stale one, is the empty
+    // page. book.opened while this is open is held until the reply (supersededBy).
+    starting: {
+      invoke: {
+        src: "open",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          {
+            guard: ({ event }) => event.output.id != null,
+            target: "opening",
+            actions: assign({ id: ({ event }) => event.output.id }),
+          },
+          { target: "empty" },
+        ],
+        onError: "empty",
+      },
+    },
     // No book yet: the shelf's selection brings one.
     empty: {},
     // The read for the selected book. Its reply carries the saved position, which the

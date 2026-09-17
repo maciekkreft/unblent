@@ -4,9 +4,11 @@ import { openBooks } from "./store.js";
 import changed from "./events/book.changed.json" with { type: "json" };
 import deleted from "./events/book.deleted.json" with { type: "json" };
 import refused from "./events/book.refused.json" with { type: "json" };
+import opened from "./events/book.opened.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import chapter from "./queries/chapter.json" with { type: "json" };
+import open from "./queries/open.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store,
 // the clock, the passkey-gated api, the session ask, and the object-URL revoke — and
@@ -60,6 +62,19 @@ const api = {
     if (!res.ok) throw new Error(`books delete ${res.status}`);
     return await res.json();
   },
+  // The open book, last write wins and never refused (like a position): the server
+  // stamps its own time and replies { id, at }. A 401 drops the session.
+  async opened(id) {
+    const res = await fetch(`/api/books/${id}/opened`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: "{}",
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (!res.ok) throw new Error(`books opened ${res.status}`);
+    return await res.json();
+  },
   async pull(since) {
     const res = await fetch(`/api/books?since=${since}`, {
       credentials: "same-origin",
@@ -93,8 +108,8 @@ const actor = mount(machine, {
     ask: (target, name, payload) => ask(machine, target, name, payload),
     revoke: (url) => URL.revokeObjectURL(url),
   },
-  events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused },
-  queries: { list, read, chapter },
+  events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused, "book.opened": opened },
+  queries: { list, read, chapter, open },
 });
 
 // A tab regaining focus drains then pulls (an import or a position from another

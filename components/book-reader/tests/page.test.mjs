@@ -193,16 +193,22 @@ for (const engine of ENGINES) {
         await page.reload({ waitUntil: "domcontentloaded" });
         await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
         await waitTile(page);
-        await clickTile(page);
-        // It reopens where it was left: the same chapter, past its first page — the
-        // block was kept (the exact page number is per device, section 12, so the
-        // invariant is the chapter and a non-first page, not a fixed number).
+        // No click: the open book is a fact `books` owns now, so the reader reopens it
+        // on its own after a reload, where it was left — the same chapter, past its
+        // first page (the block was kept; the exact page number is per device, section
+        // 12, so the invariant is the chapter and a non-first page, not a fixed number).
         await page.waitForFunction(() => {
           const r = document.querySelector("book-reader")?.shadowRoot;
           if (r?.querySelector(".footer .chap")?.textContent.trim() !== "Chapter Two") return false;
           const m = (r?.querySelector(".footer .pageno")?.textContent.trim() ?? "").match(/Page (\d+)/);
           return m && Number(m[1]) >= 2;
         }, undefined, WAIT);
+        // The shelf shows the same book as the open one, without a gesture.
+        await page.waitForFunction(() =>
+          [...(document.querySelector("book-shelf")?.shadowRoot?.querySelectorAll(".tile") ?? [])].some(
+            (t) => t.getAttribute("aria-selected") === "true" && t.querySelector(".title")?.textContent.trim() === "Sample Book",
+          ),
+        );
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await page.close();

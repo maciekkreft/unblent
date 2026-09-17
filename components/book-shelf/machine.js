@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, enqueueActions } from "xstate";
+import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 
 // The view component that shows the library and lets a book be added, opened, or
 // dropped (8, kind 4). It owns only UI state — the tiles it is showing, the imports
@@ -49,11 +49,12 @@ export const machine = setup({
     // session, since session.changed only fires on a change and a fresh signed-out
     // load is no change — the empty invite would never appear from the event alone.
     load: fromPromise(async ({ input }) => {
-      const [books, session] = await Promise.all([
+      const [books, session, open] = await Promise.all([
         input.ask("books", "list", {}),
         input.ask("session", "read", {}),
+        input.ask("books", "open", {}),
       ]);
-      return { books, session };
+      return { books, session, open };
     }),
   },
 }).createMachine({
@@ -62,7 +63,7 @@ export const machine = setup({
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded"],
     attributes: [],
-    asks: ["books: list", "session: read"],
+    asks: ["books: list", "session: read", "books: open"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -74,8 +75,9 @@ export const machine = setup({
     // Imports in flight: one placeholder per picked file, keyed by its minted id,
     // removed when book.changed brings the real tile or book.refused says why not.
     importing: [],
-    // The book the reader is showing, set on a pick (the shelf has no feedback event
-    // to learn it from, so it owns this selection as UI state).
+    // The book the reader is showing, learned from book.opened (which the fact emits on
+    // this device's pick and on another device's, pulled): the shelf highlights it but
+    // does not own it, so a reload restores the highlight (4.3, fourth rule).
     selected: null,
     // The ids counting down to a discard, each with its own cancelable timer.
     discarding: new Set(),
@@ -97,6 +99,8 @@ export const machine = setup({
               event.output.session && "userId" in event.output.session
                 ? event.output.session.userId != null
                 : context.signedIn,
+            selected: ({ context, event }) =>
+              event.output.open && "id" in event.output.open ? event.output.open.id : context.selected,
           }),
         },
         // books or session could not answer (offline, no answerer): an honest empty
@@ -157,14 +161,17 @@ export const machine = setup({
         });
       }),
     },
-    // The user opened a book (7.2, internal gesture): announce it, and highlight it —
-    // the shelf's own selection, immediate feedback with no event to learn it from.
+    // The fact says which book is open now (4.3, fourth rule): highlight it. This is
+    // how the highlight survives a reload and follows another device's open; the shelf
+    // no longer sets it on the gesture, it waits for the fact to confirm.
+    "book.opened": {
+      actions: assign({ selected: ({ event }) => event.id }),
+    },
+    // The user opened a book (7.2, internal gesture): announce it. The highlight comes
+    // back as book.opened from the fact, so there is one source of what is open.
     _select: {
       guard: ({ context, event }) => context.books.some((b) => b.id === event.id) && !context.discarding.has(event.id),
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.assign({ selected: event.id });
-        enqueue.emit({ type: "book.selected", id: event.id });
-      }),
+      actions: emit(({ event }) => ({ type: "book.selected", id: event.id })),
     },
     // The trash on a tile: begin the undo window. Nothing is emitted yet; only its
     // elapse makes the delete a fact.

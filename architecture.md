@@ -182,7 +182,7 @@ On the server, each replicated fact component has **one SQLite file per user**: 
 
 While anonymous, `notes` mints versions in the browser and the server adopts the client's number on first upload, so the anonymous note carries its history into the account. Registration is capped by `MAX_USERS`; once the registry is full `session` reports `registrationOpen` false and refuses a new passkey with `registration-closed`. `session`'s own replicated shape is not an outbox but a localStorage cache plus an owed sign-out, because identity has no records to version: there is nothing to base a write on, only the single fact of who is signed in.
 
-`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, and the source file is kept there only for re-import. The row carries the metadata that rides the bus; the directory holds what the browser fetches by URL, and the epub is never reopened. A reading position is last write wins: it carries no base version and is never refused. The files are copied to the same bucket by `deploy/`, as the databases are by Litestream.
+`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, and the source file is kept there only for re-import. The row carries the metadata that rides the bus; the directory holds what the browser fetches by URL, and the epub is never reopened. A reading position is last write wins: it carries no base version and is never refused. Which book is open is one more last-write-wins value: `books` keeps it beside the rows, the server holds a single per-user copy, and a pull brings it, so a reload or another device opens what was being read. The files are copied to the same bucket by `deploy/`, as the databases are by Litestream.
 
 ---
 
@@ -294,6 +294,7 @@ Every event has a name, an owner, and a JSON Schema for its payload, kept in the
 ```
 book.changed          owner: books          { id, title, author, cover, chapters, toc, position, version, contentVersion, pending, addedAt, updatedAt }
 book.deleted          owner: books          { id }
+book.opened           owner: books          { id | null }
 book.discarded        owner: book-shelf     { id }
 book.picked           owner: book-shelf     { id, name, size, url }
 book.progressed       owner: book-reader    { id, chapter, block }
@@ -340,6 +341,7 @@ notes: read(id)          → { note } | { error: "not-found" }
 books: list              → { books: [{ id, title, author, cover, position, chapterCount, pending, addedAt }] }
 books: read({ id })      → { book } | { error: "not-found" }
 books: chapter({ id, chapter }) → { title, html } | { error: "not-found" } | { error: "unavailable" }
+books: open              → { id: string | null }
 llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
 pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }

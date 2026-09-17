@@ -64,12 +64,14 @@ function fakeApi(impl = {}) {
   const removes = [];
   const pulls = [];
   const chapters = [];
+  const opens = [];
   return {
     uploads,
     positions,
     removes,
     pulls,
     chapters,
+    opens,
     upload: async (id, url) => {
       uploads.push([id, url]);
       if (impl.upload) {
@@ -86,6 +88,10 @@ function fakeApi(impl = {}) {
     remove: async (id) => {
       removes.push(id);
       return impl.remove ? impl.remove(id) : book(id, { version: 2, deleted: true });
+    },
+    opened: async (id) => {
+      opens.push(id);
+      return impl.opened ? impl.opened(id) : { id, at: 500 };
     },
     pull: async (since) => {
       pulls.push(since);
@@ -104,11 +110,13 @@ function start(store, { now = clock(), api, ask, revoke } = {}) {
   const changed = [];
   const refused = [];
   const deleted = [];
+  const opened = [];
   actor.on("book.changed", (e) => changed.push(e));
   actor.on("book.refused", (e) => refused.push(e));
   actor.on("book.deleted", (e) => deleted.push(e));
+  actor.on("book.opened", (e) => opened.push(e));
   actor.start();
-  return { actor, changed, refused, deleted, clock: simClock };
+  return { actor, changed, refused, deleted, opened, clock: simClock };
 }
 
 async function drain(clock) {
@@ -314,4 +322,89 @@ test("a store that rejects fails the fact, and queries still get honest replies"
   assert.deepEqual(await askQuery(actor, "list"), { books: [] });
   assert.deepEqual(await askQuery(actor, "read", { id: ID }), { error: "not-found" });
   assert.deepEqual(await askQuery(actor, "chapter", { id: ID, chapter: 0 }), { error: "unavailable" });
+});
+
+// --- The open book: last write wins, replicated so a reload reopens ---------------
+
+test("select records the open book, announces it, queues one row, and drains", async () => {
+  const store = fakeStore([book(ID), book(ID2)]);
+  const api = fakeApi();
+  const { actor, opened, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  opened.length = 0;
+
+  actor.send({ type: "book.selected", id: ID });
+  await flush();
+  assert.deepEqual(opened, [{ type: "book.opened", id: ID }], "the open is announced at once");
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID }, "open? reports it before any sync");
+  assert.equal(store.outbox.get("open").kind, "open");
+
+  await drain(clock);
+  assert.deepEqual(api.opens, [ID], "the open drains to the server once");
+  assert.equal(store.outbox.has("open"), false, "the row is gone once acknowledged");
+  assert.deepEqual(store.meta.get("open"), { id: ID, at: 500 }, "the server time is adopted");
+});
+
+test("selecting the already-open book, or an unknown one, changes nothing", async () => {
+  const store = fakeStore([book(ID)]);
+  const { actor, opened } = start(store, { api: fakeApi(), ask: askUser("u1") });
+  await ready(actor);
+
+  actor.send({ type: "book.selected", id: ID });
+  await flush();
+  opened.length = 0;
+  actor.send({ type: "book.selected", id: ID }); // already open
+  actor.send({ type: "book.selected", id: ID2 }); // not in the library
+  await flush();
+  assert.deepEqual(opened, [], "no re-announcement, no announce for an unknown book");
+});
+
+test("open? is answered before the store has loaded, then from the loaded value", async () => {
+  const store = fakeStore([book(ID)]);
+  store.meta.set("open", { id: ID, at: 42 });
+  const { actor } = start(store, { api: fakeApi(), ask: askUser("u1") });
+  // Sent while still loading: it is queued and replied after the load.
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID }, "the persisted open comes back on reload");
+});
+
+test("a newer open pulled from another device is adopted once and announced", async () => {
+  const store = fakeStore([book(ID), book(ID2)]);
+  store.meta.set("open", { id: ID, at: 100 });
+  const api = fakeApi({ pull: (since) => ({ books: [], cursor: since, open: { id: ID2, at: 999 } }) });
+  const { actor, opened } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  // Signing in on load raises a pull; let it settle.
+  await flush(16);
+  assert.deepEqual(
+    opened.filter((e) => e.id === ID2),
+    [{ type: "book.opened", id: ID2 }],
+    "the other device's open is announced exactly once",
+  );
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID2 });
+});
+
+test("a local open in flight is not overrun by an older pulled open", async () => {
+  const store = fakeStore([book(ID), book(ID2)]);
+  // The server still has an older open; this device just picked a newer one, not drained.
+  const api = fakeApi({ pull: (since) => ({ books: [], cursor: since, open: { id: ID, at: 1 } }) });
+  const { actor } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "book.selected", id: ID2 });
+  await flush();
+  // A pull arrives (focus) before the drain; the queued open must win.
+  actor.send({ type: "_sync", pull: true });
+  await flush(16);
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID2 }, "the local open in the outbox is not overrun");
+});
+
+test("discarding the open book clears what is open", async () => {
+  const store = fakeStore([book(ID)]);
+  const { actor, opened } = start(store, { api: fakeApi(), ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "book.selected", id: ID });
+  await flush();
+  actor.send({ type: "book.discarded", id: ID });
+  await flush();
+  assert.deepEqual(await askQuery(actor, "open"), { id: null }, "nothing is open once the book is gone");
+  assert.equal(store.outbox.has("open"), false, "the open row does not survive the delete");
 });

@@ -20,9 +20,11 @@ const isOurs = ({ context, event }) => Boolean(context.book) && event.id === con
 
 export const machine = setup({
   actors: {
-    // The starting picture (4.3): the selected book's tree from books. book.changed is
-    // held for this ask until the reply lands (supersededBy), so a move that races the
-    // read is applied after it, in order.
+    // Which book is open (4.3): the starting picture on load, so a reload shows the
+    // contents of the book being read. book.opened is held until the reply (supersededBy).
+    open: fromPromise(({ input }) => input.ask("books", "open", {})),
+    // The selected book's tree from books. book.changed is held for this ask until the
+    // reply lands (supersededBy), so a move that races the read is applied after it.
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
   },
   guards: {
@@ -35,7 +37,7 @@ export const machine = setup({
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],
-    asks: ["books: read"],
+    asks: ["books: open", "books: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -44,15 +46,19 @@ export const machine = setup({
     id: null,
     book: null,
   }),
-  initial: "empty",
+  initial: "starting",
   on: {
-    // The user opened a book in the shelf (4.3, fifth rule): read its contents. A switch
-    // from another book drops the old tree at once, so the panel never shows stale
-    // contents while the new ones load.
-    "book.selected": {
-      target: ".opening",
-      actions: assign({ id: ({ event }) => event.id, book: null }),
-    },
+    // The open book changed (4.3, fourth rule), opened here or on another device and
+    // pulled: read its contents. A switch drops the old tree at once, so the panel never
+    // shows stale contents while the new ones load; null empties it.
+    "book.opened": [
+      {
+        guard: ({ event }) => event.id != null,
+        target: ".opening",
+        actions: assign({ id: ({ event }) => event.id, book: null }),
+      },
+      { target: ".empty", actions: assign({ id: null, book: null }) },
+    ],
     // The fact's news for the open book (4.3, fourth rule): a re-import brings a new
     // tree, and a page turn rides in as a new position, whose chapter is the one to
     // mark. Both are just the fresh row folded in.
@@ -78,6 +84,19 @@ export const machine = setup({
     },
   },
   states: {
+    // On load, ask which book is open and show its contents; none, or a stale one, is
+    // the empty panel. book.opened while this is open is held until the reply.
+    starting: {
+      invoke: {
+        src: "open",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => event.output.id != null, target: "opening", actions: assign({ id: ({ event }) => event.output.id }) },
+          { target: "empty" },
+        ],
+        onError: "empty",
+      },
+    },
     // No book yet: the shelf's selection brings one.
     empty: {},
     // The read for the selected book. not-found (a stale selection) falls back to empty.
