@@ -26,3 +26,10 @@ The dev server runs at 127.0.0.1:8080 and reloads on every edit. Before wiring a
 - `curl -s 127.0.0.1:8080/api/catalog` — every component's manifest, status, and who it interacts with.
 - `curl -s 127.0.0.1:8080/api/catalog/contracts` — every event, query and command with its JSON Schema, owner, consumers and askers.
 - `curl -s 127.0.0.1:8080/api/pages` — the pages and their kinds.
+
+The :8080 server writes into the real `data/`. To drive a page with a forged session cookie (a Playwright experiment, a single test by hand), never point it at :8080: start a throwaway server on another port and target that, so nothing lands in `data/` or R2:
+
+```sh
+UNBLENT_DATA=$(mktemp -d) RP_ID=localhost MAX_USERS=1 .venv/bin/uvicorn server.main:app --port 8090
+# then UNBLENT_URL=http://127.0.0.1:8090
+```

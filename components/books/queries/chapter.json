@@ -1,0 +1,35 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "chapter names one chapter of one book by its spine index.",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+      "chapter": { "type": "integer", "minimum": 0 }
+    },
+    "required": ["id", "chapter"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The chapter's title and its strict-XHTML fragment, or an honest error: not-found when the book or index is gone, unavailable when the server could not be reached (5).",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "html": { "type": "string" }
+        },
+        "required": ["title", "html"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "enum": ["not-found", "unavailable"] } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["book.changed", "book.deleted"]
+}

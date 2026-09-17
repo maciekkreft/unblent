@@ -73,6 +73,8 @@ flowchart TB
 
 Every line between a component and anything else goes through the bus. The only exception is a fact component talking to *its own* server module, which is the same component on the other side of the network.
 
+A view may load an image by a URL a fact's reply or event handed it. The fact's server module serves it, and the browser's HTTP cache is the only copy.
+
 ### 3.1 Two kinds of component
 
 **A fact component owns a concept.** The notes, the conversations, the settings, the current session, access to the language model. It is headless. It is the single place the fact lives. It emits an event whenever the fact changes, and it answers queries about the fact.
@@ -179,6 +181,8 @@ On the server, each replicated fact component has **one SQLite file per user**: 
 `session` is the exception: it keeps one shared file `data/session.db`, the identity registry, because it defines users and so cannot be per-user. While no user is signed in a replicated fact's outbox does not drain; signing in starts draining, so what was written anonymously becomes the account's, and what was not acknowledged before sign-out uploads at the next sign-in.
 
 While anonymous, `notes` mints versions in the browser and the server adopts the client's number on first upload, so the anonymous note carries its history into the account. Registration is capped by `MAX_USERS`; once the registry is full `session` reports `registrationOpen` false and refuses a new passkey with `registration-closed`. `session`'s own replicated shape is not an outbox but a localStorage cache plus an owed sign-out, because identity has no records to version: there is nothing to base a write on, only the single fact of who is signed in.
+
+`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, and the source file is kept there only for re-import. The row carries the metadata that rides the bus; the directory holds what the browser fetches by URL, and the epub is never reopened. A reading position is last write wins: it carries no base version and is never refused. The files are copied to the same bucket by `deploy/`, as the databases are by Litestream.
 
 ---
 
@@ -288,6 +292,14 @@ Contracts are the only coupling in the system. Every contract is **declared once
 Every event has a name, an owner, and a JSON Schema for its payload, kept in the owning component's directory. Names are `subject.pastTenseVerb`. The set of all event schemas is one of the three shared vocabularies of the system (the others are the design tokens and the icons), and it is kept small on purpose.
 
 ```
+book.changed          owner: books          { id, title, author, cover, chapters, toc, position, version, contentVersion, pending, addedAt, updatedAt }
+book.deleted          owner: books          { id }
+book.discarded        owner: book-shelf     { id }
+book.picked           owner: book-shelf     { id, name, size, url }
+book.progressed       owner: book-reader    { id, chapter, block }
+book.refused          owner: books          { id, reason }  reason ∈ signed-out | unreadable | unavailable
+book.selected         owner: book-shelf     { id }
+chapter.selected      owner: book-toc       { id, chapter }
 note.saved            owner: note-editor    { id, title, body, baseVersion }
 note.changed          owner: notes          { id, title, subtitle, body, version, pending, updatedAt }
 note.deleted          owner: notes          { id }
@@ -325,6 +337,9 @@ note-editor#n: focus
 note-editor#n: load(id)
 notes: list              → { notes: [{ id, title, subtitle, updatedAt }] }
 notes: read(id)          → { note } | { error: "not-found" }
+books: list              → { books: [{ id, title, author, cover, position, chapterCount, pending, addedAt }] }
+books: read({ id })      → { book } | { error: "not-found" }
+books: chapter({ id, chapter }) → { title, html } | { error: "not-found" } | { error: "unavailable" }
 llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
 catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
 pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }
@@ -382,7 +397,7 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 1. **Tokens page.** Shows the design tokens and the icons, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
 3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
-4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`; `settings` with `settings-sheet`), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
+4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`; `settings` with `settings-sheet`; `books` with shelf, contents and reader), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others. A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
@@ -424,7 +439,7 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Font | Inter | OFL-1.1 | One self-hosted variable file, all weights | Italic, until a view needs it |
 | Icons | Phosphor Icons | MIT | Regular-weight path data, one icon at a time, copied verbatim from `@phosphor-icons/core` 2.1.1 `assets/regular/<name>.svg` (7.6) | The font, the web and react packages, other weights, the whole set |
 | WebAuthn | py_webauthn | BSD-3 | The passkey ceremonies (registration and authentication options, and verifying the browser's response) in `session`'s server module | Cookies or sessions, which are `server/user.py`'s HMAC over the user id |
-| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does. A WebAuthn ceremony is tested in Chromium only, through its virtual authenticator; WebKit covers the rendering | A test framework |
+| Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`; Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does. A WebAuthn ceremony is tested in Chromium only, through its virtual authenticator; WebKit covers the rendering. A test that forges a session cookie refuses to start unless `UNBLENT_DATA` names a throwaway data directory, which the check passes to the tests beside `UNBLENT_URL`, so a suite pointed by hand at the running server on :8080 stops before it writes into `data/` | A test framework |
 
 Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve.
 
@@ -481,8 +496,8 @@ checks/          check.py, the one check command; tests/ its own unit tests, nev
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
 store/           the store interface; tests/ never served
-deploy/          systemd unit, litestream.yml (section 5) and anything else the host needs; never served
-data/            per-user SQLite files (section 5), gitignored
+deploy/          systemd unit, litestream.yml (section 5) and the rclone units that copy the files (section 5) and anything else the host needs; never served
+data/            per-user SQLite files (section 5) and `books/`, the imported files, gitignored
 .env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
 ```
 
@@ -553,6 +568,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
 - **Swapping composition.** The composer (3.6) changes which implementation fills a role, in place; the replaced actor unmounts cleanly. A swappable view keeps its dock slot because the dock layout identifies it by its role, not its tag — the one place `dock`/`dock-desk` must key on role. Whether that touches the `dock.changed` schema or stays internal is settled when the composer is built (§9 step 2).
+
+- **Pages are per device.** A chapter is paginated for the reader's own size and type, so page numbers differ between devices; the shared position is a chapter and a block, and each device opens the page holding it.
 
 ---
 

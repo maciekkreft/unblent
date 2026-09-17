@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user chose a chapter in the contents (4.3, fifth rule): the reader jumps to that chapter's first page. Carries the book it belongs to so a stray jump for another book is ignored.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "chapter": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["id", "chapter"],
+  "additionalProperties": false
+}

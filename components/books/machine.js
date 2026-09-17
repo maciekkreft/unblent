@@ -1,0 +1,494 @@
+import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+
+// The fact component that owns the books (3.1), replicated (5): local-first, the
+// single place a book's metadata and reading position live in the browser. Unlike
+// notes, a book is only ever created signed in — the source epub lives nowhere but
+// the server, so an import is an upload, not a local mint (Decisions 5). The row
+// carries what rides the bus; the chapters and images are files the reader fetches
+// by URL (Decision 2), so this fact never holds a blob. A reading position is last
+// write wins: it queues in the outbox and drains like a note, but the server never
+// refuses it (Decision 4). Everything with a side effect — the store, the clock,
+// the network, the ask — arrives through input, so this stays a pure definition
+// importable in Node.
+
+// A tombstone is kept for the pull (5) but is not a book anyone reads or lists; the
+// deleted flag never rides book.changed or a reply (all additionalProperties:false).
+const visible = (record) => record && !record.deleted;
+
+// The record kept in the cache, from a server row: the book.changed shape plus the
+// tombstone flag, built field by field so nothing stray is stored or later emitted.
+const serverRecord = (b) => ({
+  id: b.id,
+  title: b.title,
+  author: b.author,
+  cover: b.cover ?? null,
+  chapters: b.chapters,
+  toc: b.toc,
+  position: b.position,
+  version: b.version,
+  contentVersion: b.contentVersion,
+  addedAt: b.addedAt,
+  updatedAt: b.updatedAt,
+  deleted: Boolean(b.deleted),
+});
+
+// The book.changed payload, built once so its shape (7.1) is in one place. pending
+// reports a local change the server has not acknowledged (5).
+const bookOf = (record, pending) => ({
+  id: record.id,
+  title: record.title,
+  author: record.author,
+  cover: record.cover,
+  chapters: record.chapters,
+  toc: record.toc,
+  position: record.position,
+  version: record.version,
+  contentVersion: record.contentVersion,
+  pending,
+  addedAt: record.addedAt,
+  updatedAt: record.updatedAt,
+});
+
+const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, pending) });
+
+function replyList(context, reply) {
+  const books = [...context.books.values()]
+    .filter(visible)
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      author: r.author,
+      cover: r.cover,
+      position: r.position,
+      chapterCount: r.chapters.length,
+      pending: context.outbox.has(r.id),
+      addedAt: r.addedAt,
+    }))
+    .sort((a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id));
+  reply({ books });
+}
+
+function replyRead(context, id, reply) {
+  const stored = context.books.get(id);
+  reply(visible(stored) ? { book: bookOf(stored, context.outbox.has(id)) } : { error: "not-found" });
+}
+
+// A chapter is a file, so answering is a fetch. The reply is a callback, so the fetch
+// runs fire-and-forget alongside the machine rather than in a state: two chapters in
+// flight never wait on each other, and the machine's own flow is untouched. The
+// browser's HTTP cache answers a repeat fetch (Decision 2). A missing book or an
+// index past the end is not-found without a round trip.
+function answerChapter(context, event) {
+  const { id, chapter } = event.payload;
+  const record = context.books.get(id);
+  if (!visible(record) || chapter < 0 || chapter >= record.chapters.length) {
+    event.reply({ error: "not-found" });
+    return;
+  }
+  if (context.api == null) {
+    event.reply({ error: "unavailable" });
+    return;
+  }
+  Promise.resolve(context.api.chapter(id, record.contentVersion, chapter))
+    .then((res) =>
+      res && res.error
+        ? event.reply({ error: res.error })
+        : event.reply({ title: record.chapters[chapter].title, html: res.html }),
+    )
+    .catch(() => event.reply({ error: "unavailable" }));
+}
+
+// The user picked a file (book-shelf emits book.picked, 4.3 fifth rule). Signed out
+// it is refused and the object URL revoked (Decision 5); nothing is minted anonymously.
+// Signed in the upload runs fire-and-forget so a long upload never blocks a position
+// drain, and its result returns as _uploaded, which the machine turns into news.
+function applyPick(context, event, enqueue, self) {
+  const { id, url } = event;
+  if (context.userId == null) {
+    enqueue.emit({ type: "book.refused", id, reason: "signed-out" });
+    enqueue(() => {
+      if (context.revoke) context.revoke(url);
+    });
+    return;
+  }
+  enqueue(() => {
+    Promise.resolve(context.api.upload(id, url))
+      .then((res) => self.send({ type: "_uploaded", id, res: res || { error: "unavailable" } }))
+      .catch(() => self.send({ type: "_uploaded", id, res: { error: "unavailable" } }));
+  });
+}
+
+// An upload finished. 200 caches the row and announces it; 422 (not an epub) and a
+// network or server error are refusals a view shows; a 401 also drops the session.
+function applyUploaded(context, event, enqueue) {
+  const { id, res } = event;
+  if (res.error === "unauthorized") {
+    enqueue.assign({ userId: null });
+    enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
+    enqueue.emit({ type: "book.refused", id, reason: "unavailable" });
+    return;
+  }
+  if (res.error) {
+    enqueue.emit({ type: "book.refused", id, reason: res.error });
+    return;
+  }
+  const record = serverRecord(res.row);
+  context.books.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  enqueue.emit(changed(record, false));
+}
+
+// The user turned to a new place (book-reader emits book.progressed). The position
+// changes locally at the held version, queues coalesced by id, is announced pending,
+// and a drain is asked for; the server never refuses it (Decision 4). A missing or
+// tombstoned book, or an unchanged place, is ignored.
+function applyProgress(context, event, enqueue) {
+  const { id, chapter, block } = event;
+  const current = context.books.get(id);
+  if (!current || current.deleted) return;
+  if (current.position.chapter === chapter && current.position.block === block) return;
+  const record = { ...current, position: { chapter, block }, updatedAt: context.now() };
+  context.books.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  const row = { id, kind: "position", chapter, block };
+  context.outbox.set(id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
+}
+
+// The user let a book's undo window run out (book-shelf emits book.discarded, 4.3
+// fifth rule): tombstone it, queue a delete (which replaces any pending position,
+// Decision 6), announce it gone, and drain. The server purges the directory.
+function applyDiscard(context, event, enqueue) {
+  const { id } = event;
+  const current = context.books.get(id);
+  if (!current || current.deleted) return;
+  const record = { ...current, deleted: true, updatedAt: context.now() };
+  context.books.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  const row = { id, kind: "delete" };
+  context.outbox.set(id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit({ type: "book.deleted", id });
+  enqueue.raise({ type: "_drain" });
+}
+
+// A query or gesture that arrived before the store loaded, replayed in order.
+function flush(context, message, enqueue, self) {
+  if (message.type === "list?") replyList(context, message.reply);
+  else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
+  else if (message.type === "chapter?") answerChapter(context, message);
+  else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
+  else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
+  else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
+}
+
+const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
+
+// The pause after a page turn the network waits for (Decision 4; 5): a further turn
+// restarts this window, so a run of turns drains once, not per page. A focus, sign-in
+// or hidden tab does not wait; they sync at once.
+const SYNC_IDLE_MS = 2000;
+
+const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+export const machine = setup({
+  guards: {
+    syncable: ({ context }) => Boolean(context.userId) && context.api != null,
+    needed: ({ context, event }) => Boolean(event.pull) || context.outbox.size > 0,
+  },
+  actors: {
+    load: fromPromise(async ({ input }) => {
+      const { store } = input;
+      const [books, outbox, cursor, userId] = await Promise.all([
+        store.all(),
+        store.outboxAll(),
+        store.metaGet("cursor"),
+        store.metaGet("userId"),
+      ]);
+      return { books, outbox, cursor: cursor ?? 0, userId: userId ?? null };
+    }),
+    session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
+    // One sync: drain the outbox in id order, then pull what changed since the
+    // cursor. Positions and deletes never conflict (Decision 4, 6), so a drained row
+    // is simply acknowledged; a network error stops with what it had, a 401 reports
+    // the session is gone. The store deletes happen here so a drained row is durably gone.
+    sync: fromPromise(async ({ input }) => {
+      const { api, store, rows, cursor, pull } = input;
+      const acks = [];
+      for (const row of [...rows].sort(byId)) {
+        let result;
+        try {
+          result = row.kind === "delete" ? await api.remove(row.id) : await api.position(row.id, row.chapter, row.block);
+        } catch {
+          return { acks, networkError: true };
+        }
+        if (result.error === "unauthorized") return { acks, authFailed: true };
+        acks.push({ id: row.id, kind: row.kind, row: result });
+        await store.outboxDelete(row.id).catch(() => {});
+      }
+      if (!pull) return { acks };
+      let pulled;
+      try {
+        pulled = await api.pull(cursor);
+      } catch {
+        return { acks, networkError: true };
+      }
+      if (pulled.error === "unauthorized") return { acks, authFailed: true };
+      return { acks, pulled: pulled.books, newCursor: pulled.cursor };
+    }),
+  },
+}).createMachine({
+  id: "books",
+  meta: {
+    kind: "fact",
+    shape: "replicated",
+    emits: ["book.changed", "book.deleted", "book.refused"],
+    owns: "the books",
+    asks: ["session: read"],
+  },
+  context: ({ input }) => ({
+    books: new Map(),
+    outbox: new Map(),
+    store: input.store,
+    now: input.now,
+    api: input.api,
+    ask: input.ask,
+    revoke: input.revoke,
+    userId: null,
+    cursor: 0,
+    queued: [],
+    resync: false,
+    pull: false,
+  }),
+  initial: "loading",
+  states: {
+    loading: {
+      invoke: {
+        src: "load",
+        input: ({ context }) => ({ store: context.store }),
+        onDone: {
+          target: "checkingSession",
+          actions: assign({
+            books: ({ event }) => new Map(event.output.books.map((row) => [row.id, row])),
+            outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.id, row])),
+            cursor: ({ event }) => event.output.cursor,
+            userId: ({ event }) => event.output.userId,
+          }),
+        },
+        onError: {
+          target: "failed",
+          actions: enqueueActions(({ context, enqueue }) => {
+            for (const message of context.queued) {
+              if (message.type === "list?") message.reply({ books: [] });
+              else if (message.type === "read?") message.reply({ error: "not-found" });
+              else if (message.type === "chapter?") message.reply({ error: "unavailable" });
+            }
+            enqueue.assign({ queued: [] });
+          }),
+        },
+      },
+      on: {
+        "list?": { actions: queue },
+        "read?": { actions: queue },
+        "chapter?": { actions: queue },
+        "book.picked": { actions: queue },
+        "book.progressed": { actions: queue },
+        "book.discarded": { actions: queue },
+      },
+    },
+    // The store is loaded; confirm who is signed in before flushing, so an early pick
+    // is refused or uploaded with the right rule.
+    checkingSession: {
+      invoke: {
+        src: "session",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: {
+          target: "ready.idle",
+          actions: enqueueActions(({ context, event, enqueue, self }) => {
+            const userId = event.output?.userId ?? null;
+            enqueue.assign({ userId });
+            for (const message of context.queued) flush(context, message, enqueue, self);
+            enqueue.assign({ queued: [] });
+            if (userId) enqueue.raise({ type: "_sync", pull: true });
+          }),
+        },
+        onError: {
+          target: "ready.idle",
+          actions: enqueueActions(({ context, enqueue, self }) => {
+            for (const message of context.queued) flush(context, message, enqueue, self);
+            enqueue.assign({ queued: [] });
+            if (context.userId) enqueue.raise({ type: "_sync", pull: true });
+          }),
+        },
+      },
+      on: {
+        "list?": { actions: queue },
+        "read?": { actions: queue },
+        "chapter?": { actions: queue },
+        "book.picked": { actions: queue },
+        "book.progressed": { actions: queue },
+        "book.discarded": { actions: queue },
+      },
+    },
+    ready: {
+      initial: "idle",
+      on: {
+        "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
+        "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
+        "chapter?": { actions: ({ context, event }) => answerChapter(context, event) },
+        "book.picked": { actions: enqueueActions(({ context, event, enqueue, self }) => applyPick(context, event, enqueue, self)) },
+        "_uploaded": { actions: enqueueActions(({ context, event, enqueue }) => applyUploaded(context, event, enqueue)) },
+        "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
+        "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
+        // The fact's own news of who is signed in (4.3, fourth rule). A book is only
+        // ever created signed in, so there is nothing anonymous to adopt: signing in
+        // resets the pull cursor and pulls; signing out clears the cache and outbox
+        // and announces every visible book gone, so the shelf empties (the library is
+        // empty signed out, Decision 5).
+        "session.changed": {
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            const userId = event.userId;
+            if (userId === context.userId) return;
+            enqueue.assign({ userId });
+            enqueue(() => context.store.metaPut("userId", userId).catch(() => {}));
+            if (userId) {
+              enqueue.assign({ cursor: 0 });
+              enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
+              enqueue.raise({ type: "_sync", pull: true });
+            } else {
+              for (const record of context.books.values()) {
+                if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
+              }
+              enqueue.assign({ books: new Map(), outbox: new Map() });
+              enqueue(() => context.store.clear().catch(() => {}));
+            }
+          }),
+        },
+      },
+      states: {
+        idle: {
+          on: {
+            _drain: { guard: "syncable", target: "debouncing" },
+            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+          },
+        },
+        debouncing: {
+          on: {
+            _drain: { target: "debouncing", reenter: true },
+            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+          },
+          after: {
+            [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
+          },
+        },
+        syncing: {
+          entry: assign({ resync: false, pull: false }),
+          invoke: {
+            src: "sync",
+            input: ({ context, event }) => ({
+              api: context.api,
+              store: context.store,
+              rows: [...context.outbox.values()],
+              cursor: context.cursor,
+              pull: Boolean(event.pull),
+            }),
+            onDone: {
+              target: "idle",
+              actions: [
+                enqueueActions(({ context, event, enqueue }) => applySync(context, event.output, enqueue)),
+                enqueueActions(({ context, event, enqueue }) => {
+                  const { authFailed, networkError } = event.output;
+                  if (authFailed || networkError) return;
+                  if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
+                  else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
+                }),
+              ],
+            },
+            onError: { target: "idle" },
+          },
+          on: {
+            _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
+          },
+        },
+      },
+    },
+    failed: {
+      on: {
+        "list?": { actions: ({ event }) => event.reply({ books: [] }) },
+        "read?": { actions: ({ event }) => event.reply({ error: "not-found" }) },
+        "chapter?": { actions: ({ event }) => event.reply({ error: "unavailable" }) },
+      },
+    },
+  },
+});
+
+// Apply a sync's summary: acknowledged positions take the server's version (keeping
+// the latest local place, since a turn during the sync leaves a newer outbox row),
+// pulled records win only when newer, a tombstone never resurrects, the cursor
+// advances, and a 401 drops the session. Kept out of the machine body so the chart
+// stays readable.
+function applySync(context, output, enqueue) {
+  const { acks = [], pulled = [], newCursor, authFailed } = output;
+
+  for (const ack of acks) {
+    if (ack.kind === "delete") {
+      // The delete was announced already; drop the outbox row and keep the tombstone
+      // at the server's version. The sync cleared the store; clear the in-memory Map too.
+      context.outbox.delete(ack.id);
+      const held = context.books.get(ack.id) || {};
+      const record = { ...serverRecord(ack.row), deleted: true };
+      record.position = held.position ?? record.position;
+      context.books.set(ack.id, record);
+      enqueue(() => context.store.put(record).catch(() => {}));
+      continue;
+    }
+    const server = ack.row;
+    const queued = context.outbox.get(ack.id);
+    // A page turned during the sync left a newer place in the outbox; only a row that
+    // still matches what the server acknowledged is fully drained. The other stays,
+    // and the onDone re-raises a drain for it.
+    const drained =
+      !queued ||
+      (queued.kind === "position" && queued.chapter === server.position.chapter && queued.block === server.position.block);
+    if (drained) {
+      context.outbox.delete(ack.id);
+      enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
+    } else {
+      enqueue(() => context.store.outboxPut(queued).catch(() => {}));
+    }
+    const held = context.books.get(ack.id);
+    const record = serverRecord(server);
+    if (held) record.position = held.position; // keep the latest local place
+    context.books.set(ack.id, record);
+    enqueue(() => context.store.put(record).catch(() => {}));
+    enqueue.emit(changed(record, context.outbox.has(ack.id)));
+  }
+
+  for (const book of pulled) {
+    const current = context.books.get(book.id);
+    if (current && book.version <= current.version) continue;
+    // A delete always wins (5): a live copy never resurrects a local tombstone.
+    if (current && current.deleted && !book.deleted) continue;
+    const record = serverRecord(book);
+    if (book.deleted) {
+      context.books.set(book.id, record);
+      enqueue(() => context.store.put(record).catch(() => {}));
+      if (visible(current)) enqueue.emit({ type: "book.deleted", id: book.id });
+      continue;
+    }
+    context.books.set(book.id, record);
+    enqueue(() => context.store.put(record).catch(() => {}));
+    enqueue.emit(changed(record, context.outbox.has(book.id)));
+  }
+
+  if (newCursor !== undefined) {
+    enqueue.assign({ cursor: newCursor });
+    enqueue(() => context.store.metaPut("cursor", newCursor).catch(() => {}));
+  }
+  if (authFailed) {
+    enqueue.assign({ userId: null });
+    enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
+  }
+}

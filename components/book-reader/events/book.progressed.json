@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The reader settled on a new place after a page turn (Decision 4): the chapter in the spine and the index of the top-most visible top-level block. `books` stores it, last write wins.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "chapter": { "type": "integer", "minimum": 0 },
+    "block": { "type": "integer", "minimum": 0 }
+  },
+  "required": ["id", "chapter", "block"],
+  "additionalProperties": false
+}

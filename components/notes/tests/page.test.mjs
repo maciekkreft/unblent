@@ -467,6 +467,7 @@ for (const engine of ENGINES) {
     // throwaway per-user database (5).
     const SECRET = process.env.SESSION_SECRET;
     assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
+    assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server");
     const userId = `notes-page-${Date.now()}`;
     const cookie = `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
     const context = await browser.newContext();

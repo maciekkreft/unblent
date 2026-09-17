@@ -15,6 +15,7 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 mkdirSync(SCREENSHOTS, { recursive: true });
+const FIXTURES = resolve(HERE, "..", "..", "books", "tests", "fixtures");
 
 // The trace lines that prove the round trip through the bus (section 10): the fact
 // tells the stack about the clash, the stack tells the fact to keep the user's copy.
@@ -92,6 +93,7 @@ for (const engine of ENGINES) {
   test(`a conflict shows a notice and Keep mine keeps the user's copy in ${engine.name}`, async () => {
     const SECRET = process.env.SESSION_SECRET;
     assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
+    assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server");
     const userId = `notice-page-${Date.now()}`;
     const cookie = `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
     const browser = await engine.launch();
@@ -187,6 +189,53 @@ for (const engine of ENGINES) {
       });
       assert.ok(fits, "the stack is within the window, no horizontal overflow");
       await page.screenshot({ path: resolve(SCREENSHOTS, `notice-phone-${engine.name}.png`) });
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // A refused book is a book.refused the stack shows in its own words. The two
+  // provokable reasons are driven end to end on the books stem page: signed out (the
+  // fact mints nothing anonymously) and a broken file (not an epub). The unavailable
+  // wording is the same one the session unavailable path exercises above.
+  test(`a refused book shows the stack's message in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
+    try {
+      const problems = [];
+      const page = await context.newPage();
+      // A 422 on /api/books is the deliberate unreadable path; everything else 4xx is
+      // a fault.
+      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+      page.on("response", (res) => {
+        if (res.status() >= 400 && !/\/api\/books\//.test(res.url())) problems.push(`HTTP ${res.status()}: ${res.url()}`);
+      });
+      const setFile = (path) => page.locator("book-shelf input[type=file]").setInputFiles(path);
+
+      // Signed out: a picked file is refused, and the stack invites a sign-in.
+      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
+      await until(async () =>
+        (await page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelector(".empty p")?.textContent.trim())) ===
+        "Sign in to add books",
+      );
+      await setFile(resolve(FIXTURES, "sample.epub"));
+      await until(async () => (await notices(page)).some((n) => n.text === "Sign in to add books."));
+
+      // Signed in: a broken file is refused as not an epub.
+      const SECRET = process.env.SESSION_SECRET;
+      assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
+      assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server");
+      const userId = `notice-book-${Date.now()}`;
+      const cookie = `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
+      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
+      await setFile(resolve(FIXTURES, "broken.epub"));
+      await until(async () => (await notices(page)).some((n) => n.text === "This file is not an epub."));
+
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

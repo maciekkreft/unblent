@@ -22,6 +22,18 @@ function describe(source) {
       ? `“${title}” was deleted elsewhere, so your edit could not be kept.`
       : `Your edit to “${title}” clashed with a newer copy. Keep yours, or dismiss to take theirs.`;
   }
+  // book.refused and session.refused both carry a `reason`, but from different
+  // vocabularies, so a book refusal is read first, by its event type.
+  if (source.type === "book.refused") {
+    switch (source.reason) {
+      case "signed-out":
+        return "Sign in to add books.";
+      case "unreadable":
+        return "This file is not an epub.";
+      default:
+        return "The server is unavailable. Try again in a moment.";
+    }
+  }
   switch (source.reason) {
     case "cancelled":
       return "Sign-in was cancelled.";

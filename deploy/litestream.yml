@@ -1,10 +1,14 @@
 # Section 5: every per-user file under data/ streams continuously to R2, and a
 # new user's files join on their own (watch), so no server module knows this
-# runs. Credentials come from the unit's EnvironmentFile, never from this file.
+# runs. Credentials and the R2 endpoint, which carries the account id, come from
+# the unit's EnvironmentFile, never from this file.
 #
 # Restoring is one command, run where the credentials are readable (root):
 #   set -a; . /etc/unblent-litestream/r2.env; set +a
 #   litestream restore -o data/<user>/notes.db s3://unblent-data/<user>/notes.db
+# The books files (chapters, images, source) are not databases; rclone copies
+# them (deploy/unblent-books-backup.*) and restores them:
+#   rclone copy r2:unblent-data/<user>/books /opt/unblent/data/<user>/books
 dbs:
   - dir: /opt/unblent/data
     pattern: "*.db"
@@ -13,7 +17,7 @@ dbs:
     replica:
       type: s3
       bucket: unblent-data
-      endpoint: https://<R2-ACCOUNT-ID>.r2.cloudflarestorage.com
+      endpoint: ${LITESTREAM_ENDPOINT}
       region: auto
       access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
       secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user chose a file to add (4.3, fifth rule): books fetches url once and revokes it. url is an object URL (URL.createObjectURL), tab-local; name and size are the file's, id a freshly minted ULID.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "name": { "type": "string" },
+    "size": { "type": "integer", "minimum": 0 },
+    "url": { "type": "string" }
+  },
+  "required": ["id", "name", "size", "url"],
+  "additionalProperties": false
+}

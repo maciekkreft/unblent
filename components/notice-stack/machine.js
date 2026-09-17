@@ -31,6 +31,13 @@ const TABLE = {
     standing: p.reason === "registration-closed" || p.reason === "unknown-credential",
     actions: [],
   }),
+  // A book could not be added (signed out, not an epub, server down): only news, one
+  // row per reason so a repeat replaces rather than piles up.
+  "book.refused": (p) => ({
+    key: `book.refused:${p.reason}`,
+    standing: false,
+    actions: [],
+  }),
 };
 
 // A Map with one entry replaced, or removed, as a new Map so assign sees a fresh
@@ -72,6 +79,7 @@ export const machine = setup({}).createMachine({
   on: {
     "note.conflicted": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and
     // says so. notes emits note.conflicted before note.deleted, so the notice exists.

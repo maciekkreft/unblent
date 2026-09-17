@@ -12,6 +12,7 @@ const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const SECRET = process.env.SESSION_SECRET;
 assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
+assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server");
 
 const cookieFor = (userId) =>
   `unblent_session=${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;

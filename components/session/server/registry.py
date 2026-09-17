@@ -5,6 +5,8 @@ by. The router reaches it only through these calls, never SQL of its own.
 
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from server.user import DATA
@@ -13,12 +15,21 @@ DB_PATH = DATA / "session.db"
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
 
-def _connect() -> sqlite3.Connection:
+# `with connection:` alone commits or rolls back and leaves the handle open, to be
+# closed only when the interpreter's cycle collector gets to it (a cursor and its rows
+# keep the connection in a cycle); on Python 3.14 the server ran out of file
+# descriptors that way. Closing when the block ends keeps one handle per request.
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def user_count() -> int:

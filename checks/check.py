@@ -1170,7 +1170,10 @@ def run_tests(affected=None) -> None:
         if not _wait_for_server(port):
             fail("checks/check.py", "tests",
                  f"server did not answer on port {port}")
-        env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}"}
+        # UNBLENT_DATA travels to the tests too: their cookie-forging helpers refuse
+        # to run without it, so a suite pointed by hand at the dev server never writes
+        # into the real data/ (architecture.md section 10, Tests row).
+        env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}", "UNBLENT_DATA": data_dir}
 
         for test in server_tests:
             result = subprocess.run([sys.executable, test], cwd=ROOT, env=env)

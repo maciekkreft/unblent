@@ -7,6 +7,8 @@ rather than silently overwritten.
 
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -19,7 +21,12 @@ router = APIRouter()
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
 
-def _connect(user_id: str) -> sqlite3.Connection:
+# `with connection:` alone commits or rolls back and leaves the handle open, to be
+# closed only when the interpreter's cycle collector gets to it (a cursor and its rows
+# keep the connection in a cycle); on Python 3.14 the server ran out of file
+# descriptors that way. Closing when the block ends keeps one handle per request.
+@contextmanager
+def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "notes.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
@@ -28,7 +35,11 @@ def _connect(user_id: str) -> sqlite3.Connection:
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(notes)")}
     if "deleted" not in columns:
         connection.executescript("ALTER TABLE notes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _next_seq(connection: sqlite3.Connection) -> int:

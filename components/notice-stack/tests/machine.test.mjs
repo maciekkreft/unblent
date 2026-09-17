@@ -140,3 +140,24 @@ test("two distinct notices stack independently", () => {
   actor.send({ type: "session.refused", reason: "cancelled" });
   assert.equal(notices(actor).size, 2, "one key each");
 });
+
+// --- Book refusals: one passing notice per reason -------------------------------
+
+for (const reason of ["signed-out", "unreadable", "unavailable"]) {
+  test(`a book.refused (${reason}) passes and is keyed by its reason`, () => {
+    const { actor, clock } = start();
+    actor.send({ type: "book.refused", id: ID, reason });
+    const key = `book.refused:${reason}`;
+    assert.ok(notice(actor, key), "shown at once");
+    assert.equal(notice(actor, key).standing, false, "a book refusal is only news");
+    clock.increment(FADE_MS);
+    assert.equal(notices(actor).size, 0, "and gone when its window elapses");
+  });
+}
+
+test("a repeated book.refused of the same reason replaces rather than piles up", () => {
+  const { actor } = start();
+  actor.send({ type: "book.refused", id: ID, reason: "unreadable" });
+  actor.send({ type: "book.refused", id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", reason: "unreadable" });
+  assert.equal(notices(actor).size, 1, "coalesced by reason");
+});

@@ -1,0 +1,45 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every book as the little a shelf needs to draw a tile: cover, title, author, where the reader is, and how many chapters. Tombstones are excluded; newest first.",
+    "type": "object",
+    "properties": {
+      "books": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+            "title": { "type": "string" },
+            "author": { "type": "string" },
+            "cover": { "type": ["string", "null"] },
+            "position": {
+              "type": "object",
+              "properties": {
+                "chapter": { "type": "integer", "minimum": 0 },
+                "block": { "type": "integer", "minimum": 0 }
+              },
+              "required": ["chapter", "block"],
+              "additionalProperties": false
+            },
+            "chapterCount": { "type": "integer", "minimum": 0 },
+            "pending": { "type": "boolean" },
+            "addedAt": { "type": "integer" }
+          },
+          "required": ["id", "title", "author", "cover", "position", "chapterCount", "pending", "addedAt"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["books"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["book.changed", "book.deleted"]
+}

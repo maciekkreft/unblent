@@ -1,0 +1,81 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read names one book by id.",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The whole book row (the book.changed shape), or an honest error when there is none by that id.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "book": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+              "title": { "type": "string" },
+              "author": { "type": "string" },
+              "cover": { "type": ["string", "null"] },
+              "chapters": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": { "title": { "type": "string" } },
+                  "required": ["title"],
+                  "additionalProperties": false
+                }
+              },
+              "toc": { "type": "array", "items": { "$ref": "#/$defs/tocEntry" } },
+              "position": { "$ref": "#/$defs/position" },
+              "version": { "type": "integer", "minimum": 1 },
+              "contentVersion": { "type": "integer", "minimum": 1 },
+              "pending": { "type": "boolean" },
+              "addedAt": { "type": "integer" },
+              "updatedAt": { "type": "integer" }
+            },
+            "required": ["id", "title", "author", "cover", "chapters", "toc", "position", "version", "contentVersion", "pending", "addedAt", "updatedAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["book"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "not-found" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ],
+    "$defs": {
+      "position": {
+        "type": "object",
+        "properties": {
+          "chapter": { "type": "integer", "minimum": 0 },
+          "block": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["chapter", "block"],
+        "additionalProperties": false
+      },
+      "tocEntry": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "chapter": { "type": "integer", "minimum": 0 },
+          "block": { "type": "integer", "minimum": 0 },
+          "children": { "type": "array", "items": { "$ref": "#/$defs/tocEntry" } }
+        },
+        "required": ["title", "chapter", "block", "children"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "supersededBy": ["book.changed", "book.deleted"]
+}

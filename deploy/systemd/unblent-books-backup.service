@@ -1,0 +1,24 @@
+[Unit]
+Description=Unblent books backup (per-user epub/chapter/image files -> Cloudflare R2)
+Documentation=https://github.com/maciekkreft/unblent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Section 5: books' chapters, images and source epubs are files, not databases,
+# so Litestream does not carry them. This timer copies them to the same R2
+# bucket, under <user>/books/<id>/…, beside the Litestream databases.
+User=unblent
+Group=unblent
+WorkingDirectory=/opt/unblent
+# R2 credentials as rclone's own env vars (RCLONE_CONFIG_R2_*), including the
+# endpoint that carries the account id, root-owned, never in git; systemd reads
+# the file before dropping to unblent. Same R2 token as Litestream.
+EnvironmentFile=/etc/unblent-rclone/r2.env
+ExecStart=/usr/bin/rclone copy /opt/unblent/data r2:unblent-data --include "/*/books/**" --transfers 4 --s3-no-check-bucket
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
