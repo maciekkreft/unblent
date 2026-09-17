@@ -67,8 +67,9 @@ const clickTile = (page) =>
   });
 const waitReaderReady = (page) =>
   page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot?.querySelector(".footer .chap")?.textContent.trim());
-// The current-chapter highlight, driven by book.changed's position (a page turn's
-// announcement or a jump's, 4.3): wait for it to name the chapter given.
+// The current-chapter highlight: the chapter the user just chose (marked at once), or
+// the fact's saved position once it moves (a page turn or a jump's announcement, 4.3).
+// Wait for it to name the chapter given.
 const waitTocCurrent = (page, title) =>
   page.waitForFunction(
     (t) => [...(document.querySelector("book-toc")?.shadowRoot?.querySelectorAll(".entry.current") ?? [])].some((e) => e.textContent.trim() === t),
@@ -180,8 +181,15 @@ for (const engine of ENGINES) {
       try {
         await openContents(page);
         await clickEntry(page, "Chapter Three");
-        // The jump lands the reader on the chapter's first page, whose settled place is
-        // announced, which moves the highlight in turn.
+        // The click marks the chosen chapter at once (the jump), well before the
+        // reader's settle and its ~600ms announcement travel back as a book.changed.
+        await page.waitForFunction(
+          () => [...(document.querySelector("book-toc")?.shadowRoot?.querySelectorAll(".entry.current") ?? [])].some((e) => e.textContent.trim() === "Chapter Three"),
+          undefined,
+          { timeout: 250, polling: 20 },
+        );
+        // Then the jump lands the reader on the chapter's first page, whose settled
+        // place is announced, and the fact confirms the mark it already showed.
         await waitReaderChapter(page, "Chapter Three");
         await waitTocCurrent(page, "Chapter Three");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);

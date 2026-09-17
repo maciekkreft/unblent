@@ -3,7 +3,10 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // The view component that shows one book's table of contents (8, kind 4) and lets a
 // chapter be jumped to. It owns only UI state — which book's contents it is showing,
 // the toc tree, and which chapter is current — and points at `books`, which owns the
-// fact. It asks books: read for the tree when a book is selected, then follows
+// fact. The current chapter is the one the user just chose (a jump the fact has not
+// confirmed yet, so the click is answered at once), else the fact's position, which
+// stays authoritative as soon as it moves. It asks books: read for the tree when a
+// book is selected, then follows
 // book.changed (a re-import changes the tree; a page turn moves the current chapter,
 // which rides book.changed's position, 4.3, fourth rule) and book.deleted after. It
 // never decides what a chapter is; it learns the tree from the fact and announces the
@@ -45,6 +48,9 @@ export const machine = setup({
     // the loaded book's id, tree and current chapter, or null before one is selected.
     id: null,
     book: null,
+    // The chapter the user chose that the fact has not confirmed yet: marked at once,
+    // because the position only arrives after the reader settles and announces.
+    jump: null,
   }),
   initial: "starting",
   on: {
@@ -55,22 +61,28 @@ export const machine = setup({
       {
         guard: ({ event }) => event.id != null,
         target: ".opening",
-        actions: assign({ id: ({ event }) => event.id, book: null }),
+        actions: assign({ id: ({ event }) => event.id, book: null, jump: null }),
       },
-      { target: ".empty", actions: assign({ id: null, book: null }) },
+      { target: ".empty", actions: assign({ id: null, book: null, jump: null }) },
     ],
     // The fact's news for the open book (4.3, fourth rule): a re-import brings a new
     // tree, and a page turn rides in as a new position, whose chapter is the one to
-    // mark. Both are just the fresh row folded in.
+    // mark. Both are just the fresh row folded in. A position whose chapter moved is
+    // the fact confirming the jump, or a newer move overriding it, so the jump ends;
+    // one with the chapter unchanged (an ack of an earlier turn) must not flick the
+    // mark back, so the jump stays.
     "book.changed": {
       guard: "ours",
-      actions: assign({ book: ({ event }) => pickToc(event) }),
+      actions: assign({
+        jump: ({ context, event }) => (event.position.chapter !== context.book.chapter ? null : context.jump),
+        book: ({ event }) => pickToc(event),
+      }),
     },
     // The open book is gone: back to the empty panel.
     "book.deleted": {
       guard: "ours",
       target: ".empty",
-      actions: assign({ id: null, book: null }),
+      actions: assign({ id: null, book: null, jump: null }),
     },
     // The user chose an entry (7.2, internal gesture): announce the jump. The payload is
     // the book and the chapter; an entry deep in a chapter opens the chapter's first
@@ -78,7 +90,9 @@ export const machine = setup({
     // it). Guarded so a click during a switch, before the tree is loaded, is dropped.
     _select: {
       guard: ({ context, event }) => Boolean(context.book) && context.book.id === event.id,
-      actions: enqueueActions(({ event, enqueue }) => {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        // The already-current chapter has nothing to confirm, so it holds no jump.
+        enqueue.assign({ jump: event.chapter === context.book.chapter ? null : event.chapter });
         enqueue.emit({ type: "chapter.selected", id: event.id, chapter: event.chapter });
       }),
     },

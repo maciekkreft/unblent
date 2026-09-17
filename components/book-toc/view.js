@@ -159,7 +159,7 @@ class BookToc extends LitElement {
     const rows = this.#rows();
     if (!book || !rows.length) return html`<div class="empty"><p>Choose a book</p></div>`;
 
-    const current = book.chapter;
+    const current = snapshot.context.jump ?? book.chapter;
     const focusAt = this.#focusRow(rows, current);
     return html`
       <div class="toc">
