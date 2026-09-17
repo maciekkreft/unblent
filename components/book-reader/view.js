@@ -109,6 +109,10 @@ class BookReader extends LitElement {
     .strip {
       height: 100%;
       column-count: 1;
+      /* iOS Safari does not fragment a box whose only column property is a count of
+         one: the chapter stays one tall column, one page. Any column width makes it a
+         multicol there; the count still caps it at one column, the full page wide. */
+      column-width: var(--space-2xl);
       column-fill: auto;
       column-gap: var(--space-xl);
       /* One page is the clip window's content width, 100cqw, not the strip's own

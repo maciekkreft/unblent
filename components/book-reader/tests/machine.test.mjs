@@ -101,6 +101,30 @@ test("turns within the window coalesce to the last place, one announcement", asy
   assert.deepEqual(progressed, [{ type: "book.progressed", id: ID, chapter: 0, block: 5 }], "one, at the latest place");
 });
 
+test("landing at the saved place is not announced as a turn", async () => {
+  // The reader opens at the fact's saved position (5). The view settles there, but the
+  // user did not turn, so nothing is announced: announcing would send this device's
+  // place over a newer one a pull is about to bring, the sync bug this guards.
+  const { actor, progressed, clock } = await open({ read: bookReply({ position: { chapter: 0, block: 7 } }) });
+  actor.send({ type: "_settled", chapter: 0, block: 7 });
+  clock.increment(PROGRESS_MS);
+  await flush();
+  assert.deepEqual(progressed, [], "the landing is not progress");
+});
+
+test("adopting another device's move is not echoed back as a turn", async () => {
+  // A pull brings a newer place (book.changed); the reader opens it, the view lands
+  // there, and that landing must not be announced back (5: last write wins, no echo).
+  const { actor, progressed, clock } = await open();
+  actor.send(changedEvent({ version: 2, position: { chapter: 0, block: 9 } }));
+  await flush();
+  assert.deepEqual(ctx(actor).pending, { chapter: 0, block: 9 }, "the move is adopted");
+  actor.send({ type: "_settled", chapter: 0, block: 9 });
+  clock.increment(PROGRESS_MS);
+  await flush();
+  assert.deepEqual(progressed, [], "the adopted place is not announced back");
+});
+
 test("a page turn past the chapter loads the next, at its first block", async () => {
   const { actor } = await open();
   actor.send({ type: "_next" });
@@ -171,16 +195,18 @@ test("another device's move is adopted; the reader's own echo is not", async () 
 
 test("an ack that lands during an unannounced turn does not move the reader", async () => {
   const { actor, progressed, clock } = await open();
-  // A first turn, announced, so `books` knows block 0.
+  // Land at the saved place (block 0); the landing is not the user's turn and is not
+  // announced. A real turn to block 2 is, so `books` hears block 2.
   actor.send({ type: "_settled", chapter: 0, block: 0 });
+  actor.send({ type: "_settled", chapter: 0, block: 2 });
   clock.increment(PROGRESS_MS);
   await flush();
 
   // The user turns again (dirty); before the window closes, the ack of the earlier
-  // place lands as a newer version at block 0 (5: the ack carries the last place books
+  // place lands as a newer version at block 2 (5: the ack carries the last place books
   // heard). It refreshes the metadata but must not pull the reader back.
   actor.send({ type: "_settled", chapter: 0, block: 4 });
-  actor.send(changedEvent({ version: 2, position: { chapter: 0, block: 0 } }));
+  actor.send(changedEvent({ version: 2, position: { chapter: 0, block: 2 } }));
   await flush();
   assert.equal(ctx(actor).pending, null, "the reader is not moved");
   assert.equal(ctx(actor).chapter, 0);
@@ -190,7 +216,7 @@ test("an ack that lands during an unannounced turn does not move the reader", as
   clock.increment(PROGRESS_MS);
   await flush();
   assert.deepEqual(progressed, [
-    { type: "book.progressed", id: ID, chapter: 0, block: 0 },
+    { type: "book.progressed", id: ID, chapter: 0, block: 2 },
     { type: "book.progressed", id: ID, chapter: 0, block: 4 },
   ]);
 });

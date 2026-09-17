@@ -68,6 +68,10 @@ export const machine = setup({
     movedInChapter: (args) => movedElsewhere(args) && args.event.position.chapter === args.context.chapter,
     oursSameContent: (args) => isOurs(args) && !reimported(args),
     ours: isOurs,
+    // The view landing where the fact put it, or landing again where it already was (a
+    // re-measure): neither is the user's turn, so neither is progress to announce.
+    landed: ({ context, event }) => context.quiet && samePos(event, context.pending),
+    unmoved: ({ context, event }) => samePos(event, context.at),
   },
   actions: {
     // Announce where the user turned to (Decision 4). The place last recorded by a
@@ -100,6 +104,12 @@ export const machine = setup({
     html: "",
     pending: null,
     sent: null,
+    // Whether the owed place came from the fact (its saved position, another device's
+    // move) rather than the user, and the place the view last reported. Announcing a
+    // landing would send this device's cached place over a newer one the pull is
+    // about to bring (5: last write wins), so only a place the user moved to is sent.
+    quiet: false,
+    at: null,
   }),
   initial: "starting",
   on: {
@@ -110,11 +120,11 @@ export const machine = setup({
       {
         guard: ({ event }) => event.id != null,
         target: ".opening",
-        actions: assign({ id: ({ event }) => event.id, book: null, html: "", pending: null, sent: null, chapter: 0 }),
+        actions: assign({ id: ({ event }) => event.id, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0 }),
       },
       {
         target: ".empty",
-        actions: assign({ id: null, book: null, html: "", pending: null, sent: null, chapter: 0 }),
+        actions: assign({ id: null, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0 }),
       },
     ],
     // The fact's news that the open book is gone (4.3, fourth rule): back to the empty
@@ -122,7 +132,7 @@ export const machine = setup({
     "book.deleted": {
       guard: ({ context, event }) => Boolean(context.book) && event.id === context.book.id,
       target: ".empty",
-      actions: assign({ id: null, book: null, html: "", pending: null, sent: null, chapter: 0 }),
+      actions: assign({ id: null, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0 }),
     },
   },
   states: {
@@ -159,6 +169,7 @@ export const machine = setup({
               book: ({ event }) => pickBook(event.output.book),
               chapter: ({ event }) => event.output.book.position.chapter,
               pending: ({ event }) => ({ ...event.output.book.position }),
+              quiet: true,
             }),
           },
           { target: "empty" },
@@ -178,6 +189,7 @@ export const machine = setup({
           actions: assign({
             chapter: ({ context }) => context.chapter + 1,
             pending: ({ context }) => ({ chapter: context.chapter + 1, block: 0 }),
+            quiet: false,
           }),
         },
         _prev: {
@@ -186,6 +198,7 @@ export const machine = setup({
           actions: assign({
             chapter: ({ context }) => context.chapter - 1,
             pending: ({ context }) => ({ chapter: context.chapter - 1, block: Infinity }),
+            quiet: false,
           }),
         },
         // The contents' jump (4.3, fifth rule): open a chapter's first page. Within the
@@ -194,11 +207,11 @@ export const machine = setup({
           {
             guard: ({ context, event }) => event.id === context.book.id && event.chapter !== context.chapter,
             target: ".fetching",
-            actions: assign({ chapter: ({ event }) => event.chapter, pending: ({ event }) => ({ chapter: event.chapter, block: 0 }) }),
+            actions: assign({ chapter: ({ event }) => event.chapter, pending: ({ event }) => ({ chapter: event.chapter, block: 0 }), quiet: false }),
           },
           {
             guard: ({ context, event }) => event.id === context.book.id,
-            actions: assign({ pending: ({ context }) => ({ chapter: context.chapter, block: 0 }) }),
+            actions: assign({ pending: ({ context }) => ({ chapter: context.chapter, block: 0 }), quiet: false }),
           },
         ],
         // A link inside the text to another spine item (the importer rewrote it to a
@@ -207,9 +220,9 @@ export const machine = setup({
           {
             guard: ({ context, event }) => event.chapter !== context.chapter,
             target: ".fetching",
-            actions: assign({ chapter: ({ event }) => event.chapter, pending: ({ event }) => ({ chapter: event.chapter, block: event.block }) }),
+            actions: assign({ chapter: ({ event }) => event.chapter, pending: ({ event }) => ({ chapter: event.chapter, block: event.block }), quiet: false }),
           },
-          { actions: assign({ pending: ({ event }) => ({ chapter: event.chapter, block: event.block }) }) },
+          { actions: assign({ pending: ({ event }) => ({ chapter: event.chapter, block: event.block }), quiet: false }) },
         ],
         // The fact's news for the open book (4.3, fourth rule): a re-import re-fetches
         // the chapter, another device's move opens the new place, and an echo of this
@@ -222,6 +235,7 @@ export const machine = setup({
               book: ({ event }) => pickBook(event),
               chapter: ({ context, event }) => Math.min(context.chapter, event.chapters.length - 1),
               pending: ({ context, event }) => ({ chapter: Math.min(context.chapter, event.chapters.length - 1), block: 0 }),
+              quiet: false,
             }),
           },
           {
@@ -231,11 +245,12 @@ export const machine = setup({
               book: ({ event }) => pickBook(event),
               chapter: ({ event }) => event.position.chapter,
               pending: ({ event }) => ({ ...event.position }),
+              quiet: true,
             }),
           },
           {
             guard: "movedInChapter",
-            actions: assign({ book: ({ event }) => pickBook(event), pending: ({ event }) => ({ ...event.position }) }),
+            actions: assign({ book: ({ event }) => pickBook(event), pending: ({ event }) => ({ ...event.position }), quiet: true }),
           },
           { guard: "ours", actions: assign({ book: ({ event }) => pickBook(event) }) },
         ],
@@ -261,12 +276,24 @@ export const machine = setup({
           states: {
             clean: {
               on: {
-                // The view settled on a page and reports its top block; record it and
-                // begin the announcement window.
-                _settled: {
-                  target: "dirty",
-                  actions: assign({ sent: ({ event }) => ({ chapter: event.chapter, block: event.block }), pending: null }),
-                },
+                // The view settled on a page and reports its top block. A landing is
+                // only noted; a place the user moved to is recorded and begins the
+                // announcement window.
+                _settled: [
+                  {
+                    guard: "landed",
+                    actions: assign({ at: ({ event }) => ({ chapter: event.chapter, block: event.block }), pending: null, quiet: false }),
+                  },
+                  { guard: "unmoved", actions: assign({ pending: null }) },
+                  {
+                    target: "dirty",
+                    actions: assign({
+                      sent: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                      at: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                      pending: null,
+                    }),
+                  },
+                ],
               },
             },
             dirty: {
@@ -274,7 +301,11 @@ export const machine = setup({
                 // Targetless so the window is not restarted: turns within it join the
                 // one announcement at its end (4.3, third rule).
                 _settled: {
-                  actions: assign({ sent: ({ event }) => ({ chapter: event.chapter, block: event.block }), pending: null }),
+                  actions: assign({
+                    sent: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                    at: ({ event }) => ({ chapter: event.chapter, block: event.block }),
+                    pending: null,
+                  }),
                 },
                 // An unannounced turn is the newest place (5: last write wins); the
                 // fact's news, the ack of an earlier place, refreshes the metadata and
