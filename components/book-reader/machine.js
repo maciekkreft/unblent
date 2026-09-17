@@ -38,6 +38,8 @@ const samePos = (a, b) => Boolean(a && b && a.chapter === b.chapter && a.block =
 // announced (same position as what it last sent), a re-import (a new contentVersion,
 // so the fragments changed and the chapter must be re-fetched), or another device's
 // move (a newer version at a different place). Each is decided by a guard below.
+// While a turn is still unannounced (ready.dirty) no news moves the reader: `books`
+// has not heard that turn yet, so the ack of an earlier place would read as a move.
 const isOurs = ({ context, event }) => Boolean(context.book) && event.id === context.book.id;
 const reimported = (args) => isOurs(args) && args.event.contentVersion !== args.context.book.contentVersion;
 const movedElsewhere = (args) =>
@@ -64,6 +66,7 @@ export const machine = setup({
     // re-fetched; one within the open chapter only re-opens a block.
     movedToOtherChapter: (args) => movedElsewhere(args) && args.event.position.chapter !== args.context.chapter,
     movedInChapter: (args) => movedElsewhere(args) && args.event.position.chapter === args.context.chapter,
+    oursSameContent: (args) => isOurs(args) && !reimported(args),
     ours: isOurs,
   },
   actions: {
@@ -273,6 +276,10 @@ export const machine = setup({
                 _settled: {
                   actions: assign({ sent: ({ event }) => ({ chapter: event.chapter, block: event.block }), pending: null }),
                 },
+                // An unannounced turn is the newest place (5: last write wins); the
+                // fact's news, the ack of an earlier place, refreshes the metadata and
+                // never moves the reader. A re-import falls through to the parent.
+                "book.changed": { guard: "oursSameContent", actions: assign({ book: ({ event }) => pickBook(event) }) },
               },
               after: {
                 [PROGRESS_MS]: { target: "clean", actions: "announce" },

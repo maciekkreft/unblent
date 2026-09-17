@@ -147,7 +147,7 @@ test("a link jumps to a chapter and a block within it", async () => {
 });
 
 test("another device's move is adopted; the reader's own echo is not", async () => {
-  const { actor } = await open();
+  const { actor, clock } = await open();
   // Record where this reader last settled.
   actor.send({ type: "_settled", chapter: 0, block: 0 });
   await flush();
@@ -158,11 +158,51 @@ test("another device's move is adopted; the reader's own echo is not", async () 
   assert.equal(ctx(actor).chapter, 0, "the echo does not move the reader");
   assert.equal(ctx(actor).book.version, 2, "but the metadata is adopted");
 
-  // A newer version at a different place in another chapter moves and re-fetches.
+  // A newer version at a different place in another chapter moves and re-fetches. The
+  // window must be closed first, so the move arrives in ready.clean, not while a turn
+  // is still unannounced (dirty), where the fact's news never moves the reader.
+  clock.increment(PROGRESS_MS);
+  await flush();
   actor.send(changedEvent({ version: 3, position: { chapter: 2, block: 1 } }));
   await flush();
   assert.equal(ctx(actor).chapter, 2, "adopts the other device's chapter");
   assert.deepEqual(ctx(actor).pending, { chapter: 2, block: 1 });
+});
+
+test("an ack that lands during an unannounced turn does not move the reader", async () => {
+  const { actor, progressed, clock } = await open();
+  // A first turn, announced, so `books` knows block 0.
+  actor.send({ type: "_settled", chapter: 0, block: 0 });
+  clock.increment(PROGRESS_MS);
+  await flush();
+
+  // The user turns again (dirty); before the window closes, the ack of the earlier
+  // place lands as a newer version at block 0 (5: the ack carries the last place books
+  // heard). It refreshes the metadata but must not pull the reader back.
+  actor.send({ type: "_settled", chapter: 0, block: 4 });
+  actor.send(changedEvent({ version: 2, position: { chapter: 0, block: 0 } }));
+  await flush();
+  assert.equal(ctx(actor).pending, null, "the reader is not moved");
+  assert.equal(ctx(actor).chapter, 0);
+  assert.equal(ctx(actor).book.version, 2, "but the metadata is adopted");
+
+  // The window closes: the newest place, block 4, is what is announced.
+  clock.increment(PROGRESS_MS);
+  await flush();
+  assert.deepEqual(progressed, [
+    { type: "book.progressed", id: ID, chapter: 0, block: 0 },
+    { type: "book.progressed", id: ID, chapter: 0, block: 4 },
+  ]);
+});
+
+test("a re-import while a turn is unannounced still re-fetches the chapter", async () => {
+  const { actor } = await open();
+  actor.send({ type: "_settled", chapter: 0, block: 4 }); // dirty
+  // A new contentVersion means the fragments changed; this must reach the parent
+  // handler and re-open, even while dirty.
+  actor.send(changedEvent({ version: 2, contentVersion: 2, position: { chapter: 0, block: 0 } }));
+  await flush();
+  assert.deepEqual(ctx(actor).pending, { chapter: 0, block: 0 }, "the re-import re-opens");
 });
 
 test("the open book being deleted returns to the empty page", async () => {
