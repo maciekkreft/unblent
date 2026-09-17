@@ -429,6 +429,18 @@ for (const engine of ENGINES) {
         assert.equal(caps.h6.color, caps.fc.color, "a heading caption is muted like a figcaption");
         // A real heading is still a heading at desk width: larger than the prose.
         assert.ok(caps.h1.size > caps.prose.size, `a chapter heading (${caps.h1.size}) stays a heading (prose ${caps.prose.size})`);
+        // A definition list reads as pairs: the term set apart in weight, the
+        // definition indented beneath it (the reader's dl rules).
+        const dl = await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          const dt = r.querySelector(".strip dt");
+          const dd = r.querySelector(".strip dd");
+          if (!dt || !dd) return null;
+          return { dt: dt.getBoundingClientRect().left, dd: dd.getBoundingClientRect().left, weight: getComputedStyle(dt).fontWeight };
+        });
+        assert.ok(dl, "the definition list is on the page");
+        assert.ok(dl.dd > dl.dt + 1, `a definition (${dl.dd}) is indented past its term (${dl.dt})`);
+        assert.ok(Number(dl.weight) >= 600, `a term is set apart in weight (${dl.weight})`);
         assert.ok(glyph, "the inline emoji image is on the page");
         // A listing reads as code: the mono face, smaller than the prose, on its own ground.
         assert.match(glyph.face, /monospace/, `a listing is set in the mono face (${glyph.face})`);

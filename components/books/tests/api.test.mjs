@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 // The server module is the far end of the same component (section 3), tested against
 // the live check server. Every route needs a signed-in user (5), so the test forges
@@ -106,6 +110,31 @@ test("a chapter is served as immutable HTML with the whitelist applied", async (
   const emoji = html.match(/<img[^>]*Smiling face emoji[^>]*>/);
   assert.ok(emoji, "the inline emoji image is kept");
   assert.ok(!/\b(class|width|height)=/.test(emoji[0]), "its presentational attributes are dropped (only src, alt kept)");
+  assert.ok(html.includes("<dl>"), "the definition list is kept");
+  assert.match(html, /<dt>Alpha<\/dt>/, "the term is kept");
+  assert.match(html, /<dd><p>The <a>first<\/a>/, "the definition, its inner id-only anchor now bare, is kept");
+  const ch0 = await (await getChapter(ID, 1, 0, cookie)).text();
+  assert.match(ch0, /data-chapter="2" data-block="2"/, "a link to an id deep inside a dd resolves to the dl block");
+});
+
+test("a re-import serves the book under the next content version", async () => {
+  const user = freshUser();
+  const cookie = cookieFor(user);
+  await importBook(ID, SAMPLE, cookie);
+  assert.equal((await getChapter(ID, 1, 2, cookie)).status, 200, "v1 is live before the re-import");
+
+  // Re-import from the host, exactly as deploy/reimport-books.py does on the same
+  // UNBLENT_DATA the check server reads. The script writes the row and files directly.
+  execFileSync(`${ROOT}.venv/bin/python`, ["deploy/reimport-books.py", user, ID], {
+    cwd: ROOT,
+    env: process.env,
+  });
+
+  const row = (await (await pull(0, cookie)).json()).books.find((b) => b.id === ID);
+  assert.equal(row.contentVersion, 2, "the pull carries the new content version");
+  assert.deepEqual(row.position, { chapter: 0, block: 0 }, "the position resets to the chapter start");
+  assert.equal((await getChapter(ID, 2, 2, cookie)).status, 200, "the v2 chapter is served");
+  assert.equal((await getChapter(ID, 1, 2, cookie)).status, 404, "the v1 URL 404s, so the old cache lapses");
 });
 
 test("a chapter 404s on a wrong content version or an index past the end", async () => {

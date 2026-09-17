@@ -7,9 +7,10 @@ never depends on this running. Stdlib only.
 sample.epub is a minimal EPUB 3 with a nav.xhtml two-level TOC (no toc.ncx), a 1x1
 PNG cover and one figure image, and three chapters: one short, one long with an
 <h2 id="mid"> the TOC points at, and one exercising a code listing with an
-inline emoji image (the O'Reilly idiom: a 160px PNG in a <pre>), a figure, an <h3>
-section and a second figure captioned with an <h6> (the O'Reilly idiom again), a
-table, a nested list, a <div> to unwrap and a <script> to drop. broken.epub is a zip with no
+inline emoji image (the O'Reilly idiom: a 160px PNG in a <pre>), a definition list
+whose dd holds an id another chapter links to, a figure, an <h3> section and a second
+figure captioned with an <h6> (the O'Reilly idiom again), a table, a nested list, a
+<div> to unwrap and a <script> to drop. broken.epub is a zip with no
 META-INF/container.xml, so the importer rejects it (422, unreadable).
 """
 
@@ -102,8 +103,9 @@ CH0 = """<?xml version="1.0" encoding="utf-8"?>
   <body>
     <h1>Chapter One</h1>
     <p>A short opening chapter, one page long. It links to
-      <a href="ch2.xhtml">the third chapter</a> and to
-      <a href="ch1.xhtml#mid">the middle</a>.</p>
+      <a href="ch2.xhtml">the third chapter</a>, to
+      <a href="ch1.xhtml#mid">the middle</a>, and to
+      <a href="ch2.xhtml#defterm">a definition</a>.</p>
   </body>
 </html>
 """
@@ -145,6 +147,12 @@ CH2 = """<?xml version="1.0" encoding="utf-8"?>
     <h1>Chapter Three</h1>
     <pre>'content': "I'm doing really well, thank you for asking! """ + "x" * 120 + """ <img class="emoji" width="160" height="160" src="images/emoji.png" alt="Smiling face emoji"/>
 'finish_reason': 'stop'</pre>
+    <dl>
+      <dt>Alpha</dt>
+      <dd><p>The <a id="defterm">first</a> letter, its id living deep inside a dd.</p></dd>
+      <dt>Beta</dt>
+      <dd><p>The second letter.</p></dd>
+    </dl>
     <div class="wrapper">
       <p>A paragraph inside a div that the importer unwraps.</p>
       <figure>

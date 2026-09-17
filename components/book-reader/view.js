@@ -139,7 +139,7 @@ class BookReader extends LitElement {
     }
     /* The book's own text in the app's type and tokens; the importer dropped its CSS
        (Decision 3). Everything is held to the page so nothing overflows a column. */
-    .strip :is(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, figure, table) {
+    .strip :is(h1, h2, h3, h4, h5, h6, p, ul, ol, dl, blockquote, pre, figure, table) {
       max-width: 100%;
     }
     .strip :is(h1, h2) {
@@ -176,6 +176,25 @@ class BookReader extends LitElement {
     }
     .strip a {
       color: var(--color-accent);
+    }
+    /* A definition list (the O'Reilly idiom for a set of named things): each term set
+       apart, its definition indented beneath it so the pairing reads at a glance. */
+    .strip dl {
+      font-size: var(--text-body);
+      margin-block: var(--space-md);
+    }
+    .strip dt {
+      margin-block-start: var(--space-md);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+      break-after: avoid;
+    }
+    .strip dd {
+      margin-inline-start: var(--space-lg);
+      margin-block: 0;
+    }
+    .strip dd > p:first-child {
+      margin-block-start: var(--space-2xs);
     }
     .strip img {
       max-width: 100%;

@@ -10,6 +10,7 @@ never serves a stale cache. A position is last write wins and never refused (Dec
 import json
 import mimetypes
 import re
+import shutil
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -77,6 +78,58 @@ def _record(row: sqlite3.Row) -> dict:
 
 def _reread(connection: sqlite3.Connection, book_id: str) -> dict:
     return _record(connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone())
+
+
+def reimport(user_id: str, book_id: str) -> dict:
+    """Re-run the importer over a book's kept source.epub under the next content version
+    (architecture.md 5), so every chapter and image URL changes and the browser's cache
+    lapses. Run from the host by deploy/reimport-books.py, not over the bus. The row is
+    updated so a pull carries the change and `books` emits book.changed; the reading
+    position resets to the chapter start because block indices shift with the new markup.
+    Raises on a missing book or an unreadable source, leaving the book untouched."""
+    book_dir = _book_dir(user_id, book_id)
+    source = book_dir / "source.epub"
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        if row is None or row["deleted"]:
+            raise LookupError(f"no live book {book_id}")
+        if not source.exists():
+            raise FileNotFoundError(f"no source for {book_id}")
+        content_version = row["content_version"] + 1
+
+        # Import into a sibling first, so an unreadable source cannot leave the book
+        # without its chapters; swap the two directories in only once it has succeeded.
+        staging = book_dir / ".reimport"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        try:
+            fields = import_book(source, staging, book_id, content_version)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        for name in ("chapters", "images"):
+            shutil.rmtree(book_dir / name, ignore_errors=True)
+            (staging / name).rename(book_dir / name)
+        shutil.rmtree(staging, ignore_errors=True)
+
+        now = int(time.time() * 1000)
+        connection.execute(
+            "UPDATE books SET title = ?, author = ?, cover = ?, chapters = ?, toc = ?,"
+            " content_version = ?, version = version + 1, position_block = 0,"
+            " updated_at = ?, seq = ? WHERE id = ?",
+            (
+                fields["title"],
+                fields["author"],
+                fields["cover"],
+                json.dumps(fields["chapters"]),
+                json.dumps(fields["toc"]),
+                content_version,
+                now,
+                _next_seq(connection),
+                book_id,
+            ),
+        )
+        return _reread(connection, book_id)
 
 
 @router.put("/{book_id}")

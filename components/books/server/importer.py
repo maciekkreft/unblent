@@ -17,12 +17,12 @@ from xml.etree import ElementTree as ET
 
 # Step 4: what survives a chapter. Kept as elements; children recursed into.
 _WHITELIST = {
-    "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "blockquote", "pre",
+    "h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "li", "dl", "dt", "dd", "blockquote", "pre",
     "code", "em", "strong", "i", "b", "a", "img", "figure", "figcaption", "table",
     "thead", "tbody", "tfoot", "tr", "th", "td", "br", "hr", "sup", "sub",
 }
 # The top-level blocks: the position anchor (Decision 4) is an index into these.
-_BLOCK = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "blockquote", "pre", "figure", "table", "hr"}
+_BLOCK = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "dl", "blockquote", "pre", "figure", "table", "hr"}
 # Removed with their content (scripts, styles, embedded media); everything else not in
 # the whitelist (div, section, span, …) is unwrapped: its children are kept, its tag dropped.
 _REMOVE = {"script", "style", "svg", "math", "video", "audio", "iframe", "object", "head", "title"}
