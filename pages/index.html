@@ -43,6 +43,7 @@
     <script type="module" src="/static/components/notes/fact.js"></script>
     <script type="module" src="/static/components/session/fact.js"></script>
     <script type="module" src="/static/components/books/fact.js"></script>
+    <script type="module" src="/static/components/subject/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
@@ -62,10 +63,10 @@
     <page-nav></page-nav>
     <dock-desk>
       <book-reader label="Reader" height="fill"></book-reader>
-      <book-shelf label="Books" side="left"></book-shelf>
+      <book-shelf label="Books" side="left" renames></book-shelf>
       <book-toc label="Contents" side="left" shows-on="book.selected"></book-toc>
-      <note-list label="Notes" side="right"></note-list>
-      <note-editor label="Editor" follows side="right" height="fill" shows-on="note.selected"></note-editor>
+      <note-list subject label="Notes" side="right"></note-list>
+      <note-editor label="Editor" follows subject side="right" height="fill" shows-on="note.selected"></note-editor>
       <settings-sheet label="Settings" side="right"></settings-sheet>
       <layout-switch control></layout-switch>
       <profile-switch control></profile-switch>

@@ -43,6 +43,12 @@ const position = (id, body, cookie) =>
     headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify(body),
   });
+const setTitle = (id, title, cookie) =>
+  fetch(`${BASE_URL}/api/books/${id}/title`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ title }),
+  });
 const remove = (id, cookie) =>
   fetch(`${BASE_URL}/api/books/${id}/deleted`, {
     method: "PUT",
@@ -67,6 +73,7 @@ test("every route needs a signed-in user (401 without a cookie)", async () => {
   assert.equal((await pull(0)).status, 401);
   assert.equal((await position(ID, { chapter: 0, block: 0 })).status, 401);
   assert.equal((await opened(ID)).status, 401);
+  assert.equal((await setTitle(ID, "x")).status, 401);
 });
 
 test("an import returns the row: chapter titles, a cover URL, and the resolved TOC", async () => {
@@ -153,6 +160,8 @@ test("a chapter is served as immutable HTML with the whitelist applied", async (
   assert.match(html, /<dd><p>The <a>first<\/a>/, "the definition, its inner id-only anchor now bare, is kept");
   const ch0 = await (await getChapter(ID, 1, 0, cookie)).text();
   assert.match(ch0, /data-chapter="2" data-block="2"/, "a link to an id deep inside a dd resolves to the dl block");
+  assert.match(ch0, /<h2>A LINKED HEADING<\/h2>/, "a title that is only a link is unwrapped to a plain heading");
+  assert.ok(!/<h[1-6]><a/.test(ch0), "no heading is left as a link");
 });
 
 test("a re-import serves the book under the next content version", async () => {
@@ -237,6 +246,89 @@ test("the open book is last write wins, never refused, and rides the pull", asyn
   assert.equal(afterPull.open.id, ID2, "the pull carries the latest open");
   assert.ok(second.at >= first.at);
   assert.equal(afterPull.cursor, before.cursor, "opening a book does not advance the seq cursor");
+});
+
+test("a user title is last write wins, kept beside the file's, and rides the pull (D11)", async () => {
+  const cookie = cookieFor(freshUser());
+  const imported = await (await importBook(ID, SAMPLE, cookie)).json();
+  assert.equal(imported.title, "Sample Book");
+  assert.equal(imported.fileTitle, "Sample Book", "a fresh book's display and file titles match");
+
+  const named = await (await setTitle(ID, "  My Copy  ", cookie)).json();
+  assert.equal(named.title, "My Copy", "the display title is the user's, trimmed");
+  assert.equal(named.fileTitle, "Sample Book", "the file's title is kept apart");
+  assert.equal(named.version, imported.version + 1, "a rename bumps the version so it pulls");
+
+  // No base version, ever: a second write from a "stale" client still wins.
+  const again = await (await setTitle(ID, "Renamed", cookie)).json();
+  assert.equal(again.title, "Renamed");
+  assert.equal(again.version, named.version + 1);
+
+  // An empty (or blank) title clears the user's, restoring the file's.
+  const cleared = await (await setTitle(ID, "   ", cookie)).json();
+  assert.equal(cleared.title, "Sample Book", "an empty title restores the file's");
+  assert.equal(cleared.fileTitle, "Sample Book");
+
+  const named2 = await (await setTitle(ID, "Again", cookie)).json();
+  const pulled = (await (await pull(0, cookie)).json()).books.find((b) => b.id === ID);
+  assert.equal(pulled.title, "Again", "the pull carries the latest display title");
+  assert.equal(pulled.version, named2.version);
+
+  // A title for a book that is not there is refused honestly.
+  assert.equal((await setTitle(ID2, "x", cookie)).status, 404);
+});
+
+test("a re-import refreshes the file's title without touching the user's (D11)", async () => {
+  const user = freshUser();
+  const cookie = cookieFor(user);
+  await importBook(ID, SAMPLE, cookie);
+  await setTitle(ID, "My Name", cookie);
+
+  execFileSync(`${ROOT}.venv/bin/python`, ["deploy/reimport-books.py", user, ID], {
+    cwd: ROOT,
+    env: process.env,
+  });
+
+  const row = (await (await pull(0, cookie)).json()).books.find((b) => b.id === ID);
+  assert.equal(row.contentVersion, 2, "the re-import ran");
+  assert.equal(row.title, "My Name", "the user's title survives a re-import");
+  assert.equal(row.fileTitle, "Sample Book", "the file's title is refreshed underneath it");
+});
+
+test("a database file from before user titles gains the column, defaulting to the file's title", async () => {
+  // node:sqlite is experimental; hush the one-time warning so the run stays clean.
+  const saved = process.emitWarning;
+  process.emitWarning = () => {};
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { join } = await import("node:path");
+    const { mkdirSync } = await import("node:fs");
+    const user = freshUser();
+    const dir = join(process.env.UNBLENT_DATA, user);
+    mkdirSync(dir, { recursive: true });
+    const db = new DatabaseSync(join(dir, "books.db"));
+    // The pre-user-title schema: a books table without user_title.
+    db.exec(
+      "CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL, cover TEXT, " +
+        "chapters TEXT NOT NULL, toc TEXT NOT NULL, position_chapter INTEGER NOT NULL DEFAULT 0, " +
+        "position_block INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL, content_version INTEGER NOT NULL DEFAULT 1, " +
+        "added_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);",
+    );
+    db.exec(
+      `INSERT INTO books (id, title, author, cover, chapters, toc, version, added_at, updated_at, seq) ` +
+        `VALUES ('${ID}', 'Old Title', 'A', NULL, '[]', '[]', 1, 5, 5, 1);`,
+    );
+    db.close();
+    const cookie = cookieFor(user);
+    const before = (await (await pull(0, cookie)).json()).books.find((b) => b.id === ID);
+    assert.equal(before.title, "Old Title", "the migrated row reads its file title");
+    assert.equal(before.fileTitle, "Old Title");
+    const named = await (await setTitle(ID, "New Title", cookie)).json();
+    assert.equal(named.title, "New Title", "the migrated db can now hold a user title");
+    assert.equal(named.fileTitle, "Old Title");
+  } finally {
+    process.emitWarning = saved;
+  }
 });
 
 test("a delete tombstones the row and purges the directory", async () => {

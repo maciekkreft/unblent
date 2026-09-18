@@ -1,0 +1,34 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The subject on the stage — a kind, an id and a title — or null when there is none (3.1).",
+    "type": "object",
+    "properties": {
+      "subject": {
+        "oneOf": [
+          { "type": "null" },
+          {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string", "minLength": 1 },
+              "id": { "type": "string", "minLength": 1 },
+              "title": { "type": "string" }
+            },
+            "required": ["kind", "id", "title"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "required": ["subject"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["subject.changed"]
+}

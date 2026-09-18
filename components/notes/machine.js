@@ -22,10 +22,12 @@ const subtitleOf = (body) => {
   return second.replace(/^#{1,3} /, "").trim().slice(0, 120);
 };
 
-const listRow = ({ id, title, body, updatedAt }) => ({ id, title, subtitle: subtitleOf(body), updatedAt });
+// about is the note's links (12), [] when none (D2); a note cached before links
+// existed has no about field, so every derivation defaults it.
+const listRow = ({ id, title, body, updatedAt, about }) => ({ id, title, subtitle: subtitleOf(body), updatedAt, about: about ?? [] });
 
 // The one place a note.changed is built, so its subtitle is derived once (5 emit sites).
-const changed = (record, pending) => ({ type: "note.changed", ...record, subtitle: subtitleOf(record.body), pending });
+const changed = (record, pending) => ({ type: "note.changed", ...record, subtitle: subtitleOf(record.body), about: record.about ?? [], pending });
 
 // A tombstone is a real record kept for the pull (5), but it is not a note anyone
 // reads or lists, and its `deleted` flag must never ride note.changed or a read reply
@@ -44,7 +46,7 @@ function replyList(context, reply) {
 function replyRead(context, id, reply) {
   const stored = context.notes.get(id);
   // pending reports the record has a local change the server has not acknowledged (5).
-  reply(visible(stored) ? { note: { ...stored, pending: context.outbox.has(id) } } : { error: "not-found" });
+  reply(visible(stored) ? { note: { ...stored, about: stored.about ?? [], pending: context.outbox.has(id) } } : { error: "not-found" });
 }
 
 // The user's gesture (4.3, fifth rule). Anonymous: local minting, announced with
@@ -59,6 +61,11 @@ function applySave(context, event, enqueue) {
   // dropped rather than reviving it. The server refuses the same edit with a 409.
   if (current && current.deleted) return;
 
+  // D2 (12): about present replaces the note's links, absent leaves them, a new note
+  // gets []. So a save that omits about (every save but a new note's) is a no-op when
+  // its text is unchanged, and a save that carries about is always a change.
+  const about = event.about !== undefined ? event.about : current ? current.about ?? [] : [];
+
   if (context.userId == null) {
     if (current && baseVersion !== current.version) {
       enqueue.emit({
@@ -69,9 +76,9 @@ function applySave(context, event, enqueue) {
       });
       return;
     }
-    if (current && title === current.title && body === current.body) return;
+    if (current && title === current.title && body === current.body && event.about === undefined) return;
     const version = current ? current.version + 1 : baseVersion === null ? 1 : baseVersion + 1;
-    const record = { id, title, body, version, updatedAt: context.now() };
+    const record = { id, title, body, version, updatedAt: context.now(), about };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit(changed(record, false));
@@ -79,13 +86,13 @@ function applySave(context, event, enqueue) {
   }
 
   // Signed in: nothing pending and the same text is not a change (5, idempotent).
-  if (current && title === current.title && body === current.body && !context.outbox.has(id)) return;
+  if (current && title === current.title && body === current.body && !context.outbox.has(id) && event.about === undefined) return;
   const version = current ? current.version : 1;
-  const record = { id, title, body, version, updatedAt: context.now() };
+  const record = { id, title, body, version, updatedAt: context.now(), about };
   context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const existing = context.outbox.get(id);
-  const row = { id, title, body, baseVersion: existing ? existing.baseVersion : current ? current.version : null };
+  const row = { id, title, body, about, baseVersion: existing ? existing.baseVersion : current ? current.version : null };
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit(changed(record, true));
@@ -424,6 +431,7 @@ function applySync(context, output, enqueue) {
       body: held ? held.body : ack.body,
       version: ack.version,
       updatedAt: ack.updatedAt,
+      about: held ? held.about ?? [] : ack.about ?? [],
     };
     // A tombstone stays a tombstone and never rides note.changed; the list already
     // dropped it on the note.deleted that the discard emitted.
@@ -438,7 +446,7 @@ function applySync(context, output, enqueue) {
     enqueue(() => context.store.outboxDelete(conflict.id).catch(() => {}));
     const theirs = conflict.theirs;
     const wasVisible = visible(context.notes.get(conflict.id));
-    const record = { id: conflict.id, title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt };
+    const record = { id: conflict.id, title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt, about: theirs.about ?? [] };
     if (theirs.deleted) record.deleted = true;
     context.notes.set(conflict.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
@@ -466,7 +474,7 @@ function applySync(context, output, enqueue) {
     // A delete always wins (5): a live copy from the server never resurrects a local
     // tombstone, even at a higher version (the server refuses such a revival anyway).
     if (current && current.deleted && !note.deleted) continue;
-    const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt };
+    const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt, about: note.about ?? [] };
     if (note.deleted) {
       record.deleted = true;
       context.notes.set(note.id, record);

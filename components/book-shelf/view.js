@@ -6,6 +6,7 @@ import { machine } from "./machine.js";
 import picked from "./events/book.picked.json" with { type: "json" };
 import selected from "./events/book.selected.json" with { type: "json" };
 import discarded from "./events/book.discarded.json" with { type: "json" };
+import renamed from "./events/book.renamed.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo
 // window; the token is the one clock, shared with the bar's animation. Duplicated
@@ -33,7 +34,7 @@ class ActorController {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         undoMs,
       },
-      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded },
+      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -58,6 +59,13 @@ class ActorController {
 const asPicked = (file) => ({ id: ulid(), name: file.name, size: file.size, url: URL.createObjectURL(file) });
 
 class BookShelf extends LitElement {
+  // The one attribute the tag understands (D11): present means a book's title can be
+  // edited in place. Reflected so a page's bare `renames` reads as true and the
+  // manifest attribute is visible. Off leaves the shelf exactly as it was.
+  static properties = {
+    renames: { type: Boolean, reflect: true },
+  };
+
   static styles = css`
     :host {
       display: flex;
@@ -183,12 +191,18 @@ class BookShelf extends LitElement {
       font-size: var(--text-caption);
       color: var(--color-mute);
     }
-    /* The trash sits on the cover, a signifier shown on hover or focus; on a coarse
-       pointer (no hover) it stands, since there is nothing to hover with. */
-    .bin {
+    /* The per-tile tools (edit, trash) sit on the cover, signifiers shown on hover or
+       focus; on a coarse pointer (no hover) they stand, since there is nothing to
+       hover with. */
+    .actions {
       position: absolute;
       inset-block-start: var(--space-2xs);
       inset-inline-end: var(--space-2xs);
+      display: flex;
+      gap: var(--space-2xs);
+      visibility: hidden;
+    }
+    .tool {
       display: inline-flex;
       appearance: none;
       border: 0;
@@ -199,22 +213,42 @@ class BookShelf extends LitElement {
       cursor: pointer;
       font: inherit;
       box-shadow: var(--shadow-card);
-      visibility: hidden;
     }
-    .bin svg {
+    .tool svg {
       display: block;
     }
-    .tile:hover .bin,
-    .tile:focus-within .bin {
+    .tile:hover .actions,
+    .tile:focus-within .actions {
       visibility: visible;
+    }
+    .edit:hover {
+      color: var(--color-accent);
     }
     .bin:hover {
       color: var(--color-danger);
     }
     @media (hover: none) {
-      .bin {
+      .actions {
         visibility: visible;
       }
+    }
+    /* Editing a title in place: the field takes the title's row, holding the current
+       text, selected, so the whole model is edit-here (Norman: one conceptual model,
+       forgiveness — Escape or an empty save restores). */
+    .title-input {
+      font: inherit;
+      font-size: var(--text-sm);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-accent);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs);
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .title-input:focus-visible {
+      outline: var(--focus-ring);
     }
     /* A book counting down to its delete: the cover dims under an Undo, with a bar
        draining the window, both reading --duration-undo so they cannot disagree. */
@@ -306,6 +340,9 @@ class BookShelf extends LitElement {
   // Which tile holds the roving tabindex and focus. Ephemeral UI focus, not a fact:
   // null falls back to the open tile, then the first.
   #focusId = null;
+  // Which tile's title is being edited in place (D11). Ephemeral view state, nothing a
+  // reload should keep: null means no field is open. The draft lives in the input.
+  #editingId = null;
 
   #tiles(snapshot) {
     return snapshot.context.books;
@@ -351,6 +388,54 @@ class BookShelf extends LitElement {
   #discard(event, id) {
     event.stopPropagation();
     this.#actor.send({ type: "_discard", id });
+  }
+
+  // Turn a tile's title into a field holding the current text, selected, so a rename
+  // starts from what is there and one keystroke can replace it (D11). The click does
+  // not open the book: the edit tool is its own target.
+  #startEdit(event, id) {
+    event.stopPropagation();
+    this.#editingId = id;
+    this.requestUpdate();
+    this.updateComplete.then(() => {
+      const input = this.renderRoot.querySelector(".title-input");
+      if (!input) return;
+      // Set the current title imperatively (not a value binding), so a re-render from
+      // another book's book.changed never clobbers the text being typed.
+      const tile = this.#actor.snapshot?.context.books.find((b) => b.id === id);
+      input.value = tile?.title ?? "";
+      input.focus();
+      input.select();
+    });
+  }
+
+  // Enter or blur saves, Escape cancels (D11); the machine ignores unchanged text and
+  // reads an empty string as "restore the file's title". Save clears the field first so
+  // the blur a programmatic close would fire finds nothing to save again.
+  #commitEdit(id, value) {
+    if (this.#editingId !== id) return;
+    this.#editingId = null;
+    this.#actor.send({ type: "_rename", id, title: value });
+    this.requestUpdate();
+  }
+
+  #cancelEdit() {
+    this.#editingId = null;
+    this.requestUpdate();
+  }
+
+  #editKeydown(event, id) {
+    // Keep every keystroke inside the field: it must not reach the grid's keydown, or
+    // Enter would open the book (a book.selected the "Contents" tab follows) and the
+    // arrow keys would move the tile focus instead of the cursor.
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      this.#commitEdit(id, event.target.value);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      this.#cancelEdit();
+    }
   }
 
   // The file picker and drops both arrive here: build the object URLs and hand the
@@ -457,9 +542,22 @@ class BookShelf extends LitElement {
       >
         <div class="cover">
           ${cover}
-          <button class="bin" type="button" tabindex="-1" aria-label="Delete book" @click=${(e) => this.#discard(e, t.id)}>
-            ${icon("trash-simple")}
-          </button>
+          <div class="actions">
+            ${this.renames
+              ? html`<button
+                  class="tool edit"
+                  type="button"
+                  tabindex="-1"
+                  aria-label="Rename book"
+                  @click=${(e) => this.#startEdit(e, t.id)}
+                >
+                  ${icon("pencil-simple")}
+                </button>`
+              : nothing}
+            <button class="tool bin" type="button" tabindex="-1" aria-label="Delete book" @click=${(e) => this.#discard(e, t.id)}>
+              ${icon("trash-simple")}
+            </button>
+          </div>
           ${isDiscarding
             ? html`<div class="over">
                   <span>Deleted</span>
@@ -468,7 +566,16 @@ class BookShelf extends LitElement {
                 </div>`
             : nothing}
         </div>
-        <span class="title">${t.title}</span>
+        ${this.#editingId === t.id
+          ? html`<input
+              class="title-input"
+              placeholder="Empty restores the original title"
+              aria-label="Book title"
+              @click=${(e) => e.stopPropagation()}
+              @keydown=${(e) => this.#editKeydown(e, t.id)}
+              @blur=${(e) => this.#commitEdit(t.id, e.target.value)}
+            />`
+          : html`<span class="title">${t.title}</span>`}
         <span class="author">${t.author || " "}</span>
         <span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>
       </li>

@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Every note as id, title, subtitle and time, for a list. subtitle is the note's second non-empty line, derived from the body (never stored).",
+    "description": "Every note as id, title, subtitle, time and links, for a list. subtitle is the note's second non-empty line, derived from the body (never stored). about is the note's links (12), [] when none.",
     "type": "object",
     "properties": {
       "notes": {
@@ -19,7 +19,19 @@
             "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
             "title": { "type": "string" },
             "subtitle": { "type": "string" },
-            "updatedAt": { "type": "integer" }
+            "updatedAt": { "type": "integer" },
+            "about": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "minLength": 1 },
+                  "id": { "type": "string", "minLength": 1 }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              }
+            }
           },
           "required": ["id", "title", "updatedAt"],
           "additionalProperties": false

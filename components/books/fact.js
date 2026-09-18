@@ -51,6 +51,20 @@ const api = {
     if (!res.ok) throw new Error(`books position ${res.status}`);
     return await res.json();
   },
+  // A user title, last write wins and never refused (like a position): the server
+  // keeps it beside the file's title and stamps a new version, replying the row.
+  // An empty title clears it, restoring the file's. A 401 drops the session.
+  async title(id, title) {
+    const res = await fetch(`/api/books/${id}/title`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (!res.ok) throw new Error(`books title ${res.status}`);
+    return await res.json();
+  },
   async remove(id) {
     const res = await fetch(`/api/books/${id}/deleted`, {
       method: "PUT",

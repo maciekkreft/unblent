@@ -19,6 +19,7 @@ const flush = async (n = 8) => {
 const book = (id, over = {}) => ({
   id,
   title: "T",
+  fileTitle: "T",
   author: "A",
   cover: null,
   chapters: [{ title: "One" }, { title: "Two" }],
@@ -65,6 +66,7 @@ function fakeApi(impl = {}) {
   const pulls = [];
   const chapters = [];
   const opens = [];
+  const titles = [];
   return {
     uploads,
     positions,
@@ -72,6 +74,7 @@ function fakeApi(impl = {}) {
     pulls,
     chapters,
     opens,
+    titles,
     upload: async (id, url) => {
       uploads.push([id, url]);
       if (impl.upload) {
@@ -92,6 +95,13 @@ function fakeApi(impl = {}) {
     opened: async (id) => {
       opens.push(id);
       return impl.opened ? impl.opened(id) : { id, at: 500 };
+    },
+    title: async (id, t) => {
+      titles.push([id, t]);
+      // The server reports the display title (the user's when set, else the file's) and
+      // the file's own; an empty user title clears it, so the file's "T" comes back.
+      const trimmed = (t || "").trim();
+      return impl.title ? impl.title(id, t) : book(id, { version: 2, title: trimmed || "T", fileTitle: "T" });
     },
     pull: async (since) => {
       pulls.push(since);
@@ -231,6 +241,77 @@ test("a progress for a missing or unchanged place is ignored", async () => {
   actor.send({ type: "book.progressed", id: ID, chapter: 0, block: 0 }); // unchanged
   await flush();
   assert.equal(changed.length, 0);
+  assert.equal(store.outbox.size, 0);
+});
+
+// --- Rename: a user title, last write wins, apart from the position ---------------
+
+test("signed in: a rename gives a user title, announces it pending, then acknowledged", async () => {
+  const store = fakeStore([book(ID)]);
+  const api = fakeApi();
+  const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  changed.length = 0;
+
+  actor.send({ type: "book.renamed", id: ID, title: "  My Title  " });
+  await flush();
+  assert.equal(changed[0].pending, true);
+  assert.equal(changed[0].title, "My Title", "the title is trimmed and shown at once");
+  assert.equal(store.outbox.get(`title:${ID}`).kind, "title", "the rename queues under its own key");
+  assert.equal(store.outbox.has(ID), false, "it does not sit on the book id");
+
+  await drain(clock);
+  assert.deepEqual(api.titles, [[ID, "My Title"]]);
+  assert.equal(changed.at(-1).pending, false);
+  assert.equal(store.outbox.size, 0, "the row is gone once acknowledged");
+});
+
+test("an empty rename restores the file's title from the cache at once", async () => {
+  const store = fakeStore([book(ID, { title: "My Title" })]); // fileTitle stays "T"
+  const api = fakeApi();
+  const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  changed.length = 0;
+
+  actor.send({ type: "book.renamed", id: ID, title: "   " });
+  await flush();
+  assert.equal(changed[0].title, "T", "the file's title comes back without a round trip");
+  assert.equal(changed[0].pending, true);
+
+  await drain(clock);
+  assert.deepEqual(api.titles, [[ID, ""]], "the empty title is sent so the server clears the user's");
+  assert.equal(changed.at(-1).title, "T");
+});
+
+test("a rename for a missing or unchanged title is ignored", async () => {
+  const store = fakeStore([book(ID, { title: "Same" })]);
+  const api = fakeApi();
+  const { actor, changed } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  changed.length = 0;
+  actor.send({ type: "book.renamed", id: ID2, title: "X" }); // unknown
+  actor.send({ type: "book.renamed", id: ID, title: "Same" }); // unchanged
+  actor.send({ type: "book.renamed", id: ID, title: "  Same  " }); // unchanged after trim
+  await flush();
+  assert.equal(changed.length, 0);
+  assert.equal(store.outbox.size, 0);
+});
+
+test("a rename and a pending page turn both reach the server", async () => {
+  const store = fakeStore([book(ID)]);
+  const api = fakeApi();
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+
+  actor.send({ type: "book.progressed", id: ID, chapter: 1, block: 3 });
+  await flush();
+  actor.send({ type: "book.renamed", id: ID, title: "New Name" });
+  await flush();
+  assert.equal(store.outbox.size, 2, "the page turn and the rename queue apart");
+
+  await drain(clock);
+  assert.deepEqual(api.positions, [[ID, 1, 3]], "the position still drains");
+  assert.deepEqual(api.titles, [[ID, "New Name"]], "the rename drains too");
   assert.equal(store.outbox.size, 0);
 });
 

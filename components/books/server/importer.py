@@ -23,6 +23,7 @@ _WHITELIST = {
 }
 # The top-level blocks: the position anchor (Decision 4) is an index into these.
 _BLOCK = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "dl", "blockquote", "pre", "figure", "table", "hr"}
+_HEADING = {"h1", "h2", "h3", "h4", "h5", "h6"}
 # Removed with their content (scripts, styles, embedded media); everything else not in
 # the whitelist (div, section, span, …) is unwrapped: its children are kept, its tag dropped.
 _REMOVE = {"script", "style", "svg", "math", "video", "audio", "iframe", "object", "head", "title"}
@@ -138,7 +139,14 @@ def _convert(el, links: list):
     eid = el.attrs.get("id")
     if tag in _WHITELIST:
         kept = {k: v for k, v in el.attrs.items() if k in _ATTRS.get(tag, set())}
-        ids = _ids_of(child_nodes)
+        extra_ids = set()
+        if tag in _HEADING:
+            anchor = _sole_anchor(child_nodes)
+            if anchor is not None:
+                links[:] = [entry for entry in links if entry[0] is not anchor]
+                extra_ids = anchor["ids"]  # a fragment target on the dropped anchor is kept
+                child_nodes = anchor["children"]
+        ids = _ids_of(child_nodes) | extra_ids
         if eid:
             ids.add(eid)
         node = {"tag": tag, "attrs": kept, "children": child_nodes, "ids": ids}
@@ -159,6 +167,25 @@ def _flow(el, links) -> list:
     for child in el.children:
         nodes.extend(_convert(child, links))
     return nodes
+
+
+def _sole_anchor(children):
+    """The single <a> that is a heading's whole content (whitespace aside), else None.
+    A publisher often wraps a chapter title in a link back to the contents; that title
+    is a heading, not a navigation signifier, so it is unwrapped to plain text (a link
+    within running text — a footnote, a cross-reference — is left alone)."""
+    anchor = None
+    for node in children:
+        if isinstance(node, str):
+            if node.strip():
+                return None
+        elif isinstance(node, dict) and node["tag"] == "a":
+            if anchor is not None:
+                return None
+            anchor = node
+        else:
+            return None
+    return anchor
 
 
 def _only_image(children):

@@ -144,7 +144,7 @@ test("queued queries are answered in order after the store loads (anonymous)", a
   await ready(actor);
   const [listReply, readReply] = await Promise.all([list, read]);
   assert.deepEqual(order, ["list", "read"]);
-  assert.deepEqual(listReply, { notes: [{ id: ID, title: "T", subtitle: "", updatedAt: 5 }] });
+  assert.deepEqual(listReply, { notes: [{ id: ID, title: "T", subtitle: "", updatedAt: 5, about: [] }] });
   assert.equal(readReply.note.version, 3);
   assert.equal(readReply.note.pending, false);
 });
@@ -168,7 +168,7 @@ test("anonymous: a new note is announced at version 1, pending false, and never 
   await flush();
   // subtitle is derived from the body's second non-empty line, on every note.changed.
   assert.deepEqual(changed, [
-    { type: "note.changed", id: ID, title: "Hi", subtitle: "there", body: "Hi\nthere", version: 1, updatedAt: 101, pending: false },
+    { type: "note.changed", id: ID, title: "Hi", subtitle: "there", body: "Hi\nthere", version: 1, updatedAt: 101, about: [], pending: false },
   ]);
   assert.equal(api.puts.length, 0, "anonymous never writes to the server");
   assert.equal(api.pulls.length, 0, "anonymous never pulls");
@@ -185,6 +185,46 @@ test("anonymous: a save on a stale base is a conflict, not a silent loss", async
   assert.deepEqual(conflicted, [
     { type: "note.conflicted", id: ID, mine: { title: "C", body: "c", baseVersion: 1 }, theirs: { title: "A", body: "a", version: 2, updatedAt: 5 } },
   ]);
+});
+
+// --- Note links (about) ----------------------------------------------------------
+
+test("a note's about rides note.changed and both replies; absent keeps it, present replaces it", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  // A new note created with one link to the subject.
+  actor.send({ type: "note.saved", id: ID, title: "N", body: "N", baseVersion: null, about: [{ kind: "book", id: "b1" }] });
+  await flush();
+  assert.deepEqual(changed.at(-1).about, [{ kind: "book", id: "b1" }]);
+  assert.deepEqual((await askQuery(actor, "read", { id: ID })).note.about, [{ kind: "book", id: "b1" }]);
+  assert.deepEqual((await askQuery(actor, "list")).notes[0].about, [{ kind: "book", id: "b1" }]);
+
+  // A later save without about keeps the stored links (D2).
+  actor.send({ type: "note.saved", id: ID, title: "N2", body: "N2", baseVersion: 1 });
+  await flush();
+  assert.deepEqual(changed.at(-1).about, [{ kind: "book", id: "b1" }]);
+
+  // A save carrying about replaces the links; unlinking is a shorter list.
+  actor.send({ type: "note.saved", id: ID, title: "N3", body: "N3", baseVersion: 2, about: [] });
+  await flush();
+  assert.deepEqual(changed.at(-1).about, []);
+});
+
+test("a note cached before links existed reads as about: []", async () => {
+  const { actor } = start(fakeStore([{ id: ID, title: "Old", body: "old", version: 1, updatedAt: 5 }]));
+  await ready(actor);
+  assert.deepEqual((await askQuery(actor, "read", { id: ID })).note.about, []);
+  assert.deepEqual((await askQuery(actor, "list")).notes[0].about, []);
+});
+
+test("signed in: a new note's link is sent to the server in the outbox row", async () => {
+  const api = fakeApi();
+  const { actor, clock } = start(fakeStore(), { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "note.saved", id: ID, title: "N", body: "N", baseVersion: null, about: [{ kind: "book", id: "b1" }] });
+  await flush();
+  await drain(clock);
+  assert.deepEqual(api.puts[0].about, [{ kind: "book", id: "b1" }]);
 });
 
 // --- Signed in: pending, outbox, and sync ----------------------------------------

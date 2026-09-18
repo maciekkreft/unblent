@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine } from "../machine.js";
+import { machine, shown } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -24,11 +24,11 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false } = {}) {
   const selected = [];
   const discarded = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.start();
@@ -38,7 +38,15 @@ function list({ ask, mint = minter(), undoMs = UNDO_MS } = {}) {
 const answeringList = (notes) => (target, name) =>
   Promise.resolve(name === "list" ? { notes } : {});
 
+// Answers both the list and, for a following list, subject: read.
+const answering = ({ notes = [], subject = null }) => (target, name) => {
+  if (name === "list") return Promise.resolve({ notes });
+  if (target === "subject" && name === "read") return Promise.resolve({ subject });
+  return Promise.resolve({});
+};
+
 const ids = (actor) => actor.getSnapshot().context.notes.map((n) => n.id);
+const shownIds = (actor) => shown(actor.getSnapshot().context).map((n) => n.id);
 
 test("the starting picture is notes: list, sorted newest first", async () => {
   const asked = [];
@@ -208,4 +216,86 @@ test("a discard of an unknown id does nothing", async () => {
   assert.equal(discardingHas(actor, C), false);
   clock.increment(UNDO_MS * 2);
   assert.deepEqual(discarded, []);
+});
+
+// --- Following the stage: the subject's notes only (D5, D6) ------------------------
+
+test("following a subject, every note is kept but only those about it are shown", async () => {
+  const asked = [];
+  const { actor } = list({
+    following: true,
+    ask: (...args) => {
+      asked.push(args);
+      return answering({
+        notes: [
+          { id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] },
+          { id: B, title: "B", updatedAt: 20, about: [{ kind: "book", id: "bk2" }] },
+          { id: C, title: "C", updatedAt: 30, about: [] },
+        ],
+        subject: { kind: "book", id: "bk1", title: "Dune" },
+      })(...args);
+    },
+  });
+  await tick();
+  assert.deepEqual(ids(actor), [C, B, A], "every note is kept, newest first");
+  assert.deepEqual(shownIds(actor), [A], "only the note about the subject shows");
+  assert.ok(
+    asked.some(([t, n]) => t === "subject" && n === "read"),
+    "a following list asks the subject",
+  );
+});
+
+test("with the attribute off, the subject is not asked and every note shows", async () => {
+  const asked = [];
+  const { actor } = list({
+    following: false,
+    ask: (...args) => {
+      asked.push(args);
+      return answeringList([{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }])(...args);
+    },
+  });
+  await tick();
+  assert.deepEqual(asked, [["notes", "list", {}]], "only notes: list is asked");
+  assert.deepEqual(shownIds(actor), [A], "links are ignored, every note shows");
+});
+
+test("following with no subject shows every note", async () => {
+  const { actor } = list({
+    following: true,
+    ask: answering({ notes: [{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }], subject: null }),
+  });
+  await tick();
+  assert.deepEqual(shownIds(actor), [A]);
+});
+
+test("a note.changed for another subject is kept but not shown", async () => {
+  const { actor } = list({
+    following: true,
+    ask: answering({ notes: [], subject: { kind: "book", id: "bk1", title: "Dune" } }),
+  });
+  await tick();
+  actor.send({ type: "note.changed", id: B, title: "B", subtitle: "", body: "b", version: 1, pending: false, updatedAt: 30, about: [{ kind: "book", id: "bk2" }] });
+  assert.deepEqual(ids(actor), [B], "kept in the full set");
+  assert.deepEqual(shownIds(actor), [], "not shown under this subject");
+  actor.send({ type: "note.changed", id: A, title: "A", subtitle: "", body: "a", version: 1, pending: false, updatedAt: 40, about: [{ kind: "book", id: "bk1" }] });
+  assert.deepEqual(shownIds(actor), [A], "a note about the subject does show");
+});
+
+test("subject.changed switches which notes are shown", async () => {
+  const { actor } = list({
+    following: true,
+    ask: answering({
+      notes: [
+        { id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] },
+        { id: B, title: "B", updatedAt: 20, about: [{ kind: "book", id: "bk2" }] },
+      ],
+      subject: { kind: "book", id: "bk1", title: "One" },
+    }),
+  });
+  await tick();
+  assert.deepEqual(shownIds(actor), [A]);
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "bk2", title: "Two" } });
+  assert.deepEqual(shownIds(actor), [B]);
+  actor.send({ type: "subject.changed", subject: null });
+  assert.deepEqual(shownIds(actor), [B, A], "no subject on the stage shows every note");
 });

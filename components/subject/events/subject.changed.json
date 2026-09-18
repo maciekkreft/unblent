@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What the user is working on now — the thing on the stage — as a kind, an id and a title, or null when nothing on the stage is a subject (3.1).",
+  "type": "object",
+  "properties": {
+    "subject": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "minLength": 1 },
+            "id": { "type": "string", "minLength": 1 },
+            "title": { "type": "string" }
+          },
+          "required": ["kind", "id", "title"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "required": ["subject"],
+  "additionalProperties": false
+}

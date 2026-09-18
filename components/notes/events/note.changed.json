@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A note now looks like this: the whole note (4, third rule), pending until the server acknowledges it (5).",
+  "description": "A note now looks like this: the whole note (4, third rule), pending until the server acknowledges it (5). about is the note's links (12), [] when none.",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
@@ -9,7 +9,19 @@
     "body": { "type": "string" },
     "version": { "type": "integer", "minimum": 1 },
     "pending": { "type": "boolean" },
-    "updatedAt": { "type": "integer" }
+    "updatedAt": { "type": "integer" },
+    "about": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 }
+        },
+        "required": ["kind", "id"],
+        "additionalProperties": false
+      }
+    }
   },
   "required": ["id", "title", "body", "version", "pending", "updatedAt"],
   "additionalProperties": false

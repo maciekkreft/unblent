@@ -8,7 +8,8 @@
 -- and the directory is purged; a position is last write wins and never refused (4).
 CREATE TABLE IF NOT EXISTS books (
     id               TEXT PRIMARY KEY,
-    title            TEXT NOT NULL,
+    title            TEXT NOT NULL,   -- the title read from the file; a re-import refreshes it
+    user_title       TEXT,            -- the title the user gave (D11), NULL when none; the display title is this when set, else title
     author           TEXT NOT NULL,
     cover            TEXT,
     chapters         TEXT NOT NULL,   -- JSON: [{ title }] in spine order

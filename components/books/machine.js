@@ -17,9 +17,13 @@ const visible = (record) => record && !record.deleted;
 
 // The record kept in the cache, from a server row: the book.changed shape plus the
 // tombstone flag, built field by field so nothing stray is stored or later emitted.
+// title is the display title (the user's when set, else the file's); fileTitle is the
+// file's own, kept only so an empty rename can restore it locally at once (D11); it
+// never rides book.changed or a reply.
 const serverRecord = (b) => ({
   id: b.id,
   title: b.title,
+  fileTitle: b.fileTitle ?? b.title,
   author: b.author,
   cover: b.cover ?? null,
   chapters: b.chapters,
@@ -51,6 +55,11 @@ const bookOf = (record, pending) => ({
 
 const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, pending) });
 
+// A book has a local change not yet acknowledged when it has an outbox row — a
+// position or delete keyed by the book id, or a title keyed under `title:<id>` (kept
+// apart so a rename never overwrites a pending page turn, D11).
+const pendingFor = (context, id) => context.outbox.has(id) || context.outbox.has(`title:${id}`);
+
 function replyList(context, reply) {
   const books = [...context.books.values()]
     .filter(visible)
@@ -61,7 +70,7 @@ function replyList(context, reply) {
       cover: r.cover,
       position: r.position,
       chapterCount: r.chapters.length,
-      pending: context.outbox.has(r.id),
+      pending: pendingFor(context, r.id),
       addedAt: r.addedAt,
     }))
     .sort((a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id));
@@ -70,7 +79,7 @@ function replyList(context, reply) {
 
 function replyRead(context, id, reply) {
   const stored = context.books.get(id);
-  reply(visible(stored) ? { book: bookOf(stored, context.outbox.has(id)) } : { error: "not-found" });
+  reply(visible(stored) ? { book: bookOf(stored, pendingFor(context, id)) } : { error: "not-found" });
 }
 
 // The open book (4.3): the id only when that book is still one this device can read, so
@@ -164,6 +173,30 @@ function applyProgress(context, event, enqueue) {
   enqueue.raise({ type: "_drain" });
 }
 
+// The user renamed a book (book-shelf emits book.renamed, 4.3 fifth rule): give it a
+// user title at once, announce it pending, and queue the write, last write wins and
+// never refused like a position (D11). A trimmed empty string restores the file's
+// title, which the cache keeps as fileTitle so the change shows without a round trip.
+// The row is keyed under `title:<id>`, apart from a pending position or delete, so a
+// rename and a page turn for the same book both reach the server. A missing or
+// tombstoned book, or a title that changes nothing, is ignored.
+function applyRename(context, event, enqueue) {
+  const { id } = event;
+  const current = context.books.get(id);
+  if (!current || current.deleted) return;
+  const sent = (event.title || "").trim();
+  const next = sent || current.fileTitle || current.title;
+  if (next === current.title) return;
+  const record = { ...current, title: next, updatedAt: context.now() };
+  context.books.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  const row = { id: `title:${id}`, kind: "title", book: id, title: sent };
+  context.outbox.set(row.id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
+}
+
 // The user opened a book (book-shelf emits book.selected, 4.3 fifth rule): record it
 // as the open book, announce it (book.opened), and queue the single last-write-wins
 // outbox row so a reload or another device opens it too (5). An unknown or tombstoned
@@ -222,6 +255,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
   else if (message.type === "book.selected") applySelect(context, message, enqueue);
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
+  else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
 }
 
@@ -267,12 +301,14 @@ export const machine = setup({
               ? await api.remove(row.id)
               : row.kind === "open"
                 ? await api.opened(row.book)
-                : await api.position(row.id, row.chapter, row.block);
+                : row.kind === "title"
+                  ? await api.title(row.book, row.title)
+                  : await api.position(row.id, row.chapter, row.block);
         } catch {
           return { acks, networkError: true };
         }
         if (result.error === "unauthorized") return { acks, authFailed: true };
-        acks.push({ id: row.id, kind: row.kind, row: result });
+        acks.push({ id: row.id, kind: row.kind, sent: row.title, row: result });
         await store.outboxDelete(row.id).catch(() => {});
       }
       if (!pull) return { acks };
@@ -349,6 +385,7 @@ export const machine = setup({
         "chapter?": { actions: queue },
         "book.picked": { actions: queue },
         "book.progressed": { actions: queue },
+        "book.renamed": { actions: queue },
         "book.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
@@ -385,6 +422,7 @@ export const machine = setup({
         "chapter?": { actions: queue },
         "book.picked": { actions: queue },
         "book.progressed": { actions: queue },
+        "book.renamed": { actions: queue },
         "book.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
@@ -400,6 +438,7 @@ export const machine = setup({
         "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
         "_uploaded": { actions: enqueueActions(({ context, event, enqueue }) => applyUploaded(context, event, enqueue)) },
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
+        "book.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         // The fact's own news of who is signed in (4.3, fourth rule). A book is only
         // ever created signed in, so there is nothing anonymous to adopt: signing in
@@ -517,6 +556,27 @@ function applySync(context, output, enqueue) {
       enqueue(() => context.store.put(record).catch(() => {}));
       continue;
     }
+    if (ack.kind === "title") {
+      // A rename was acknowledged, last write wins: adopt the server row (its title is
+      // the display title, its fileTitle the file's) but keep the latest local place,
+      // since a page may have turned during the sync. Only drain the row if a newer
+      // rename has not queued since; the onDone re-raises a drain for one that has.
+      const server = ack.row;
+      const queued = context.outbox.get(ack.id);
+      if (!queued || queued.title === ack.sent) {
+        context.outbox.delete(ack.id);
+        enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
+      } else {
+        enqueue(() => context.store.outboxPut(queued).catch(() => {}));
+      }
+      const held = context.books.get(server.id);
+      const record = serverRecord(server);
+      if (held) record.position = held.position;
+      context.books.set(server.id, record);
+      enqueue(() => context.store.put(record).catch(() => {}));
+      enqueue.emit(changed(record, pendingFor(context, server.id)));
+      continue;
+    }
     const server = ack.row;
     const queued = context.outbox.get(ack.id);
     // A page turned during the sync left a newer place in the outbox; only a row that
@@ -536,7 +596,7 @@ function applySync(context, output, enqueue) {
     if (held) record.position = held.position; // keep the latest local place
     context.books.set(ack.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
-    enqueue.emit(changed(record, context.outbox.has(ack.id)));
+    enqueue.emit(changed(record, pendingFor(context, ack.id)));
   }
 
   for (const book of pulled) {
@@ -553,7 +613,7 @@ function applySync(context, output, enqueue) {
     }
     context.books.set(book.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
-    enqueue.emit(changed(record, context.outbox.has(book.id)));
+    enqueue.emit(changed(record, pendingFor(context, book.id)));
   }
 
   // Another device's open, brought by the pull (5): adopt it only when it is newer by

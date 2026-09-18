@@ -3,24 +3,573 @@ import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
 import { machine, titleOf, parseBody, serialize } from "../machine.js";
 
-// The actor is note-editor's, tested there in full; here we test only what cm6 adds:
-// the marker-stripping title and the parseBody/serialize transform between the wire
-// markdown and the marker-free document (view.js edits the latter).
+// This member's actor is note-editor's, kept identical (7.3), so its decisions are
+// tested here in full — the same suite as note-editor — to guard against the two
+// drifting. On top of that, cm6 adds the marker-stripping title and the
+// parseBody/serialize transform between the wire markdown and the marker-free document
+// the view edits; those pure functions are tested at the end.
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
 const THROTTLE_MS = 200;
+const NOTE = { id: ID, title: "L", body: "L\nloaded", version: 7, pending: false, updatedAt: 9 };
 
 const answering = (replies) => (target, name) => Promise.resolve(replies[name] ?? {});
 
-function editor({ ask = answering({ list: { notes: [] } }), mint = () => ID } = {}) {
+// A target-aware ask for the follow-the-stage tests: notes: list, notes: read and
+// subject: read all matter, and notes: read and subject: read share the name "read", so
+// the plain `answering` (keyed on name alone) cannot tell them apart.
+const asking =
+  ({ list = { notes: [] }, note = { error: "not-found" }, subject = null } = {}) =>
+  (target, name) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return Promise.resolve(note);
+    return Promise.resolve({});
+  };
+
+function editor({
+  ask = answering({ list: { notes: [] } }),
+  focus = () => {},
+  follows = false,
+  mint = () => ID,
+  subjecting = false,
+  recall,
+  remember,
+  flashMs = 3000,
+} = {}) {
   const clock = new SimulatedClock();
   const saved = [];
-  const actor = createActor(machine, { input: { ask, mint, focus: () => {}, follows: false }, clock });
+  const opened = [];
+  const refused = [];
+  const actor = createActor(machine, {
+    input: { ask, mint, focus, follows, subjecting, recall, remember, flashMs },
+    clock,
+  });
   actor.on("note.saved", (e) => saved.push(e));
+  actor.on("note.opened", (e) => opened.push(e.id));
+  actor.on("note.refused", (e) => refused.push(e));
   actor.start();
-  return { actor, clock, saved };
+  return { actor, clock, saved, opened, refused };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// The follow tests chain two async queries (start's list+subject, then a read) and
+// sometimes a second read (a forgotten pin), so drain a few microtask turns to settle.
+const settle = async () => {
+  for (let i = 0; i < 6; i++) await tick();
+};
+
+// An editor past its start, in `empty`.
+async function started(options) {
+  const e = editor(options);
+  await tick();
+  assert.equal(e.actor.getSnapshot().value, "empty");
+  return e;
+}
+
+test("typing in an empty editor mints an id and becomes dirty, emitting nothing yet", async () => {
+  const { actor, saved } = await started();
+  actor.send({ type: "_typed", body: "Hi\nyo" });
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "dirty" });
+  assert.equal(s.context.id, ID);
+  assert.deepEqual(saved, []);
+});
+
+test("keystrokes inside the window are coalesced into one save, titled by its first line", async () => {
+  const { actor, clock, saved } = await started();
+  actor.send({ type: "_typed", body: "a" });
+  clock.increment(THROTTLE_MS - 1);
+  actor.send({ type: "_typed", body: "ab\nmore" });
+  clock.increment(1);
+  assert.deepEqual(saved, [{ type: "note.saved", id: ID, title: "ab", body: "ab\nmore", baseVersion: null }]);
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+
+  actor.send({ type: "_typed", body: "ab\nmore\nagain" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 2);
+  assert.deepEqual(saved[1].body, "ab\nmore\nagain");
+});
+
+test("a blur while dirty saves at once", async () => {
+  const { actor, saved } = await started();
+  actor.send({ type: "_typed", body: "quick" });
+  actor.send({ type: "_blurred" });
+  assert.equal(saved.length, 1);
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+});
+
+test("the echo of our own save bumps baseVersion and leaves a dirty draft untouched", async () => {
+  const { actor, clock } = await started();
+  actor.send({ type: "_typed", body: "T\nB" });
+  clock.increment(THROTTLE_MS);
+  actor.send({ type: "_typed", body: "T2\nB" });
+  actor.send({ type: "note.changed", id: ID, title: "T", body: "T\nB", version: 1, pending: false, updatedAt: 1 });
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "dirty" }, "still dirty");
+  assert.equal(s.context.body, "T2\nB", "the keystroke made since is not lost");
+  assert.equal(s.context.baseVersion, 1);
+});
+
+test("a newer change is adopted; an older one and another id are ignored", async () => {
+  const { actor } = await started();
+  actor.send({ type: "_typed", body: "mine" });
+  actor.send({ type: "note.changed", id: ID, title: "theirs", body: "theirs\nnewer", version: 5, pending: false, updatedAt: 2 });
+  let s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.body, "theirs\nnewer");
+  assert.equal(s.context.baseVersion, 5);
+
+  actor.send({ type: "note.changed", id: ID, title: "stale", body: "old", version: 3, pending: false, updatedAt: 3 });
+  assert.equal(actor.getSnapshot().context.body, "theirs\nnewer", "an older version is ignored");
+
+  const other = { type: "note.changed", id: ID2, title: "x", body: "x", version: 9, pending: false, updatedAt: 4 };
+  assert.equal(actor.getSnapshot().can(other), false, "a change for another id is not handled");
+});
+
+test("on start it reopens the newest note notes lists", async () => {
+  const asked = [];
+  const { actor } = editor({
+    ask: (target, name, payload) => {
+      asked.push([target, name, payload]);
+      if (name === "list") return Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }, { id: ID, title: "O", updatedAt: 10 }] });
+      return Promise.resolve({ note: { ...NOTE, id: ID2 } });
+    },
+  });
+  assert.equal(actor.getSnapshot().value, "starting");
+  await tick();
+  await tick();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID2, "the first listed, the newest");
+  assert.equal(s.context.body, NOTE.body);
+  assert.equal(s.context.baseVersion, 7);
+  assert.deepEqual(asked, [["notes", "list", {}], ["notes", "read", { id: ID2 }]]);
+});
+
+test("on start with no notes, or no answer, it is empty", async () => {
+  const none = editor({ ask: answering({ list: { notes: [] } }) });
+  await tick();
+  assert.equal(none.actor.getSnapshot().value, "empty");
+  const unanswered = editor({ ask: answering({ list: { error: "no-answerer" } }) });
+  await tick();
+  assert.equal(unanswered.actor.getSnapshot().value, "empty");
+});
+
+test("a keystroke before the start reply is the user's answer: it mints and the reply is dropped", async () => {
+  let resolveList;
+  const { actor } = editor({
+    ask: (target, name) =>
+      name === "list" ? new Promise((r) => (resolveList = r)) : Promise.resolve({ note: NOTE }),
+  });
+  actor.send({ type: "_typed", body: "first" });
+  assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" });
+  assert.equal(actor.getSnapshot().context.id, ID);
+  resolveList({ notes: [{ id: ID2, title: "N", updatedAt: 20 }] });
+  await tick();
+  await tick();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "dirty" });
+  assert.equal(s.context.body, "first");
+});
+
+test("load asks notes: read and lands per the reply", async () => {
+  const asked = [];
+  const withReply = async (reply) => {
+    const { actor } = await started({
+      ask: (...args) => (asked.push(args), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
+    });
+    actor.send({ type: "load", id: ID });
+    return actor;
+  };
+
+  const found = await withReply({ note: NOTE });
+  await tick();
+  let s = found.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.body, NOTE.body);
+  assert.equal(s.context.baseVersion, 7);
+  assert.deepEqual(asked[1], ["notes", "read", { id: ID }]);
+
+  const blank = await withReply({ error: "not-found" });
+  await tick();
+  assert.equal(blank.getSnapshot().value, "blank");
+
+  const failed = await withReply({ error: "no-answerer" });
+  await tick();
+  assert.equal(failed.getSnapshot().value, "failed");
+});
+
+test("focus calls the focus callback", async () => {
+  let focused = 0;
+  const { actor } = await started({ focus: () => focused++ });
+  actor.send({ type: "focus" });
+  assert.equal(focused, 1);
+});
+
+test("a save after a load carries the loaded version as its base", async () => {
+  const { actor, clock, saved } = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  actor.send({ type: "load", id: ID });
+  await tick();
+  actor.send({ type: "_typed", body: "L edited\nloaded" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].baseVersion, 7);
+  assert.equal(saved[0].title, "L edited");
+});
+
+test("a pause that ends on the text notes already holds saves nothing", async () => {
+  const { actor, clock, saved } = await started();
+  actor.send({ type: "_typed", body: "T\nB" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 1);
+  actor.send({ type: "_typed", body: "Tx\nB" });
+  actor.send({ type: "_typed", body: "T\nB" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 1, "the pause emitted nothing");
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+  actor.send({ type: "_typed", body: "Tx\nB" });
+  actor.send({ type: "_typed", body: "T\nB" });
+  actor.send({ type: "_blurred" });
+  assert.equal(saved.length, 1, "nor the blur");
+
+  const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  loaded.actor.send({ type: "load", id: ID });
+  await tick();
+  loaded.actor.send({ type: "_typed", body: "L!\nloaded" });
+  loaded.actor.send({ type: "_typed", body: NOTE.body });
+  loaded.clock.increment(THROTTLE_MS);
+  assert.deepEqual(loaded.saved, []);
+});
+
+test("note.selected loads the note when the editor follows, and is ignored when it does not", async () => {
+  const following = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  following.actor.send({ type: "note.selected", id: ID });
+  await tick();
+  assert.deepEqual(following.actor.getSnapshot().value, { editing: "clean" });
+  assert.equal(following.actor.getSnapshot().context.id, ID);
+
+  const plain = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  assert.equal(plain.actor.getSnapshot().can({ type: "note.selected", id: ID }), false, "unfollowing editor ignores it");
+});
+
+test("note.opened is emitted on reopening at start, on load, on a followed selection, and on minting", async () => {
+  const start = editor({
+    ask: (target, name) =>
+      name === "list" ? Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }] }) : Promise.resolve({ note: { ...NOTE, id: ID2 } }),
+  });
+  await tick();
+  await tick();
+  assert.deepEqual(start.opened, [ID2]);
+
+  const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  loaded.actor.send({ type: "load", id: ID });
+  await tick();
+  assert.deepEqual(loaded.opened, [ID]);
+
+  const followed = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  followed.actor.send({ type: "note.selected", id: ID2 });
+  await tick();
+  assert.deepEqual(followed.opened, [ID2]);
+
+  const minted = await started();
+  minted.actor.send({ type: "_typed", body: "fresh" });
+  assert.deepEqual(minted.opened, [ID]);
+});
+
+test("typing in blank saves under the loaded id with a null base", async () => {
+  const { actor, clock, saved } = await started({
+    follows: true,
+    ask: answering({ list: { notes: [] }, read: { error: "not-found" } }),
+  });
+  actor.send({ type: "note.selected", id: ID2 });
+  await tick();
+  assert.equal(actor.getSnapshot().value, "blank");
+  actor.send({ type: "_typed", body: "made\nhere" });
+  clock.increment(THROTTLE_MS);
+  assert.deepEqual(saved, [{ type: "note.saved", id: ID2, title: "made", body: "made\nhere", baseVersion: null }]);
+});
+
+test("the open note being deleted falls back to the empty page", async () => {
+  const { actor } = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  actor.send({ type: "load", id: ID });
+  await tick();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+
+  actor.send({ type: "note.deleted", id: ID });
+  const s = actor.getSnapshot();
+  assert.equal(s.value, "empty", "the deleted note is no longer shown");
+  assert.equal(s.context.id, null);
+  assert.equal(s.context.body, "");
+});
+
+test("a deletion of another note leaves the open one alone", async () => {
+  const { actor } = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
+  actor.send({ type: "load", id: ID });
+  await tick();
+  actor.send({ type: "note.deleted", id: ID2 });
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" }, "still showing the open note");
+  assert.equal(s.context.id, ID);
+});
+
+// --- Following the stage and the pin (D7) --------------------------------------
+
+const SUBJECT = { kind: "book", id: "bookA", title: "Dune" };
+const SUBJECT_B = { kind: "book", id: "bookB", title: "Emma" };
+const SUBJECT_C = { kind: "book", id: "bookC", title: "Foundation" };
+const LINK_A = { kind: "book", id: "bookA" };
+const LINK_B = { kind: "book", id: "bookB" };
+const noteAbout = (id, link) => ({ id, title: "n", body: "n\nbody", version: 3, pending: false, updatedAt: 1, about: link ? [link] : [] });
+
+test("with the subject attribute, start opens the newest note about the subject and records its title", async () => {
+  const list = {
+    notes: [
+      { id: ID2, title: "unrelated", updatedAt: 20, about: [] },
+      { id: ID, title: "about A", updatedAt: 10, about: [LINK_A] },
+    ],
+  };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID, "the note about the subject, not the newer unrelated one");
+  assert.deepEqual(s.context.about, [LINK_A], "the open note's links are held for the About line");
+  assert.equal(s.context.titles["book:bookA"], "Dune", "the subject's title is remembered");
+});
+
+test("with a subject on the stage but no note about it, start is the empty page", async () => {
+  const list = { notes: [{ id: ID2, title: "unrelated", updatedAt: 20, about: [] }] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, subject: SUBJECT }) });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "empty");
+});
+
+test("with the attribute on but nothing on the stage, start reopens the newest note overall", async () => {
+  const list = { notes: [{ id: ID2, title: "n", updatedAt: 20, about: [] }, { id: ID, title: "o", updatedAt: 10, about: [] }] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID2, null) }, subject: null }) });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID2, "today's behaviour when there is no subject");
+});
+
+test("a new note written while following carries one link to the subject; later edits leave links alone", async () => {
+  const { actor, clock, saved } = editor({ subjecting: true, ask: asking({ subject: SUBJECT }) });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "empty");
+  actor.send({ type: "_typed", body: "fresh" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].about, [LINK_A], "a new note is about what is on the stage");
+  actor.send({ type: "note.changed", id: ID, title: "fresh", body: "fresh", version: 1, pending: false, updatedAt: 1, about: [LINK_A] });
+  actor.send({ type: "_typed", body: "fresh more" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 2);
+  assert.equal(saved[1].baseVersion, 1);
+  assert.ok(!("about" in saved[1]), "an edit to an existing note does not touch its links (D2)");
+});
+
+test("a new note written with nothing on the stage carries an empty links list", async () => {
+  const { actor, clock, saved } = editor({ subjecting: true, ask: asking({ subject: null }) });
+  await settle();
+  actor.send({ type: "_typed", body: "x" });
+  clock.increment(THROTTLE_MS);
+  assert.deepEqual(saved[0].about, []);
+});
+
+test("changing the subject saves a dirty draft, then opens the new subject's newest note", async () => {
+  const list = {
+    notes: [
+      { id: ID2, title: "about B", updatedAt: 20, about: [LINK_B] },
+      { id: ID, title: "about A", updatedAt: 10, about: [LINK_A] },
+    ],
+  };
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, payload.id === ID2 ? LINK_B : LINK_A) });
+    return Promise.resolve({});
+  };
+  const { actor, saved } = editor({ subjecting: true, ask });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID, "opened A's note");
+  actor.send({ type: "_typed", body: "n\nbody edited" });
+  assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" });
+
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].id, ID);
+  assert.equal(saved[0].baseVersion, 3);
+  assert.ok(!("about" in saved[0]));
+
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID2, "re-followed to the note about the new subject");
+});
+
+test("a title-only subject change keeps the note on screen and updates what it shows", async () => {
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID);
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "bookA", title: "Dune (2nd ed.)" } });
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" }, "the same note stays");
+  assert.equal(s.context.id, ID);
+  assert.equal(s.context.titles["book:bookA"], "Dune (2nd ed.)", "the new title is remembered for the About line");
+});
+
+test("a pinned editor keeps its note when the subject changes, only remembering the new subject", async () => {
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  await settle();
+  actor.send({ type: "_togglePin" });
+  assert.equal(actor.getSnapshot().context.pinned, true);
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID, "the note did not change");
+  assert.equal(s.context.subject.id, "bookB", "but the new subject is remembered");
+});
+
+test("a pinned editor refuses note.selected and load, naming the note it refused", async () => {
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor, refused } = editor({
+    subjecting: true,
+    follows: true,
+    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
+  });
+  await settle();
+  actor.send({ type: "_togglePin" });
+  const open = actor.getSnapshot().context.id;
+
+  actor.send({ type: "note.selected", id: ID2 });
+  assert.equal(actor.getSnapshot().context.id, open, "the note on screen did not change");
+  assert.deepEqual(refused, [{ type: "note.refused", id: ID2, reason: "pinned" }]);
+
+  actor.send({ type: "load", id: ID2 });
+  assert.equal(refused.length, 2, "load is refused too, once per attempt");
+  assert.equal(actor.getSnapshot().context.id, open);
+});
+
+test("a refusal flashes the pin for the flash window, and a repeat restarts it", async () => {
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor, clock } = editor({
+    subjecting: true,
+    follows: true,
+    flashMs: 3000,
+    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
+  });
+  await settle();
+  actor.send({ type: "_togglePin" });
+  actor.send({ type: "note.selected", id: ID2 });
+  assert.equal(actor.getSnapshot().context.flashing, true);
+  clock.increment(2999);
+  actor.send({ type: "note.selected", id: ID2 });
+  clock.increment(1);
+  assert.equal(actor.getSnapshot().context.flashing, true, "still flashing: the window restarted");
+  clock.increment(2999);
+  assert.equal(actor.getSnapshot().context.flashing, false, "cleared a full window after the last refusal");
+});
+
+test("the pin does nothing while the editor holds no note", async () => {
+  const { actor } = editor({ subjecting: true, ask: asking({ subject: SUBJECT }) });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "empty");
+  assert.equal(actor.getSnapshot().can({ type: "_togglePin" }), false, "the pin button is disabled with no note");
+});
+
+test("unpinning lets the editor follow the next subject change again", async () => {
+  const list = {
+    notes: [
+      { id: ID2, title: "about C", updatedAt: 30, about: [{ kind: "book", id: "bookC" }] },
+      { id: ID, title: "about A", updatedAt: 10, about: [LINK_A] },
+    ],
+  };
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, null) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, follows: true, ask });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID, "started on A's note");
+  actor.send({ type: "_togglePin" });
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  assert.equal(actor.getSnapshot().context.id, ID, "pinned: unchanged while B is on the stage");
+  actor.send({ type: "_togglePin" });
+  actor.send({ type: "subject.changed", subject: SUBJECT_C });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID2, "following resumed: opened C's note");
+});
+
+test("deleting the pinned note falls to the empty page, unpins, and forgets the pin", async () => {
+  const forgot = [];
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor } = editor({
+    subjecting: true,
+    remember: (v) => forgot.push(v),
+    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
+  });
+  await settle();
+  actor.send({ type: "_togglePin" });
+  assert.deepEqual(forgot, [ID], "the pinned note's id is remembered");
+  actor.send({ type: "note.deleted", id: ID });
+  const s = actor.getSnapshot();
+  assert.equal(s.value, "empty");
+  assert.equal(s.context.pinned, false);
+  assert.equal(forgot.at(-1), null, "the pin was forgotten");
+});
+
+test("a remembered pin reopens its note and starts pinned, skipping the subject choice", async () => {
+  const list = { notes: [{ id: ID2, title: "newest about A", updatedAt: 99, about: [LINK_A] }] };
+  const { actor } = editor({
+    subjecting: true,
+    recall: () => ID,
+    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
+  });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID, "the remembered note, not the newest about the subject");
+  assert.equal(s.context.pinned, true, "restored pinned");
+});
+
+test("a remembered pin whose note is gone is forgotten, and start falls back to the subject's note", async () => {
+  const forgot = [];
+  const list = { notes: [{ id: ID2, title: "about A", updatedAt: 20, about: [LINK_A] }] };
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return Promise.resolve(payload.id === ID2 ? { note: noteAbout(ID2, LINK_A) } : { error: "not-found" });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, recall: () => ID, remember: (v) => forgot.push(v), ask });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID2, "fell back to the newest note about the subject");
+  assert.equal(s.context.pinned, false);
+  assert.deepEqual(forgot, [null], "the stale pin was forgotten");
+});
+
+test("with the attribute off, no subject is asked and saves carry no links (today's behaviour)", async () => {
+  const asked = [];
+  const { actor, clock, saved } = editor({
+    ask: (target, name, payload) => {
+      asked.push([target, name]);
+      return Promise.resolve(name === "list" ? { notes: [] } : {});
+    },
+  });
+  await settle();
+  assert.ok(!asked.some(([t]) => t === "subject"), "subject is never asked when the attribute is off");
+  actor.send({ type: "_typed", body: "plain" });
+  clock.increment(THROTTLE_MS);
+  assert.ok(!("about" in saved[0]), "no links ride a save when not following the stage");
+});
+
+// --- What cm6 adds: the marker-stripping title and the wire<->doc transform --------
 
 test("the title is the first line, with its level marker stripped", () => {
   assert.equal(titleOf("# Hello\nworld"), "Hello");
@@ -53,8 +602,6 @@ test("parseBody and serialize round-trip every level", () => {
 });
 
 test("known edge: a Body line whose text begins with a marker re-parses as a heading", () => {
-  // Accepted (Markdown's own ATX ambiguity): serialize keeps it bare, parseBody
-  // reads it as a Title on the next load. Documented in machine.js.
   assert.equal(serialize("# typed as body", ["body"]), "# typed as body");
   assert.deepEqual(parseBody("# typed as body"), { doc: "typed as body", levels: ["title"] });
 });

@@ -5,7 +5,8 @@ never depends on this running. Stdlib only.
     python3 components/books/tests/fixtures/make_sample.py
 
 sample.epub is a minimal EPUB 3 with a nav.xhtml two-level TOC (no toc.ncx), a 1x1
-PNG cover and one figure image, and three chapters: one short, one long with an
+PNG cover and one figure image, and three chapters: one short (with a title-as-link
+heading the importer unwraps to plain text), one long with an
 <h2 id="mid"> the TOC points at, and one exercising a code listing with an
 inline emoji image (the O'Reilly idiom: a 160px PNG in a <pre>), a definition list
 whose dd holds an id another chapter links to, a figure, an <h3> section and a second
@@ -102,6 +103,7 @@ CH0 = """<?xml version="1.0" encoding="utf-8"?>
   <head><title>One</title></head>
   <body>
     <h1>Chapter One</h1>
+    <h2><a href="ch2.xhtml">A LINKED HEADING</a></h2>
     <p>A short opening chapter, one page long. It links to
       <a href="ch2.xhtml">the third chapter</a>, to
       <a href="ch1.xhtml#mid">the middle</a>, and to

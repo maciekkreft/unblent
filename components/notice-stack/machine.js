@@ -38,6 +38,13 @@ const TABLE = {
     standing: false,
     actions: [],
   }),
+  // A pinned editor would not open the note the user picked (12): only news, the pin
+  // itself is where the user acts. One row per reason so a repeat replaces.
+  "note.refused": (p) => ({
+    key: `note.refused:${p.reason}`,
+    standing: false,
+    actions: [],
+  }),
 };
 
 // A Map with one entry replaced, or removed, as a new Map so assign sees a fresh
@@ -80,6 +87,7 @@ export const machine = setup({}).createMachine({
     "note.conflicted": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    "note.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and
     // says so. notes emits note.conflicted before note.deleted, so the notice exists.

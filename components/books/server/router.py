@@ -42,6 +42,11 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "books.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    # schema.sql is replayed per connect, but CREATE IF NOT EXISTS never adds a column
+    # to an existing table, so a db from before user titles is migrated here (5, D11).
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(books)")}
+    if "user_title" not in columns:
+        connection.executescript("ALTER TABLE books ADD COLUMN user_title TEXT")
     try:
         with connection:
             yield connection
@@ -62,7 +67,11 @@ def _record(row: sqlite3.Row) -> dict:
     # chapters and toc are JSON columns; position is its two columns; cover is a full URL.
     return {
         "id": row["id"],
-        "title": row["title"],
+        # The display title is the user's when set, else the file's (D11); fileTitle is
+        # the file's own, so the browser can restore it when a rename is cleared. Only
+        # title rides the bus (book.changed); fileTitle stays inside the books fact.
+        "title": row["user_title"] if row["user_title"] is not None else row["title"],
+        "fileTitle": row["title"],
         "author": row["author"],
         "cover": row["cover"],
         "chapters": json.loads(row["chapters"]),
@@ -192,6 +201,25 @@ async def set_position(book_id: str, request: Request, user_id: str = Depends(re
         connection.execute(
             "UPDATE books SET position_chapter = ?, position_block = ?, version = ?, updated_at = ?, seq = ? WHERE id = ?",
             (chapter, block, row["version"] + 1, now, _next_seq(connection), book_id),
+        )
+        return _reread(connection, book_id)
+
+
+@router.put("/{book_id}/title")
+async def set_title(book_id: str, request: Request, user_id: str = Depends(require_user)):
+    # A user title, last write wins (D11): no base, never a 409. It is kept apart from
+    # the file's title, which a re-import refreshes without touching this; a trimmed
+    # empty string clears it (NULL), so the display title falls back to the file's.
+    payload = await request.json()
+    user_title = (payload.get("title") or "").strip() or None
+    now = int(time.time() * 1000)
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404)
+        connection.execute(
+            "UPDATE books SET user_title = ?, version = ?, updated_at = ?, seq = ? WHERE id = ?",
+            (user_title, row["version"] + 1, now, _next_seq(connection), book_id),
         )
         return _reread(connection, book_id)
 

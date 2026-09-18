@@ -83,13 +83,15 @@ Where it stores the fact is its own business, and there are three shapes:
 
 | Shape | Storage | Offline | Example |
 |---|---|---|---|
-| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings`, `trace`, `viewport` |
+| **Local-only** | Browser only: localStorage, IndexedDB, memory | Always works; follows the device | `settings`, `trace`, `viewport`, `subject` |
 | **Replicated** | Browser cache + server, kept in sync (section 5) | Works; syncs later | `notes`, `conversations`, `session` |
 | **Remote-only** | The fact can only be produced by the server | Fails honestly, with an error reply and, where other views need to know, an `unavailable` event | `llm`, `catalog`, `pages` |
 
 A fact component that needs the server brings its own server module with it, in the same directory (section 11.1).
 
-**A view component owns a way of looking at or acting on a concept.** Editing, listing, reading, chatting. It owns only its own UI state: cursor position, scroll, which tab is open, the draft in the input box. It points at one or more fact components, queries them, listens to their events, and emits events about what the user did. It never holds a copy of a fact it would be sad to lose.
+A fact may be **derived**: it stores nothing and combines what other facts announce into one answer several components need. `subject` is the one such fact: what the user is working on — the thing on the stage — as `{ kind, id, title }`, or null. It combines `dock`'s staged view with the open item of the fact behind that view (`books: open` for `book-reader`), asking those facts for the starting picture and following their events after (4.3) like any asker, and it announces `subject.changed` only when the answer differs. The table from staged view to kind lives in `subject` alone, so a new kind of stage content changes one component, and a follower compares `kind` and `id` without knowing what kinds exist.
+
+**A view component owns a way of looking at or acting on a concept.** Editing, listing, reading, chatting. It owns only its own UI state: cursor position, scroll, which tab is open, the draft in the input box. It points at one or more fact components, queries them, listens to their events, and emits events about what the user did. It never holds a copy of a fact it would be sad to lose. UI state worth keeping across a reload — which note is pinned, say — a view may keep in localStorage under a key beginning with its role or name; it follows the browser, never the account, and losing it loses nothing.
 
 ### 3.2 Inside a component
 
@@ -182,7 +184,7 @@ On the server, each replicated fact component has **one SQLite file per user**: 
 
 While anonymous, `notes` mints versions in the browser and the server adopts the client's number on first upload, so the anonymous note carries its history into the account. Registration is capped by `MAX_USERS`; once the registry is full `session` reports `registrationOpen` false and refuses a new passkey with `registration-closed`. `session`'s own replicated shape is not an outbox but a localStorage cache plus an owed sign-out, because identity has no records to version: there is nothing to base a write on, only the single fact of who is signed in.
 
-`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, and the source file is kept there only for re-import. A re-import is run on the host, by `deploy/`, from the kept source under the next content version, so every chapter and image URL changes and the old cache lapses. The row carries the metadata that rides the bus; the directory holds what the browser fetches by URL, and the epub is never reopened. A reading position is last write wins: it carries no base version and is never refused. Which book is open is one more last-write-wins value: `books` keeps it beside the rows, the server holds a single per-user copy, and a pull brings it, so a reload or another device opens what was being read. The files are copied to the same bucket by `deploy/`, as the databases are by Litestream.
+`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, and the source file is kept there only for re-import. A re-import is run on the host, by `deploy/`, from the kept source under the next content version, so every chapter and image URL changes and the old cache lapses. The row carries the metadata that rides the bus; the directory holds what the browser fetches by URL, and the epub is never reopened. A reading position is last write wins: it carries no base version and is never refused. A title the user gives a book is the same: last write wins, kept beside the title read from the file, which a re-import refreshes without touching the user's; an empty title restores the file's. Which book is open is one more last-write-wins value: `books` keeps it beside the rows, the server holds a single per-user copy, and a pull brings it, so a reload or another device opens what was being read. The files are copied to the same bucket by `deploy/`, as the databases are by Litestream.
 
 ---
 
@@ -299,15 +301,17 @@ book.discarded        owner: book-shelf     { id }
 book.picked           owner: book-shelf     { id, name, size, url }
 book.progressed       owner: book-reader    { id, chapter, block }
 book.refused          owner: books          { id, reason }  reason ∈ signed-out | unreadable | unavailable
+book.renamed          owner: book-shelf     { id, title }
 book.selected         owner: book-shelf     { id }
 chapter.selected      owner: book-toc       { id, chapter }
-note.saved            owner: note-editor    { id, title, body, baseVersion }
-note.changed          owner: notes          { id, title, subtitle, body, version, pending, updatedAt }
+note.saved            owner: note-editor    { id, title, body, baseVersion, about }
+note.changed          owner: notes          { id, title, subtitle, body, version, pending, updatedAt, about }
 note.deleted          owner: notes          { id }
 note.conflicted       owner: notes          { id, mine, theirs }
 note.selected         owner: note-list      { id }
 note.discarded        owner: note-list      { id }
 note.opened           owner: note-editor    { id }
+note.refused          owner: note-editor    { id, reason }  reason ∈ pinned
 conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
 dock.changed          owner: dock           { stage, docks }
@@ -320,6 +324,7 @@ session.changed       owner: session        { userId | null, registrationOpen }
 session.refused       owner: session        { reason }  reason ∈ cancelled | registration-closed | unknown-credential | unavailable
 signin.requested      owner: session-switch  {}
 signout.requested     owner: session-switch  {}
+subject.changed       owner: subject        { subject: { kind, id, title } | null }
 trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
 turn.submitted        owner: chat           { conversationId, turn }
 viewport.selected     owner: viewport-switch { viewport }
@@ -337,7 +342,7 @@ Every command a component accepts, and every query a fact component answers, is 
 ```
 note-editor#n: focus
 note-editor#n: load(id)
-notes: list              → { notes: [{ id, title, subtitle, updatedAt }] }
+notes: list              → { notes: [{ id, title, subtitle, updatedAt, about }] }
 notes: read(id)          → { note } | { error: "not-found" }
 books: list              → { books: [{ id, title, author, cover, position, chapterCount, pending, addedAt }] }
 books: read({ id })      → { book } | { error: "not-found" }
@@ -350,6 +355,7 @@ catalog: contracts       → { events: [{ name, owner, schema, consumers }], que
 trace: list              → { records: [record] }
 viewport: read           → { viewport }
 dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
+subject: read            → { subject: { kind, id, title } | null }
 settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging, editors, profile }
 session: read            → { userId: string | null, registrationOpen: boolean }
 ```
@@ -400,7 +406,7 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 1. **Tokens page.** Shows the design tokens and the icons, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
 3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
-4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`; `settings` with `settings-sheet`; `books` with shelf, contents and reader), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
+4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`; `settings` with `settings-sheet`; `books` with shelf, contents and reader; `subject` with the notes views that follow it), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box. The product is the app page at `/` (`pages/index.html`); the pages under `/workshop/apps/` are testbeds for assembling components.
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others: it groups its links by kind and shows none in the product profile (§12). A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
@@ -417,6 +423,8 @@ Because changing a contract is the expensive operation, contracts are decided be
 2. It appears on the components page and the contracts page. Review it there against its neighbours: does it consume events nobody emits, ask queries nobody answers, duplicate a fact someone already owns, or need a change to an existing contract?
 3. Only when the contracts settle, write the actor, then the store or view, then the server module if any, then tests.
 4. Add its browser entry and put it on a page: the entry is what makes it built.
+
+A change to what the user sees is reviewed before it is live, because the product and the workshop run the same code. It is built behind an attribute the page must set, and set first only on a stem page; the product page (`pages/index.html`) gets the attribute once the user has approved it there, on the desk and in the phone preview.
 
 Coding agents follow the same four steps. Step 2 is the human's, and the components page is where it happens.
 
@@ -566,7 +574,7 @@ The architecture document describes the rules; the checks are what make them rea
 
 - **One user per browser.** Signing in adopts everything cached anonymously in that browser, so `notes` enqueues its whole cache to the account; a second account on the same browser is not a goal.
 
-- **A notice lives in its tab.** `notice-stack` consumes `session.refused` and `note.conflicted` and shows them as dismissable notices; a conflict offers Keep mine, which re-emits `note.saved` (the view where the user acted, section 4) so the user's copy survives what `notes` otherwise drops. It holds notices only as UI state: after a reload the conflict, and the copy it carried, are gone, because `notes` does not yet keep conflicts as a queryable fact. `llm.unavailable` joins the same table when `llm` exists.
+- **A notice lives in its tab.** `notice-stack` consumes `session.refused`, `note.conflicted` and `note.refused` and shows them as dismissable notices; a conflict offers Keep mine, which re-emits `note.saved` (the view where the user acted, section 4) so the user's copy survives what `notes` otherwise drops. It holds notices only as UI state: after a reload the conflict, and the copy it carried, are gone, because `notes` does not yet keep conflicts as a queryable fact. `llm.unavailable` joins the same table when `llm` exists.
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
@@ -575,6 +583,10 @@ The architecture document describes the rules; the checks are what make them rea
 - **Pages are per device.** A chapter is paginated for the reader's own size and type, so page numbers differ between devices; the shared position is a chapter and a block, and each device opens the page holding it.
 
 - **Two profiles.** `settings` keeps one copy of the preferences per profile, `product` and `workshop`, and reports the active one. A page outside `/workshop/` is in `product` until the user switches; a workshop page is always `workshop`. `profile-switch` is the one door from the product into the workshop and is deliberately not a visible signifier: it appears on hover or focus. A phone preview left on in `workshop` still frames the product after switching back, until it is switched off in `workshop`.
+
+- **A note's links.** A note carries `about`, a list of `{ kind, id }` naming what it is about: none, one or many. A `note.saved` without `about` leaves the list as it is; with it, replaces it, so unlinking is a save with a shorter list. A new note is linked to the subject (3.1) at creation, by the editor where it was written. A link to something since deleted is harmless: the note is still listed under all notes. Each link is an object so it can later carry a place inside its target.
+
+- **Following the subject.** With the `subject` attribute, `note-list` shows the notes about the subject — a note always belongs to what is on the stage, so there is no switch to all notes — and a `note-editor` opens the most recently edited note about it whenever the subject changes, or an empty page. A pinned editor stays: it refuses `note.selected` and `load` with `note.refused` until it is unpinned, so the note on screen never changes by surprise. The pin is UI state, kept in localStorage (3.1): it follows the browser, not the account.
 
 ---
 
@@ -598,3 +610,19 @@ The architecture document describes the rules; the checks are what make them rea
 - **Stem**: a fact component together with its related views.
 - **Page**: an HTML file, an import map and tags; tokens, contracts, components, stem, or app.
 - **App**: the page kind that composes components around a purpose.
+- **Subject**: what the user is working on, the thing on the stage, as a kind, an id and a title; owned by `subject`, a derived fact.
+- **Link**: one entry of a note's `about`, naming something the note is about.
+
+---
+
+## 14. Directions
+
+Where the product is heading. Nothing here is designed or built; each line is one sentence, and a proposal says how it leaves every line open.
+
+- A chat with the language model in a side dock, discussing what is on the stage.
+- Chats linked to books, so a book shows its notes and its chats.
+- One note linked to many books and chats at once.
+- Unlinking a note.
+- A journal with daily notes.
+- Highlights in a note that link back to the exact place in the book.
+- A note on the stage, with a chat beside it that knows the note's content.

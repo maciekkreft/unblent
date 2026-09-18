@@ -24,7 +24,19 @@
               "body": { "type": "string" },
               "version": { "type": "integer", "minimum": 1 },
               "pending": { "type": "boolean" },
-              "updatedAt": { "type": "integer" }
+              "updatedAt": { "type": "integer" },
+              "about": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": { "type": "string", "minLength": 1 },
+                    "id": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["kind", "id"],
+                  "additionalProperties": false
+                }
+              }
             },
             "required": ["id", "title", "body", "version", "pending", "updatedAt"],
             "additionalProperties": false

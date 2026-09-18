@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine } from "./machine.js";
+import { machine, shown } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 
@@ -31,6 +31,10 @@ class ActorController {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         mint: ulid,
         undoMs,
+        // The `subject` attribute (D5): present means follow the stage and show only
+        // the notes about it. Parsed by the time hostConnected runs. Off is exactly
+        // today's behaviour.
+        following: this.host.subject,
       },
       events: { "note.selected": selected, "note.discarded": discarded },
     });
@@ -73,6 +77,13 @@ const REVEAL = 0.5; // how far left the row slides open, as a fraction of its wi
 const THRESHOLD = 0.35; // past this fraction, releasing deletes
 
 class NoteList extends LitElement {
+  // The one attribute the tag understands (D5): follow the stage, showing only the
+  // notes about the subject. Reflected so a page's bare `subject` reads as true and the
+  // manifest attribute is visible. Off is exactly today's behaviour.
+  static properties = {
+    subject: { type: Boolean, reflect: true },
+  };
+
   static styles = css`
     :host {
       display: flex;
@@ -313,7 +324,8 @@ class NoteList extends LitElement {
   #swallowClick = false;
 
   #rows(snapshot) {
-    const { notes, draft } = snapshot.context;
+    const notes = shown(snapshot.context);
+    const { draft } = snapshot.context;
     return draft ? [{ id: draft, draft: true }, ...notes] : notes;
   }
 

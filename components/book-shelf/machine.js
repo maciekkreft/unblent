@@ -61,8 +61,8 @@ export const machine = setup({
   id: "book-shelf",
   meta: {
     kind: "view",
-    emits: ["book.picked", "book.selected", "book.discarded"],
-    attributes: [],
+    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
+    attributes: ["renames"],
     asks: ["books: list", "session: read", "books: open"],
   },
   context: ({ input }) => ({
@@ -172,6 +172,18 @@ export const machine = setup({
     _select: {
       guard: ({ context, event }) => context.books.some((b) => b.id === event.id) && !context.discarding.has(event.id),
       actions: emit(({ event }) => ({ type: "book.selected", id: event.id })),
+    },
+    // The user edited a title in place (D11, 7.2 internal gesture): announce the
+    // trimmed text as book.renamed, which books turns into a user title (last write
+    // wins) and the book.changed that redraws the tile. Unchanged text emits nothing,
+    // so a blur that changed nothing is silent; an empty string is a real change (it
+    // restores the file's title), so it is announced.
+    _rename: {
+      guard: ({ context, event }) => {
+        const tile = context.books.find((b) => b.id === event.id);
+        return Boolean(tile) && event.title.trim() !== tile.title;
+      },
+      actions: emit(({ event }) => ({ type: "book.renamed", id: event.id, title: event.title.trim() })),
     },
     // The trash on a tile: begin the undo window. Nothing is emitted yet; only its
     // elapse makes the delete a fact.

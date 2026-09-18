@@ -5,6 +5,7 @@ single user. version is assigned here; a stale base is rejected as a conflict (5
 rather than silently overwritten.
 """
 
+import json
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -35,6 +36,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(notes)")}
     if "deleted" not in columns:
         connection.executescript("ALTER TABLE notes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+    if "about" not in columns:
+        connection.executescript("ALTER TABLE notes ADD COLUMN about TEXT NOT NULL DEFAULT '[]'")
     try:
         with connection:
             yield connection
@@ -55,6 +58,7 @@ def _record(row: sqlite3.Row) -> dict:
         "version": row["version"],
         "updatedAt": row["updated_at"],
         "deleted": bool(row["deleted"]),
+        "about": json.loads(row["about"]),
     }
 
 
@@ -71,6 +75,8 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
     body = payload.get("body", "")
     base = payload.get("baseVersion")
     deleted = bool(payload.get("deleted", False))
+    # about absent leaves the stored links unchanged (D2); present replaces them.
+    about = payload.get("about")
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
@@ -81,8 +87,8 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
             # upload arrives already gone.
             version = (base or 0) + 1
             connection.execute(
-                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (note_id, title, body, version, now, _next_seq(connection), int(deleted)),
+                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted, about) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (note_id, title, body, version, now, _next_seq(connection), int(deleted), json.dumps(about if about is not None else [])),
             )
             return _reread(connection, note_id)
         # A delete always wins (5): it states no base and is not refused for a stale
@@ -104,14 +110,17 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
         # conflict carrying the server's copy, so a view can show both.
         if base != row["version"]:
             return JSONResponse({"note": _record(row)}, status_code=409)
-        # The same text on the right base is not a change (5, idempotent writes): the
-        # current record comes back, no new version, no bump of seq.
-        if title == row["title"] and body == row["body"]:
+        # The same text and the same links on the right base is not a change (5,
+        # idempotent writes): the current record comes back, no new version, no bump of
+        # seq. about absent means the links are unchanged (D2).
+        existing_about = json.loads(row["about"])
+        effective_about = about if about is not None else existing_about
+        if title == row["title"] and body == row["body"] and effective_about == existing_about:
             return _record(row)
         version = row["version"] + 1
         connection.execute(
-            "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ? WHERE id = ?",
-            (title, body, version, now, _next_seq(connection), note_id),
+            "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, about = ? WHERE id = ?",
+            (title, body, version, now, _next_seq(connection), json.dumps(effective_about), note_id),
         )
         return _reread(connection, note_id)
 

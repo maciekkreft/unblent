@@ -118,3 +118,68 @@ test("a delete for an unknown id is born a tombstone at version 1", async () => 
   assert.equal(born.version, 1);
   assert.equal(born.deleted, true);
 });
+
+// --- Note links (about, slice 2) --------------------------------------------------
+
+test("about rides the create and the pull; a note without about is []", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  const created = await (await put(id, { title: "a", body: "b", baseVersion: null, about: [{ kind: "book", id: "b1" }] }, cookie)).json();
+  assert.deepEqual(created.about, [{ kind: "book", id: "b1" }]);
+  const plain = await (await put(noteId(2), { title: "c", body: "d", baseVersion: null }, cookie)).json();
+  assert.deepEqual(plain.about, [], "a note created without about is []");
+  const all = await (await list(0, cookie)).json();
+  assert.deepEqual(all.notes.find((n) => n.id === id).about, [{ kind: "book", id: "b1" }]);
+});
+
+test("about absent leaves the links; present replaces them, empty clears them", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  await put(id, { title: "a", body: "b", baseVersion: null, about: [{ kind: "book", id: "b1" }] }, cookie);
+  const kept = await (await put(id, { title: "a2", body: "b2", baseVersion: 1 }, cookie)).json();
+  assert.deepEqual(kept.about, [{ kind: "book", id: "b1" }], "an edit without about keeps the link");
+  const relinked = await (await put(id, { title: "a3", body: "b3", baseVersion: 2, about: [{ kind: "book", id: "b2" }] }, cookie)).json();
+  assert.deepEqual(relinked.about, [{ kind: "book", id: "b2" }], "about present replaces the links");
+  const cleared = await (await put(id, { title: "a4", body: "b4", baseVersion: 3, about: [] }, cookie)).json();
+  assert.deepEqual(cleared.about, [], "an empty list clears the links");
+});
+
+test("changing only the links is a change: a new version; the same links is idempotent", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  const created = await (await put(id, { title: "a", body: "b", baseVersion: null }, cookie)).json();
+  assert.equal(created.version, 1);
+  const linked = await (await put(id, { title: "a", body: "b", baseVersion: 1, about: [{ kind: "book", id: "b1" }] }, cookie)).json();
+  assert.equal(linked.version, 2, "same text, a new link, still a change");
+  const again = await (await put(id, { title: "a", body: "b", baseVersion: 2, about: [{ kind: "book", id: "b1" }] }, cookie)).json();
+  assert.equal(again.version, 2, "same text and same links is not a change");
+});
+
+test("a database file from before links gains the about column, defaulting to []", async () => {
+  // node:sqlite is experimental; hush the one-time warning so the run stays clean.
+  const saved = process.emitWarning;
+  process.emitWarning = () => {};
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { join } = await import("node:path");
+    const { mkdirSync } = await import("node:fs");
+    const user = freshUser();
+    const dir = join(process.env.UNBLENT_DATA, user);
+    mkdirSync(dir, { recursive: true });
+    const db = new DatabaseSync(join(dir, "notes.db"));
+    // The pre-links schema: notes without an about column.
+    db.exec(
+      "CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, " +
+        "version INTEGER NOT NULL, updated_at INTEGER NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);",
+    );
+    db.exec(`INSERT INTO notes (id, title, body, version, updated_at, seq, deleted) VALUES ('${noteId(1)}', 'old', 'body', 1, 5, 1, 0);`);
+    db.close();
+    const cookie = cookieFor(user);
+    const all = await (await list(0, cookie)).json();
+    assert.deepEqual(all.notes.find((n) => n.id === noteId(1)).about, [], "the migrated row reads as []");
+    const updated = await (await put(noteId(1), { title: "old2", body: "body2", baseVersion: 1, about: [{ kind: "book", id: "b1" }] }, cookie)).json();
+    assert.deepEqual(updated.about, [{ kind: "book", id: "b1" }], "the migrated db can now store links");
+  } finally {
+    process.emitWarning = saved;
+  }
+});

@@ -161,3 +161,23 @@ test("a repeated book.refused of the same reason replaces rather than piles up",
   actor.send({ type: "book.refused", id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", reason: "unreadable" });
   assert.equal(notices(actor).size, 1, "coalesced by reason");
 });
+
+// --- A pinned editor refuses a selection: one passing notice --------------------
+
+test("a note.refused passes and is keyed by its reason", () => {
+  const { actor, clock } = start();
+  actor.send({ type: "note.refused", id: ID, reason: "pinned" });
+  const key = "note.refused:pinned";
+  assert.ok(notice(actor, key), "shown at once");
+  assert.equal(notice(actor, key).standing, false, "a refusal is only news");
+  assert.deepEqual(notice(actor, key).actions, [], "the pin is where the user acts");
+  clock.increment(FADE_MS);
+  assert.equal(notices(actor).size, 0, "and gone when its window elapses");
+});
+
+test("a repeated note.refused replaces rather than piles up: one row for the pin", () => {
+  const { actor } = start();
+  actor.send({ type: "note.refused", id: ID, reason: "pinned" });
+  actor.send({ type: "note.refused", id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", reason: "pinned" });
+  assert.equal(notices(actor).size, 1, "coalesced by reason");
+});

@@ -74,6 +74,14 @@ const clickBin = (page, title) =>
       ?.querySelector(".bin")
       ?.click();
   }, title);
+const clickEdit = (page, title) =>
+  page.evaluate((title) => {
+    const root = document.querySelector("book-shelf").shadowRoot;
+    [...root.querySelectorAll(".tile")]
+      .find((t) => t.querySelector(".title")?.textContent.trim() === title)
+      ?.querySelector(".edit")
+      ?.click();
+  }, title);
 const clickUndo = (page, title) =>
   page.evaluate((title) => {
     const root = document.querySelector("book-shelf").shadowRoot;
@@ -182,6 +190,44 @@ for (const engine of ENGINES) {
       });
       assert.ok(hasCover, "the cover image resolved");
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    test("renaming a book in place updates the tile and reaches the server (D11)", async () => {
+      const { page, problems } = await open();
+      await setFile(page, SAMPLE);
+      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
+      // Let the import settle before editing: an in-flight import keeps re-rendering the
+      // grid, which detaches the field mid-fill on a slower engine. No .adding tile means
+      // the shelf is stable, so the edit lands on a tile that stays put.
+      await until(async () =>
+        page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile.adding").length === 0),
+      );
+
+      await clickEdit(page, "Sample Book");
+      const input = page.locator("book-shelf .title-input");
+      await input.waitFor();
+      await input.fill("My Renamed Book");
+      // The write drains on its own debounce (5); wait for that ack so the round trip
+      // is proven, not just the instant local change.
+      const titledOk = page.waitForResponse(
+        (res) => /\/api\/books\/[^/]+\/title$/.test(res.url()) && res.ok(),
+        { timeout: 4000 },
+      );
+      await input.press("Enter");
+      await until(async () => (await tiles(page)).some((t) => t.title === "My Renamed Book"));
+      // Enter saves the title and nothing more: it does not open the book (a book.selected
+      // the "Contents" tab follows), so the renamed tile is not selected.
+      assert.ok(
+        !(await tiles(page)).find((t) => t.title === "My Renamed Book").selected,
+        "saving a rename did not open the book",
+      );
+      // A tab regaining focus drains at once (5), so the write need not wait out its
+      // debounce window; this keeps the test well under its budget.
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await titledOk;
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
     });
 
     test("a broken file is refused with a message and no tile", async () => {
@@ -193,6 +239,7 @@ for (const engine of ENGINES) {
       await until(async () => (await page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile.adding").length)) === 0);
       assert.equal((await tiles(page)).length, before, "no tile was added for a broken file");
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
     });
 
     test("delete offers undo, then commits when its window ends and stays gone", async () => {
@@ -235,6 +282,7 @@ for (const engine of ENGINES) {
       await new Promise((r) => setTimeout(r, 300));
       assert.ok(!(await tiles(page)).some((t) => t.title === "Sample Book"), "it stays gone after a reload");
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
     });
 
     test("the phone preview lays the shelf out within the window", async () => {
@@ -249,6 +297,7 @@ for (const engine of ENGINES) {
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `books-shelf-phone-${engine.name}.png`) });
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
     });
   });
 }

@@ -20,11 +20,30 @@ import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 const order = (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
 const sorted = (notes) => [...notes].sort(order);
 
+// A note's links (12), always an array: an old cached note, or an event from before
+// links existed, reads as none.
+const links = (note) => (Array.isArray(note.about) ? note.about : []);
+
+// One row keeps only the fields the list shows, plus the links it filters by.
+const row = ({ id, title, subtitle, updatedAt, about }) => ({ id, title, subtitle, updatedAt, about: links({ about }) });
+
 // Fold one changed note into the rows: replace the row with its id if present, else
-// add it, then re-sort. Only the fields a row shows are kept (a note.changed carries
-// the whole note, 4.3, third rule).
-const upsert = (notes, { id, title, subtitle, updatedAt }) =>
-  sorted([...notes.filter((n) => n.id !== id), { id, title, subtitle, updatedAt }]);
+// add it, then re-sort. Only the fields a row shows (and its links) are kept (a
+// note.changed carries the whole note, 4.3, third rule).
+const upsert = (notes, changed) => sorted([...notes.filter((n) => n.id !== changed.id), row(changed)]);
+
+// A note is about the subject when one of its links matches the subject's kind and id
+// (D4: a follower compares kind + id, it never learns what kinds exist).
+const isAbout = (note, subject) =>
+  subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id);
+
+// The rows to show (D6): while following, with a subject on the stage, only the notes
+// about it — a note always belongs to what is on the stage, so there is no "all notes"
+// choice to fall back to. Only when nothing on the stage is a subject (a null subject,
+// or the attribute off) is there nothing to scope by, and every note shows. The draft
+// row is the view's, always on top of whichever set this returns.
+export const shown = ({ notes, following, subject }) =>
+  following && subject != null ? notes.filter((n) => isAbout(n, subject)) : notes;
 
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
 // context immutable; the view re-renders on every snapshot regardless).
@@ -36,14 +55,38 @@ const without = (set, id) => {
 
 export const machine = setup({
   actors: {
-    list: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // The starting picture (4.3): every note, and — only when following the stage —
+    // the current subject. Each ask holds its own supersession events for us (the
+    // list's note.changed/note.deleted, the subject's subject.changed) until its reply
+    // lands, so a change that races the start is applied after it, in order.
+    load: fromPromise(async ({ input }) => {
+      const [notes, subject] = await Promise.all([
+        input.ask("notes", "list", {}),
+        input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }),
+      ]);
+      return { notes: notes?.notes, subject: subject?.subject ?? null };
+    }),
   },
 }).createMachine({
   id: "note-list",
-  meta: { kind: "view", emits: ["note.selected", "note.discarded"], attributes: [], asks: ["notes: list"] },
+  meta: {
+    kind: "view",
+    emits: ["note.selected", "note.discarded"],
+    // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
+    // no filtering, every note shown. On, the list shows only the notes about the
+    // subject on the stage; there is no switch to all notes.
+    attributes: ["subject"],
+    asks: ["notes: list", "subject: read"],
+  },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
+    // Whether the page set the `subject` attribute (D5); it arrives through input so
+    // the machine stays importable in Node.
+    following: Boolean(input.following),
+    // The subject on the stage, learned from subject: read then subject.changed. Null
+    // until the first reply, and whenever nothing on the stage is a subject.
+    subject: null,
     // How long a discarded row can be brought back (the --duration-undo token, read
     // in the view and passed in so the machine stays importable in Node). The delete
     // is not a fact until this window ends (delayed delete): stop it and nothing was
@@ -64,13 +107,16 @@ export const machine = setup({
   states: {
     loading: {
       invoke: {
-        src: "list",
-        input: ({ context }) => ({ ask: context.ask }),
+        src: "load",
+        input: ({ context }) => ({ ask: context.ask, following: context.following }),
         onDone: [
           {
             guard: ({ event }) => Array.isArray(event.output.notes),
             target: "ready",
-            actions: assign({ notes: ({ event }) => sorted(event.output.notes) }),
+            actions: assign({
+              notes: ({ event }) => sorted(event.output.notes.map(row)),
+              subject: ({ event }) => event.output.subject,
+            }),
           },
           // notes could not answer (offline, no answerer): an honest empty list.
           { target: "failed" },
@@ -103,6 +149,13 @@ export const machine = setup({
         });
         if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
       }),
+    },
+    // The stage moved (4.3): the subject changed, so a different set of notes is about
+    // it. Held for us until the starting subject: read reply lands, so it is never lost
+    // and never applied before the picture it supersedes. Ignored when not following,
+    // where it changes nothing shown.
+    "subject.changed": {
+      actions: assign({ subject: ({ event }) => event.subject }),
     },
     // The trash on a row, or a swipe past its threshold (5): begin the undo window.
     // Nothing is emitted yet; only its elapse makes the delete a fact.

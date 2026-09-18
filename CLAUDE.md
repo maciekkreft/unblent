@@ -20,6 +20,7 @@ The architecture is the spec. If a request conflicts with it, name the section a
 - UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step) (one exception: `profile-switch`, architecture §12).
 - Verify UI in WebKit, then Chromium, on the desk and in the phone preview (`data-viewport="phone"`, set through `viewport-switch` or localStorage key `viewport`), before reporting done.
 - Commits: 2-3 words, no attribution trailers, same-session fixes amend.
+- Talk to the user as the product owner: simple language and business terms, no technical jargon. Say what the user will see and what it costs; keep component names, contracts and code detail for plan files, proposals that need them, and the code itself.
 
 # Reading the slip-box
 
