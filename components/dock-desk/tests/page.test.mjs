@@ -31,16 +31,23 @@ const state = (page) =>
     const root = el.shadowRoot;
     const dock = root.querySelector(".dock.right");
     const stage = root.querySelector(".stage");
+    const strip = stage.querySelector(".strip");
+    const rail = dock.querySelector(".rail");
     const scrim = root.querySelector(".scrim");
     const box = (n) => (n ? n.getBoundingClientRect() : null);
+    const within = (a, b) =>
+      a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && a.bottom <= b.bottom + 1;
     return {
       host: box(el).width,
       dockPos: getComputedStyle(dock).position,
       dockWidth: Math.round(box(dock).width),
+      dockHeight: Math.round(box(dock).height),
       folded: dock.classList.contains("folded"),
       stageWidth: Math.round(box(stage).width),
       stageRight: Math.round(box(stage).right),
       hostRight: Math.round(box(el).right),
+      railInStrip: within(box(rail), box(strip)),
+      railTablistShown: getComputedStyle(rail.querySelector('[role="tablist"]')).display !== "none",
       scrimOn: scrim.classList.contains("on"),
       scrimVisible: getComputedStyle(scrim).visibility === "visible",
     };
@@ -81,11 +88,19 @@ for (const engine of ENGINES) {
       await page.locator("dock-desk").waitFor();
 
       // On the phone a fresh desk seeds a side dock folded (6.4), so the stage and
-      // its header are never hidden behind a drawer at first sight: it is a rail,
-      // out of the flow, with no scrim.
+      // its header are never hidden behind a drawer at first sight: it is a button
+      // in the header corner, out of the flow, with no scrim, leaving the whole
+      // stage width for the body below.
       const seeded = await state(page);
       assert.equal(seeded.dockPos, "absolute", "a folded side dock stays out of the flow, on its gutter");
-      assert.ok(Math.abs(seeded.dockWidth - rail) <= 1, "the side dock seeds as a rail one token wide");
+      assert.ok(Math.abs(seeded.dockWidth - rail) <= 1, "the folded side dock is one token wide");
+      assert.ok(Math.abs(seeded.dockHeight - rail) <= 1, "the folded side dock is a square, not a full-height rail");
+      assert.ok(seeded.railInStrip, "the folded button sits within the stage header");
+      assert.ok(!seeded.railTablistShown, "the folded button hides its tabs; its title names what it holds");
+      assert.ok(
+        Math.abs(seeded.stageWidth - seeded.host) <= 1,
+        "the stage spans the full width; the button costs only header padding",
+      );
       assert.ok(!seeded.scrimOn, "no scrim while the drawer is folded");
 
       // A tap on the rail floats the drawer over the stage (absolute, leaving only a
@@ -106,9 +121,9 @@ for (const engine of ENGINES) {
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `dock-desk-phone-drawer-${engine.name}.png`) });
 
-      // A tap on the scrim folds the drawer back to its edge rail: the forgiving
-      // close, one step (Norman). The dock stays out of the flow and only narrows,
-      // so the stage holds one width through every frame of the slide.
+      // A tap on the scrim folds the drawer back to its header button: the forgiving
+      // close, one step (Norman). The dock stays out of the flow, so the full-width
+      // stage holds one width through every frame of the slide.
       await clickInDesk(page, ".scrim");
       const slide = await page.locator("dock-desk").evaluate(async (el, rail) => {
         const dock = el.shadowRoot.querySelector(".dock.right");
@@ -124,26 +139,30 @@ for (const engine of ENGINES) {
       assert.deepEqual(slide, [open.stageWidth], "the stage is never squeezed while the drawer folds");
       // The dock slides to the rail width; wait for it to settle, not just for the
       // class, so the measurement is the folded size and not a mid-slide frame.
+      // Height steps to the button only at the slide's end, after the width reaches the
+      // edge; wait for both so the folded square is measured settled, not mid-slide.
       await page.waitForFunction((rail) => {
-        const d = document.querySelector("dock-desk").shadowRoot.querySelector(".dock.right");
-        return d.classList.contains("folded") && d.getBoundingClientRect().width <= rail + 1;
+        const r = document.querySelector("dock-desk").shadowRoot.querySelector(".dock.right");
+        const b = r.getBoundingClientRect();
+        return r.classList.contains("folded") && b.width <= rail + 1 && b.height <= rail + 1;
       }, rail);
       const folded = await state(page);
       assert.equal(folded.dockPos, "absolute", "a folded side dock stays out of the flow, on its gutter");
       assert.equal(folded.stageWidth, open.stageWidth, "folding the drawer does not resize the stage");
-      // Within a pixel: the rail's edge border rounds the border-box width.
-      assert.ok(Math.abs(folded.dockWidth - rail) <= 1, "a folded side dock is a rail one token wide");
-      assert.ok(Math.abs(folded.hostRight - folded.stageRight - rail) <= 1, "the stage sits beside the rail, not under it");
+      // Within a pixel: the button's edge border rounds the border-box width.
+      assert.ok(Math.abs(folded.dockWidth - rail) <= 1, "a folded side dock is a button one token wide");
+      assert.ok(Math.abs(folded.dockHeight - rail) <= 1, "a folded side dock returns to a header-corner square");
+      assert.ok(Math.abs(folded.stageWidth - folded.host) <= 1, "the stage spans the full width beside the button");
       assert.ok(!folded.scrimOn, "the scrim clears once no drawer is open");
 
-      // A tap on the rail reopens the drawer.
+      // A tap on the button reopens the drawer.
       await clickInDesk(page, ".dock.right .rail");
       await page.waitForFunction((rail) => {
         const d = document.querySelector("dock-desk").shadowRoot.querySelector(".dock.right");
         return !d.classList.contains("folded") && d.getBoundingClientRect().width > rail * 3;
       }, rail);
       const reopened = await state(page);
-      assert.equal(reopened.dockPos, "absolute", "tapping the rail floats the drawer back over the stage");
+      assert.equal(reopened.dockPos, "absolute", "tapping the button floats the drawer back over the stage");
       assert.ok(reopened.scrimOn, "the scrim returns with the drawer");
       assert.equal(reopened.stageWidth, open.stageWidth, "opening the drawer does not resize the stage");
 

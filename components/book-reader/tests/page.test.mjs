@@ -565,11 +565,13 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       await page.setViewportSize({ width: 1024, height: 768 });
       watch(page, problems);
-      // The cold sync GETs must land before the reload below, or the reload aborts them
-      // and the watch reports a cancelled request; waiters are armed before goto fires them.
+      // The cold GETs must land before the reload below, or the reload aborts them
+      // and the watch reports a cancelled request; waiters are armed before goto fires
+      // them. catalog's manifest fetch is one of them: the product page mounts catalog.
       const synced = Promise.all([
         page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
         page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
+        page.waitForResponse((r) => /\/api\/catalog(\?|$)/.test(r.url()), { timeout: WAIT.timeout }),
       ]);
       await page.goto(`${BASE_URL}/`);
       // Every view mounted (its shadow root exists) and the dock offers a tab for each.

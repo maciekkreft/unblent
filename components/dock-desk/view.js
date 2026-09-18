@@ -408,28 +408,27 @@ class DockDesk extends LitElement {
        admits only tokens for lengths that place a box, and a container breakpoint is
        neither. Range syntax: WebKit ≥ 16.4 and Chromium support it. */
     @container (width < 45rem) {
-      /* A side dock is always out of the flow here, a rail or a drawer, anchored
-         to the row at its edge. The stage reserves the rail as a margin instead,
-         so the stage keeps one width whether a drawer is folded, open or
-         mid-slide, and only the dock's own width animates: a dock that re-entered
-         the flow on fold would squeeze the stage for the length of the slide. The
-         dock still spans from the true edge (left/right: 0 against the unpadded
-         row), so an open drawer covers its own rail with no strip left showing. */
+      /* A folded side dock is a square button in the stage header's corner, not a
+         full-height rail: it costs the header one token but leaves the whole stage
+         width for the body below. Tapping it opens a full-height drawer over the
+         stage (the geometry below). The dock is out of the flow, so folding never
+         squeezes the stage; the header reserves the button's token as padding on
+         the strip alone, one width whether the drawer is folded, open or sliding. */
       .row {
         position: relative;
       }
-      .row:has(> .dock.left) .stage {
-        margin-left: var(--space-xl);
+      .row:has(> .dock.left) .stage .strip {
+        padding-left: var(--space-xl);
       }
-      .row:has(> .dock.right) .stage {
-        margin-right: var(--space-xl);
+      .row:has(> .dock.right) .stage .strip {
+        padding-right: var(--space-xl);
       }
       .dock.left,
       .dock.right {
         position: absolute;
         top: 0;
-        bottom: 0;
         width: var(--space-xl);
+        height: var(--space-xl);
         z-index: 0;
       }
       .dock.left {
@@ -438,28 +437,82 @@ class DockDesk extends LitElement {
       .dock.right {
         right: 0;
       }
-      /* Opening a side dock widens it over the stage as a drawer, keeping its own
-         canvas, edge border and clipping (base .dock); its panel fills it. It
-         spans the row, so a bottom sheet stays whole below it, under the scrim. */
+      /* Opening a side dock grows it from the corner square to a full-height drawer
+         over the stage, keeping its own canvas, edge border and clipping (base
+         .dock); its panel fills it. It spans the row, so a bottom sheet stays whole
+         below it, under the scrim. */
       .dock.left:not(.folded),
       .dock.right:not(.folded) {
         width: calc(100% - var(--space-2xl));
+        height: 100%;
         box-shadow: var(--shadow-card);
         z-index: 2;
+      }
+      /* Folded, each side dock is a header-corner button: its rail lies flat as a
+         square with the fold glyph centred, not a full-height vertical spine (base
+         side-rail rules turned it upright). The tabs are hidden here — what the dock
+         holds is read from the button's title and from the drawer once it opens. */
+      .dock.left .rail,
+      .dock.right .rail {
+        writing-mode: horizontal-tb;
+        transform: none;
+        top: 0;
+        bottom: auto;
+        width: var(--space-xl);
+        height: var(--space-xl);
+        padding: 0;
+        justify-content: center;
+        background: transparent;
+      }
+      .dock.left .rail .action {
+        transform: none;
+      }
+      .dock.left .rail [role="tablist"],
+      .dock.right .rail [role="tablist"] {
+        display: none;
+      }
+      /* Folded, the button carries no panel edge: the side border that divides an
+         open drawer from the peeking stage would otherwise draw a stray tick beside
+         the glyph, boxing the header. The open drawer keeps it (base .dock, the
+         :not(.folded) state). */
+      .dock.left.folded,
+      .dock.right.folded {
+        border: 0;
+      }
+      /* The left drawer opened from the leading corner, so its fold returns there:
+         open and close are one spot. The right drawer's fold is already trailing. */
+      .dock.left .strip .fold {
+        order: -1;
       }
       .dock.left:not(.folded) .panel,
       .dock.right:not(.folded) .panel {
         width: 100%;
       }
-      /* A closing drawer stays above the fading scrim until it is a rail again. */
-      .settled .dock.folded {
+      /* The drawer slides in from the whole edge, not out of the corner button:
+         width animates while height steps at the still ends, so the panel is full
+         height for the entire slide. Unfolding, height snaps to full at once, then
+         the width grows from the edge; folding, it holds full height through the
+         slide and drops back to the button only at the end (the same 0s-after-a-
+         delay trick the visibility swap uses). z-index steps late so a closing
+         drawer stays above the fading scrim until it is a button again. */
+      .settled .dock.left,
+      .settled .dock.right {
         transition:
           width var(--duration-slide) var(--ease),
-          height var(--duration-slide) var(--ease),
+          height 0s;
+      }
+      .settled .dock.left.folded,
+      .settled .dock.right.folded {
+        transition:
+          width var(--duration-slide) var(--ease),
+          height 0s var(--duration-slide),
           z-index 0s var(--duration-slide);
       }
       @media (prefers-reduced-motion: reduce) {
-        .settled .dock.folded {
+        .settled .dock.left,
+        .settled .dock.right,
+        .settled .dock.left.folded,
+        .settled .dock.right.folded {
           transition: none;
         }
       }
@@ -529,7 +582,8 @@ class DockDesk extends LitElement {
     const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);
     // On the phone a side dock overlays the stage as a drawer (@container below);
     // the scrim dims the stage still peeking beside it, and tapping it folds the
-    // drawer back to its rail — the forgiving close, one step, no new gesture.
+    // drawer back to its header button — the forgiving close, one step, no new
+    // gesture.
     const drawers = ["left", "right"].filter((s) => docks[s]?.open);
     const closeDrawers = () => drawers.forEach((s) => this.#send("_fold", undefined, s));
 
@@ -650,7 +704,7 @@ class DockDesk extends LitElement {
         </div>
         <div class="rail" @click=${unfold}>
           ${this.#tablist(group, dock.views, active, labelOf, show)}
-          ${this.#fold("Unfold", "false", () => this.#send("_unfold", undefined, side))}
+          ${this.#fold("Unfold", "false", () => this.#send("_unfold", undefined, side), `Unfold ${dock.views.map(labelOf).join(", ")}`)}
         </div>
       </aside>
     `;
@@ -658,10 +712,12 @@ class DockDesk extends LitElement {
 
   // The fold toggle: one glyph in the strip (expanded) and on the rail (folded),
   // oriented per side by CSS. The label loses the side name; the side reads from
-  // the dock the button sits in.
-  #fold(label, expanded, act) {
+  // the dock the button sits in. On the phone the folded rail is a header button
+  // with no visible tabs, so its title names what the drawer holds; aria-label
+  // stays the bare action, the accessible name the whole layout keys on.
+  #fold(label, expanded, act, title = label) {
     return html`
-      <button class="action fold" aria-label=${label} title=${label} aria-expanded=${expanded} @click=${act}>
+      <button class="action fold" aria-label=${label} title=${title} aria-expanded=${expanded} @click=${act}>
         ${FOLD}
       </button>
     `;
