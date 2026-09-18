@@ -149,13 +149,39 @@ for (const engine of ENGINES) {
     test("paginates a long chapter, turns a page, and announces the place", async () => {
       const { page, problems, debug } = await openAndRewind();
       try {
-        // Next past the one-page first chapter loads the second, several pages long.
+        // Next past the one-page first chapter crosses into the second, which slides in
+        // like any turn (Norman): watch every frame across the turn for the leaving strip
+        // and a moving one (the slide is on the translate property, both strips at once).
+        await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          window.__slid = { leaving: false, moved: false };
+          const t0 = performance.now();
+          const tick = () => {
+            if (r.querySelector(".strip.leaving")) window.__slid.leaving = true;
+            for (const s of r.querySelectorAll(".strip")) {
+              const t = getComputedStyle(s).translate;
+              if (t && t !== "none") window.__slid.moved = true;
+            }
+            if (performance.now() - t0 < 1500) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
         await page.keyboard.press("ArrowRight");
         await waitPagesAtLeast(page, "Chapter Two", 3);
         assert.equal((await rstate(page)).page, 1, "the new chapter opens at its first page");
 
         // A turn within the chapter advances the page; its top block is not the first.
         await settle();
+        assert.ok(
+          await page.evaluate(() => window.__slid.leaving && window.__slid.moved),
+          "crossing into the next chapter slid a fresh strip in",
+        );
+        const rest = await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          return { count: r.querySelectorAll(".strip").length, translate: getComputedStyle(r.querySelector(".strip")).translate };
+        });
+        assert.equal(rest.count, 1, "the leaving strip is gone once the slide ends");
+        assert.equal(rest.translate, "none", "the settled strip sits at rest");
         await page.keyboard.press("ArrowRight");
         await waitChapterPage(page, "Chapter Two", 2);
 
@@ -379,7 +405,12 @@ for (const engine of ENGINES) {
           const t0 = performance.now();
           const tick = () => {
             const m = getComputedStyle(strip).transform;
+            const tr = getComputedStyle(strip).translate;
+            // A jump has nowhere to slide from: neither the transform (page within a
+            // chapter) nor the translate (a chapter-crossing slide) ever moves, and no
+            // leaving strip is ever handed over.
             if (r.querySelector(".footer .chap").textContent.trim() === "Chapter Three" && m !== "none" && m !== "matrix(1, 0, 0, 1, 0, 0)") window.__slid.push(m);
+            if (r.querySelector(".strip.leaving") || (tr && tr !== "none")) window.__slid.push(tr);
             if (performance.now() - t0 < 1500) requestAnimationFrame(tick);
           };
           requestAnimationFrame(tick);

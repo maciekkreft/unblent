@@ -127,9 +127,36 @@ class BookReader extends LitElement {
       color: var(--color-body);
       line-height: var(--leading-normal);
     }
+    /* Crossing a chapter: the entering strip slides in from the turn's side and the
+       leaving one out the other, on the individual translate property so it composes
+       with the --page transform the settle still corrects underneath. --dir is +1 for a
+       forward turn, -1 for back. */
+    @keyframes enter {
+      from {
+        translate: calc(var(--dir) * (100cqw + var(--space-xl)));
+      }
+    }
+    @keyframes leave {
+      to {
+        translate: calc(-1 * var(--dir) * (100cqw + var(--space-xl)));
+      }
+    }
+    .strip.entering {
+      animation: enter var(--duration-slide) var(--ease);
+    }
+    /* The entering strip stays in flow, measured as usual; only the leaving one is lifted
+       out and laid over the .page (its padding box, so inset-inline sits it back in the
+       content box the in-flow strip fills) to slide away without disturbing the layout. */
+    .strip.leaving {
+      position: absolute;
+      inset-block: 0;
+      inset-inline: var(--space-lg);
+      animation: leave var(--duration-slide) var(--ease) forwards;
+    }
     @media (prefers-reduced-motion: reduce) {
       .strip {
         transition: none;
+        animation: none;
       }
     }
     /* A mouse can select the text to copy it; a finger cannot, so a horizontal
@@ -356,9 +383,13 @@ class BookReader extends LitElement {
   `;
 
   #actor = new ActorController(this);
-  // The fragment lives outside Lit's template so a re-render never rebuilds it; it is
-  // created once and its children are the blocks, replaced when the chapter changes.
-  #strip = document.createElement("div");
+  // The fragment lives outside Lit's template so a re-render never rebuilds it; its
+  // children are the blocks, replaced when the chapter changes. A chapter-crossing turn
+  // replaces the whole element instead, sliding the new one in beside the old (#swapStrip).
+  #strip = this.#makeStrip();
+  // The strip on its way out during a chapter-crossing slide, removed when it lands or the
+  // reader disconnects.
+  #leaving = null;
   #ro = null;
   // What has been applied, to know in updated() when the chapter or the owed place
   // changed. The page now shown, the pages there are, the anchor, and each block's
@@ -385,18 +416,26 @@ class BookReader extends LitElement {
   #settling = false;
   #raf = 0;
   #timer = 0;
+  // The direction of a turn that crossed the current chapter's edge (+1 forward, -1 back),
+  // set as the _next/_prev is sent and consumed by the next fragment change, which slides
+  // when it is the neighbour that turn asked for. Zero for every other navigation (an
+  // in-chapter turn, a contents jump, a link, another device's move): those do not slide.
+  #turning = 0;
 
-  constructor() {
-    super();
-    this.#strip.className = "strip";
+  // The fragment element: a bare div with the click handler for in-text chapter links.
+  // Made here so #swapStrip can build a second one for a chapter-crossing slide.
+  #makeStrip() {
+    const strip = document.createElement("div");
+    strip.className = "strip";
     // A link inside the text to another chapter (the importer rewrote it to a
     // data-chapter, and a fragment to a data-block): jump rather than navigate.
-    this.#strip.addEventListener("click", (e) => {
+    strip.addEventListener("click", (e) => {
       const a = e.target.closest("a[data-chapter]");
       if (!a) return;
       e.preventDefault();
       this.#actor.send({ type: "_link", chapter: Number(a.dataset.chapter), block: Number(a.dataset.block ?? 0) });
     });
+    return strip;
   }
 
   connectedCallback() {
@@ -411,9 +450,36 @@ class BookReader extends LitElement {
   disconnectedCallback() {
     this.#ro?.disconnect();
     this.#ro = null;
+    this.#leaving?.remove();
+    this.#leaving = null;
     cancelAnimationFrame(this.#raf);
     clearTimeout(this.#timer);
     super.disconnectedCallback();
+  }
+
+  // A turn that crosses a chapter hands the current strip over as the leaving page and
+  // slides a fresh one in beside it, so crossing a chapter gives the same feedback as any
+  // turn (Norman). The old strip is already laid out on its own layer, so it is handed
+  // over rather than re-laid-out; a jump has nowhere to slide from and does not call this.
+  #swapStrip(dir) {
+    const clip = this.#strip.parentNode;
+    if (!clip) return;
+    this.#leaving?.remove();
+    const leaving = this.#strip;
+    leaving.classList.add("leaving");
+    leaving.inert = true;
+    leaving.setAttribute("aria-hidden", "true");
+    leaving.style.setProperty("--dir", dir);
+    leaving.addEventListener("animationend", () => leaving.remove(), { once: true });
+    this.#leaving = leaving;
+    const entering = this.#makeStrip();
+    entering.classList.add("entering");
+    entering.style.setProperty("--dir", dir);
+    entering.addEventListener("animationend", () => entering.classList.remove("entering"), { once: true });
+    // Prepended, so it is the first .strip the tests and updated() find; the leaving one
+    // trails until its animation ends.
+    clip.prepend(entering);
+    this.#strip = entering;
   }
 
   // Put the chapter's fragment in the strip: parse the strict-XHTML subset (lit-core
@@ -421,9 +487,10 @@ class BookReader extends LitElement {
   // each image has loaded, since an unloaded image has no height and moves the blocks.
   #setFragment(htmlText) {
     this.#strip.replaceChildren();
-    // A fresh fragment starts at its first page at once: the strip may still be slid,
-    // or mid-slide, to the old chapter's page, and a transition from there would show
-    // the new text sweeping across several pages before it settles.
+    // A fresh fragment starts at its first page at once, with no transform transition: a
+    // jump reuses the strip, which may still be slid or mid-slide to the old page, and a
+    // transition from there would show the new text sweeping across before it settles;
+    // a chapter-crossing turn enters on a fresh strip whose own slide is the translate.
     this.#page = 0;
     this.#place(0, false);
     if (htmlText) {
@@ -542,10 +609,11 @@ class BookReader extends LitElement {
     return Math.max(0, Math.min(this.#pages - 1, page));
   }
 
-  // Slide the strip to a page. A turn animates, the immediate feedback for the user's
-  // gesture (Norman); a landing does not, because a chapter that opens, a jump, or a
-  // re-measure that keeps the place has nowhere to slide from. The transition is
-  // suspended for the one style flush that applies the page, then restored.
+  // Slide the strip to a page within the chapter. An in-chapter turn animates, the
+  // immediate feedback for the user's gesture (Norman); a landing does not, because a
+  // chapter that opens, a jump, or a re-measure that keeps the place has no page within
+  // the chapter to slide from (a chapter-crossing turn slides the whole strip instead,
+  // #swapStrip). The transition is suspended for the one flush that applies the page.
   #place(page, animate) {
     const strip = this.#strip;
     if (!animate) strip.style.transition = "none";
@@ -637,14 +705,20 @@ class BookReader extends LitElement {
     if (this.#page + 1 < this.#pages) {
       this.#endSettle();
       this.#turn(this.#page + 1);
-    } else this.#actor.send({ type: "_next" });
+    } else {
+      this.#turning = 1;
+      this.#actor.send({ type: "_next" });
+    }
   }
 
   #prev() {
     if (this.#page > 0) {
       this.#endSettle();
       this.#turn(this.#page - 1);
-    } else this.#actor.send({ type: "_prev" });
+    } else {
+      this.#turning = -1;
+      this.#actor.send({ type: "_prev" });
+    }
   }
 
   #keydown(e) {
@@ -741,7 +815,15 @@ class BookReader extends LitElement {
     const { html: htmlText, pending, chapter } = snapshot.context;
     const pendingKey = pending ? `${pending.chapter}:${pending.block}` : null;
     if (this.#lastHtml !== htmlText || this.#chapter !== chapter) {
+      // A turn that crossed into the very neighbour it asked for slides; every other
+      // chapter change (a jump, a link, another device's move) does not. Consume the
+      // direction whichever way it goes, so a no-op or offline turn cannot leave it set.
+      const dir = this.#turning;
+      this.#turning = 0;
+      const slide =
+        dir !== 0 && chapter === this.#chapter + dir && !matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.#lastHtml = htmlText;
+      if (slide) this.#swapStrip(dir);
       this.#chapter = chapter;
       this.#wantBlock = pending && pending.chapter === chapter ? pending.block : 0;
       this.#setFragment(htmlText);
