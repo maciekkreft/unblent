@@ -61,8 +61,53 @@ const ENGINES = [
   { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
 ];
 
+// The active tab label in the right dock, whichever tab the desk shows there.
+const rightActive = (page) =>
+  page.locator("dock-desk").evaluate((el) =>
+    el.shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]')?.textContent.trim(),
+  );
+
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // The product page docks Notes and Editor on the right; the Editor follows
+  // note.selected with `shows-on` (6.4), so picking a note brings its tab forward.
+  test(`picking a note shows the Editor tab on / in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      context.setDefaultTimeout(4000);
+      const page = await context.newPage();
+      const problems = [];
+      page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
+      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+      page.on("requestfailed", (req) =>
+        problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`),
+      );
+      page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
+
+      await page.goto(`${BASE_URL}/`);
+      await page.locator("dock-desk").waitFor();
+      // The right dock seeds on its first tab, Notes; the Editor is behind it.
+      await page.waitForFunction(() => {
+        const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
+        return t && t.textContent.trim() === "Notes";
+      });
+
+      // Pick the next-note row in Notes: note-list emits note.selected, which the
+      // Editor follows (6.4), so the desk brings the Editor tab forward.
+      await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
+      await page.waitForFunction(() => {
+        const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
+        return t && t.textContent.trim() === "Editor";
+      });
+      assert.equal(await rightActive(page), "Editor", "picking a note brings the Editor tab forward");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`a side dock is a scrim drawer on the phone in ${engine.name}`, async () => {
     const rail = tokenPx("--space-xl");
     const peek = tokenPx("--space-2xl");

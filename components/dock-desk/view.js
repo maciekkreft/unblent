@@ -47,6 +47,7 @@ class ActorController {
         name: child.getAttribute("data-role") ?? child.localName,
         label: child.getAttribute("label") ?? child.localName,
         side: child.getAttribute("side") ?? undefined,
+        showsOn: child.getAttribute("shows-on") ?? undefined,
       }));
     this.actor = mount(machine, {
       input: {
@@ -341,6 +342,12 @@ class DockDesk extends LitElement {
     }
     .left .rail .action {
       transform: rotate(180deg);
+    }
+    /* The tabs sit at the fold end of the rail on both sides: the right's fold is
+       lifted by order, the left's rail is turned, so the same top of the strip is
+       flex-start on the right and flex-end on the left. */
+    .left .rail [role="tablist"] {
+      justify-content: flex-end;
     }
     /* The unfold button sits at the top of either rail, where the fold was. */
     .right .rail .action {

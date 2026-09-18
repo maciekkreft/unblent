@@ -92,6 +92,41 @@ const seed = (views, narrow) => {
 // Adopt the fact's layout, or the page's declared default when it has none.
 const adopt = (layout, views, narrow) => (isEmpty(layout) ? seed(views, narrow) : reconcile(layout, views));
 
+// The layout with every view that declared `shows-on` this event (6.4) brought
+// forward where it sits: a docked view shown on its side, unfolded, as _activate
+// does; a stage tab staged.
+const shown = (context, type) => {
+  let { stage, docks } = context;
+  for (const v of context.views) {
+    if (v.showsOn !== type) continue;
+    const s = sideOf(docks, v.name);
+    if (s) docks = { ...docks, [s]: { ...docks[s], open: true, active: v.name } };
+    else stage = v.name;
+  }
+  return { stage, docks };
+};
+
+// Already in view: nothing to announce, so `dock` stores nothing.
+const showsMore = ({ context, event }) => {
+  const next = shown(context, event.type);
+  if (next.stage !== context.stage) return true;
+  return SIDES.some((s) => {
+    const was = context.docks[s];
+    const now = next.docks[s];
+    return now && (!was.open || (was.active ?? was.views[0]) !== now.active);
+  });
+};
+
+// A selection gesture a child follows with `shows-on` (6.4). Showing a tab is daily
+// use, like _activate, so it is not gated on arranging.
+const show = {
+  guard: showsMore,
+  actions: emit(({ context, event }) => {
+    const next = shown(context, event.type);
+    return arranged(next.stage, next.docks);
+  }),
+};
+
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
 const isDocked = ({ context, event }) => dockedNames(context.docks).includes(event.name);
@@ -202,6 +237,9 @@ export const machine = setup({
           guard: ({ context, event }) => Boolean(context.docks[event.side]),
           actions: emit(({ context, event }) => arranged(context.stage, setOpen(context.docks, event.side, true))),
         },
+        // A child follows a selection gesture (6.4): bring its tab forward.
+        "book.selected": show,
+        "note.selected": show,
       },
     },
     // No dock fact on the page: the desk still works as a plain tab switcher, so
@@ -212,6 +250,10 @@ export const machine = setup({
           guard: isStageTab,
           actions: assign({ stage: ({ event }) => event.name }),
         },
+        // A child follows a selection gesture (6.4); with no dock fact the desk is a
+        // plain tab switcher, so a followed stage tab is staged locally.
+        "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
+        "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
       },
     },
   },

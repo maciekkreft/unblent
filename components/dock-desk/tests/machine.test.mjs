@@ -303,6 +303,61 @@ test("settings.changed turns arranging off and on (4.3, fourth rule)", async () 
   assert.equal(emitted.length, 1, "arrangeable again");
 });
 
+// Views that follow a selection gesture with `shows-on` (6.4).
+const FOLLOWERS = [
+  { name: "reader", label: "Reader" },
+  { name: "book-toc", label: "Contents", side: "left", showsOn: "book.selected" },
+  { name: "note-editor", label: "Editor", showsOn: "note.selected" },
+];
+
+test("a shows-on view docked on a folded side is shown and unfolded (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: { left: { open: false, views: ["book-toc"] } } }),
+    { views: FOLLOWERS },
+  );
+  actor.send({ type: "book.selected", id: "b1" });
+  assert.deepEqual(emitted, [
+    {
+      type: "dock.arranged",
+      stage: "reader",
+      docks: { left: { open: true, views: ["book-toc"], active: "book-toc" } },
+    },
+  ]);
+});
+
+test("a shows-on view on the stage is staged (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: {} }),
+    { views: FOLLOWERS },
+  );
+  actor.send({ type: "note.selected", id: "n1" });
+  assert.deepEqual(emitted, [{ type: "dock.arranged", stage: "note-editor", docks: {} }]);
+});
+
+test("a shows-on view already in view announces nothing (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: { left: { open: true, views: ["book-toc"], active: "book-toc" } } }),
+    { views: FOLLOWERS },
+  );
+  actor.send({ type: "book.selected", id: "b1" });
+  assert.deepEqual(emitted, [], "the tab is already shown, so `dock` stores nothing");
+});
+
+test("a shows-on gesture is followed while not arranging (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: {} }, { arranging: false }),
+    { views: FOLLOWERS },
+  );
+  actor.send({ type: "note.selected", id: "n1" });
+  assert.deepEqual(emitted, [{ type: "dock.arranged", stage: "note-editor", docks: {} }]);
+});
+
+test("in failed, a shows-on gesture stages the followed view (6.4)", async () => {
+  const { actor } = await settle(stored({ error: "unavailable" }), { views: FOLLOWERS });
+  actor.send({ type: "note.selected", id: "n1" });
+  assert.equal(actor.getSnapshot().context.stage, "note-editor");
+});
+
 test("in failed, _open switches the stage locally", async () => {
   const { actor, emitted } = await settle(stored({ error: "unavailable" }));
   actor.send({ type: "_open", name: "trace-list" });
