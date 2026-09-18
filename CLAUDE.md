@@ -17,7 +17,7 @@ The architecture is the spec. If a request conflicts with it, name the section a
   a test past half its 5s budget is named in a warning.
 - Ask before changing `tokens/tokens.css`, `tokens/icons.js`, an event, the document facts list (7.5), or `architecture.md`. Propose, then wait.
 - Comments say why, or cite an architecture section. Never what the code does, never history.
-- UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step).
+- UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step) (one exception: `profile-switch`, architecture §12).
 - Verify UI in WebKit, then Chromium, on the desk and in the phone preview (`data-viewport="phone"`, set through `viewport-switch` or localStorage key `viewport`), before reporting done.
 - Commits: 2-3 words, no attribution trailers, same-session fixes amend.
 

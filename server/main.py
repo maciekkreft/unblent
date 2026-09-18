@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
@@ -20,8 +20,9 @@ TOKENS = ROOT / "tokens"
 BUS = ROOT / "bus"
 STORE = ROOT / "store"
 COMPOSER = ROOT / "composer"
-PAGES_DESIGN = ROOT / "pages" / "design"
-PAGES_APPS = ROOT / "pages" / "apps"
+INDEX = ROOT / "pages" / "index.html"
+PAGES_DESIGN = ROOT / "pages" / "workshop" / "design"
+PAGES_APPS = ROOT / "pages" / "workshop" / "apps"
 
 # Section 11.1: source and tests never reach the browser.
 _BLOCKED_SEGMENTS = {"server", "tests"}
@@ -83,11 +84,13 @@ app.mount("/static/composer", ComponentStaticFiles(directory=COMPOSER), name="co
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
-async def index() -> RedirectResponse:
-    return RedirectResponse("/design/tokens")
+async def index() -> FileResponse:
+    # The product (architecture.md 8, 11.1): the app page at /. The workshop lives
+    # under /workshop/; everything else is the product.
+    return FileResponse(INDEX, headers={"Cache-Control": "no-cache"})
 
 
-@app.api_route("/design/{name}", methods=["GET", "HEAD"])
+@app.api_route("/workshop/design/{name}", methods=["GET", "HEAD"])
 async def design_page(name: str) -> FileResponse:
     page = PAGES_DESIGN / f"{name}.html"
     if not page.is_file() or page.parent != PAGES_DESIGN:
@@ -95,7 +98,7 @@ async def design_page(name: str) -> FileResponse:
     return FileResponse(page, headers={"Cache-Control": "no-cache"})
 
 
-@app.api_route("/apps/{name}", methods=["GET", "HEAD"])
+@app.api_route("/workshop/apps/{name}", methods=["GET", "HEAD"])
 async def app_page(name: str) -> FileResponse:
     page = PAGES_APPS / f"{name}.html"
     if not page.is_file() or page.parent != PAGES_APPS:

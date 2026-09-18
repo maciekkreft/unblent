@@ -22,7 +22,7 @@ const ENGINES = [
 
 // The dock's layout is stored under a page-scoped key (dock/store.js), so the stem's
 // arrangement never clobbers an app desk's.
-const DOCK_KEY = "dock:/design/dock";
+const DOCK_KEY = "dock:/workshop/design/dock";
 
 // The desk's own picture, read from its shadow root. A group's strip is
 // `.stage` or `.dock.<side> .panel`; a folded side's rail is `.dock.<side> .rail`.
@@ -236,7 +236,7 @@ async function open(browser, { layout, phone = false } = {}) {
   );
   const page = await context.newPage();
   const problems = watch(page);
-  await page.goto(`${BASE_URL}/design/dock`);
+  await page.goto(`${BASE_URL}/workshop/design/dock`);
   if (phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
   await ready(page);
   return { context, page, problems };
@@ -642,16 +642,16 @@ for (const engine of ENGINES) {
       await until(async () => (await switchPressed(page)) === "true");
       await until(async () => await shadowHas(page, ".dock.right .panel .action:not(.fold)"));
 
-      // Hide the switch on /design/settings: the desk is not arrangeable, and the
+      // Hide the switch on /workshop/design/settings: the desk is not arrangeable, and the
       // switch leaves the page.
-      await page.goto(`${BASE_URL}/design/settings`);
+      await page.goto(`${BASE_URL}/workshop/design/settings`);
       await page.waitForFunction(() => document.querySelector("settings-sheet")?.shadowRoot?.querySelector(".row"));
       await hideSwitchOnSettings(page);
       await until(async () =>
         page.evaluate(() => JSON.parse(localStorage.getItem("settings") || "{}").layoutSwitchHidden === true),
       );
 
-      await page.goto(`${BASE_URL}/design/dock`);
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
       await ready(page);
       await until(async () => await shadowHas(page, ".dock.right"));
       assert.ok(await switchGone(page), "the layout switch is hidden");

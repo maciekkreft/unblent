@@ -20,13 +20,13 @@ const merge = (pages, nav) => {
     const p = byPath.get(n.path);
     if (p && !seen.has(n.path)) {
       seen.add(n.path);
-      rows.push({ path: p.path, title: p.title, hidden: n.hidden });
+      rows.push({ path: p.path, title: p.title, hidden: n.hidden, kind: p.kind });
     }
   }
   for (const p of pages) {
     if (!seen.has(p.path)) {
       seen.add(p.path);
-      rows.push({ path: p.path, title: p.title, hidden: false });
+      rows.push({ path: p.path, title: p.title, hidden: false, kind: p.kind });
     }
   }
   return rows;
@@ -36,6 +36,27 @@ const merge = (pages, nav) => {
 // page is always kept — you can always see where you are, even on a hidden page.
 export const visible = (pages, nav, current) => merge(pages, nav).filter((r) => !r.hidden || r.path === current);
 
+// The link groups, in architecture 8's composition order. The muted label is what
+// tells apart two pages of the same title (the `notes` stem from the notes app);
+// the user's order (nav) still holds within a group. A row of a kind in no group
+// falls to the last (Apps); the page check already rejects unknown kinds.
+const GROUPS = [
+  { label: "Design", kinds: ["tokens", "contracts", "components"] },
+  { label: "Stems", kinds: ["stem"] },
+  { label: "Apps", kinds: ["app"] },
+];
+const groupOf = (kind) => GROUPS.find((g) => g.kinds.includes(kind)) ?? GROUPS[GROUPS.length - 1];
+
+// The product profile (§8, §12) shows no page links at all: the bar stays, but the
+// only way on is the hidden door. Every other profile groups the pages as before.
+export const grouped = (pages, nav, current, profile) => {
+  if (profile === "product") return [];
+  const rows = visible(pages, nav, current);
+  return GROUPS.map((g) => ({ label: g.label, rows: rows.filter((r) => groupOf(r.kind) === g) })).filter(
+    (g) => g.rows.length,
+  );
+};
+
 export const machine = setup({
   actors: {
     list: fromPromise(({ input }) => input.ask("pages", "list", {})),
@@ -44,7 +65,16 @@ export const machine = setup({
 }).createMachine({
   id: "page-nav",
   meta: { kind: "view", emits: [], attributes: [], asks: ["pages: list", "settings: read"] },
-  context: ({ input }) => ({ ask: input.ask, current: input.current, pages: [], nav: [], error: null }),
+  context: ({ input }) => ({
+    ask: input.ask,
+    current: input.current,
+    pages: [],
+    nav: [],
+    // The active profile (§12), adopted from settings; a page without settings
+    // stays in `workshop`, the full nav, exactly as before profiles existed.
+    profile: "workshop",
+    error: null,
+  }),
   initial: "loadingPages",
   states: {
     loadingPages: {
@@ -70,7 +100,13 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "ready", actions: assign({ nav: ({ event }) => event.output.nav }) },
+          {
+            target: "ready",
+            actions: assign({
+              nav: ({ event }) => event.output.nav,
+              profile: ({ event, context }) => event.output.profile ?? context.profile,
+            }),
+          },
         ],
         onError: { target: "ready" },
       },
@@ -79,7 +115,12 @@ export const machine = setup({
     failed: {},
   },
   on: {
-    // The fact's news (4.3, fourth rule): adopt the order and hidden pages.
-    "settings.changed": { actions: assign({ nav: ({ event }) => event.nav }) },
+    // The fact's news (4.3, fourth rule): adopt the order, hidden pages and profile.
+    "settings.changed": {
+      actions: assign({
+        nav: ({ event }) => event.nav,
+        profile: ({ event, context }) => event.profile ?? context.profile,
+      }),
+    },
   },
 });

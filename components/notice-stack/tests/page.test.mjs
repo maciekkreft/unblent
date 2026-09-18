@@ -118,7 +118,7 @@ for (const engine of ENGINES) {
           return real(url, init);
         };
       });
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/apps/notes`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
       // The sign-in pull settles the fact before the first edit (5).
       await until(() => page.evaluate(() => window.__puts !== undefined));
@@ -177,7 +177,7 @@ for (const engine of ENGINES) {
       // A short window so a passing notice does not linger; seed the notice from a
       // real refusal by clicking sign-in with no authenticator.
       await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.goto(`${BASE_URL}/design/session`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/session`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await page.evaluate(() => document.querySelector("notice-stack").style.setProperty("--duration-undo", "4s"));
       await page.evaluate(() => document.querySelector("session-switch").shadowRoot.querySelector("button")?.click());
@@ -215,7 +215,7 @@ for (const engine of ENGINES) {
       const setFile = (path) => page.locator("book-shelf input[type=file]").setInputFiles(path);
 
       // Signed out: a picked file is refused, and the stack invites a sign-in.
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       await until(async () =>
         (await page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelector(".empty p")?.textContent.trim())) ===

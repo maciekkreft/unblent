@@ -60,7 +60,7 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
       },
     });
 
-    await page.goto(`${LOCAL_URL}/design/session`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${LOCAL_URL}/workshop/design/session`, { waitUntil: "domcontentloaded" });
     await ready(page);
     assert.equal((await switchState(page)).title, "Create account");
 
@@ -90,7 +90,7 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
     const bareLogs = [];
     barePage.on("pageerror", (err) => pageErrors.push(err.message));
     barePage.on("console", (msg) => bareLogs.push(msg.text()));
-    await barePage.goto(`${LOCAL_URL}/design/session`, { waitUntil: "domcontentloaded" });
+    await barePage.goto(`${LOCAL_URL}/workshop/design/session`, { waitUntil: "domcontentloaded" });
     await ready(barePage);
     await clickSwitch(barePage);
     await until(() => bareLogs.some((l) => l.includes("session.refused") && l.includes("session → session-switch")));

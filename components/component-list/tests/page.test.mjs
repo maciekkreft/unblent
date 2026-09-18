@@ -56,7 +56,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/components`);
+      await page.goto(`${BASE_URL}/workshop/design/components`);
       await page.waitForFunction(
         (n) => document.querySelector("component-list")?.shadowRoot?.querySelectorAll(".card").length === n,
         COMPONENT_DIRS.length,

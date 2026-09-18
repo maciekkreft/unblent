@@ -121,7 +121,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
 
       // session: read (asked by session-switch) settles the signed-out picture.
@@ -160,7 +160,7 @@ for (const engine of ENGINES) {
       watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       return { page, problems, debug };

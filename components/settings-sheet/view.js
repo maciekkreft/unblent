@@ -200,9 +200,15 @@ class SettingsSheet extends LitElement {
     )
       return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current, roles } = snapshot.context;
+    const { pages, settings, current, roles, profile } = snapshot.context;
     const rows = merge(pages, settings.nav);
+    // The product profile (§12) shows only the production options: the editor
+    // selects and the layout-switch row. The page order and the viewport switch
+    // are workshop-only, so the product sheet never offers them.
+    const workshop = profile !== "product";
     return html`
+      ${workshop
+        ? html`
       <h2>Pages</h2>
       <ul>
         ${rows.map(
@@ -249,7 +255,11 @@ class SettingsSheet extends LitElement {
           `,
         )}
       </ul>
+          `
+        : nothing}
       <div class="switches">
+        ${workshop
+          ? html`
         <label>
           <input
             type="checkbox"
@@ -258,6 +268,8 @@ class SettingsSheet extends LitElement {
           />
           Viewport switch shown
         </label>
+          `
+          : nothing}
         <label>
           <input
             type="checkbox"

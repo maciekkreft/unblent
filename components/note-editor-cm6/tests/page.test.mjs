@@ -132,7 +132,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
-      await page.goto(`${BASE_URL}/apps/notes`);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
       assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" });
 
@@ -174,7 +174,7 @@ for (const engine of ENGINES) {
       watch(page, problems);
 
       // Write and save on the page default (plain note-editor).
-      await page.goto(`${BASE_URL}/apps/notes`);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
       assert.deepEqual(await slotted(page), { tag: "note-editor", role: null }, "default is the plain editor");
       await page.evaluate(() => {
@@ -207,7 +207,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
-      await page.goto(`${BASE_URL}/apps/notes`);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
 
       await page.locator("note-editor-cm6 .cm-content").click();
@@ -269,7 +269,7 @@ for (const engine of ENGINES) {
         localStorage.setItem("viewport", "phone");
         localStorage.setItem("settings", v);
       }, CM6);
-      await page.goto(`${BASE_URL}/apps/notes`);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
       await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" });

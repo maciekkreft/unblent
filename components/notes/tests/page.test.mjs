@@ -150,7 +150,7 @@ for (const engine of ENGINES) {
         if (msg.type() === "debug") debug.push(msg.text());
       });
 
-      await page.goto(`${BASE_URL}/design/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       const ready = (p) =>
         p.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
       await ready(page);
@@ -233,7 +233,7 @@ for (const engine of ENGINES) {
       const phone = await context.newPage();
       watch(phone, problems);
       await phone.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await phone.goto(`${BASE_URL}/design/notes`, { waitUntil: "domcontentloaded" });
+      await phone.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       await ready(phone);
       await phone.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       const fits = await phone.evaluate(() => {
@@ -263,7 +263,7 @@ for (const engine of ENGINES) {
         if (msg.type() === "debug") debug.push(msg.text());
       });
 
-      await page.goto(`${BASE_URL}/design/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () =>
           document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea") &&
@@ -391,7 +391,7 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.goto(`${BASE_URL}/apps/notes`);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
       await page.waitForFunction(() => document.querySelector("dock-desk")?.shadowRoot?.querySelector(".stage"));
 
       // The three views are the desk's children (8): the page composes, dock-desk
@@ -487,7 +487,7 @@ for (const engine of ENGINES) {
         };
       });
 
-      await page.goto(`${BASE_URL}/apps/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/apps/notes`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
       // Signing in pulls at once (5): wait for that GET so the fact is signed in.
       await until(() => page.evaluate(() => window.__fetches.some((f) => /\/api\/notes\?since=/.test(f.url))));
@@ -549,7 +549,7 @@ for (const engine of ENGINES) {
       watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.goto(`${BASE_URL}/design/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () =>
           document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea") &&

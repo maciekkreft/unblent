@@ -29,6 +29,10 @@
       "editors": {
         "type": "object",
         "additionalProperties": { "type": "string" }
+      },
+      "profile": {
+        "enum": ["product", "workshop"],
+        "description": "The active profile whose preferences these are (§12)."
       }
     },
     "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging", "editors"],

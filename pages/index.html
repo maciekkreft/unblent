@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <meta name="kind" content="app" />
-    <title>Reader</title>
+    <title>Unblent</title>
     <link rel="stylesheet" href="/static/tokens/tokens.css" />
     <link rel="stylesheet" href="/static/tokens/base.css" />
     <script type="importmap">
@@ -38,6 +38,7 @@
     <script type="module" src="/static/components/pages/fact.js"></script>
     <script type="module" src="/static/components/viewport/fact.js"></script>
     <script type="module" src="/static/components/settings/fact.js"></script>
+    <script type="module" src="/static/components/catalog/fact.js"></script>
     <script type="module" src="/static/components/dock/fact.js"></script>
     <script type="module" src="/static/components/notes/fact.js"></script>
     <script type="module" src="/static/components/session/fact.js"></script>
@@ -48,7 +49,9 @@
     <script type="module" src="/static/components/note-list/view.js"></script>
     <script type="module" src="/static/components/note-editor/view.js"></script>
     <script type="module" src="/static/components/layout-switch/view.js"></script>
+    <script type="module" src="/static/components/profile-switch/view.js"></script>
     <script type="module" src="/static/components/session-switch/view.js"></script>
+    <script type="module" src="/static/components/settings-sheet/view.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
     <script type="module" src="/static/components/book-shelf/view.js"></script>
     <script type="module" src="/static/components/book-toc/view.js"></script>
@@ -56,13 +59,14 @@
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
   <body>
-    <page-nav><layout-switch></layout-switch><session-switch></session-switch></page-nav>
+    <page-nav><layout-switch></layout-switch><profile-switch></profile-switch><session-switch></session-switch></page-nav>
     <dock-desk>
       <book-reader label="Reader" height="fill"></book-reader>
       <book-shelf label="Books" side="left"></book-shelf>
       <book-toc label="Contents" side="left"></book-toc>
       <note-editor label="Editor" follows side="right" height="fill"></note-editor>
       <note-list label="Notes" side="right"></note-list>
+      <settings-sheet label="Settings" side="right"></settings-sheet>
     </dock-desk>
     <viewport-switch></viewport-switch>
     <notice-stack></notice-stack>

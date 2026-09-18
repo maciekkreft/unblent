@@ -124,6 +124,26 @@ test("_setEditor emits the whole settings with the role's choice set", async () 
   assert.deepEqual(emitted[1].editors, { "note-editor": "note-editor" });
 });
 
+test("the profile is adopted from the read and defaults to workshop", async () => {
+  const workshop = await start();
+  assert.equal(workshop.snapshot.context.profile, "workshop", "absent profile means workshop");
+  const product = await start({ profile: "product" });
+  assert.equal(product.snapshot.context.profile, "product");
+});
+
+test("settings.changed carries the profile", async () => {
+  const { actor } = await start();
+  actor.send({
+    type: "settings.changed",
+    nav: [],
+    viewportSwitchHidden: false,
+    layoutSwitchHidden: false,
+    arranging: true,
+    profile: "product",
+  });
+  assert.equal(actor.getSnapshot().context.profile, "product");
+});
+
 test("settings.changed is adopted (4.3, fourth rule)", async () => {
   const { actor } = await start();
   actor.send({

@@ -27,9 +27,9 @@ test("a list query is answered with the loaded pages", async () => {
   const { calls, query } = start();
   const replies = query();
   assert.equal(calls.length, 1);
-  calls[0].resolve({ pages: [{ path: "/design/tokens" }] });
+  calls[0].resolve({ pages: [{ path: "/workshop/design/tokens" }] });
   await tick();
-  assert.deepEqual(replies, [{ pages: [{ path: "/design/tokens" }] }]);
+  assert.deepEqual(replies, [{ pages: [{ path: "/workshop/design/tokens" }] }]);
 });
 
 test("queries during one load share it and are all answered", async () => {
@@ -59,7 +59,7 @@ test("after settling, the next query loads again", async () => {
   assert.equal(actor.getSnapshot().value, "idle");
   const replies = query();
   assert.equal(calls.length, 2);
-  calls[1].resolve({ pages: [{ path: "/design/components" }] });
+  calls[1].resolve({ pages: [{ path: "/workshop/design/components" }] });
   await tick();
-  assert.deepEqual(replies, [{ pages: [{ path: "/design/components" }] }]);
+  assert.deepEqual(replies, [{ pages: [{ path: "/workshop/design/components" }] }]);
 });

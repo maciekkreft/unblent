@@ -58,7 +58,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/work-desk`);
+      await page.goto(`${BASE_URL}/workshop/design/work-desk`);
       await page.waitForFunction(
         () => document.querySelector("work-desk")?.shadowRoot?.querySelector("slot"),
       );

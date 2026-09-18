@@ -3,12 +3,16 @@ import { setup, assign, emit } from "xstate";
 // A local-only fact component (3.1): headless owner of the user's page
 // preferences — the order and visibility of pages in the navigation, whether the
 // viewport switch and the layout switch are shown, and whether the desk layout is
-// being arranged. It keeps them in one global localStorage key and answers
-// settings: read; a view takes its starting picture by query (4.3) and follows
-// settings.changed after. The store arrives through `input`, so the machine is a
+// being arranged. It keeps two independent copies (§12), one per profile
+// (product and workshop), and reports the active one through settings: read and
+// settings.changed; a view takes its starting picture by query (4.3) and follows
+// settings.changed after. The stores arrive through `input`, so the machine is a
 // pure definition importable in Node.
 
+// Each profile has its own defaults: the workshop is the full development surface,
+// the product hides the switches and does not arrange (§12, plan step 6).
 const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {} };
+const PRODUCT_DEFAULT = { nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, editors: {} };
 
 // Sanitise any candidate into the contract shape (7.2): nav a list of
 // { path: string, hidden: boolean } deduped by path (a page is listed once);
@@ -45,13 +49,18 @@ const clean = (value) => {
   };
 };
 
-const parse = (stored) => {
+const parse = (stored, fallback) => {
+  if (stored == null) return { ...fallback };
   try {
     return clean(JSON.parse(stored));
   } catch {
-    return { ...DEFAULT };
+    return { ...fallback };
   }
 };
+
+// Which copy is live: a workshop page is always workshop; the product page is
+// product until the stored switch names workshop (plan step 4, §12).
+const activeProfile = (onProduct, storedSwitch) => (onProduct && storedSwitch !== "workshop" ? "product" : "workshop");
 
 const sameNav = (a, b) => a.length === b.length && a.every((r, i) => r.path === b[i].path && r.hidden === b[i].hidden);
 
@@ -68,40 +77,71 @@ const same = (a, b) =>
   a.arranging === b.arranging &&
   sameEditors(a.editors, b.editors);
 
+// The active copy, and the news about it: every emit and reply carries the copy
+// plus the profile it belongs to (§12).
+const active = (context) => context.copies[context.profile];
+const changed = emit(({ context }) => ({ type: "settings.changed", ...active(context), profile: context.profile }));
+
 export const machine = setup({}).createMachine({
   id: "settings",
   meta: {
     kind: "fact",
     shape: "local-only",
     emits: ["settings.changed"],
-    owns: "the user's page preferences: the order and visibility of pages in the navigation, whether the viewport switch and the layout switch are shown, and whether the desk layout is being arranged",
+    owns: "the user's page preferences, one copy per profile (product and workshop): the order and visibility of pages in the navigation, whether the viewport switch and the layout switch are shown, and whether the desk layout is being arranged; it reports the active profile's copy",
   },
-  context: ({ input }) => ({ settings: parse(input.stored), save: input.save }),
+  context: ({ input }) => ({
+    onProduct: input.product,
+    profile: activeProfile(input.product, input.stored.profile),
+    copies: {
+      workshop: parse(input.stored.workshop, DEFAULT),
+      product: parse(input.stored.product, PRODUCT_DEFAULT),
+    },
+    save: input.save,
+  }),
   on: {
     // The gesture from settings-sheet, consumed as an event (4.3): the sheet emits
-    // the whole settings, the fact never merges. Guarded so a repeat writes, saves
-    // and announces nothing.
+    // the whole settings, the fact never merges. It lands in the active copy only,
+    // so a choice in one profile never leaks into the other (§12). Guarded so a
+    // repeat writes, saves and announces nothing.
     "settings.edited": {
-      guard: ({ context, event }) => !same(clean(event), context.settings),
+      guard: ({ context, event }) => !same(clean(event), active(context)),
       actions: [
-        assign({ settings: ({ event }) => clean(event) }),
-        ({ context }) => context.save(JSON.stringify(context.settings)),
-        emit(({ context }) => ({ type: "settings.changed", ...context.settings })),
+        assign({ copies: ({ context, event }) => ({ ...context.copies, [context.profile]: clean(event) }) }),
+        ({ context }) => context.save[context.profile](JSON.stringify(active(context))),
+        changed,
       ],
     },
-    // The gesture from layout-switch. Guarded out when the switch is hidden (the
-    // desk is not arrangeable, so arranging cannot be turned on) and on a no-op.
+    // The gesture from layout-switch, on the active copy. Guarded out when the
+    // switch is hidden (the desk is not arrangeable, so arranging cannot be turned
+    // on) and on a no-op.
     "layout.switched": {
-      guard: ({ context, event }) =>
-        !context.settings.layoutSwitchHidden && event.arranging !== context.settings.arranging,
+      guard: ({ context, event }) => !active(context).layoutSwitchHidden && event.arranging !== active(context).arranging,
       actions: [
-        assign({ settings: ({ context, event }) => clean({ ...context.settings, arranging: event.arranging }) }),
-        ({ context }) => context.save(JSON.stringify(context.settings)),
-        emit(({ context }) => ({ type: "settings.changed", ...context.settings })),
+        assign({
+          copies: ({ context, event }) => ({
+            ...context.copies,
+            [context.profile]: clean({ ...active(context), arranging: event.arranging }),
+          }),
+        }),
+        ({ context }) => context.save[context.profile](JSON.stringify(active(context))),
+        changed,
+      ],
+    },
+    // The gesture from profile-switch, the one door from the product (§12): only on
+    // the product page, and only a real change. It activates the other copy and
+    // remembers the switch; the activated copy rides out on settings.changed.
+    "profile.switched": {
+      guard: ({ context, event }) => context.onProduct && event.profile !== context.profile,
+      actions: [
+        assign({ profile: ({ event }) => event.profile }),
+        ({ context }) => context.save.profile(context.profile),
+        changed,
       ],
     },
     "read?": {
-      actions: ({ context, event }) => event.reply({ ...context.settings, nav: context.settings.nav.map((r) => ({ ...r })) }),
+      actions: ({ context, event }) =>
+        event.reply({ ...active(context), nav: active(context).nav.map((r) => ({ ...r })), profile: context.profile }),
     },
   },
 });

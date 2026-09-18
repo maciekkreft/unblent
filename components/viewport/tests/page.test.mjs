@@ -68,7 +68,7 @@ for (const engine of ENGINES) {
         if (res.status() >= 400) problems.push(`HTTP ${res.status()}: ${res.url()}`);
       });
 
-      await page.goto(`${BASE_URL}/design/tokens`);
+      await page.goto(`${BASE_URL}/workshop/design/tokens`);
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "desk");
       assert.equal(await pressed(page), "Desk");
       const deskWidth = await bodyWidth(page);
@@ -116,7 +116,7 @@ for (const engine of ENGINES) {
       const phone = await browser.newContext({ ...devices["iPhone 14"] });
       await phone.addInitScript(() => localStorage.setItem("viewport", "phone"));
       const small = await phone.newPage();
-      await small.goto(`${BASE_URL}/design/tokens`);
+      await small.goto(`${BASE_URL}/workshop/design/tokens`);
       await small.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       assert.equal(
         await small.evaluate(() => getComputedStyle(document.querySelector("viewport-switch")).display),

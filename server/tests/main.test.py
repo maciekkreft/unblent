@@ -25,20 +25,28 @@ def _request(path: str) -> Reply:
 
 
 class ServerEntry(unittest.TestCase):
-    def test_root_redirects_to_tokens(self):
+    def test_root_serves_the_product(self):
+        # Section 8: / is the product app page (pages/index.html), served no-cache
+        # like the other pages, not a redirect into the workshop.
         res = _request("/")
-        self.assertIn(res.status, (301, 302, 303, 307, 308))
-        self.assertEqual(res.headers.get("Location"), "/design/tokens")
+        self.assertEqual(res.status, 200)
+        self.assertTrue(res.headers.get("Content-Type", "").startswith("text/html"))
+        self.assertEqual(res.headers.get("Cache-Control"), "no-cache")
 
     def test_unknown_design_page_404s(self):
-        self.assertEqual(_request("/design/does-not-exist").status, 404)
+        self.assertEqual(_request("/workshop/design/does-not-exist").status, 404)
 
     def test_app_page_serves_and_guards(self):
-        # Section 11.1: /apps/<name> serves pages/apps/<name>.html, 404 otherwise,
-        # with the same parent guard as /design/<name>.
-        self.assertEqual(_request("/apps/notes").status, 200)
-        self.assertEqual(_request("/apps/does-not-exist").status, 404)
-        self.assertEqual(_request("/apps/foo%2F..%2Fbar").status, 404)
+        # Section 11.1: /workshop/apps/<name> serves pages/workshop/apps/<name>.html,
+        # 404 otherwise, with the same parent guard as /workshop/design/<name>.
+        self.assertEqual(_request("/workshop/apps/notes").status, 200)
+        self.assertEqual(_request("/workshop/apps/does-not-exist").status, 404)
+        self.assertEqual(_request("/workshop/apps/foo%2F..%2Fbar").status, 404)
+
+    def test_legacy_urls_404(self):
+        # The workshop moved under /workshop/; the old flat URLs are gone (only the owner used them).
+        self.assertEqual(_request("/design/tokens").status, 404)
+        self.assertEqual(_request("/apps/notes").status, 404)
 
     def test_static_responses_are_no_cache(self):
         # The header the edit-and-reload story rests on, on every static mount.
@@ -77,7 +85,7 @@ class ServerEntry(unittest.TestCase):
 
     def test_design_name_cannot_escape_pages_dir(self):
         # Whether routing or the page.parent guard enforces it, the outcome is 404.
-        self.assertEqual(_request("/design/foo%2F..%2Fbar").status, 404)
+        self.assertEqual(_request("/workshop/design/foo%2F..%2Fbar").status, 404)
 
 
 if __name__ == "__main__":

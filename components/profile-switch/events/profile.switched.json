@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user switched the active profile: product (the app at /) or workshop (everything at /workshop/).",
+  "type": "object",
+  "properties": {
+    "profile": {
+      "enum": ["product", "workshop"],
+      "description": "The profile now switched to."
+    }
+  },
+  "required": ["profile"],
+  "additionalProperties": false
+}

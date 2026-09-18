@@ -84,7 +84,9 @@ export const machine = setup({
     attributes: [],
     asks: ["pages: list", "settings: read", "catalog: list"],
   },
-  context: ({ input }) => ({ ask: input.ask, current: input.current, pages: [], settings: { ...DEFAULT }, roles: {} }),
+  // The active profile (§12), adopted from settings; a page without settings
+  // stays in `workshop`, the full sheet, exactly as before profiles existed.
+  context: ({ input }) => ({ ask: input.ask, current: input.current, pages: [], settings: { ...DEFAULT }, roles: {}, profile: "workshop" }),
   initial: "loadingPages",
   states: {
     loadingPages: {
@@ -104,7 +106,13 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "failed" },
-          { target: "loadingCatalog", actions: assign({ settings: ({ event }) => adopt(event.output) }) },
+          {
+            target: "loadingCatalog",
+            actions: assign({
+              settings: ({ event }) => adopt(event.output),
+              profile: ({ event, context }) => event.output.profile ?? context.profile,
+            }),
+          },
         ],
         onError: { target: "failed" },
       },
@@ -180,6 +188,11 @@ export const machine = setup({
     failed: {},
   },
   on: {
-    "settings.changed": { actions: assign({ settings: ({ event }) => adopt(event) }) },
+    "settings.changed": {
+      actions: assign({
+        settings: ({ event }) => adopt(event),
+        profile: ({ event, context }) => event.profile ?? context.profile,
+      }),
+    },
   },
 });

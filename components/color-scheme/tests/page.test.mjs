@@ -69,7 +69,7 @@ for (const engine of ENGINES) {
     // before any fact has run, and it must already be dark.
     const still = await browser.newContext({ javaScriptEnabled: false, colorScheme: "dark" });
     const first = await still.newPage();
-    await first.goto(`${BASE_URL}/design/tokens`);
+    await first.goto(`${BASE_URL}/workshop/design/tokens`);
     assert.equal(await canvas(first), dark, "the first frame should already be dark");
     await still.close();
 
@@ -91,7 +91,7 @@ for (const engine of ENGINES) {
       // Dark first: proves the attribute was written before any view read the
       // sheet (7.5), not only after a flip.
       await page.emulateMedia({ colorScheme: "dark" });
-      await page.goto(`${BASE_URL}/design/tokens`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/workshop/design/tokens`, { waitUntil: "networkidle" });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
 
       assert.equal(

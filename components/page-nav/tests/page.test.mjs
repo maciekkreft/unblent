@@ -14,19 +14,22 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const SCREENSHOTS = resolve(REPO, ".screenshots");
-const PAGES = resolve(REPO, "pages");
+const PAGES = resolve(REPO, "pages", "workshop");
+const INDEX = resolve(REPO, "pages", "index.html");
 
 // The five page kinds in composition order (architecture.md 8).
 const KINDS = ["tokens", "contracts", "components", "stem", "app"];
 
-// The expected links come from the filesystem, so the test tracks the pages.
+// The expected links come from the filesystem, so the test tracks the pages. The
+// product at / is one of them (its URL is the root, not its directory).
 function pageList() {
   const rows = [];
+  rows.push({ path: "/", kind: readFileSync(INDEX, "utf-8").match(/<meta name="kind" content="([^"]*)"/)?.[1] });
   for (const dir of readdirSync(PAGES, { withFileTypes: true }).filter((e) => e.isDirectory())) {
     for (const file of readdirSync(resolve(PAGES, dir.name)).filter((f) => f.endsWith(".html"))) {
       const html = readFileSync(resolve(PAGES, dir.name, file), "utf-8");
       const kind = html.match(/<meta name="kind" content="([^"]*)"/)?.[1];
-      rows.push({ path: `/${dir.name}/${file.replace(/\.html$/, "")}`, kind });
+      rows.push({ path: `/workshop/${dir.name}/${file.replace(/\.html$/, "")}`, kind });
     }
   }
   const rank = (k) => (KINDS.includes(k) ? KINDS.indexOf(k) : KINDS.length);
@@ -45,6 +48,10 @@ const currentHref = (page) =>
   page.evaluate(() =>
     document.querySelector("page-nav").shadowRoot.querySelector('a[aria-current="page"]')
       ?.getAttribute("href"),
+  );
+const labels = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("page-nav").shadowRoot.querySelectorAll(".label")].map((s) => s.textContent),
   );
 
 const ENGINES = [
@@ -78,13 +85,14 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/tokens`);
+      await page.goto(`${BASE_URL}/workshop/design/tokens`);
       await page.waitForFunction(
         (n) => document.querySelector("page-nav")?.shadowRoot?.querySelectorAll("a").length === n,
         PATHS.length,
       );
       assert.deepEqual(await hrefs(page), PATHS);
-      assert.equal(await currentHref(page), "/design/tokens");
+      assert.equal(await currentHref(page), "/workshop/design/tokens");
+      assert.deepEqual(await labels(page), ["Design", "Stems", "Apps"], "grouped by kind (8)");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `page-nav-${engine.name}.png`) });
@@ -94,16 +102,16 @@ for (const engine of ENGINES) {
         page.evaluate(() =>
           document
             .querySelector("page-nav")
-            .shadowRoot.querySelector('a[href="/design/components"]')
+            .shadowRoot.querySelector('a[href="/workshop/design/components"]')
             .click(),
         ),
       ]);
-      assert.match(page.url(), /\/design\/components$/);
+      assert.match(page.url(), /\/workshop\/design\/components$/);
       await page.waitForFunction(
         (n) => document.querySelector("page-nav")?.shadowRoot?.querySelectorAll("a").length === n,
         PATHS.length,
       );
-      assert.equal(await currentHref(page), "/design/components");
+      assert.equal(await currentHref(page), "/workshop/design/components");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
@@ -116,7 +124,7 @@ for (const engine of ENGINES) {
     context.setDefaultTimeout(4000);
     const page = await context.newPage();
     try {
-      await page.goto(`${BASE_URL}/design/dock`);
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
       // The bar renders a slot, and the page's <layout-switch> is assigned into it
       // (right-aligned) and renders its own button — the control lives in the bar.
       await page.waitForFunction(

@@ -9,7 +9,7 @@
       "items": {
         "type": "object",
         "properties": {
-          "path": { "type": "string", "description": "The page's path, e.g. /design/notes." },
+          "path": { "type": "string", "description": "The page's path, e.g. /workshop/design/notes." },
           "hidden": { "type": "boolean", "description": "The page is hidden from the navigation (still reachable by URL)." }
         },
         "required": ["path", "hidden"],
@@ -23,6 +23,10 @@
       "type": "object",
       "additionalProperties": { "type": "string" },
       "description": "Chosen implementation per swappable role: role -> component."
+    },
+    "profile": {
+      "enum": ["product", "workshop"],
+      "description": "The active profile whose preferences these are (7.5, §12): product outside /workshop/, workshop on a workshop page or after the switch."
     }
   },
   "required": ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging", "editors"],

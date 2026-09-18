@@ -312,8 +312,9 @@ conversation.changed  owner: conversations  { id, turns, version }
 dock.arranged         owner: dock-desk      { stage, docks }
 dock.changed          owner: dock           { stage, docks }
 layout.switched       owner: layout-switch  { arranging }
-settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
+settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors, profile }
 settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
+profile.switched      owner: profile-switch { profile }  profile ∈ product | workshop
 llm.unavailable       owner: llm            { reason }
 session.changed       owner: session        { userId | null, registrationOpen }
 session.refused       owner: session        { reason }  reason ∈ cancelled | registration-closed | unknown-credential | unavailable
@@ -349,7 +350,7 @@ catalog: contracts       → { events: [{ name, owner, schema, consumers }], que
 trace: list              → { records: [record] }
 viewport: read           → { viewport }
 dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
-settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
+settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging, editors, profile }
 session: read            → { userId: string | null, registrationOpen: boolean }
 ```
 
@@ -400,9 +401,9 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
 3. **Components page.** Every component, built or planned, drawn from its manifest: kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
 4. **Stem pages.** One per root component with its related components wired together: a fact component with its views (`notes` with editor, list, and reader; `conversations` with chat; `dock` with `dock-desk`; `settings` with `settings-sheet`; `books` with shelf, contents and reader), or a container view with the views it composes (`work-desk` with the tokens, contracts and components views). The `trace` stem page (`trace` with `trace-list`) shows the traffic actually observed on the bus this session. A stem page is the test bed for its root.
-5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box.
+5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box. The product is the app page at `/` (`pages/index.html`); the pages under `/workshop/apps/` are testbeds for assembling components.
 
-Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others. A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
+Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others: it groups its links by kind and shows none in the product profile (§12). A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
 
 The contracts page and the components page show the same data in two arrangements. Neither is hand-written, so they cannot diverge.
 
@@ -487,13 +488,13 @@ components/
 The components tree sits inside a small repository-wide layout:
 
 ```
-server/          FastAPI entry (named "server", not "app", so it never clashes with pages/apps/)
+server/          FastAPI entry (named "server", not "app", so it never clashes with pages/workshop/apps/)
   user.py        the entry's user infrastructure: who the request is from and where their files live (UNBLENT_DATA overriding data/); a server module may import it
   tests/         HTTP tests for the entry; infrastructure like the bus, not a component. Never served
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
 tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
-pages/           the HTML pages (section 8), e.g. pages/design/tokens.html
+pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design|apps/<name>.html
 checks/          check.py, the one check command; tests/ its own unit tests, never served
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
@@ -511,10 +512,10 @@ Static serving is namespaced so the future app can own `/`:
 | `/static/bus/…` | the bus, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/static/composer/…` | the composer, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/static/store/…` | the store interface, `Cache-Control: no-cache`; its `tests/` are never served |
-| `/design/<name>` | `pages/design/<name>.html`, 404 if missing |
-| `/apps/<name>` | `pages/apps/<name>.html`, 404 if missing |
+| `/workshop/design/<name>` | `pages/workshop/design/<name>.html`, 404 if missing |
+| `/workshop/apps/<name>` | `pages/workshop/apps/<name>.html`, 404 if missing |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
-| `/` | the app; for now a redirect to `/design/tokens` |
+| `/` | `pages/index.html`, the product |
 
 A component's `server/` (its Python server module) and `tests/` are never served: the static mount for `components/` 404s any path that dips into them, so source and tests never reach the browser.
 
@@ -572,6 +573,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Swapping composition.** The composer (3.6) changes which implementation fills a role, in place; the replaced actor unmounts cleanly. A swappable view keeps its dock slot because the dock layout identifies it by its role, not its tag — the one place `dock`/`dock-desk` must key on role. Whether that touches the `dock.changed` schema or stays internal is settled when the composer is built (§9 step 2).
 
 - **Pages are per device.** A chapter is paginated for the reader's own size and type, so page numbers differ between devices; the shared position is a chapter and a block, and each device opens the page holding it.
+
+- **Two profiles.** `settings` keeps one copy of the preferences per profile, `product` and `workshop`, and reports the active one. A page outside `/workshop/` is in `product` until the user switches; a workshop page is always `workshop`. `profile-switch` is the one door from the product into the workshop and is deliberately not a visible signifier: it appears on hover or focus. A phone preview left on in `workshop` still frames the product after switching back, until it is switched off in `workshop`.
 
 ---
 

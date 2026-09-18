@@ -10,7 +10,8 @@ const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const PAGES = resolve(REPO, "pages");
+const PAGES = resolve(REPO, "pages", "workshop");
+const INDEX = resolve(REPO, "pages", "index.html");
 
 // The five page kinds in composition order (architecture.md 8).
 const KINDS = ["tokens", "contracts", "components", "stem", "app"];
@@ -18,13 +19,20 @@ const KINDS = ["tokens", "contracts", "components", "stem", "app"];
 // The expected list comes from the filesystem, so adding a page never breaks it.
 function expected() {
   const rows = [];
+  // The product at / (its URL is the root, not its directory), then the workshop pages.
+  const index = readFileSync(INDEX, "utf-8");
+  rows.push({
+    path: "/",
+    title: index.match(/<title>([^<]*)<\/title>/)?.[1].trim() || "index",
+    kind: index.match(/<meta name="kind" content="([^"]*)"/)?.[1],
+  });
   for (const dir of readdirSync(PAGES, { withFileTypes: true }).filter((e) => e.isDirectory())) {
     for (const file of readdirSync(resolve(PAGES, dir.name)).filter((f) => f.endsWith(".html"))) {
       const stem = file.replace(/\.html$/, "");
       const html = readFileSync(resolve(PAGES, dir.name, file), "utf-8");
       const title = html.match(/<title>([^<]*)<\/title>/)?.[1].trim() || stem;
       const kind = html.match(/<meta name="kind" content="([^"]*)"/)?.[1];
-      rows.push({ path: `/${dir.name}/${stem}`, title, kind });
+      rows.push({ path: `/workshop/${dir.name}/${stem}`, title, kind });
     }
   }
   const rank = (k) => (KINDS.includes(k) ? KINDS.indexOf(k) : KINDS.length);

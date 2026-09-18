@@ -57,7 +57,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/tokens`, { waitUntil: "networkidle" });
+      await page.goto(`${BASE_URL}/workshop/design/tokens`, { waitUntil: "networkidle" });
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
 

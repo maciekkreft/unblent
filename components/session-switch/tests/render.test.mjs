@@ -46,7 +46,7 @@ for (const engine of ENGINES) {
     const page = await context.newPage();
     const problems = watch(page);
     try {
-      await page.goto(`${BASE_URL}/design/session`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/session`, { waitUntil: "domcontentloaded" });
       await ready(page);
       const state = await switchState(page);
       // Anonymous either way: the dashed glyph, the "anon" class. The label follows

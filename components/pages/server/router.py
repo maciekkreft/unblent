@@ -1,7 +1,7 @@
 """The server side of ``pages`` (architecture.md 3.4): walks ``pages/`` and
 returns one record per page. It cannot import the entry (``server/main.py``), so
 it finds the repository root by climbing the tree; the URL rule mirrors the
-``/design/{name}`` route (11.1), a page's directory naming its URL prefix. A
+``/workshop/design/{name}`` route (11.1), a page's directory naming its URL prefix. A
 page's kind comes from its ``<meta name="kind">`` (section 8), not its directory."""
 
 import html.parser
@@ -52,12 +52,18 @@ def _head(file: Path) -> _Head:
 def list_pages():
     try:
         pages = []
-        for file in sorted((ROOT / "pages").glob("*/*.html")):
+        # The product is the app page at / (architecture.md 8); its URL is the root,
+        # not its directory, unlike the workshop pages below.
+        index = ROOT / "pages" / "index.html"
+        if index.is_file():
+            head = _head(index)
+            pages.append({"path": "/", "title": head.title or "index", "kind": head.kind or "app"})
+        for file in sorted((ROOT / "pages" / "workshop").glob("*/*.html")):
             head = _head(file)
             # A malformed page still lists rather than 500s; the page check rejects it.
             kind = head.kind or file.parent.name
             pages.append(
-                {"path": f"/{file.parent.name}/{file.stem}", "title": head.title or file.stem, "kind": kind}
+                {"path": f"/workshop/{file.parent.name}/{file.stem}", "title": head.title or file.stem, "kind": kind}
             )
         pages.sort(key=lambda p: (KINDS.index(p["kind"]) if p["kind"] in KINDS else len(KINDS), p["path"]))
         return {"pages": pages}

@@ -51,7 +51,7 @@ for (const engine of ENGINES) {
     try {
       const pageA = await context.newPage();
       watch(pageA, "A");
-      await pageA.goto(`${BASE_URL}/design/components`, { waitUntil: "domcontentloaded" });
+      await pageA.goto(`${BASE_URL}/workshop/design/components`, { waitUntil: "domcontentloaded" });
 
       const debugB = [];
       const pageB = await context.newPage();
@@ -59,7 +59,7 @@ for (const engine of ENGINES) {
       pageB.on("console", (msg) => {
         if (msg.type() === "debug") debugB.push(msg.text());
       });
-      await pageB.goto(`${BASE_URL}/design/components`, { waitUntil: "domcontentloaded" });
+      await pageB.goto(`${BASE_URL}/workshop/design/components`, { waitUntil: "domcontentloaded" });
 
       // The second tab prints its own catalog: list and, once the hello/buffer
       // handshake lands, the first tab's — two distinct tab ids for the same query.

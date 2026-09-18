@@ -76,7 +76,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/design/trace`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/trace`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() =>
         [...document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row")].some(
           (tr) => {

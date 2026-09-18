@@ -114,7 +114,7 @@ for (const engine of ENGINES) {
       await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize({ width: 1024, height: 768 });
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
       await waitTile(page);
@@ -133,7 +133,7 @@ for (const engine of ENGINES) {
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
       watch(page, problems, opts.ignoreAborts);
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-toc")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot && document.querySelector("book-reader")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await waitTile(page);

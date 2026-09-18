@@ -88,7 +88,7 @@ for (const engine of ENGINES) {
       await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize({ width: 1024, height: 768 });
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
       await waitTile(page);
@@ -117,7 +117,7 @@ for (const engine of ENGINES) {
       watch(page, problems, opts.ignoreAborts);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.goto(`${BASE_URL}/design/books`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await waitTile(page);
@@ -249,7 +249,7 @@ for (const engine of ENGINES) {
     });
 
     // Folding the left dock widens the reader, which re-paginates the chapter, exactly
-    // as opening the right dock narrows it on /apps/reader. The place must survive the
+    // as opening the right dock narrows it on the product page. The place must survive the
     // round trip: the same page and the same first line after fold then unfold.
     test("keeps the page across a dock fold", async () => {
       const { page, problems } = await openAndRewind({ viewport: { width: 760, height: 768 } });
@@ -549,11 +549,13 @@ for (const engine of ENGINES) {
   });
 }
 
-// The reader app (/apps/reader): the reader stage with the shelf and contents on the
-// left, the editor and notes on the right — every book view beside every note view,
-// one path through the box. One load per engine: it composes, and nothing errors.
+// The product page (/): the reader stage with the shelf and contents on the left, the
+// editor, notes and settings on the right — every book view beside every note view,
+// one path through the box. One load per engine: it composes, and nothing errors. The
+// page starts in the product profile, where the nav shows no links; seeding the stored
+// switch to workshop is not needed — composition is the same in either profile.
 for (const engine of ENGINES) {
-  test(`the reader app composes all five views in ${engine.name}`, async () => {
+  test(`the product page composes the reader views in ${engine.name}`, async () => {
     const problems = [];
     const browser = await engine.launch();
     try {
@@ -569,7 +571,7 @@ for (const engine of ENGINES) {
         page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
         page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
       ]);
-      await page.goto(`${BASE_URL}/apps/reader`);
+      await page.goto(`${BASE_URL}/`);
       // Every view mounted (its shadow root exists) and the dock offers a tab for each.
       const NAMES = ["book-reader", "book-shelf", "book-toc", "note-editor", "note-list"];
       await page.waitForFunction((names) => names.every((n) => document.querySelector(n)?.shadowRoot), NAMES, WAIT);
@@ -585,6 +587,96 @@ for (const engine of ENGINES) {
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot);
       await page.screenshot({ path: resolve(SCREENSHOTS, `reader-app-phone-${engine.name}.png`) });
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+}
+
+// The product page's own behaviour (§12): the hidden door and what each profile shows.
+// profile-switch (step 5) carries only a machine test, so its browser behaviour lives
+// here, on the page where it is placed. WebKit first, then Chromium.
+const navCount = (page) => page.evaluate(() => document.querySelector("page-nav").shadowRoot.querySelectorAll("a").length);
+const switchHidden = (page, tag) => page.evaluate((t) => getComputedStyle(document.querySelector(t)).display === "none", tag);
+const arrangeControls = (page) => page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelectorAll(".action:not(.fold)").length);
+const sheetPicture = (page) =>
+  page.evaluate(() => {
+    const r = document.querySelector("settings-sheet").shadowRoot;
+    const labels = [...r.querySelectorAll(".switches label")].map((l) => l.textContent);
+    return {
+      pages: Boolean(r.querySelector("h2")),
+      viewport: labels.some((t) => /Viewport switch/.test(t)),
+      layout: labels.some((t) => /Layout switch/.test(t)),
+    };
+  });
+const doorPressed = (page) => page.evaluate(() => document.querySelector("profile-switch").shadowRoot.querySelector("button").getAttribute("aria-pressed"));
+const doorOpacity = (page) => page.evaluate(() => getComputedStyle(document.querySelector("profile-switch").shadowRoot.querySelector("button")).opacity);
+
+for (const engine of ENGINES) {
+  test(`the product hides the workshop behind the toolbox in ${engine.name}`, async () => {
+    const problems = [];
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
+      const page = await context.newPage();
+      await page.setViewportSize({ width: 1024, height: 768 });
+      watch(page, problems);
+      // Arm the cold sync waiters before the load so the reload below never aborts one.
+      const synced = Promise.all([
+        page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
+        page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
+      ]);
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () =>
+          document.querySelector("profile-switch")?.shadowRoot?.querySelector("button") &&
+          document.querySelector("settings-sheet")?.shadowRoot?.querySelector(".switches"),
+        undefined,
+        WAIT,
+      );
+
+      // Product: no links, both bar switches hidden, no arrange controls, and the sheet
+      // is the production picture — the layout row alone, no Pages section, no viewport row.
+      assert.equal(await navCount(page), 0, "no page links in the product");
+      assert.ok(await switchHidden(page, "viewport-switch"), "the viewport switch is hidden");
+      assert.ok(await switchHidden(page, "layout-switch"), "the layout switch is hidden");
+      assert.equal(await arrangeControls(page), 0, "no arrange controls on the desk");
+      assert.deepEqual(await sheetPicture(page), { pages: false, viewport: false, layout: true }, "the product sheet shows only the layout row");
+      assert.equal(await doorPressed(page), "false", "the door reads as not engaged");
+
+      // The door is transparent until hover reveals it (§12).
+      assert.equal(await doorOpacity(page), "0", "the toolbox is invisible until hover");
+      await page.locator("profile-switch button").hover();
+      await page.waitForFunction(() => getComputedStyle(document.querySelector("profile-switch").shadowRoot.querySelector("button")).opacity === "1", undefined, WAIT);
+
+      await synced;
+
+      // Through the door into the workshop: the grouped nav and the bar switches return,
+      // the sheet fills, and the door reads as engaged.
+      await page.locator("profile-switch button").click();
+      await page.waitForFunction(() => document.querySelector("page-nav").shadowRoot.querySelectorAll("a").length > 0, undefined, WAIT);
+      assert.ok(!(await switchHidden(page, "viewport-switch")), "the viewport switch returns in the workshop");
+      assert.ok(!(await switchHidden(page, "layout-switch")), "the layout switch returns in the workshop");
+      assert.ok((await sheetPicture(page)).pages, "the sheet shows the Pages section in the workshop");
+      assert.equal(await doorPressed(page), "true", "the door reads as engaged");
+      const labels = await page.evaluate(() =>
+        [...document.querySelector("page-nav").shadowRoot.querySelectorAll(".label")].map((l) => l.textContent.trim()),
+      );
+      assert.deepEqual(labels, ["Design", "Stems", "Apps"], "the nav groups the workshop pages");
+
+      // The chosen profile survives a reload (§12, local-only).
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("page-nav")?.shadowRoot?.querySelectorAll("a").length > 0, undefined, WAIT);
+      assert.equal(await doorPressed(page), "true", "the workshop profile survives a reload");
+
+      // Back through the same door returns to the product: the links go again.
+      await page.locator("profile-switch button").click();
+      await page.waitForFunction(() => document.querySelector("page-nav").shadowRoot.querySelectorAll("a").length === 0, undefined, WAIT);
+      assert.equal(await navCount(page), 0, "the product hides the links again");
+
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();
