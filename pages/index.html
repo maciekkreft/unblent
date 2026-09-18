@@ -59,7 +59,7 @@
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
   <body>
-    <page-nav><layout-switch></layout-switch><profile-switch></profile-switch><session-switch></session-switch></page-nav>
+    <page-nav></page-nav>
     <dock-desk>
       <book-reader label="Reader" height="fill"></book-reader>
       <book-shelf label="Books" side="left"></book-shelf>
@@ -67,6 +67,9 @@
       <note-editor label="Editor" follows side="right" height="fill"></note-editor>
       <note-list label="Notes" side="right"></note-list>
       <settings-sheet label="Settings" side="right"></settings-sheet>
+      <layout-switch control></layout-switch>
+      <profile-switch control></profile-switch>
+      <session-switch control></session-switch>
     </dock-desk>
     <viewport-switch></viewport-switch>
     <notice-stack></notice-stack>

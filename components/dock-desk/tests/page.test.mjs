@@ -80,8 +80,23 @@ for (const engine of ENGINES) {
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       await page.locator("dock-desk").waitFor();
 
-      // The stem seeds the side dock open: on the phone that is a drawer floating
-      // over the stage (absolute, leaving only a peek), with the scrim dimming it.
+      // On the phone a fresh desk seeds a side dock folded (6.4), so the stage and
+      // its header are never hidden behind a drawer at first sight: it is a rail,
+      // out of the flow, with no scrim.
+      const seeded = await state(page);
+      assert.equal(seeded.dockPos, "absolute", "a folded side dock stays out of the flow, on its gutter");
+      assert.ok(Math.abs(seeded.dockWidth - rail) <= 1, "the side dock seeds as a rail one token wide");
+      assert.ok(!seeded.scrimOn, "no scrim while the drawer is folded");
+
+      // A tap on the rail floats the drawer over the stage (absolute, leaving only a
+      // peek), with the scrim dimming it. Wait for the slide to settle, not just for
+      // the width to pass the rail, so the peek is measured open and not mid-slide.
+      await clickInDesk(page, ".dock.right .rail");
+      await page.waitForFunction((peek) => {
+        const d = document.querySelector("dock-desk").shadowRoot.querySelector(".dock.right");
+        const host = document.querySelector("dock-desk").getBoundingClientRect().width;
+        return !d.classList.contains("folded") && Math.abs(host - d.getBoundingClientRect().width - peek) <= 1;
+      }, peek);
       const open = await state(page);
       assert.equal(open.dockPos, "absolute", "an open side dock overlays the stage as a drawer");
       // Within a pixel: the drawer's edge border rounds the border-box width.

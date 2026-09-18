@@ -41,8 +41,8 @@ class ActorController {
 
 class SessionSwitch extends LitElement {
   static styles = css`
-    /* An inline control in the nav bar (slotted into page-nav), flush with the
-       layout switch beside it: no surface of its own, the bar carries it. */
+    /* An inline control slotted into page-nav or a desk's stage header (6.4), flush
+       with its neighbours: no surface of its own, the strip carries it. */
     :host {
       display: inline-flex;
       align-items: center;

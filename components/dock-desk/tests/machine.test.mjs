@@ -11,8 +11,8 @@ const VIEWS = [
 
 // The actor is where decisions live (3.2): it is driven with a fake ask, the shape
 // the bus's `ask` returns (4.2).
-function settle(ask, { views = VIEWS } = {}) {
-  const actor = createActor(machine, { input: { ask, views } });
+function settle(ask, { views = VIEWS, narrow } = {}) {
+  const actor = createActor(machine, { input: { ask, views, narrow } });
   const emitted = [];
   actor.on("dock.arranged", (e) => emitted.push(e));
   return new Promise((resolve) => {
@@ -82,6 +82,38 @@ test("an empty layout seeds from the children's declared sides", async () => {
   assert.deepEqual(layout(snapshot.context), {
     stage: "note-editor",
     docks: { right: { open: true, views: ["trace-list"] } },
+  });
+});
+
+test("a narrow desk seeds left and right folded, the bottom open", async () => {
+  // Too narrow for a dock beside the stage (6.4): an open left/right would be a
+  // drawer over the stage and its header, so it seeds folded; the bottom is a sheet
+  // under the stage, so it stays open.
+  const views = [
+    { name: "note-editor", label: "Editor" },
+    { name: "note-list", label: "Notes", side: "right" },
+    { name: "trace-list", label: "Trace", side: "bottom" },
+  ];
+  const { snapshot } = await settle(stored({ stage: null, docks: {} }), { views, narrow: () => true });
+  assert.deepEqual(layout(snapshot.context), {
+    stage: "note-editor",
+    docks: { right: { open: false, views: ["note-list"] }, bottom: { open: true, views: ["trace-list"] } },
+  });
+});
+
+test("a stored layout wins over declared sides even on a narrow desk", async () => {
+  // A user's arrangement is reconciled untouched; narrow only affects the seed.
+  const views = [
+    { name: "note-editor", label: "Editor" },
+    { name: "note-list", label: "Notes", side: "right" },
+  ];
+  const { snapshot } = await settle(
+    stored({ stage: "note-editor", docks: { right: { open: true, views: ["note-list"] } } }),
+    { views, narrow: () => true },
+  );
+  assert.deepEqual(layout(snapshot.context), {
+    stage: "note-editor",
+    docks: { right: { open: true, views: ["note-list"] } },
   });
 });
 

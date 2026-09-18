@@ -19,6 +19,11 @@ const RETURN = icon("arrows-in-simple");
 // side (mirrored on the right, turned down on the bottom, turned down on every
 // sheet on the phone). Fold and unfold are the same glyph in the same place.
 const FOLD = icon("sidebar-simple");
+// The narrow-desk breakpoint (6.4): the same 45rem the @container rule below uses,
+// a literal in both places because 7.4 admits no token for a container breakpoint.
+// rem is relative to the root font-size, so a resolved px width reads it once.
+const NARROW_REM = 45;
+const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -30,17 +35,28 @@ class ActorController {
   hostConnected() {
     // The children are what the page put on the desk (8); reading them is a read
     // of this element's own light DOM, and the machine only sees name and label.
-    // The label falls back to the tag name when the child declares none.
-    const views = [...this.host.children].map((child) => ({
-      // A view is keyed by its role, not its tag, so a composer swap (3.6, 12)
-      // keeps its dock slot: the chosen member carries data-role, the page default
-      // is named by its tag.
-      name: child.getAttribute("data-role") ?? child.localName,
-      label: child.getAttribute("label") ?? child.localName,
-      side: child.getAttribute("side") ?? undefined,
-    }));
+    // The label falls back to the tag name when the child declares none. A child
+    // carrying `control` (6.4) is not a view: it gets no tab and no place in the
+    // layout, so it is left out of `views` and slotted into the stage header.
+    const views = [...this.host.children]
+      .filter((child) => !child.hasAttribute("control"))
+      .map((child) => ({
+        // A view is keyed by its role, not its tag, so a composer swap (3.6, 12)
+        // keeps its dock slot: the chosen member carries data-role, the page default
+        // is named by its tag.
+        name: child.getAttribute("data-role") ?? child.localName,
+        label: child.getAttribute("label") ?? child.localName,
+        side: child.getAttribute("side") ?? undefined,
+      }));
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), views },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        views,
+        // The seed folds a side too wide for a narrow desk (6.4); the host's own
+        // width is the honest signal (the phone frame narrows the body), read when
+        // the seed is chosen, and compared to the same breakpoint as the CSS.
+        narrow: () => this.host.getBoundingClientRect().width < NARROW_REM * ROOT_EM(),
+      },
       events: { "dock.arranged": arranged },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -123,7 +139,8 @@ class DockDesk extends LitElement {
     }
     /* One strip, four groups (Norman: one conceptual model). Tabs, then the
        actions for the shown tab, then on an edge the fold; every control is
-       always visible, so what can be done is discoverable without hovering. */
+       always visible, so what can be done is discoverable without hovering. The
+       stage strip also ends with the page's slotted controls (6.4). */
     .strip {
       flex: none;
       box-sizing: border-box;
@@ -178,6 +195,15 @@ class DockDesk extends LitElement {
       flex: none;
       display: flex;
       align-items: center;
+    }
+    /* Page controls (6.4) slotted at the trailing end of the stage strip, past the
+       tabs and their actions; empty on a desk with no control children, so it adds
+       nothing there. */
+    .controls {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-sm);
     }
     .action {
       box-sizing: border-box;
@@ -515,6 +541,7 @@ class DockDesk extends LitElement {
             <div class="strip">
               ${this.#tablist("Stage", tabs, stage, labelOf, (name) => this.#send("_open", name))}
               ${ready && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
+              <span class="controls"><slot></slot></span>
             </div>
             <div class="body" data-side="stage">
               ${stage
@@ -663,6 +690,14 @@ class DockDesk extends LitElement {
       const el = child(slot.name);
       const current = slot.assignedElements();
       if (el && !(current.length === 1 && current[0] === el)) slot.assign(el);
+    }
+    // Slotting is manual (shadowRootOptions), so the control children (6.4) are
+    // assigned by hand to the one unnamed slot in the stage strip, in page order.
+    const controls = this.renderRoot.querySelector(".controls slot:not([name])");
+    if (controls) {
+      const want = [...this.children].filter((c) => c.hasAttribute("control"));
+      const have = controls.assignedElements();
+      if (want.length !== have.length || want.some((c, i) => have[i] !== c)) controls.assign(...want);
     }
     for (const body of this.renderRoot.querySelectorAll(".body")) {
       const want = this.#dockScroll[body.dataset.side];

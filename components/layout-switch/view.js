@@ -39,9 +39,9 @@ class ActorController {
 
 class LayoutSwitch extends LitElement {
   static styles = css`
-    /* An inline control living in the nav bar (slotted into page-nav), flush with
-       the links rather than a floating pill: no surface of its own, the bar carries
-       it. Visible on touch devices too: arranging matters on a phone. */
+    /* An inline control slotted into page-nav or a desk's stage header (6.4), flush
+       with its neighbours rather than a floating pill: no surface of its own, the
+       strip carries it. Visible on touch devices too: arranging matters on a phone. */
     :host {
       display: inline-flex;
       align-items: center;

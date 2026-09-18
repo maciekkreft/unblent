@@ -39,8 +39,8 @@ class ActorController {
 
 class ProfileSwitch extends LitElement {
   static styles = css`
-    /* An inline control living in the nav bar (slotted into page-nav), left of the
-       auth icon, flush with the other controls. */
+    /* An inline control slotted into page-nav or a desk's stage header (6.4), left
+       of the auth icon, flush with the other controls. */
     :host {
       display: inline-flex;
       align-items: center;

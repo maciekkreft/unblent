@@ -76,17 +76,21 @@ const reconcile = (layout, views) => {
 const isEmpty = (layout) => !layout.stage && SIDES.every((s) => !layout.docks?.[s]);
 
 // The starting picture a page declares (6.4): each view with a valid `side` lands
-// there (open), in child order; the rest stay stage tabs; the stage takes the
-// first undocked view. `active` is left absent, so each side shows its first tab.
-const seed = (views) => {
+// there, in child order; the rest stay stage tabs; the stage takes the first
+// undocked view. A side is open, except left and right on a desk too narrow to
+// hold a dock beside the stage: there an open side is a drawer over the stage and
+// its header, so it starts folded. `active` is left absent, so each side shows its
+// first tab.
+const seed = (views, narrow) => {
   const docks = {};
   for (const v of views)
-    if (SIDES.includes(v.side)) docks[v.side] = side(true, [...(docks[v.side]?.views ?? []), v.name]);
+    if (SIDES.includes(v.side))
+      docks[v.side] = side(!(narrow && v.side !== "bottom"), [...(docks[v.side]?.views ?? []), v.name]);
   return { stage: firstFree(views, docks), docks };
 };
 
 // Adopt the fact's layout, or the page's declared default when it has none.
-const adopt = (layout, views) => (isEmpty(layout) ? seed(views) : reconcile(layout, views));
+const adopt = (layout, views, narrow) => (isEmpty(layout) ? seed(views, narrow) : reconcile(layout, views));
 
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
@@ -102,7 +106,16 @@ export const machine = setup({
   meta: { kind: "view", emits: ["dock.arranged"], attributes: [], asks: ["dock: read", "settings: read"] },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
-  context: ({ input }) => ({ ask: input.ask, views: input.views, stage: null, docks: {}, arranging: true }),
+  // `narrow` is a function, like `ask`, so the width is read when the seed is
+  // chosen (the viewport fact has framed the body by then), not at connect.
+  context: ({ input }) => ({
+    ask: input.ask,
+    views: input.views,
+    narrow: input.narrow ?? (() => false),
+    stage: null,
+    docks: {},
+    arranging: true,
+  }),
   initial: "loading",
   states: {
     loading: {
@@ -113,7 +126,7 @@ export const machine = setup({
           { guard: ({ event }) => Boolean(event.output.error), target: "failed" },
           {
             target: "loadingSettings",
-            actions: assign(({ context, event }) => adopt(event.output, context.views)),
+            actions: assign(({ context, event }) => adopt(event.output, context.views, context.narrow())),
           },
         ],
         onError: { target: "failed" },
@@ -206,7 +219,7 @@ export const machine = setup({
     // The fact's news (4.3, fourth rule): adopt it whoever caused the change. The
     // only place the layout is assigned once ready.
     "dock.changed": {
-      actions: assign(({ context, event }) => adopt(event, context.views)),
+      actions: assign(({ context, event }) => adopt(event, context.views, context.narrow())),
     },
     // Arranging is a settings fact: adopt it, so a stray gesture past a hidden
     // control still does nothing (the guards read context.arranging).

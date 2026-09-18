@@ -598,6 +598,14 @@ for (const engine of ENGINES) {
 // profile-switch (step 5) carries only a machine test, so its browser behaviour lives
 // here, on the page where it is placed. WebKit first, then Chromium.
 const navCount = (page) => page.evaluate(() => document.querySelector("page-nav").shadowRoot.querySelectorAll("a").length);
+const navHeight = (page) => page.evaluate(() => document.querySelector("page-nav").getBoundingClientRect().height);
+// The control tags the page slotted into the stage strip (6.4): their tag names in
+// the order the unnamed slot in the stage's strip assigns them.
+const stageControls = (page) =>
+  page.evaluate(() => {
+    const slot = document.querySelector("dock-desk").shadowRoot.querySelector(".stage .strip .controls slot:not([name])");
+    return slot ? slot.assignedElements().map((e) => e.localName) : null;
+  });
 const switchHidden = (page, tag) => page.evaluate((t) => getComputedStyle(document.querySelector(t)).display === "none", tag);
 const arrangeControls = (page) => page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelectorAll(".action:not(.fold)").length);
 const sheetPicture = (page) =>
@@ -641,6 +649,14 @@ for (const engine of ENGINES) {
       // Product: no links, both bar switches hidden, no arrange controls, and the sheet
       // is the production picture — the layout row alone, no Pages section, no viewport row.
       assert.equal(await navCount(page), 0, "no page links in the product");
+      // The bar takes no space in the product (§8/§12): its controls live in the
+      // stage header (6.4), in page order, so the desk starts at the top of the page.
+      assert.equal(await navHeight(page), 0, "the empty nav bar takes no height in the product");
+      assert.deepEqual(
+        await stageControls(page),
+        ["layout-switch", "profile-switch", "session-switch"],
+        "the page controls sit in the stage header",
+      );
       assert.ok(await switchHidden(page, "viewport-switch"), "the viewport switch is hidden");
       assert.ok(await switchHidden(page, "layout-switch"), "the layout switch is hidden");
       assert.equal(await arrangeControls(page), 0, "no arrange controls on the desk");
@@ -658,6 +674,7 @@ for (const engine of ENGINES) {
       // the sheet fills, and the door reads as engaged.
       await page.locator("profile-switch button").click();
       await page.waitForFunction(() => document.querySelector("page-nav").shadowRoot.querySelectorAll("a").length > 0, undefined, WAIT);
+      assert.ok((await navHeight(page)) > 0, "the bar returns with height once it has links (the workshop)");
       assert.ok(!(await switchHidden(page, "viewport-switch")), "the viewport switch returns in the workshop");
       assert.ok(!(await switchHidden(page, "layout-switch")), "the layout switch returns in the workshop");
       assert.ok((await sheetPicture(page)).pages, "the sheet shows the Pages section in the workshop");

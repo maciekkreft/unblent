@@ -98,9 +98,14 @@ class PageNav extends LitElement {
     if (!snapshot || snapshot.matches("loadingPages") || snapshot.matches("loadingSettings")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">pages unavailable</p>`;
     const { pages, nav, current, profile } = snapshot.context;
+    const groups = grouped(pages, nav, current, profile);
+    // With no links (the product profile, §8/§12) and nothing slotted in, the bar
+    // takes no space: the page controls live elsewhere (a desk's stage header, 6.4)
+    // and the bar returns on its own where there are links to show (the workshop).
+    if (!groups.length && !this.children.length) return nothing;
     return html`
       <nav aria-label="Pages">
-        ${grouped(pages, nav, current, profile).map(
+        ${groups.map(
           (group) => html`
             <span class="label">${group.label}</span>
             ${group.rows.map(

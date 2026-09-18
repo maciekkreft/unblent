@@ -279,7 +279,7 @@ Suppose the build order is: `notes` + `note-editor`, then `note-list`, then `spl
 
 Each later component used only contracts that already existed, and the components page (section 8) showed which ones were available before it was built. This is the Zettelkasten property made concrete: a new note points at old notes; old notes do not change.
 
-A page may declare a view's home side with a `side="left|right|bottom"` attribute on a `dock-desk` child, read like the `label` convention (neither is a `dock-desk` tag attribute). `dock-desk` seeds the initial layout from the declared sides only when the `dock` fact has no stored arrangement; the first user gesture stores a layout, and that stored layout wins thereafter. The layout fact stays owned by `dock` — `dock-desk` only chooses a starting picture when the fact has none.
+A page may declare a view's home side with a `side="left|right|bottom"` attribute on a `dock-desk` child, read like the `label` convention (neither is a `dock-desk` tag attribute). `dock-desk` seeds the initial layout from the declared sides — open, or with left and right folded where the desk is too narrow to hold a dock beside the stage — only when the `dock` fact has no stored arrangement; the first user gesture stores a layout, and that stored layout wins thereafter. The layout fact stays owned by `dock` — `dock-desk` only chooses a starting picture when the fact has none. A `dock-desk` child carrying `control` is not a view: it gets no tab and no place in the layout, and sits at the trailing end of the stage header.
 
 ---
 
