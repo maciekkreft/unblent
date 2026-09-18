@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine } from "./machine.js";
+import { machine, markedChapter } from "./machine.js";
 import selected from "./events/chapter.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -87,9 +87,11 @@ class BookToc extends LitElement {
       outline: var(--focus-ring);
       outline-offset: calc(-1 * var(--border-width));
     }
-    /* The chapter now being read: named in ink, weighted, with the accent rail lit, so
-       the reader's place in the book is visible at a glance (immediate feedback as the
-       page turns move it). */
+    /* The entry the reader is inside: named in ink, weighted, with the accent rail lit,
+       so the reader's place in the book is visible at a glance (immediate feedback as the
+       page turns move it). A publisher's contents skips pieces (a dedication, an
+       illustration), so this is the entry at or before the current chapter, not only its
+       exact match (markedChapter). */
     .entry.current {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
@@ -114,7 +116,7 @@ class BookToc extends LitElement {
   `;
 
   #actor = new ActorController(this);
-  // Which row holds the roving tabindex; null falls back to the current chapter, then
+  // Which row holds the roving tabindex; null falls back to the marked chapter, then
   // the first row. Ephemeral focus, not a fact.
   #focusIndex = null;
 
@@ -123,15 +125,15 @@ class BookToc extends LitElement {
     return book ? flatten(book.toc) : [];
   }
 
-  #focusRow(rows, current) {
+  #focusRow(rows, marked) {
     if (this.#focusIndex != null && this.#focusIndex < rows.length) return this.#focusIndex;
-    const at = rows.findIndex((r) => r.chapter === current);
+    const at = rows.findIndex((r) => r.chapter === marked);
     return at >= 0 ? at : rows.length ? 0 : null;
   }
 
-  #keydown(event, rows, current) {
+  #keydown(event, rows, marked) {
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-    const at = this.#focusRow(rows, current) ?? 0;
+    const at = this.#focusRow(rows, marked) ?? 0;
     if (step) {
       const next = Math.min(rows.length - 1, Math.max(0, at + step));
       if (next === at) return;
@@ -159,16 +161,16 @@ class BookToc extends LitElement {
     const rows = this.#rows();
     if (!book || !rows.length) return html`<div class="empty"><p>Choose a book</p></div>`;
 
-    const current = snapshot.context.jump ?? book.chapter;
-    const focusAt = this.#focusRow(rows, current);
+    const marked = markedChapter(book.toc, snapshot.context.jump ?? book.chapter);
+    const focusAt = this.#focusRow(rows, marked);
     return html`
       <div class="toc">
-        <ul role="tree" aria-label="Contents" @keydown=${(e) => this.#keydown(e, rows, current)}>
+        <ul role="tree" aria-label="Contents" @keydown=${(e) => this.#keydown(e, rows, marked)}>
           ${rows.map(
             (r, at) => html`
-              <li role="treeitem" aria-level=${r.depth + 1} aria-selected=${r.chapter === current}>
+              <li role="treeitem" aria-level=${r.depth + 1} aria-selected=${r.chapter === marked}>
                 <button
-                  class="entry ${r.chapter === current ? "current" : ""}"
+                  class="entry ${r.chapter === marked ? "current" : ""}"
                   type="button"
                   data-at=${at}
                   tabindex=${at === focusAt ? 0 : -1}

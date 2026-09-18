@@ -15,6 +15,9 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 const SAMPLE = resolve(HERE, "..", "..", "books", "tests", "fixtures", "sample.epub");
+// A book whose reading order holds pieces the publisher's contents does not list (an
+// illustration, front-matter): reading into one must keep the preceding entry lit (A).
+const GAPS = resolve(HERE, "..", "..", "books", "tests", "fixtures", "gaps.epub");
 
 const WAIT = { timeout: 4000, polling: 100 };
 
@@ -52,19 +55,19 @@ const tocRows = (page) => page.evaluate(tocRowsIn);
 const readerChapter = (page) =>
   page.evaluate(() => document.querySelector("book-reader")?.shadowRoot?.querySelector(".footer .chap")?.textContent.trim() ?? "");
 
-const waitTile = (page) =>
+const waitTile = (page, title = "Sample Book") =>
   page.waitForFunction(
-    () => [...(document.querySelector("book-shelf")?.shadowRoot?.querySelectorAll(".tile:not(.adding)") ?? [])].some((t) => t.querySelector(".title")?.textContent.trim() === "Sample Book"),
-    undefined,
+    (t) => [...(document.querySelector("book-shelf")?.shadowRoot?.querySelectorAll(".tile:not(.adding)") ?? [])].some((x) => x.querySelector(".title")?.textContent.trim() === t),
+    title,
     { timeout: 8000, polling: 100 },
   );
-const clickTile = (page) =>
-  page.evaluate(() => {
-    const t = [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile:not(.adding)")].find(
-      (x) => x.querySelector(".title")?.textContent.trim() === "Sample Book",
+const clickTile = (page, title = "Sample Book") =>
+  page.evaluate((t) => {
+    const tile = [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile:not(.adding)")].find(
+      (x) => x.querySelector(".title")?.textContent.trim() === t,
     );
-    t?.click();
-  });
+    tile?.click();
+  }, title);
 const waitReaderReady = (page) =>
   page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot?.querySelector(".footer .chap")?.textContent.trim());
 // The current-chapter highlight: the chapter the user just chose (marked at once), or
@@ -118,6 +121,9 @@ for (const engine of ENGINES) {
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
       await waitTile(page);
+      // A second book with unlisted pieces, on the same shelf, for the highlight case.
+      await page.locator("book-shelf input[type=file]").setInputFiles(GAPS);
+      await waitTile(page, "Gappy Book");
       // Warm the reader path so no case pays the cold chapter fetch and pagination.
       await clickTile(page);
       await waitReaderReady(page);
@@ -136,8 +142,9 @@ for (const engine of ENGINES) {
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-toc")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot && document.querySelector("book-reader")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-      await waitTile(page);
-      await clickTile(page);
+      const book = opts.book ?? "Sample Book";
+      await waitTile(page, book);
+      await clickTile(page, book);
       await waitReaderReady(page);
       return { page, problems };
     };
@@ -192,6 +199,33 @@ for (const engine of ENGINES) {
         // place is announced, and the fact confirms the mark it already showed.
         await waitReaderChapter(page, "Chapter Three");
         await waitTocCurrent(page, "Chapter Three");
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test("the highlight stays on the section while reading an unlisted piece", async () => {
+      const { page, problems } = await open({ book: "Gappy Book" });
+      try {
+        await openContents(page);
+        // The gaps book opens on its cover (an unlisted-free first entry).
+        await waitTocCurrent(page, "Cover");
+        await focusReader(page);
+        // Turn onto Chapter A, a listed entry: it lights.
+        await page.keyboard.press("ArrowRight");
+        await waitReaderChapter(page, "Chapter A");
+        await waitTocCurrent(page, "Chapter A");
+        // Turn again onto the Full-Page Plate, which the contents does not list: the
+        // reader names it, but the entry that stays lit is the one it sits under.
+        await page.keyboard.press("ArrowRight");
+        await waitReaderChapter(page, "Full-Page Plate");
+        await waitTocCurrent(page, "Chapter A");
+        assert.equal(
+          (await tocRows(page)).find((r) => r.current)?.title,
+          "Chapter A",
+          "only the preceding listed entry is marked while an unlisted piece is read",
+        );
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await page.close();

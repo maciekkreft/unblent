@@ -202,7 +202,163 @@ def build_broken(path: Path) -> None:
         zf.writestr("hello.txt", "not an epub")
 
 
+# gaps.epub exercises the gap-tolerant import (A, B, C): a cover and an illustration
+# drawn as an <svg><image> (rendered as <img>, C), front-matter and illustration pieces
+# the nav does not list (named without inventing "Chapter N", B), and an empty spacer
+# a link points at (dropped from the reading order, the link following to the next
+# piece, C). Seven spine pieces, six survive.
+GAPS_OPF = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">urn:uuid:gaps-0001</dc:identifier>
+    <dc:title>Gappy Book</dc:title>
+    <dc:creator>A. Writer</dc:creator>
+    <dc:language>en</dc:language>
+    <meta name="cover" content="cover-img"/>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="cover-img" href="images/cover.png" media-type="image/png" properties="cover-image"/>
+    <item id="fig" href="images/fig.png" media-type="image/png"/>
+    <item id="g0" href="ch0.xhtml" media-type="application/xhtml+xml"/>
+    <item id="g1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="g2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+    <item id="g3" href="ch3.xhtml" media-type="application/xhtml+xml"/>
+    <item id="g4" href="ch4.xhtml" media-type="application/xhtml+xml"/>
+    <item id="g5" href="ch5.xhtml" media-type="application/xhtml+xml"/>
+    <item id="g6" href="ch6.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="g0"/>
+    <itemref idref="g1"/>
+    <itemref idref="g2"/>
+    <itemref idref="g3"/>
+    <itemref idref="g4"/>
+    <itemref idref="g5"/>
+    <itemref idref="g6"/>
+  </spine>
+</package>
+"""
+
+# The nav lists only the cover and the two real chapters; the illustration, the
+# front-matter, the spacer and the trailing piece are all unlisted.
+GAPS_NAV = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Contents</title></head>
+  <body>
+    <nav epub:type="toc" id="toc">
+      <ol>
+        <li><a href="ch0.xhtml">Cover</a></li>
+        <li><a href="ch1.xhtml">Chapter A</a></li>
+        <li><a href="ch5.xhtml">Chapter B</a></li>
+      </ol>
+    </nav>
+  </body>
+</html>
+"""
+
+# A cover drawn as an SVG wrapping one <image> (the Calibre shape): the importer must
+# turn it into an <img>, or the first page is blank (C).
+GAPS_CH0 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Cover</title></head>
+  <body>
+    <div>
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 100 150">
+        <image width="100" height="150" xlink:href="images/cover.png"/>
+      </svg>
+    </div>
+  </body>
+</html>
+"""
+
+# A real chapter, listed, that links to the spacer piece (ch3, dropped) and to a
+# fragment of its own; the spacer link must follow to the piece that replaces it (C).
+GAPS_CH1 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>A</title></head>
+  <body>
+    <h1>Chapter A</h1>
+    <p>Opening. It links to <a href="ch3.xhtml">the spacer</a> that carries no content.</p>
+    <p id="mid">A later paragraph other pieces point at.</p>
+  </body>
+</html>
+"""
+
+# An unlisted full-page illustration, its only name the title on its <section>, its
+# only content an SVG image (C gives it an <img>; B names it from the section).
+GAPS_CH2 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Plate</title></head>
+  <body epub:type="bodymatter">
+    <section title="Full-Page Plate">
+      <div>
+        <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 40 40">
+          <image width="40" height="40" xlink:href="images/fig.png"/>
+        </svg>
+      </div>
+    </section>
+  </body>
+</html>
+"""
+
+# An empty spacer: no content survives conversion, so it leaves the reading order (C).
+GAPS_CH3 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Spacer</title></head>
+  <body><div><span></span></div></body>
+</html>
+"""
+
+# Unlisted front-matter named by its short opening line, not a heading (B, step 4).
+GAPS_CH4 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Notes</title></head>
+  <body>
+    <p>Ebook Instructions</p>
+    <p>Use your device's note-taking function wherever you see a bracketed prompt.</p>
+  </body>
+</html>
+"""
+
+GAPS_CH5 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>B</title></head>
+  <body>
+    <h1>Chapter B</h1>
+    <p>A second real chapter, listed in the contents.</p>
+  </body>
+</html>
+"""
+
+# Unlisted, with neither a heading, a section title, nor a short opening line: it takes
+# the name of the entry it sits under (B, step 5) — here Chapter B.
+GAPS_CH6 = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Tail</title></head>
+  <body>
+    <p>A long trailing paragraph with no name of its own, running well past eighty
+      characters so it is not mistaken for a title, the kind of afterword a publisher
+      leaves out of the table of contents entirely.</p>
+  </body>
+</html>
+"""
+
+
+def build_gaps(path: Path) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", CONTAINER)
+        zf.writestr("OEBPS/content.opf", GAPS_OPF)
+        zf.writestr("OEBPS/nav.xhtml", GAPS_NAV)
+        for n, body in enumerate((GAPS_CH0, GAPS_CH1, GAPS_CH2, GAPS_CH3, GAPS_CH4, GAPS_CH5, GAPS_CH6)):
+            zf.writestr(f"OEBPS/ch{n}.xhtml", body)
+        zf.writestr("OEBPS/images/cover.png", PNG_1x1)
+        zf.writestr("OEBPS/images/fig.png", PNG_1x1)
+
+
 if __name__ == "__main__":
     build_sample(HERE / "sample.epub")
     build_broken(HERE / "broken.epub")
-    print("wrote sample.epub and broken.epub")
+    build_gaps(HERE / "gaps.epub")
+    print("wrote sample.epub, broken.epub and gaps.epub")

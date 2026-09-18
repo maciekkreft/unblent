@@ -26,6 +26,10 @@ _BLOCK = {"h1", "h2", "h3", "h4", "h5", "h6", "p", "ul", "ol", "dl", "blockquote
 # Removed with their content (scripts, styles, embedded media); everything else not in
 # the whitelist (div, section, span, …) is unwrapped: its children are kept, its tag dropped.
 _REMOVE = {"script", "style", "svg", "math", "video", "audio", "iframe", "object", "head", "title"}
+# SVG shapes that carry their own art: an SVG holding any of these is genuine vector
+# drawing we cannot render, so it is dropped whole. An SVG whose only content is
+# <image> (the common cover shape) is unwrapped into <img> instead (_svg_images).
+_SVG_DRAW = {"path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "text", "use"}
 # Serialised as HTML5: no self-closing slash, no end tag.
 _VOID = {"br", "hr", "img"}
 # The only attributes kept, per tag (step 4); links gain data-chapter/data-block on resolution.
@@ -126,6 +130,8 @@ def _convert(el, links: list):
     if isinstance(el, str):
         return [el]
     tag = el.tag
+    if tag == "svg":
+        return _svg_images(el)
     if tag in _REMOVE:
         return []
     child_nodes = _flow(el, links)
@@ -155,17 +161,41 @@ def _flow(el, links) -> list:
     return nodes
 
 
+def _only_image(children):
+    """The single <img> a paragraph holds with nothing else but whitespace, else None.
+    A paragraph that is just a picture — a cover, a full-page plate — is a figure, not a
+    line of running text: the reader sizes an image in running text to a glyph's height
+    (a book's inline emoji), so a lone image left in a <p> would show as a speck."""
+    image = None
+    for node in children:
+        if isinstance(node, str):
+            if node.strip():
+                return None
+        elif isinstance(node, dict) and node["tag"] == "img":
+            if image is not None:
+                return None
+            image = node
+        else:
+            return None
+    return image
+
+
 def _blocks_of(body, links):
     """The body's top-level blocks (step 4): consecutive inline nodes are wrapped in a
-    <p>, empty paragraphs dropped. Returns (blocks, idmap) where idmap maps every
-    fragment id to the index of the block it ends up in (step 5)."""
+    <p>, empty paragraphs dropped, a paragraph that is only an image made a <figure>.
+    Returns (blocks, idmap) where idmap maps every fragment id to the index of the block
+    it ends up in (step 5)."""
     raw = _flow(body, links)
     blocks = []
     buf = []
 
     def flush():
         if _has_content(buf):
-            blocks.append({"tag": "p", "attrs": {}, "children": buf[:], "ids": _ids_of(buf)})
+            image = _only_image(buf)
+            if image is not None:
+                blocks.append({"tag": "figure", "attrs": {}, "children": [image], "ids": _ids_of(buf)})
+            else:
+                blocks.append({"tag": "p", "attrs": {}, "children": buf[:], "ids": _ids_of(buf)})
         buf.clear()
 
     for node in raw:
@@ -173,6 +203,8 @@ def _blocks_of(body, links):
             flush()
             if node["tag"] == "p" and not _has_content(node["children"]):
                 continue
+            if node["tag"] == "p" and _only_image(node["children"]) is not None:
+                node = {"tag": "figure", "attrs": node["attrs"], "children": [_only_image(node["children"])], "ids": node.get("ids", set())}
             blocks.append(node)
         else:
             buf.append(node)
@@ -215,6 +247,27 @@ def _is_external(href: str) -> bool:
     return "://" in href or href.startswith(("mailto:", "tel:", "//"))
 
 
+def _svg_images(el) -> list:
+    """An <svg> that only wraps <image> elements (Calibre's cover shape, and full-page
+    illustrations) becomes one <img> per image, so a picture a book draws through SVG
+    still renders under Decision 3 (HTML only). An SVG with any real vector art is
+    dropped whole, as before, because we cannot render it."""
+    images = []
+    for node in _iter_el(el):
+        if node is el:
+            continue
+        if node.tag == "image":
+            images.append(node)
+        elif node.tag in _SVG_DRAW:
+            return []
+    out = []
+    for node in images:
+        href = node.attrs.get("xlink:href") or node.attrs.get("href")
+        if href:
+            out.append({"tag": "img", "attrs": {"src": href, "alt": ""}, "children": [], "ids": set()})
+    return out
+
+
 def _first_heading(blocks) -> str:
     for block in blocks:
         if block["tag"] in {"h1", "h2", "h3", "h4", "h5", "h6"}:
@@ -222,6 +275,31 @@ def _first_heading(blocks) -> str:
             if text:
                 return text
     return ""
+
+
+_GENERIC_SECTION = {"frontmatter", "bodymatter", "backmatter", "cover", "titlepage", "chapter"}
+
+
+def _section_title(body) -> str:
+    """A book often names a piece with no heading of its own on its wrapping element:
+    <section title="4. A Character"> around a full-page illustration. The first such
+    title is a truer name than an invented one (step 7). A structural bucket
+    ("Frontmatter") is not a name, though, so it is skipped for the piece's own text."""
+    for el in _iter_el(body):
+        title = el.attrs.get("title", "").strip() if isinstance(el, _El) else ""
+        if title and title.lower() not in _GENERIC_SECTION:
+            return title
+    return ""
+
+
+def _lead_line(blocks) -> str:
+    """The first block's text, when it is a short paragraph and not the whole piece:
+    a front-matter page ("Ebook Instructions", "This book is dedicated to:") names
+    itself in its opening line (step 7)."""
+    if len(blocks) < 2 or blocks[0]["tag"] != "p":
+        return ""
+    text = _text_of(blocks[0]).strip()
+    return text if 0 < len(text) <= 80 else ""
 
 
 def import_book(source_path: Path, book_dir: Path, book_id: str, content_version: int = 1) -> dict:
@@ -310,25 +388,50 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
             raise ValueError("empty spine")
 
         chapter_paths = [resolve(opf_dir, manifest[idref][0]) for idref in spine]
-        spine_index = {path: n for n, path in enumerate(chapter_paths)}
 
         # Convert each chapter (step 4, 5), deferring link resolution until every
-        # chapter's idmap exists (a link may point forward into a later chapter).
-        chapter_blocks = []
-        chapter_links = []  # per chapter: list of (node, href)
-        idmaps = []
+        # chapter's idmap exists (a link may point forward into a later chapter). The
+        # source's own name for a piece (a <section title=…>) is kept for step 7.
+        raw_blocks = []
+        chapter_links = []  # per source piece: (base_dir, list of (node, href))
+        raw_idmaps = []
+        section_titles = []
         for path in chapter_paths:
             root = _parse_html(zf.read(path).decode("utf-8", "replace"))
             body = _find(root, "body") or root
             links = []
             blocks, idmap = _blocks_of(body, links)
-            chapter_blocks.append(blocks)
-            chapter_links.append((posixpath.dirname(path), links))
-            idmaps.append(idmap)
+            base_dir = posixpath.dirname(path)
+            _rewrite_images(blocks, base_dir, resolve, img_map, image_prefix)
+            raw_blocks.append(blocks)
+            chapter_links.append((base_dir, links))
+            raw_idmaps.append(idmap)
+            section_titles.append(_section_title(body))
 
-        # Resolve internal links to data-chapter/data-block (step 4); external links
-        # keep their URL; unresolved internal links become inert (#).
-        for n, (base_dir, links) in enumerate(chapter_links):
+        # Drop a piece that holds nothing after conversion — a spacer, or a picture that
+        # did not resolve — because a blank page is not one to turn through (5, C). Every
+        # source piece still maps to a served chapter: a surviving one to its own new
+        # index, a dropped one to the next survivor (the previous, if it was last), so a
+        # link or TOC entry aimed at a dropped piece follows it to a real page.
+        kept = [n for n in range(len(spine)) if raw_blocks[n]]
+        if not kept:
+            raise ValueError("empty spine")
+        pos = {old: i for i, old in enumerate(kept)}
+        served_of = {}
+        nxt = None
+        for old in reversed(range(len(spine))):
+            if old in pos:
+                nxt = pos[old]
+            served_of[old] = nxt if nxt is not None else len(kept) - 1
+
+        chapter_blocks = [raw_blocks[old] for old in kept]
+        idmaps = [raw_idmaps[old] for old in kept]
+        spine_index = {chapter_paths[old]: served_of[old] for old in range(len(spine))}
+
+        # Resolve internal links to data-chapter/data-block (step 4); external links keep
+        # their URL; unresolved internal links become inert (#). Targets are served
+        # indices, so a link into a dropped piece lands on the piece that replaced it.
+        for old, (base_dir, links) in enumerate(chapter_links):
             for node, href in links:
                 if not href:
                     node["attrs"].pop("href", None)
@@ -336,7 +439,7 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
                 if _is_external(href):
                     continue
                 path, _, frag = href.partition("#")
-                target = n if path == "" else spine_index.get(resolve(base_dir, path))
+                target = served_of[old] if path == "" else spine_index.get(resolve(base_dir, path))
                 node["attrs"]["href"] = "#"
                 if target is None:
                     continue
@@ -344,30 +447,37 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
                 if frag:
                     node["attrs"]["data-block"] = str(idmaps[target].get(frag, 0))
 
-        # Rewrite image sources to the served URL (step 4).
-        for n, path in enumerate(chapter_paths):
-            base_dir = posixpath.dirname(path)
-            _rewrite_images(chapter_blocks[n], base_dir, resolve, img_map, image_prefix)
-
-        # Table of contents (step 6): the nav document, else toc.ncx, else one entry
-        # per chapter.
+        # Table of contents (step 6): the nav document, else toc.ncx, else one entry per
+        # chapter. Entries collapsing onto one served (chapter, block) after the drop are
+        # deduplicated, first kept, so the outline does not gain twin rows.
         toc = _read_nav(zf, manifest, opf_dir, resolve, spine_index, idmaps, names)
         if toc is None:
             toc = _read_ncx(zf, opf, manifest, opf_dir, resolve, spine_index, idmaps, names)
+        toc = _dedupe(toc or [], set())
 
-        # Chapter titles (step 7): a TOC entry at (n, 0), else the first heading, else
-        # a fallback. Compute before falling back to one-entry-per-chapter, so a real
-        # TOC names the chapters.
+        # Chapter titles (step 7): the first that truly names the piece — a TOC entry at
+        # its start, its own first heading, the title on its wrapping <section>, its
+        # short opening line, else the entry it sits under (the rule the contents marks
+        # by, 4.3) — never an invented "Chapter N".
         toc_titles = {}
-        for entry in _flatten(toc or []):
+        for entry in _flatten(toc):
             if entry["block"] == 0:
                 toc_titles.setdefault(entry["chapter"], entry["title"])
         titles = []
-        for n in range(len(spine)):
-            titles.append(toc_titles.get(n) or _first_heading(chapter_blocks[n]) or f"Chapter {n + 1}")
+        inherited = ""
+        for n in range(len(kept)):
+            if n in toc_titles:
+                inherited = toc_titles[n]
+            titles.append(
+                toc_titles.get(n)
+                or _first_heading(chapter_blocks[n])
+                or section_titles[kept[n]]
+                or _lead_line(chapter_blocks[n])
+                or inherited
+            )
 
         if not toc:
-            toc = [{"title": titles[n], "chapter": n, "block": 0, "children": []} for n in range(len(spine))]
+            toc = [{"title": titles[n], "chapter": n, "block": 0, "children": []} for n in range(len(kept))]
 
         # Write the fragments (step 8): the fragment only, no html/body wrapper.
         for n, blocks in enumerate(chapter_blocks):
@@ -399,6 +509,23 @@ def _flatten(entries):
     for entry in entries:
         yield entry
         yield from _flatten(entry.get("children", []))
+
+
+def _dedupe(entries, seen):
+    """Drop entries whose served (chapter, block) a preceding entry already claimed —
+    a collision the empty-piece drop can create — keeping the first in reading order and
+    splicing a dropped entry's unseen children up in its place, as a heading-only branch
+    is spliced (see _nav_list)."""
+    out = []
+    for entry in entries:
+        key = (entry["chapter"], entry["block"])
+        if key in seen:
+            out.extend(_dedupe(entry.get("children", []), seen))
+            continue
+        seen.add(key)
+        entry["children"] = _dedupe(entry.get("children", []), seen)
+        out.append(entry)
+    return out
 
 
 def _entry(title, href, base_dir, resolve, spine_index, idmaps):

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine } from "../machine.js";
+import { machine, markedChapter } from "../machine.js";
 
 // The actor is where the contents' decisions live (3.2): which book it shows, and the
 // chapter it marks. The mark is the chapter the user just chose (a jump the fact has
@@ -117,4 +117,24 @@ test("deletion clears the jump", async () => {
   actor.send({ type: "book.deleted", id: ID });
   await flush();
   assert.equal(ctx(actor).jump, null);
+});
+
+// A publisher's contents rarely lists every piece, so the entry to mark is the one at
+// or before the chapter being read, not only its exact match (A).
+test("markedChapter marks the entry the chapter belongs to", () => {
+  const toc = [
+    { title: "Cover", chapter: 0 },
+    { title: "Part", chapter: 3, children: [{ title: "One", chapter: 4 }, { title: "Two", chapter: 6 }] },
+    { title: "End", chapter: 9 },
+  ];
+  assert.equal(markedChapter(toc, 4), 4, "an exact listed chapter marks itself");
+  assert.equal(markedChapter(toc, 2), 0, "an unlisted piece marks the entry before it");
+  assert.equal(markedChapter(toc, 5), 4, "a nested child wins over its parent");
+  assert.equal(markedChapter(toc, 12), 9, "past the last entry the last entry stays lit");
+  assert.equal(markedChapter(toc, 0), 0, "the first entry marks itself");
+});
+
+test("markedChapter marks nothing before the first entry", () => {
+  assert.equal(markedChapter([{ title: "Intro", chapter: 2 }], 1), null);
+  assert.equal(markedChapter([], 0), null, "an empty tree marks nothing");
 });

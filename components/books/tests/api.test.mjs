@@ -21,6 +21,7 @@ assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data dir
 
 const SAMPLE = readFileSync(new URL("./fixtures/sample.epub", import.meta.url));
 const BROKEN = readFileSync(new URL("./fixtures/broken.epub", import.meta.url));
+const GAPS = readFileSync(new URL("./fixtures/gaps.epub", import.meta.url));
 
 const cookieFor = (userId) =>
   `unblent_session=${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
@@ -84,6 +85,43 @@ test("an import returns the row: chapter titles, a cover URL, and the resolved T
   assert.equal(mid.title, "The Middle");
   assert.equal(mid.chapter, 1);
   assert.ok(mid.block > 0, "the fragment resolved to a mid-chapter block");
+});
+
+test("import tolerates a publisher's gaps: SVG covers, unlisted pieces, empty spacers", async () => {
+  const cookie = cookieFor(freshUser());
+  const row = await (await importBook(ID, GAPS, cookie)).json();
+  const titles = row.chapters.map((c) => c.title);
+
+  // C: seven spine pieces, the empty spacer dropped, six served chapters.
+  assert.equal(titles.length, 6, "the empty spacer left the reading order");
+  // B: every piece is named from the book, never an invented "Chapter N".
+  assert.ok(!titles.some((t) => /^Chapter \d+$/.test(t)), `no invented chapter numbers: ${titles}`);
+  assert.deepEqual(titles, [
+    "Cover", // a TOC entry
+    "Chapter A", // a TOC entry and its own heading
+    "Full-Page Plate", // the title on its <section>, no heading of its own
+    "Ebook Instructions", // its short opening line
+    "Chapter B", // a TOC entry
+    "Chapter B", // unlisted: inherits the entry it sits under
+  ]);
+
+  // C: the SVG-wrapped cover and the SVG illustration each render as an image, not a
+  // blank page; the cover is also the row's cover URL. A page that is only a picture is
+  // a <figure>, so the reader gives it the page instead of a running-text glyph's height.
+  assert.match(row.cover, /^\/api\/books\/.*\/1\/images\/.*\.png$/);
+  assert.match(await (await getChapter(ID, 1, 0, cookie)).text(), /^\s*<figure><img[^>]+src=/, "the cover fills the page as a figure");
+  assert.match(await (await getChapter(ID, 1, 2, cookie)).text(), /^\s*<figure><img[^>]+src=/, "the illustration fills the page as a figure");
+
+  // C: a link that pointed at the dropped spacer (spine 3) follows to the piece that
+  // replaced it, now served as chapter 3.
+  const chapterA = await (await getChapter(ID, 1, 1, cookie)).text();
+  assert.match(chapterA, /data-chapter="3"/, "the link into the dropped piece lands on its successor");
+
+  // The nav's three entries survive with the reindexed chapter numbers.
+  assert.deepEqual(
+    row.toc.map((e) => [e.title, e.chapter]),
+    [["Cover", 0], ["Chapter A", 1], ["Chapter B", 4]],
+  );
 });
 
 test("a second import of the same id is idempotent, returning the row unchanged", async () => {

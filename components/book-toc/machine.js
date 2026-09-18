@@ -17,6 +17,22 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // draw, and the current chapter to mark, which rides the book's saved position.
 const pickToc = (b) => ({ id: b.id, toc: b.toc, chapter: b.position.chapter });
 
+// A publisher's contents rarely lists every piece of the book (a praise page, a
+// dedication, an illustration before a chapter), so the chapter being read may have no
+// entry of its own. It belongs to the entry before it: the mark is the last listed
+// chapter at or before the current one, and null before the first entry.
+export const markedChapter = (toc, chapter) => {
+  let marked = null;
+  const walk = (entries) => {
+    for (const e of entries) {
+      if (e.chapter <= chapter && (marked === null || e.chapter > marked)) marked = e.chapter;
+      if (e.children?.length) walk(e.children);
+    }
+  };
+  walk(toc);
+  return marked;
+};
+
 // The changed book is the one being shown when its id matches; a book.changed or a
 // book.deleted for any other book is the bus's to record as ignored.
 const isOurs = ({ context, event }) => Boolean(context.book) && event.id === context.book.id;

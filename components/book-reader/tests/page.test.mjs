@@ -116,7 +116,10 @@ for (const engine of ENGINES) {
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
       watch(page, problems, opts.ignoreAborts);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
-      if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+      // The engine's pages share one context (its localStorage too), so a phone case's
+      // stored viewport would otherwise ride into the next test's desk page. Set it
+      // deterministically each time — phone, or cleared — so order cannot leak.
+      await page.addInitScript((v) => (v ? localStorage.setItem("viewport", v) : localStorage.removeItem("viewport")), opts.phone ? "phone" : "");
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
