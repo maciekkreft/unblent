@@ -293,42 +293,14 @@ Contracts are the only coupling in the system. Every contract is **declared once
 
 Every event has a name, an owner, and a JSON Schema for its payload, kept in the owning component's directory. Names are `subject.pastTenseVerb`. The set of all event schemas is one of the three shared vocabularies of the system (the others are the design tokens and the icons), and it is kept small on purpose.
 
+The events of every component that has a directory in `components/` are not listed here, because a list in this document would be a second copy that drifts from the schemas. Read them from the running system instead: `python3 checks/show.py contracts` prints every event with its owner and its fields, and `python3 checks/show.py contracts <name>` prints one event's full schema and the components that consume it. The contracts page (section 8) shows the same in the browser.
+
+Three components are planned but not built yet — `chat`, `conversations` and `llm`. They have no directory, so the running system does not know their events. Until they are built, their events are listed here, and each line is removed when its component gets a directory (section 9, step 1):
+
 ```
-book.changed          owner: books          { id, title, author, cover, chapters, toc, position, version, contentVersion, pending, addedAt, updatedAt }
-book.deleted          owner: books          { id }
-book.opened           owner: books          { id | null }
-book.discarded        owner: book-shelf     { id }
-book.picked           owner: book-shelf     { id, name, size, url }
-book.progressed       owner: book-reader    { id, chapter, block }
-book.refused          owner: books          { id, reason }  reason ∈ signed-out | unreadable | unavailable
-book.renamed          owner: book-shelf     { id, title }
-book.selected         owner: book-shelf     { id }
-chapter.selected      owner: book-toc       { id, chapter }
-note.saved            owner: note-editor    { id, title, body, baseVersion, about }
-note.changed          owner: notes          { id, title, subtitle, body, version, pending, updatedAt, about }
-note.deleted          owner: notes          { id }
-note.conflicted       owner: notes          { id, mine, theirs }
-note.selected         owner: note-list      { id }
-note.discarded        owner: note-list      { id }
-note.opened           owner: note-editor    { id }
-note.refused          owner: note-editor    { id, reason }  reason ∈ pinned
 conversation.changed  owner: conversations  { id, turns, version }
-dock.arranged         owner: dock-desk      { stage, docks }
-dock.changed          owner: dock           { stage, docks }
-layout.switched       owner: layout-switch  { arranging }
-settings.changed      owner: settings       { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors, profile }
-settings.edited       owner: settings-sheet { nav, viewportSwitchHidden, layoutSwitchHidden, arranging, editors }
-profile.switched      owner: profile-switch { profile }  profile ∈ product | workshop
 llm.unavailable       owner: llm            { reason }
-session.changed       owner: session        { userId | null, registrationOpen }
-session.refused       owner: session        { reason }  reason ∈ cancelled | registration-closed | unknown-credential | unavailable
-signin.requested      owner: session-switch  {}
-signout.requested     owner: session-switch  {}
-subject.changed       owner: subject        { subject: { kind, id, title } | null }
-trace.recorded        owner: trace          { seq, at, tab, kind, name, from, to, ignored, outcome, reason, cid, payload, states }
 turn.submitted        owner: chat           { conversationId, turn }
-viewport.selected     owner: viewport-switch { viewport }
-viewport.changed      owner: viewport       { viewport }
 ```
 
 Payload shapes are only ever **extended**: never a removed field, a renamed field, or a new required field. Nor is a shape ever **narrowed**: a `type` may not lose an alternative, an `enum` or `const` may not lose a value, a `oneOf`/`anyOf` may not lose a branch, and `additionalProperties` may not go from open to closed. The same holds for query payloads and replies (7.2) and command payloads. If a change cannot be additive, it is a new event with a new name.
@@ -339,25 +311,10 @@ Because the vocabulary is shared, it is not grown casually: **adding an event, o
 
 Every command a component accepts, and every query a fact component answers, is named, with the shape of its payload and, for queries, the shape of the reply.
 
+They are read from the running system the same way as the events (7.1): `python3 checks/show.py contracts` lists every query and command of a built component. One query belongs to `llm`, which is planned but not built, so it is listed here until `llm` gets a directory:
+
 ```
-note-editor#n: focus
-note-editor#n: load(id)
-notes: list              → { notes: [{ id, title, subtitle, updatedAt, about }] }
-notes: read(id)          → { note } | { error: "not-found" }
-books: list              → { books: [{ id, title, author, cover, position, chapterCount, pending, addedAt }] }
-books: read({ id })      → { book } | { error: "not-found" }
-books: chapter({ id, chapter }) → { title, html } | { error: "not-found" } | { error: "unavailable" }
-books: open              → { id: string | null }
 llm: complete({ prompt, context }) → { text } | { error: "unavailable" }
-catalog: list            → { components: [{ name, status, kind, shape, owns, attributes, emits, consumes, accepts, answers, asks, interacts }] } | { error: "unavailable" }
-pages: list              → { pages: [{ path, title, kind }] } | { error: "unavailable" }
-catalog: contracts       → { events: [{ name, owner, schema, consumers }], queries: [{ target, name, payload, reply, askers }], commands: [{ target, name, payload }] } | { error: "unavailable" }
-trace: list              → { records: [record] }
-viewport: read           → { viewport }
-dock: read               → { stage, docks: { left|right|bottom: { open, views, active } } }
-subject: read            → { subject: { kind, id, title } | null }
-settings: read           → { nav: [{ path, hidden }], viewportSwitchHidden, layoutSwitchHidden, arranging, editors, profile }
-session: read            → { userId: string | null, registrationOpen: boolean }
 ```
 
 What a machine handles is read from the keys of its `on` handlers, in any state, by one convention: a dotted name (`note.changed`) is a consumed event; a name ending in `?` (`list?`) answers the query of that name; a leading underscore (`_mediaChanged`) is an internal message the bus never routes; anything else is an accepted command. A query is delivered to the answerer as `{ type: "list?", cid, payload, reply }`, and the answerer calls `reply(value)` exactly once.
@@ -503,7 +460,7 @@ components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
 tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
 pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design|apps/<name>.html
-checks/          check.py, the one check command; tests/ its own unit tests, never served
+checks/          check.py, the one check command; show.py, prints the components, contracts and pages the server reports (7.1); tests/ its own unit tests, never served
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
 store/           the store interface; tests/ never served

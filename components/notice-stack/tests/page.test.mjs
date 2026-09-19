@@ -222,7 +222,7 @@ for (const engine of ENGINES) {
         "Sign in to add books",
       );
       await setFile(resolve(FIXTURES, "sample.epub"));
-      await until(async () => (await notices(page)).some((n) => n.text === "Sign in to add books."));
+      await until(async () => (await notices(page)).some((n) => n.text === "Sign in to continue."));
 
       // Signed in: a broken file is refused as not an epub.
       const SECRET = process.env.SESSION_SECRET;

@@ -74,6 +74,12 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
       logs.some((l) => l.includes("session.changed") && l.includes("session → session-switch") && l.includes("delivered")),
     );
 
+    // The sign-in cookie persists across a browser restart (server/user.py): it carries
+    // a Max-Age, so Playwright reports a real expiry rather than -1 (a session cookie).
+    const session = (await context.cookies()).find((c) => c.name === "unblent_session");
+    assert.ok(session, "the ceremony set a session cookie");
+    assert.ok(session.expires > Date.now() / 1000 + 29 * 24 * 3600, "the cookie lasts ~30 days, not just the browser session");
+
     // Sign out flips back to the dashed anonymous control at once (local-first).
     await clickSwitch(page);
     await until(async () => (await switchState(page))?.cls === "anon");

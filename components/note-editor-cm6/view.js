@@ -280,7 +280,7 @@ class NoteEditorCm6 extends LitElement {
     .pin svg {
       display: block;
     }
-    .pin:hover:not(:disabled) {
+    .pin:hover:not(:disabled):not([aria-pressed="true"]) {
       color: var(--color-ink);
     }
     .pin[aria-pressed="true"] {

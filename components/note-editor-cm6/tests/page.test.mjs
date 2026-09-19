@@ -125,7 +125,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    test("edits under Vim: line one is a Title, \\2 makes a Heading, no markers in the buffer", async () => {
+    test("edits under Vim: lines start as Body, \\2 makes a Heading and \\1 a Title, no markers in the buffer", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -145,13 +145,21 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Escape");
       await until(async () => (await lines(page)).map((l) => l.text).join("\n") === "Alpha\nBeta");
 
+      // No level is imposed on the first line: both lines start as Body.
+      const start = await lines(page);
+      assert.ok(!start.some((l) => l.className.includes("cm-level-")), "lines start as Body, no forced Title");
+
       // The caret is on line two (Beta): the leader map \2 makes it a Heading.
       await page.keyboard.type("\\2");
       await until(async () => (await lines(page))[1]?.className.includes("cm-level-heading"));
+      // Move to line one and raise it to a Title with \1.
+      await page.keyboard.type("k");
+      await page.keyboard.type("\\1");
+      await until(async () => (await lines(page))[0]?.className.includes("cm-level-title"));
 
       const shown = await lines(page);
       assert.equal(shown.map((l) => l.text).join("\n"), "Alpha\nBeta", "the buffer holds no marker characters");
-      assert.ok(shown[0].className.includes("cm-level-title"), "line one is a Title (the first-line default)");
+      assert.ok(shown[0].className.includes("cm-level-title"), "line one became a Title");
       assert.ok(shown[1].className.includes("cm-level-heading"), "line two became a Heading");
 
       const sizes = await page.evaluate(() => {

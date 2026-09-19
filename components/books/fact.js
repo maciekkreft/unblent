@@ -5,6 +5,7 @@ import changed from "./events/book.changed.json" with { type: "json" };
 import deleted from "./events/book.deleted.json" with { type: "json" };
 import refused from "./events/book.refused.json" with { type: "json" };
 import opened from "./events/book.opened.json" with { type: "json" };
+import rejected from "./events/session.rejected.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import chapter from "./queries/chapter.json" with { type: "json" };
@@ -109,6 +110,9 @@ const api = {
       return { error: "unavailable" };
     }
     if (res.status === 404) return { error: "not-found" };
+    // A 401 is the session, not the server (like every other call): the machine ends
+    // the session on it, rather than the reader mislabelling it "unavailable" (12).
+    if (res.status === 401) return { error: "unauthorized" };
     if (!res.ok) return { error: "unavailable" };
     return { html: await res.text() };
   },
@@ -122,7 +126,7 @@ const actor = mount(machine, {
     ask: (target, name, payload) => ask(machine, target, name, payload),
     revoke: (url) => URL.revokeObjectURL(url),
   },
-  events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused, "book.opened": opened },
+  events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused, "book.opened": opened, "session.rejected": rejected },
   queries: { list, read, chapter, open },
 });
 

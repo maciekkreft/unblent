@@ -27,7 +27,7 @@ function describe(source) {
   if (source.type === "book.refused") {
     switch (source.reason) {
       case "signed-out":
-        return "Sign in to add books.";
+        return "Sign in to continue.";
       case "unreadable":
         return "This file is not an epub.";
       default:

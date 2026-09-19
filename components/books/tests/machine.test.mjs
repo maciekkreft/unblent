@@ -121,12 +121,14 @@ function start(store, { now = clock(), api, ask, revoke } = {}) {
   const refused = [];
   const deleted = [];
   const opened = [];
+  const rejected = [];
   actor.on("book.changed", (e) => changed.push(e));
   actor.on("book.refused", (e) => refused.push(e));
   actor.on("book.deleted", (e) => deleted.push(e));
   actor.on("book.opened", (e) => opened.push(e));
+  actor.on("session.rejected", (e) => rejected.push(e));
   actor.start();
-  return { actor, changed, refused, deleted, opened, clock: simClock };
+  return { actor, changed, refused, deleted, opened, rejected, clock: simClock };
 }
 
 async function drain(clock) {
@@ -364,6 +366,28 @@ test("signing out empties the library and announces every book gone", async () =
   assert.equal(store.books.size, 0);
 });
 
+test("a session that ended while away empties the library on load (cookie gone)", async () => {
+  // The store still holds a signed-in user's books, but the session now reads null: no
+  // live session.changed fires, so the load must reconcile and clear, the same as a
+  // deliberate sign-out (Decision 5), rather than show a stale, half-usable library.
+  const store = fakeStore([book(ID), book(ID2)]);
+  store.meta.set("userId", "u1");
+  const revoked = [];
+  const { actor, deleted, refused, rejected } = start(store, { api: fakeApi(), ask: askUser(null), revoke: (u) => revoked.push(u) });
+  await ready(actor);
+
+  assert.deepEqual(deleted.map((d) => d.id).sort(), [ID, ID2].sort(), "every book is announced gone");
+  assert.deepEqual(await askQuery(actor, "list"), { books: [] }, "the library is empty");
+  assert.equal(store.books.size, 0, "the cache is cleared");
+  assert.equal(refused.length, 0, "a cold-load reconcile clears silently");
+  assert.equal(rejected.length, 0, "session already knows null, so it is not told to re-check");
+
+  // Truly signed out: a pick is refused, not minted.
+  actor.send({ type: "book.picked", id: ID, name: "b.epub", size: 9, url: "blob:x" });
+  await flush();
+  assert.deepEqual(refused, [{ type: "book.refused", id: ID, reason: "signed-out" }], "signed out, so a pick is refused");
+});
+
 // --- Queries ---------------------------------------------------------------------
 
 test("list, read and chapter reply from the cache and honestly on a miss", async () => {
@@ -391,6 +415,24 @@ test("chapter replies unavailable when the fetch fails", async () => {
   const { actor } = start(store, { api, ask: askUser("u1") });
   await ready(actor);
   assert.deepEqual(await askQuery(actor, "chapter", { id: ID, chapter: 0 }), { error: "unavailable" });
+});
+
+test("a 401 on a chapter fetch ends the session, not a retryable 'unavailable'", async () => {
+  // A 401 is the session being gone, not the server being down: the fact ends the
+  // session (so the library empties and the reader lands on its empty page via the held
+  // book.deleted) and says so through the notice, rather than a futile offline retry.
+  const store = fakeStore([book(ID), book(ID2)]);
+  const api = fakeApi({ chapter: () => ({ error: "unauthorized" }) });
+  const { actor, deleted, refused, rejected } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+
+  const reply = await askQuery(actor, "chapter", { id: ID, chapter: 1 });
+  await flush();
+  assert.deepEqual(reply, { error: "not-found" }, "the reader is answered not-found, not unavailable");
+  assert.deepEqual(deleted.map((d) => d.id).sort(), [ID, ID2].sort(), "the library empties");
+  assert.deepEqual(refused, [{ type: "book.refused", id: ID, reason: "signed-out" }], "one 'signed out' notice for the book read");
+  assert.deepEqual(rejected, [{ type: "session.rejected" }], "session is told to re-check so the auth control flips");
+  assert.deepEqual(await askQuery(actor, "list"), { books: [] }, "nothing is left signed out");
 });
 
 test("a store that rejects fails the fact, and queries still get honest replies", async () => {

@@ -137,7 +137,7 @@ for (const engine of ENGINES) {
 
       await setFile(page, SAMPLE);
       await until(() => debug.some((l) => REFUSED.test(l)));
-      await until(async () => (await noticeTexts(page)).includes("Sign in to add books."));
+      await until(async () => (await noticeTexts(page)).includes("Sign in to continue."));
       assert.deepEqual(await tiles(page), [], "no tile is added when signed out");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);

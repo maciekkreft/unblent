@@ -106,6 +106,12 @@ export const machine = setup({
         },
         // Internal (7.2): sent by fact.js on mount and when the tab regains focus.
         _revalidate: { target: "revalidating" },
+        // A fact's request was rejected by the server as unauthenticated (books emits
+        // session.rejected on a 401): the cookie is gone though this cache still reads
+        // signed in. Re-check now, rather than waiting for the next focus, so the auth
+        // control flips at once (4.3, fourth rule). Only when we think we are signed in;
+        // a stray one while already signed out needs no round trip.
+        "session.rejected": { guard: ({ context }) => Boolean(context.userId), target: "revalidating" },
       },
     },
     authing: {

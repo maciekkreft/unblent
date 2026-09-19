@@ -589,9 +589,9 @@ test("parseBody splits markers into a marker-free doc plus per-line levels", () 
   assert.deepEqual(parseBody("just text"), { doc: "just text", levels: ["body"] });
 });
 
-test("an empty note seeds a Title first line but serializes back to empty", () => {
-  assert.deepEqual(parseBody(""), { doc: "", levels: ["title"] });
-  assert.equal(serialize("", ["title"]), ""); // opening a blank note never mints a "# "
+test("an empty note starts as a Body first line and serializes back to empty", () => {
+  assert.deepEqual(parseBody(""), { doc: "", levels: ["body"] });
+  assert.equal(serialize("", ["body"]), ""); // opening a blank note never mints a "# "
 });
 
 test("parseBody and serialize round-trip every level", () => {

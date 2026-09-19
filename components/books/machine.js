@@ -94,7 +94,7 @@ function replyOpen(context, reply) {
 // flight never wait on each other, and the machine's own flow is untouched. The
 // browser's HTTP cache answers a repeat fetch (Decision 2). A missing book or an
 // index past the end is not-found without a round trip.
-function answerChapter(context, event) {
+function answerChapter(context, event, self) {
   const { id, chapter } = event.payload;
   const record = context.books.get(id);
   if (!visible(record) || chapter < 0 || chapter >= record.chapters.length) {
@@ -106,11 +106,20 @@ function answerChapter(context, event) {
     return;
   }
   Promise.resolve(context.api.chapter(id, record.contentVersion, chapter))
-    .then((res) =>
+    .then((res) => {
+      // A 401 is not the server being down, it is the session being gone: end it so the
+      // library empties and the notice says so (12), and answer not-found so the reader
+      // lands on its empty page rather than the offline retry — the book.deleted the
+      // ended session emits (held for this ask until the reply, 4.2) then clears it.
+      if (res && res.error === "unauthorized") {
+        self?.send({ type: "_sessionEnded", id });
+        event.reply({ error: "not-found" });
+        return;
+      }
       res && res.error
         ? event.reply({ error: res.error })
-        : event.reply({ title: record.chapters[chapter].title, html: res.html }),
-    )
+        : event.reply({ title: record.chapters[chapter].title, html: res.html });
+    })
     .catch(() => event.reply({ error: "unavailable" }));
 }
 
@@ -139,9 +148,7 @@ function applyPick(context, event, enqueue, self) {
 function applyUploaded(context, event, enqueue) {
   const { id, res } = event;
   if (res.error === "unauthorized") {
-    enqueue.assign({ userId: null });
-    enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
-    enqueue.emit({ type: "book.refused", id, reason: "unavailable" });
+    endSession(context, enqueue, { notifyId: id, sawReject: true });
     return;
   }
   if (res.error) {
@@ -246,12 +253,40 @@ function forgetOpen(context, enqueue) {
   }
 }
 
+// The session ended, however it ended (a deliberate sign-out, a cookie gone across a
+// restart, or a 401 from any call): the one routine every such path funnels through,
+// so signed out always means the same thing — an empty library (Decision 5). A book
+// is only ever created signed in, so there is nothing anonymous to keep: every visible
+// book is announced gone, the cache and outbox are cleared, and no book is open. The
+// maps are mutated in place, as applySync does, so a flush in the same block sees the
+// emptied library at once. notifyId names the book a user gesture was refused on, so a
+// 401 the user provoked (a chapter fetch, an upload) says "signed out" through the
+// notice; a background sync or a cold-load reconcile passes none and clears silently.
+// sawReject is set when the server rejected our cookie (a 401): session.rejected tells
+// `session` to re-check and flip the auth control at once (3.4), rather than at the next
+// focus. A deliberate sign-out or a cold-load reconcile does not set it — session
+// already knows who is signed in in those cases.
+function endSession(context, enqueue, { notifyId, sawReject } = {}) {
+  for (const record of context.books.values())
+    if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
+  context.books.clear();
+  context.outbox.clear();
+  context.open = { id: null, at: 0 };
+  context.userId = null;
+  enqueue.assign({ userId: null });
+  enqueue(() => context.store.clear().catch(() => {}));
+  enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
+  enqueue(() => context.store.metaPut("open", { id: null, at: 0 }).catch(() => {}));
+  if (notifyId) enqueue.emit({ type: "book.refused", id: notifyId, reason: "signed-out" });
+  if (sawReject) enqueue.emit({ type: "session.rejected" });
+}
+
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue, self) {
   if (message.type === "list?") replyList(context, message.reply);
   else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
   else if (message.type === "open?") replyOpen(context, message.reply);
-  else if (message.type === "chapter?") answerChapter(context, message);
+  else if (message.type === "chapter?") answerChapter(context, message, self);
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
   else if (message.type === "book.selected") applySelect(context, message, enqueue);
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
@@ -327,7 +362,7 @@ export const machine = setup({
   meta: {
     kind: "fact",
     shape: "replicated",
-    emits: ["book.changed", "book.deleted", "book.refused", "book.opened"],
+    emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
     owns: "the books",
     asks: ["session: read"],
   },
@@ -399,8 +434,24 @@ export const machine = setup({
         onDone: {
           target: "ready.idle",
           actions: enqueueActions(({ context, event, enqueue, self }) => {
+            // Reconcile the stored user against who the session says is signed in, so a
+            // session that ended while the tab was away (a cookie gone across a restart)
+            // empties the library on load exactly as a live sign-out does — the same
+            // invariant, whether the news arrives now or later (Decision 5). No live
+            // session.changed fires when the cache already knows null at load.
+            const stored = context.userId;
             const userId = event.output?.userId ?? null;
-            enqueue.assign({ userId });
+            if (userId !== stored) {
+              if (userId === null) endSession(context, enqueue);
+              else {
+                context.userId = userId;
+                enqueue.assign({ userId, cursor: 0 });
+                enqueue(() => context.store.metaPut("userId", userId).catch(() => {}));
+                enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
+              }
+            } else {
+              enqueue.assign({ userId });
+            }
             for (const message of context.queued) flush(context, message, enqueue, self);
             enqueue.assign({ queued: [] });
             if (userId) enqueue.raise({ type: "_sync", pull: true });
@@ -433,7 +484,12 @@ export const machine = setup({
         "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
         "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
-        "chapter?": { actions: ({ context, event }) => answerChapter(context, event) },
+        "chapter?": { actions: ({ context, event, self }) => answerChapter(context, event, self) },
+        // A chapter fetch came back 401 (answerChapter, run fire-and-forget, cannot
+        // enqueue): the session is gone, so end it here where actions can run.
+        "_sessionEnded": {
+          actions: enqueueActions(({ context, event, enqueue }) => endSession(context, enqueue, { notifyId: event.id, sawReject: true })),
+        },
         "book.picked": { actions: enqueueActions(({ context, event, enqueue, self }) => applyPick(context, event, enqueue, self)) },
         "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
         "_uploaded": { actions: enqueueActions(({ context, event, enqueue }) => applyUploaded(context, event, enqueue)) },
@@ -456,12 +512,8 @@ export const machine = setup({
               enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
               enqueue.raise({ type: "_sync", pull: true });
             } else {
-              for (const record of context.books.values()) {
-                if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
-              }
-              enqueue.assign({ books: new Map(), outbox: new Map(), open: { id: null, at: 0 } });
-              enqueue(() => context.store.clear().catch(() => {}));
-              enqueue(() => context.store.metaPut("open", { id: null, at: 0 }).catch(() => {}));
+              // A deliberate sign-out: clear silently, the auth control is the feedback.
+              endSession(context, enqueue);
             }
           }),
         },
@@ -634,7 +686,8 @@ function applySync(context, output, enqueue) {
     enqueue(() => context.store.metaPut("cursor", newCursor).catch(() => {}));
   }
   if (authFailed) {
-    enqueue.assign({ userId: null });
-    enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
+    // A 401 during a background sync: the session is gone. Clear silently, but tell
+    // `session` to re-check so the auth control flips too (session.rejected).
+    endSession(context, enqueue, { sawReject: true });
   }
 }

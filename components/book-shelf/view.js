@@ -166,9 +166,11 @@ class BookShelf extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-body-mid);
     }
-    /* The open book carries the one visible selection. */
+    /* The open book carries the one visible selection: a solid accent ring, thick
+       enough to read at a glance against a cover or a placeholder (Norman: visible
+       signifier). --color-accent-selection is a text-selection tint, too faint here. */
     .tile[aria-selected="true"] .cover {
-      outline: var(--border-width) solid var(--color-accent-selection);
+      outline: var(--space-2xs) solid var(--color-accent);
       outline-offset: var(--space-2xs);
     }
     .title {

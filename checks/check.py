@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -975,6 +976,58 @@ def _wait_for_server(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
+@contextlib.contextmanager
+def _throwaway_server(port: int):
+    """The server the tests run against, and the one `--server` keeps up for an
+    experiment by hand: yields (port, data_dir), and stops the server and deletes the
+    directory on the way out."""
+    uvicorn = ROOT / ".venv" / "bin" / "uvicorn"
+    if not uvicorn.exists():
+        fail("checks/check.py", "tests",
+             f"{uvicorn} is missing; create the venv with "
+             "`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`")
+    # Section 5, 3.4: the session router needs RP_ID, MAX_USERS and a data directory;
+    # a throwaway one per run keeps the suite off the real data/ and its passkeys and
+    # per-user files disposable. RP_ID=localhost lets WebAuthn accept any port.
+    data_dir = tempfile.mkdtemp(prefix="unblent-test-data-")
+    server_env = {
+        **_dotenv(), **os.environ,
+        "RP_ID": "localhost", "MAX_USERS": "1", "UNBLENT_DATA": data_dir,
+    }
+    server = subprocess.Popen(
+        [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port)],
+        cwd=ROOT, env=server_env,
+    )
+    try:
+        if not _wait_for_server(port):
+            fail("checks/check.py", "tests",
+                 f"server did not answer on port {port}")
+        yield port, data_dir
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
+def serve(port: int) -> None:
+    """`--server`: the throwaway server for a forged-cookie experiment (10, Tests row),
+    so nothing a person or an agent tries by hand lands in the real data/."""
+    with _throwaway_server(port) as (port, data_dir):
+        print(f"throwaway server is up; Ctrl-C stops it and deletes its data\n"
+              f"  export UNBLENT_URL=http://127.0.0.1:{port}\n"
+              f"  export UNBLENT_DATA={data_dir}", flush=True)
+        # Both Ctrl-C and a `kill` must unwind through this `with`, or the server and its
+        # directory would be left behind. SIGINT is handled explicitly rather than left to
+        # KeyboardInterrupt, because a shell that starts this in the background inherits
+        # SIGINT ignored, and then Ctrl-C alone would not stop it.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+        signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+        signal.pause()
+
+
 # --- Change-scoped selection (architecture.md 11) --------------------------------
 # The full run is the definition of done, but while iterating the edit loop and the
 # Stop hook may narrow it to the tests reachable from what changed: the changed
@@ -1209,29 +1262,7 @@ def run_tests(affected=None, webkit_only=False) -> None:
     if not browser and not api and not server_tests:
         return
 
-    uvicorn = ROOT / ".venv" / "bin" / "uvicorn"
-    if not uvicorn.exists():
-        fail("checks/check.py", "tests",
-             f"{uvicorn} is missing; create the venv with "
-             "`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`")
-
-    port = _free_port()
-    # Section 5, 3.4: the session router needs RP_ID, MAX_USERS and a data directory;
-    # a throwaway one per run keeps the suite off the real data/ and its passkeys and
-    # per-user files disposable. RP_ID=localhost lets WebAuthn accept any port.
-    data_dir = tempfile.mkdtemp(prefix="unblent-test-data-")
-    server_env = {
-        **_dotenv(), **os.environ,
-        "RP_ID": "localhost", "MAX_USERS": "1", "UNBLENT_DATA": data_dir,
-    }
-    server = subprocess.Popen(
-        [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=ROOT, env=server_env,
-    )
-    try:
-        if not _wait_for_server(port):
-            fail("checks/check.py", "tests",
-                 f"server did not answer on port {port}")
+    with _throwaway_server(_free_port()) as (port, data_dir):
         # UNBLENT_DATA travels to the tests too: their cookie-forging helpers refuse
         # to run without it, so a suite pointed by hand at the dev server never writes
         # into the real data/ (architecture.md section 10, Tests row).
@@ -1253,13 +1284,6 @@ def run_tests(affected=None, webkit_only=False) -> None:
                 fail(".env", "browser tests",
                      "PLAYWRIGHT_MODULE is not set; add PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs to .env")
             _run_browser(browser, env, webkit_only)
-    finally:
-        server.terminate()
-        try:
-            server.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            server.kill()
-        shutil.rmtree(data_dir, ignore_errors=True)
 
 
 def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
@@ -1312,6 +1336,13 @@ def _enforce_budget(timings: list, budget: float, phase: str) -> None:
              "Optimise it, or move the slow part out of the fast phase so the after-edit run stays instant.")
 
 
+def _server_port(argv: list) -> int:
+    value = argv[argv.index("--server") + 1: argv.index("--server") + 2]
+    if value and not value[0].isdigit():
+        fail("checks/check.py", "--server", "expects a port number or nothing: --server [port]")
+    return int(value[0]) if value else 8090
+
+
 def _only_value(argv: list) -> str:
     if "--only" in argv:
         i = argv.index("--only")
@@ -1331,6 +1362,10 @@ USAGE = """The one check command (architecture.md 11).
   before push           python3 checks/check.py
                         every static rule + ALL tests, WebKit then Chromium;
                         the pre-push hook in .githooks/ runs it
+  by hand               python3 checks/check.py --server [port]
+                        the throwaway server the tests use (temporary data
+                        directory, port 8090 unless given), until Ctrl-C; for
+                        an experiment with a forged session cookie
 """
 
 
@@ -1338,6 +1373,9 @@ def main() -> None:
     argv = sys.argv[1:]
     if "--help" in argv or "-h" in argv:
         print(USAGE)
+        return
+    if "--server" in argv:
+        serve(_server_port(argv))
         return
     static_only = "--static" in argv
     changed = "--changed" in argv

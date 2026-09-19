@@ -189,3 +189,25 @@ test("revalidate announces a registrationOpen flip even when the user is unchang
   ]);
   assert.equal(context(a.actor).registrationOpen, false);
 });
+
+test("session.rejected re-checks and signs out when the server no longer knows us", async () => {
+  // Another fact (books) got a 401 and announced it: the cookie is gone though this
+  // cache still reads signed in. session re-checks and announces the sign-out, so the
+  // auth control flips at once rather than at the next focus (3.4).
+  const { api, calls } = fakeApi({ me: { userId: null, registrationOpen: true } });
+  const { actor, events } = start({ userId: "u1", registrationOpen: false, logoutOwed: false }, api);
+  actor.send({ type: "session.rejected" });
+  await flush();
+  assert.equal(calls.me, 1, "it re-checks with the server");
+  assert.equal(context(actor).userId, null);
+  assert.deepEqual(events, [{ type: "session.changed", userId: null, registrationOpen: true }]);
+});
+
+test("session.rejected while already signed out needs no round trip", async () => {
+  const { api, calls } = fakeApi({ me: { userId: null, registrationOpen: true } });
+  const { actor, events } = start({ userId: null, registrationOpen: true, logoutOwed: false }, api);
+  actor.send({ type: "session.rejected" });
+  await flush();
+  assert.equal(calls.me, 0, "no re-check when we already think we are signed out");
+  assert.deepEqual(events, []);
+});

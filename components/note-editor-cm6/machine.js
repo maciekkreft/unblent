@@ -29,11 +29,11 @@ export function titleOf(body) {
 }
 
 // markdown -> { doc: marker-free text, levels: one level per line }. An empty note
-// seeds a single Title line: the first line's default (changeable), not a hardcoded
-// level — loaded content is governed by its own markers, so a plain-editor note
-// round-trips losslessly (a bare first line stays Body, never re-titled).
+// starts as a single Body line: no level is imposed on the first line, the user
+// raises one with \1/\2/\3 when they want it. Loaded content is governed by its own
+// markers, so a plain-editor note round-trips losslessly (a bare first line stays Body).
 export function parseBody(md) {
-  if (md === "") return { doc: "", levels: ["title"] };
+  if (md === "") return { doc: "", levels: ["body"] };
   const doc = [];
   const levels = [];
   for (const line of md.split("\n")) {

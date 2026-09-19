@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A fact's request was rejected by the server as unauthenticated (a 401): the cookie is gone though the browser still read as signed in. Emitted by any replicated fact that sees a 401 (books now); session consumes it to re-check and announce the sign-out at once, so the auth control flips without waiting for the next focus (architecture.md 3.4).",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

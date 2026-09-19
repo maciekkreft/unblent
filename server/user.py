@@ -19,6 +19,11 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("UNBLENT_DATA") or ROOT / "data")
 
 SESSION_COOKIE = "unblent_session"
+# A passkey sign-in is meant to last: without a Max-Age the cookie is a session
+# cookie the browser drops on close, so every restart signs the user out while the
+# local caches persist (architecture.md 3.4). Thirty days keeps them signed in
+# across restarts; losing the cookie only forces a re-login, never data.
+SESSION_MAX_AGE = 60 * 60 * 24 * 30
 
 
 def user_dir(user_id: str) -> Path:
@@ -58,6 +63,7 @@ def set_session_cookie(response: Response, request: Request, user_id: str) -> No
     response.set_cookie(
         SESSION_COOKIE,
         sign(user_id),
+        max_age=SESSION_MAX_AGE,
         httponly=True,
         secure=request.url.scheme == "https",
         samesite="strict",
