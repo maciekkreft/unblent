@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, titleOf } from "../machine.js";
+import { machine, titleOf, aboutTitleOf } from "../machine.js";
 
 // The actor is where decisions live (3.2): it is driven with a fake ask, mint and
 // focus, the shapes view.js builds for real. A SimulatedClock drives the throttle
@@ -34,6 +34,9 @@ function editor({
   subjecting = false,
   recall,
   remember,
+  recallTitles,
+  rememberTitles,
+  aboutNew = false,
   flashMs = 3000,
 } = {}) {
   const clock = new SimulatedClock();
@@ -41,7 +44,7 @@ function editor({
   const opened = [];
   const refused = [];
   const actor = createActor(machine, {
-    input: { ask, mint, focus, follows, subjecting, recall, remember, flashMs },
+    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, aboutNew, flashMs },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
@@ -569,6 +572,160 @@ test("a remembered pin whose note is gone is forgotten, and start falls back to 
   assert.equal(s.context.id, ID2, "fell back to the newest note about the subject");
   assert.equal(s.context.pinned, false);
   assert.deepEqual(forgot, [null], "the stale pin was forgotten");
+});
+
+// --- The About line survives a reload, and names a new note (12) ----------------
+
+// A start that stays pending until resolve() is called, so a keystroke can land while
+// the editor is still waiting for the subject (the reload race).
+const pendingStart = () => {
+  let resolve;
+  const gate = new Promise((r) => (resolve = r));
+  const ask = (target, name) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return gate;
+    return Promise.resolve({});
+  };
+  return { ask, resolve };
+};
+
+test("a subject.changed before the notes arrive keeps a remembered pin: it reopens pinned", async () => {
+  // subject.changed lands while start is still waiting for the notes list. The editor
+  // must not re-follow the new subject and skip the pin restore.
+  let resolveList;
+  const gate = new Promise((r) => (resolveList = r));
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return gate;
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, recall: () => ID, ask });
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  assert.equal(actor.getSnapshot().value, "starting", "still waiting for the notes");
+  assert.equal(actor.getSnapshot().context.subject.id, "bookB", "the new subject was taken");
+  resolveList({ notes: [{ id: ID2, title: "newest about B", updatedAt: 99, about: [LINK_B] }] });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID, "the remembered pinned note, not B's note the re-follow would open");
+  assert.equal(s.context.pinned, true, "restored pinned despite the racing subject change");
+});
+
+test("a subject.changed before the notes arrive, no pin, follows the new subject with one list query", async () => {
+  const listCalls = [];
+  let resolve;
+  const gate = new Promise((r) => (resolve = r));
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") {
+      listCalls.push(payload);
+      return listCalls.length === 1 ? gate : Promise.resolve({ notes: [{ id: ID2, title: "about B", updatedAt: 20, about: [LINK_B] }] });
+    }
+    if (name === "read") return Promise.resolve({ note: noteAbout(ID2, LINK_B) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, ask });
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  resolve({ notes: [{ id: ID2, title: "about B", updatedAt: 20, about: [LINK_B] }] });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID2, "opened the note about the subject now on the stage");
+  assert.equal(listCalls.length, 1, "the start's list is reused, not asked a second time");
+});
+
+test("a subject.changed while a remembered pin is loading keeps the pinned note", async () => {
+  let resolveRead;
+  const list = { notes: [{ id: ID2, title: "about A", updatedAt: 20, about: [LINK_A] }] };
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return new Promise((r) => (resolveRead = () => r({ note: noteAbout(payload.id, LINK_A) })));
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, recall: () => ID, ask });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "loading", "the remembered note is loading");
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  resolveRead();
+  await settle();
+  const s = actor.getSnapshot();
+  assert.equal(s.context.id, ID, "the pinned note stayed, though the stage moved");
+  assert.equal(s.context.subject.id, "bookB", "the new subject was still taken");
+});
+
+test("titles are recalled at start, so the About line names a link the session never saw", () => {
+  // The open note is about A; the stage holds B. Only A's title, recalled from storage,
+  // lets the About line name it.
+  const snapshot = {
+    context: { about: [LINK_A], titles: { "book:bookA": "Dune" }, aboutNew: false, subjecting: true, subject: SUBJECT_B, baseVersion: 3 },
+    matches: () => false,
+  };
+  assert.equal(aboutTitleOf(snapshot), "Dune");
+});
+
+test("every subject taken is written back through rememberTitles", async () => {
+  const written = [];
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor } = editor({
+    subjecting: true,
+    recallTitles: () => ({}),
+    rememberTitles: (t) => written.push({ ...t }),
+    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
+  });
+  await settle();
+  assert.equal(written.at(-1)["book:bookA"], "Dune", "the start subject's title was stored");
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  await settle();
+  assert.equal(written.at(-1)["book:bookB"], "Emma", "the changed subject's title was stored too");
+});
+
+test("with subjecting, a keystroke before the subject is known is held, then saved with the link", async () => {
+  const { ask, resolve } = pendingStart();
+  const { actor, clock, saved, opened } = editor({ subjecting: true, ask });
+  actor.send({ type: "_typed", body: "held" });
+  assert.equal(actor.getSnapshot().value, "starting", "the keystroke did not leave starting");
+  assert.equal(actor.getSnapshot().context.body, "held", "the text is on screen");
+  assert.deepEqual(opened, [ID], "the minted id was announced once");
+  resolve({ notes: [] });
+  await settle();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" });
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].about, [LINK_A], "the first save carries the link the subject named");
+});
+
+test("with subjecting, a keystroke before start fails still saves, with an empty link list", async () => {
+  let reject;
+  const ask = (target, name) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: null });
+    if (name === "list") return new Promise((_, r) => (reject = r));
+    return Promise.resolve({});
+  };
+  const { actor, clock, saved } = editor({ subjecting: true, ask });
+  actor.send({ type: "_typed", body: "x" });
+  reject(new Error("offline"));
+  await settle();
+  clock.increment(THROTTLE_MS);
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].about, [], "no subject was known, so no link");
+});
+
+test("aboutTitleOf names the stage subject on a new note only with about-new and no links", () => {
+  const fresh = (level, extra = {}) => ({
+    context: { about: [], titles: {}, subjecting: true, subject: SUBJECT, baseVersion: null, ...extra },
+    matches: (v) => v === level,
+  });
+  // A new note, about-new on: the stage's subject.
+  assert.equal(aboutTitleOf({ ...fresh("empty"), context: { ...fresh("empty").context, aboutNew: true } }), "Dune");
+  assert.equal(aboutTitleOf({ ...fresh("editing"), context: { ...fresh("editing").context, aboutNew: true } }), "Dune", "a dirty draft with no version yet still counts as new");
+  // about-new off: nothing, the old behaviour.
+  assert.equal(aboutTitleOf({ ...fresh("empty"), context: { ...fresh("empty").context, aboutNew: false } }), null);
+  // No subject on the stage: nothing to name.
+  assert.equal(aboutTitleOf({ context: { about: [], titles: {}, aboutNew: true, subjecting: true, subject: null, baseVersion: null }, matches: (v) => v === "empty" }), null);
+  // While a note may still arrive (loading/starting), the line stays quiet.
+  assert.equal(aboutTitleOf({ context: { about: [], titles: {}, aboutNew: true, subjecting: true, subject: SUBJECT, baseVersion: null }, matches: () => false }), null);
 });
 
 test("with the attribute off, no subject is asked and saves carry no links (today's behaviour)", async () => {

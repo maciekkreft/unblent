@@ -55,8 +55,25 @@ const sameThing = (a, b) => (a == null && b == null) || Boolean(a && b && a.kind
 // Remember a subject's title so the About line can name a note's link this session
 // (D7, D9): a small kind:id → title table, never a claim about kinds the editor
 // understands.
-const withTitle = (titles, subject) =>
-  subject ? { ...titles, [`${subject.kind}:${subject.id}`]: subject.title } : titles;
+const withTitle = (titles, subject) => {
+  if (!subject) return titles;
+  const key = `${subject.kind}:${subject.id}`;
+  return titles[key] === subject.title ? titles : { ...titles, [key]: subject.title };
+};
+
+// What the About line names (12): the open note's first link, by a title this browser
+// has seen; else, with `about-new`, the subject on the stage while the editor holds a
+// new note, because that is what the note is linked to at its first save. Never while
+// a note may still arrive (starting, loading), so a pinned note's line does not show
+// the stage's book first. Pure, so it is tested in Node and the view only renders it.
+export function aboutTitleOf(snapshot) {
+  const { about, titles, aboutNew, subjecting, subject, baseVersion } = snapshot.context;
+  const link = about?.[0];
+  if (link) return titles?.[`${link.kind}:${link.id}`] ?? null;
+  if (!aboutNew || !subjecting || baseVersion !== null) return null;
+  const fresh = ["empty", "blank", "refollowing", "editing"].some((state) => snapshot.matches(state));
+  return fresh ? subject?.title ?? null : null;
+}
 
 const assignTyped = assign({ body: ({ event }) => event.body });
 
@@ -118,6 +135,8 @@ export const machine = setup({
     // A remembered pin (D10): a note to reopen and start pinned, skipping the subject
     // choice.
     hasPin: ({ context }) => context.restoreId != null,
+    // A keystroke landed while the start was still waiting for the subject.
+    typedAhead: ({ context }) => context.id != null,
   },
   actions: {
     save: enqueueActions(({ context, enqueue }) => {
@@ -133,6 +152,26 @@ export const machine = setup({
       if (!dirty(context)) return;
       enqueue.assign({ sent: { body: context.body } });
       enqueue.emit(savedEvent(context));
+    }),
+    // Take the subject the stage holds, from the start reply or from subject.changed, and
+    // keep its title in the browser (3.1) so the About line can name a pinned note's
+    // book after a reload. One action, so the table in context and the stored one cannot
+    // drift apart.
+    takeSubject: enqueueActions(({ context, event, enqueue }) => {
+      const subject = event.subject;
+      const titles = withTitle(context.titles, subject);
+      enqueue.assign({ subject, titles });
+      if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
+    }),
+    // The subject from the start reply is the starting picture (4.3), so it yields to a
+    // subject.changed that raced ahead of it and was taken in `starting` (context.subject
+    // is then already the newer one). Otherwise it sets the subject and keeps its title.
+    takeStartSubject: enqueueActions(({ context, event, enqueue }) => {
+      if (context.subject != null) return;
+      const subject = event.output.subject;
+      const titles = withTitle(context.titles, subject);
+      enqueue.assign({ subject, titles });
+      if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
     }),
     // A pinned editor was asked to change its note (D7): it does not, it says so
     // (note.refused, id = the note asked for) and flashes the pin for --duration-undo.
@@ -152,7 +191,7 @@ export const machine = setup({
     // note-editor-cm6, which shares this contract exactly.
     role: "note-editor",
     emits: ["note.saved", "note.opened", "note.refused"],
-    attributes: ["height", "follows", "subject"],
+    attributes: ["height", "follows", "subject", "about-new"],
     asks: ["notes: list", "notes: read", "subject: read"],
   },
   context: ({ input }) => ({
@@ -182,8 +221,14 @@ export const machine = setup({
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
-    // Titles of subjects seen this session, so the About line can name a link (D7, D9).
-    titles: {},
+    // Titles of subjects this browser has seen, so the About line can name a link (D7,
+    // D9): recalled from the view's own storage (3.1) and written back through
+    // rememberTitles, like the pin.
+    rememberTitles: input.rememberTitles,
+    titles: (input.subjecting ? input.recallTitles?.() : null) ?? {},
+    // The `about-new` attribute (12): show the subject on the stage in the About line
+    // while the editor holds a new note.
+    aboutNew: Boolean(input.aboutNew),
     // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
     pinned: false,
     // Whether a pin restore is in flight, so a successful load starts pinned and a
@@ -233,13 +278,11 @@ export const machine = setup({
     // never applied before the picture it supersedes. Ignored when not following.
     "subject.changed": [
       {
-        // Pinned, or the same thing with a new title only: take the subject and its
-        // title but keep the note on screen (D7).
-        guard: ({ context, event }) => context.subjecting && (context.pinned || sameThing(context.subject, event.subject)),
-        actions: assign({
-          subject: ({ event }) => event.subject,
-          titles: ({ context, event }) => withTitle(context.titles, event.subject),
-        }),
+        // Pinned (or a remembered pin's note still loading), or the same thing with a
+        // new title only: take the subject and its title but keep the note on screen (D7).
+        guard: ({ context, event }) =>
+          context.subjecting && (context.pinned || context.restoring || sameThing(context.subject, event.subject)),
+        actions: "takeSubject",
       },
       {
         // A different thing on the stage, not pinned: save a dirty draft (its links are
@@ -248,9 +291,8 @@ export const machine = setup({
         target: ".refollowing",
         actions: [
           "saveIfDirty",
+          "takeSubject",
           assign({
-            subject: ({ event }) => event.subject,
-            titles: ({ context, event }) => withTitle(context.titles, event.subject),
             id: null,
             body: "",
             baseVersion: null,
@@ -304,17 +346,44 @@ export const machine = setup({
       invoke: {
         src: "start",
         input: ({ context }) => ({ ask: context.ask, subjecting: context.subjecting }),
-        onDone: {
-          target: "choosing",
-          actions: assign({
-            startNotes: ({ event }) => event.output.notes,
-            subject: ({ event }) => event.output.subject,
-            titles: ({ context, event }) => withTitle(context.titles, event.output.subject),
-          }),
-        },
-        onError: { target: "choosing", actions: assign({ startNotes: [] }) },
+        onDone: [
+          // The user typed while following the stage: the subject is known now, so the
+          // note starts its throttle here and its first save carries the link (12).
+          { guard: "typedAhead", target: "editing.dirty", actions: "takeStartSubject" },
+          {
+            target: "choosing",
+            actions: ["takeStartSubject", assign({ startNotes: ({ event }) => event.output.notes })],
+          },
+        ],
+        onError: [
+          { guard: "typedAhead", target: "editing.dirty" },
+          { target: "choosing", actions: assign({ startNotes: [] }) },
+        ],
       },
-      on: { _typed: mintAndType },
+      on: {
+        _typed: [
+          {
+            // Following the stage, a keystroke stays here until the subject is known, so
+            // a new note is never saved without its link (12). The text is on screen
+            // meanwhile; the id is minted, and announced, once.
+            guard: ({ context }) => context.subjecting,
+            actions: enqueueActions(({ context, event, enqueue }) => {
+              if (context.id == null) {
+                const id = context.mint();
+                enqueue.assign({ id });
+                enqueue.emit({ type: "note.opened", id });
+              }
+              enqueue.assign({ body: event.body });
+            }),
+          },
+          mintAndType,
+        ],
+        // The stage moved before the notes arrived: take the subject and stay, so
+        // `choosing` still runs — a remembered pin is restored, and the note chosen is
+        // about the subject now on the stage. Tried before the root handler, which
+        // would re-follow and skip the choice.
+        "subject.changed": { guard: ({ context }) => context.subjecting, actions: "takeSubject" },
+      },
     },
     // The start replies are in: a remembered pin reopens its note (D10), else the newest
     // note about the subject, else the empty page. A synchronous choice, so a keystroke

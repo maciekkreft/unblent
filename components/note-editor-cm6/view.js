@@ -6,7 +6,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Prec } from "@co
 import { EditorView, Decoration, keymap, drawSelection } from "@codemirror/view";
 import { history, historyKeymap } from "@codemirror/commands";
 import { vim, Vim } from "@replit/codemirror-vim";
-import { machine, parseBody, serialize } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import refused from "./events/note.refused.json" with { type: "json" };
@@ -37,6 +37,28 @@ const pinStore = {
       else localStorage.removeItem(KEY);
     } catch {
       // No persistence available; the pin lives only for this page.
+    }
+  },
+};
+
+// The titles of subjects this browser has seen (12), kept beside the pin under a key
+// named for the role, so both members share them and a composer swap keeps them (3.1).
+// "kind:id" -> title. Wrapped like pinStore: a browser refusing storage, or a malformed
+// value, reads an empty table and drops the write.
+const TITLES_KEY = "note-editor.titles";
+const titleStore = {
+  recall() {
+    try {
+      return JSON.parse(localStorage.getItem(TITLES_KEY)) ?? {};
+    } catch {
+      return {};
+    }
+  },
+  remember(titles) {
+    try {
+      localStorage.setItem(TITLES_KEY, JSON.stringify(titles));
+    } catch {
+      // No persistence available; the titles live only for this page.
     }
   },
 };
@@ -190,6 +212,9 @@ class ActorController {
         subjecting: this.host.subject,
         recall: pinStore.recall,
         remember: pinStore.remember,
+        recallTitles: titleStore.recall,
+        rememberTitles: titleStore.remember,
+        aboutNew: this.host.aboutNew,
         flashMs,
       },
       events: { "note.saved": saved, "note.opened": opened, "note.refused": refused },
@@ -222,6 +247,10 @@ class NoteEditorCm6 extends LitElement {
     // page's bare `subject` reads as true and the manifest attribute is visible. Off is
     // exactly today's behaviour.
     subject: { type: Boolean, reflect: true },
+    // Whether an editor holding a new note names the subject on the stage in the About
+    // line (12): what the note will be linked to at its first save. Reflected so the
+    // page's bare `about-new` reads as true and the manifest attribute is visible.
+    aboutNew: { type: Boolean, attribute: "about-new", reflect: true },
   };
 
   static styles = css`
@@ -464,13 +493,11 @@ class NoteEditorCm6 extends LitElement {
     this.#actor.send({ type: "_togglePin" });
   }
 
-  // The About line (D7): the subject the open note's first link names, when that subject
-  // was seen this session; nothing otherwise (D9). The editor never learns kinds — the
-  // title comes from what subject.changed carried.
-  #aboutTitle(context) {
-    const link = context.about?.[0];
-    if (!link) return null;
-    return context.titles?.[`${link.kind}:${link.id}`] ?? null;
+  // The About line (12): computed by the machine's pure aboutTitleOf, so the rule — a
+  // saved note's link, or the stage's subject on a new note when about-new is on — is
+  // tested in Node and the view only renders the result.
+  #aboutTitle(snapshot) {
+    return aboutTitleOf(snapshot);
   }
 
   // The header shown only while following the stage (D7): the About line, and the pin
@@ -499,7 +526,7 @@ class NoteEditorCm6 extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
     const { subjecting, pinned, flashing, id } = snapshot.context;
-    const aboutTitle = this.#aboutTitle(snapshot.context);
+    const aboutTitle = this.#aboutTitle(snapshot);
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
       <div class="editor">

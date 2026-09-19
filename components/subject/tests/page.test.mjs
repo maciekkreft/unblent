@@ -111,6 +111,22 @@ const seedNote = (page, { id, title, about }) =>
 const editorBody = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector("textarea")?.value ?? "");
 
+// The About line's text (12), "About: <book>" or "" when the line is empty.
+const aboutText = (page) =>
+  page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".about")?.textContent.trim() ?? "");
+
+// Type into the editor's textarea through its input event (the gesture the editor hears).
+const typeInto = (page, text) =>
+  page.evaluate((text) => {
+    const t = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
+    t.value = text;
+    t.dispatchEvent(new Event("input", { bubbles: true }));
+  }, text);
+
+// Click the list's "New note" draft row, the gesture that opens a fresh note.
+const clickNew = (page) =>
+  page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.draft")?.click());
+
 // Whether the editor's pin reads as pressed (pinned).
 const pinPressed = (page) =>
   page.evaluate(
@@ -283,6 +299,67 @@ for (const engine of ENGINES) {
       await clickRow(page, NOTE_ONE);
       await until(async () => (await editorBody(page)) === "About one");
       await until(async () => sameSet(await shownTitles(page), ["About one"]));
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // The About line names a note's book after a reload (fault the reload race left blank),
+    // and names the stage's book on a new note before anything is typed (12, about-new).
+    // One page kept open throughout, so the book stays staged and the subject stays set;
+    // reuses the two books and notes the first test seeded, on the same context.
+    test("the About line survives a reload and names a new note", async () => {
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ready(page);
+      await until(async () => (await tileIds(page)).length >= 2, 8000);
+      const [first, second] = await tileIds(page);
+
+      // Open a book (the first test seeded one note about each; both books share the
+      // title "Sample Book"): the editor names it above the note about it. Capture that
+      // note's body, since the two books' order is the shelf's, not this test's.
+      await openTile(page, second);
+      await until(async () => (await editorBody(page)) !== "", 8000);
+      const pinnedBody = await editorBody(page);
+      assert.equal(await aboutText(page), "About: Sample Book");
+
+      // Pin, then move the stage to the other book so the pinned note's book is no longer
+      // on the stage — the case where the About line used to go blank after a reload.
+      await clickPin(page);
+      await until(async () => await pinPressed(page));
+      const listBefore = await shownTitles(page);
+      // The "open book" write for `first` must reach the server before the reload, so the
+      // reload's own hidden-tab drain has nothing in flight for WebKit to cancel.
+      const openedDone = page.waitForResponse(
+        (r) => /\/opened$/.test(r.url()) && r.request().method() === "PUT",
+        { timeout: 8000 },
+      );
+      await openTile(page, first);
+      await until(async () => !sameSet(await shownTitles(page), listBefore));
+      assert.equal(await editorBody(page), pinnedBody, "the pinned editor kept its note while the stage moved");
+      await openedDone.catch(() => {});
+
+      // Reload: the pinned note comes back, still pinned, and its About line still names
+      // its own book though that book is not the one now on the stage.
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await ready(page);
+      await until(async () => (await editorBody(page)) === pinnedBody, 8000);
+      assert.ok(await pinPressed(page), "the pinned note came back pinned");
+      assert.equal(await aboutText(page), "About: Sample Book", "its book is named though it was never on this page's stage");
+
+      // Unpin, open a fresh note: with about-new the line names the book on the stage at
+      // once, and it does not change once the note is saved (its own link names the same).
+      await clickPin(page);
+      await until(async () => !(await pinPressed(page)));
+      await clickNew(page);
+      await until(async () => (await editorBody(page)) === "");
+      assert.equal(await aboutText(page), "About: Sample Book", "a new note names its book at once");
+      await typeInto(page, "A new note about the open book");
+      await until(async () => (await editorBody(page)) === "A new note about the open book");
+      assert.equal(await aboutText(page), "About: Sample Book", "the line is unchanged once the note is saved");
+      await until(async () => (await shownTitles(page)).includes("A new note about the open book"), 8000);
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
