@@ -209,7 +209,7 @@ class SettingsSheet extends LitElement {
     return html`
       ${workshop
         ? html`
-      <h2>Pages</h2>
+      <h2>Workshop page links</h2>
       <ul>
         ${rows.map(
           (row, i) => html`
