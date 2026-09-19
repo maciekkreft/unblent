@@ -148,10 +148,21 @@ export const machine = setup({
   actors: {
     read: fromPromise(({ input }) => input.ask("dock", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // The subject starting picture, asked as its own concern (3.5) so its reply never
+    // overwrites a subject.changed that arrived first while the layout was still
+    // loading. Off with no `marks-subject` attribute: no ask, no mark. subject.changed
+    // is held for this ask until its reply lands (subject: read supersededBy).
+    readSubject: fromPromise(({ input }) =>
+      input.marking ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
   },
 }).createMachine({
   id: "dock-desk",
-  meta: { kind: "view", emits: ["dock.arranged"], attributes: ["reorders"], asks: ["dock: read", "settings: read"] },
+  meta: {
+    kind: "view",
+    emits: ["dock.arranged"],
+    attributes: ["reorders", "marks-subject"],
+    asks: ["dock: read", "settings: read", "subject: read"],
+  },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
   // `narrow` is a function, like `ask`, so the width is read when the seed is
@@ -163,7 +174,25 @@ export const machine = setup({
     stage: null,
     docks: {},
     arranging: true,
+    // Whether the page set `marks-subject` (12): mark the tab of the view that shows
+    // the subject. Off by default; arrives through input so the machine stays
+    // importable in Node.
+    marking: Boolean(input.marking),
+    // The subject, learned from subject: read then subject.changed, as
+    // { kind, id, title, view } or null. The view marks the tab whose name is `view`.
+    subject: null,
   }),
+  // The subject read runs for the machine's whole life (3.5), so the layout-load
+  // transitions never cancel it: its reply lands on its own, and no layout reply ever
+  // writes the subject, so a slow layout reply cannot re-apply a stale null over a
+  // subject.changed that arrived first. A page without `subject` (no-answerer) leaves
+  // it null and shows no mark, exactly as a page without `settings` stays arrangeable.
+  invoke: {
+    src: "readSubject",
+    input: ({ context }) => ({ ask: context.ask, marking: context.marking }),
+    onDone: { actions: assign({ subject: ({ event }) => event.output.subject ?? null }) },
+    onError: { actions: [] },
+  },
   initial: "loading",
   states: {
     loading: {
@@ -289,6 +318,12 @@ export const machine = setup({
     // control still does nothing (the guards read context.arranging).
     "settings.changed": {
       actions: assign({ arranging: ({ event }) => event.arranging }),
+    },
+    // The subject changed (4.3): mark a different tab, or none. Held for us until the
+    // starting subject: read reply lands, so it is never lost and never applied before
+    // the picture it supersedes.
+    "subject.changed": {
+      actions: assign({ subject: ({ event }) => event.subject }),
     },
   },
 });

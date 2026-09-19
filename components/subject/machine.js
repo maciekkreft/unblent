@@ -1,35 +1,43 @@
 import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
-// A derived fact component (3.1): it owns "what the user is working on" — the thing
-// on the stage — as { kind, id, title } or null, and stores nothing. It combines
-// `dock`'s staged view with the open item of the fact behind that view, asking those
-// facts for the starting picture (4.3) and following their events after. The table
-// from staged view to kind, and to the fact that names its open item, lives here
-// alone (D3): a follower compares kind and id without knowing what kinds exist, and a
-// new kind of stage content changes only this component. Everything with a side
+// A derived fact component (3.1): it owns "what the user is working on" as
+// { kind, id, title, view } or null, and stores nothing. Some views show a thing; the
+// subject is the thing shown by the one of those that was last in front on the stage,
+// and it stays while any other view is in front, because a view about the subject does
+// not replace it (3.1). It combines `dock`'s staged view with the open item of the fact
+// behind the showing view, asking those facts for the starting picture (4.3) and
+// following their events after. The table from a view to the kind of thing it shows
+// lives here alone (D3): a follower compares kind and id without knowing what kinds
+// exist, and a new kind of thing changes only this component. Everything with a side
 // effect — the asks — arrives through `input`, so this stays importable in Node.
 
-// The one staged-view → kind table (D3). Today one row: the reader stages a book,
-// whose id comes from `books: open` and whose title from `books: read`. A stage
-// showing any other view, or the reader with no book open, is no subject.
+// The one view → kind table (D3): the views that show a thing. Today one row: the
+// reader shows a book, whose id comes from `books: open` and whose title from
+// `books: read`. A view with no row is about the subject and never changes it.
 const STAGE_KINDS = { "book-reader": "book" };
 
 // A stage is a view address, `book-reader` or `book-reader#2` when a page holds more
 // than one (4.1); the kind is keyed on the base name.
 const viewOf = (stage) => (typeof stage === "string" ? stage.split("#")[0] : null);
-const kindOf = (context) => STAGE_KINDS[viewOf(context.stage)];
+const shows = (stage) => viewOf(stage) in STAGE_KINDS;
 
-// The subject the current context makes: a kind on the stage, an open id, and a
-// title we have resolved. Missing any of the three is null.
-const subjectOf = (context) => {
-  const kind = kindOf(context);
-  return kind && context.openId != null && context.title != null
-    ? { kind, id: context.openId, title: context.title }
+// The view that shows the subject: the one last in front, or, before any has been (a
+// reload with a view about the subject in front), the first row of the table (3.1).
+const showing = (context) => context.shower ?? Object.keys(STAGE_KINDS)[0];
+const kindOf = (context) => STAGE_KINDS[viewOf(showing(context))];
+
+// A staged view takes over as the shower only when it shows a thing.
+const showerAfter = (shower, stage) => (shows(stage) ? stage : shower);
+
+// The subject the current context makes: an open id and a title we have resolved, of
+// the kind the showing view shows. Missing either is null.
+const subjectOf = (context) =>
+  context.openId != null && context.title != null
+    ? { kind: kindOf(context), id: context.openId, title: context.title, view: showing(context) }
     : null;
-};
 
 const sameSubject = (a, b) =>
-  a === b || Boolean(a && b && a.kind === b.kind && a.id === b.id && a.title === b.title);
+  a === b || Boolean(a && b && a.kind === b.kind && a.id === b.id && a.title === b.title && a.view === b.view);
 
 export const machine = setup({
   actors: {
@@ -48,13 +56,13 @@ export const machine = setup({
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
   },
   guards: {
-    // A book is on the stage but we do not yet hold its title, so it must be read.
-    needsTitle: ({ context }) => Boolean(kindOf(context)) && context.openId != null && context.title == null,
+    // A book is open but we do not yet hold its title, so it must be read.
+    needsTitle: ({ context }) => context.openId != null && context.title == null,
     found: ({ event }) => "book" in event.output,
   },
   actions: {
-    // Announce the subject only when it actually differs (D3): a dock re-arrangement
-    // that keeps the same staged view, or an echo of the same book, changes nothing.
+    // Announce the subject only when it actually differs (D3): a view about the subject
+    // coming to the front, or an echo of the same book, changes nothing.
     settle: enqueueActions(({ context, enqueue }) => {
       const next = subjectOf(context);
       if (sameSubject(next, context.subject)) return;
@@ -73,9 +81,10 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
-    // The staged view address, the open book id, the title we have resolved for it,
-    // and the last subject we announced (to answer read and to emit only on a change).
-    stage: null,
+    // The address of the view that last showed a thing in front (memory only, 3.1), the
+    // open book id, the title we have resolved for it, and the last subject we announced
+    // (to answer read and to emit only on a change).
+    shower: null,
     openId: null,
     title: null,
     subject: null,
@@ -95,7 +104,7 @@ export const machine = setup({
         onDone: {
           target: "active",
           actions: assign({
-            stage: ({ event }) => event.output.stage,
+            shower: ({ context, event }) => showerAfter(context.shower, event.output.stage),
             openId: ({ event }) => event.output.openId,
           }),
         },
@@ -105,8 +114,11 @@ export const machine = setup({
     active: {
       initial: "reconcile",
       on: {
-        // The stage moved (4.3): a different view, or none, may change the subject.
-        "dock.changed": { actions: assign({ stage: ({ event }) => event.stage ?? null }), target: ".reconcile" },
+        // The stage moved (4.3): only a view that shows a thing takes the subject over.
+        "dock.changed": {
+          actions: assign({ shower: ({ context, event }) => showerAfter(context.shower, event.stage) }),
+          target: ".reconcile",
+        },
         // The open book changed here or on another device. A new id needs its title
         // read; the same id keeps the title we hold.
         "book.opened": {
@@ -122,7 +134,7 @@ export const machine = setup({
           actions: assign({ title: ({ event }) => event.title }),
           target: ".reconcile",
         },
-        // The open book was deleted: nothing is on the stage to be a subject.
+        // The open book was deleted: nothing open, so no subject.
         "book.deleted": {
           guard: ({ context, event }) => event.id === context.openId,
           actions: assign({ openId: null, title: null }),
@@ -130,7 +142,7 @@ export const machine = setup({
         },
       },
       states: {
-        // Decide whether the current stage and open book need a title read, or settle.
+        // Decide whether the open book needs a title read, or settle.
         reconcile: {
           always: [
             { guard: "needsTitle", target: "resolving" },

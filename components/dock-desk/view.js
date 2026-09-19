@@ -57,6 +57,9 @@ class ActorController {
         // width is the honest signal (the phone frame narrows the body), read when
         // the seed is chosen, and compared to the same breakpoint as the CSS.
         narrow: () => this.host.getBoundingClientRect().width < NARROW_REM * ROOT_EM(),
+        // The `marks-subject` attribute (12): read from the host's light DOM, so the
+        // machine learns it through input and stays importable in Node.
+        marking: this.host.hasAttribute("marks-subject"),
       },
       events: { "dock.arranged": arranged },
     });
@@ -90,11 +93,13 @@ class DockDesk extends LitElement {
   // any child, so the desk never touches another component.
   static shadowRootOptions = { ...LitElement.shadowRootOptions, slotAssignment: "manual" };
 
-  // The one attribute the tag understands: present means a dock's tabs can be
-  // reordered while arranging (6.4). Reflected so a page's bare `reorders` reads as
-  // true and the manifest attribute is visible. Off leaves the strip as it was.
+  // The attributes the tag understands. `reorders`: a dock's tabs can be reordered
+  // while arranging (6.4). `marks-subject` (12): mark the tab of the view that shows
+  // the subject. Both reflected so a page's bare attribute reads as true and the
+  // manifest is visible; both off leave the strip as it was.
   static properties = {
     reorders: { type: Boolean, reflect: true },
+    marksSubject: { type: Boolean, reflect: true, attribute: "marks-subject" },
   };
 
   static styles = css`
@@ -198,6 +203,15 @@ class DockDesk extends LitElement {
     [role="tab"][aria-selected="true"] {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
+    }
+    /* The subject mark (12): an indicator sitting before the label inside the tab, the
+       size and colour of the tab text (7.6), with a hair of space after it. Not a
+       control: no box, no pointer, no hit target of its own. */
+    .mark {
+      display: inline-flex;
+      align-items: center;
+      margin-right: var(--space-2xs);
+      color: var(--color-accent);
     }
     .actions {
       flex: none;
@@ -573,6 +587,11 @@ class DockDesk extends LitElement {
   #dockScroll = {};
   // The sides drawn at their size; a side not here is entering.
   #present = new Set();
+  // The subject the current render marks: the view's base name (12), or null, and the
+  // subject's title for the mark's hover text. Set in render and read by #tablist, so
+  // every strip (stage, dock, rail) marks the same tab without threading it through.
+  #marked = null;
+  #markedTitle = "";
 
   #send(type, name, side, step) {
     const event = { type };
@@ -594,8 +613,12 @@ class DockDesk extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading") || snapshot.matches("loadingSettings")) return nothing;
     const ready = snapshot.matches("ready");
-    const { views, stage, docks, arranging } = snapshot.context;
+    const { views, stage, docks, arranging, subject } = snapshot.context;
     const labelOf = (name) => views.find((v) => v.name === name)?.label ?? name;
+    // The tab to mark (12): only with the attribute, and only a subject that names a
+    // view. The address may carry an instance suffix (4.1); a tab is keyed by base name.
+    this.#marked = this.marksSubject && subject?.view ? subject.view.split("#")[0] : null;
+    this.#markedTitle = subject?.title ?? "";
     const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
     const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
     const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);
@@ -634,7 +657,9 @@ class DockDesk extends LitElement {
     `;
   }
 
-  // A group's strip: tabs first, then the shown tab's actions, then the fold.
+  // A group's strip: tabs first, then the shown tab's actions, then the fold. The tab
+  // that shows the subject carries a mark before its label (12): an indicator, not a
+  // control — no button of its own, no click, its title naming what is being worked on.
   #tablist(group, tabs, active, labelOf, activate) {
     return html`
       <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, tabs, active, activate)}>
@@ -646,6 +671,14 @@ class DockDesk extends LitElement {
               tabindex=${name === active ? 0 : -1}
               @click=${() => activate(name)}
             >
+              ${name === this.#marked
+                ? html`<span
+                    class="mark"
+                    title="Working on: ${this.#markedTitle}"
+                    aria-label="Working on: ${this.#markedTitle}"
+                    >${icon("crosshair-simple")}</span
+                  >`
+                : nothing}
               ${labelOf(name)}
             </button>
           `,

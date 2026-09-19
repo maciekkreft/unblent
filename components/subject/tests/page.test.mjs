@@ -267,6 +267,38 @@ const showHighlights = (page) =>
     (tabs.find((t) => t.offsetParent !== null) ?? tabs[0])?.click();
   });
 
+// The tab that carries the subject mark (12): its label and the mark's hover title, or
+// null when no tab is marked. The mark is a span.mark inside a [role="tab"] button.
+const markedTab = (page) =>
+  page.evaluate(() => {
+    const mark = document.querySelector("dock-desk").shadowRoot.querySelector('[role="tab"] .mark');
+    if (!mark) return null;
+    const tab = mark.closest('[role="tab"]');
+    return { label: tab.textContent.trim(), title: mark.getAttribute("title") };
+  });
+
+// Bring the docked Highlights to the stage: show its tab, then click the desk's
+// "Return Highlights to the stage" action (shown while the desk is being arranged).
+const stageHighlights = async (page) => {
+  await showHighlights(page);
+  await page.evaluate(() => {
+    const btn = [...document.querySelector("dock-desk").shadowRoot.querySelectorAll("button")].find((b) =>
+      /Return Highlights to the stage/.test(b.getAttribute("aria-label") ?? ""),
+    );
+    btn?.click();
+  });
+};
+
+// The label of the view shown on the stage (its active stage tab).
+const stagedTab = (page) =>
+  page.evaluate(
+    () =>
+      document
+        .querySelector("dock-desk")
+        .shadowRoot.querySelector('.stage [role="tab"][aria-selected="true"]')
+        ?.textContent.trim() ?? null,
+  );
+
 // The Highlights document, and the text of each painted quote line: read through the
 // EditorView the .cm-content node carries, the way the reader tests read the strip.
 const hnDoc = (page) =>
@@ -788,6 +820,37 @@ for (const engine of ENGINES) {
       await until(async () => (await hnHas(page, ".cm-undo")) && (await hnHas(page, ".cm-discarding")));
       await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-undo")?.click());
       await until(async () => (await hnHas(page, ".cm-bin")) && !(await hnHas(page, ".cm-undo")));
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // The book stays the subject when Highlights is on the stage (12): the Reader tab
+    // keeps the mark, Highlights on the stage shows its quotes, and Notes does not list
+    // the highlight as a plain note (the bug this change fixes).
+    test("Highlights on the stage keeps the book the subject and marks the Reader tab", async () => {
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ready(page);
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length > 0, 8000);
+
+      // Reader on the stage: its tab carries the mark, and the mark names the open book.
+      await until(async () => (await markedTab(page))?.label === "Reader");
+      assert.match((await markedTab(page)).title, /^Working on: .+/);
+      // Notes does not list the highlight as a plain note.
+      assert.deepEqual(await shownTitles(page), [], "the highlight is not among the plain notes");
+
+      // Bring Highlights to the stage: it still shows its quotes there, Notes still does
+      // not list the highlight, and the mark stays on the Reader tab (the book is still
+      // the subject, because Highlights is a view about it).
+      await stageHighlights(page);
+      await until(async () => (await stagedTab(page)) === "Highlights");
+      await until(async () => (await hnQuotes(page)).length > 0);
+      assert.deepEqual(await shownTitles(page), [], "Notes does not list the highlight with Highlights staged");
+      assert.equal((await markedTab(page))?.label, "Reader", "the mark stays on the Reader tab");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();

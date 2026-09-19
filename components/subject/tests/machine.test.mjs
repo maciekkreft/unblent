@@ -37,14 +37,17 @@ const readSubject = (actor) =>
 test("a book on the stage becomes the subject and is announced", async () => {
   const { actor, changed } = start({ stage: "book-reader", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } });
   await flush();
-  assert.deepEqual(changed.at(-1), { type: "subject.changed", subject: { kind: "book", id: "b1", title: "Dune" } });
-  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune" } });
+  assert.deepEqual(changed.at(-1), {
+    type: "subject.changed",
+    subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" },
+  });
+  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" } });
 });
 
-test("an instance-suffixed stage still resolves the kind", async () => {
+test("an instance-suffixed stage still resolves the kind and reports its address", async () => {
   const { changed } = start({ stage: "book-reader#2", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } });
   await flush();
-  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune" });
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune", view: "book-reader#2" });
 });
 
 test("no open book means no subject, and nothing is announced", async () => {
@@ -54,11 +57,13 @@ test("no open book means no subject, and nothing is announced", async () => {
   assert.deepEqual(await readSubject(actor), { subject: null });
 });
 
-test("a stage that is not the reader is no subject", async () => {
+test("a view about the subject in front, with a book open, is still the subject (reload)", async () => {
+  // No view that shows a thing has been in front this session, so the showing view
+  // falls back to the first row of the table (3.1): the open book is the subject.
   const { actor, changed } = start({ stage: "note-list", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } });
   await flush();
-  assert.equal(changed.length, 0);
-  assert.deepEqual(await readSubject(actor), { subject: null });
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune", view: "book-reader" });
+  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" } });
 });
 
 test("read is answered null before the first asks land", async () => {
@@ -77,7 +82,7 @@ test("opening another book switches the subject", async () => {
   changed.length = 0;
   actor.send({ type: "book.opened", id: "b2" });
   await flush();
-  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b2", title: "Emma" });
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b2", title: "Emma", view: "book-reader" });
 });
 
 test("a rename of the open book changes the subject's title", async () => {
@@ -86,7 +91,7 @@ test("a rename of the open book changes the subject's title", async () => {
   changed.length = 0;
   actor.send({ type: "book.changed", id: "b1", title: "Dune (1965)" });
   await flush();
-  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune (1965)" });
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune (1965)", view: "book-reader" });
 });
 
 test("a change to another book is ignored", async () => {
@@ -96,7 +101,7 @@ test("a change to another book is ignored", async () => {
   actor.send({ type: "book.changed", id: "b9", title: "Other" });
   await flush();
   assert.equal(changed.length, 0);
-  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune" } });
+  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" } });
 });
 
 test("deleting the open book clears the subject", async () => {
@@ -109,13 +114,16 @@ test("deleting the open book clears the subject", async () => {
   assert.deepEqual(await readSubject(actor), { subject: null });
 });
 
-test("moving another view onto the stage clears the subject", async () => {
+test("a view about the subject coming to the front keeps the subject and announces nothing", async () => {
+  // The reader showed the book; bringing highlight-notes to the front does not
+  // replace it, because it is a view about the subject (3.1).
   const { actor, changed } = start({ stage: "book-reader", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } });
   await flush();
   changed.length = 0;
-  actor.send({ type: "dock.changed", stage: "note-list", docks: {} });
+  actor.send({ type: "dock.changed", stage: "highlight-notes", docks: {} });
   await flush();
-  assert.deepEqual(changed.at(-1).subject, null);
+  assert.equal(changed.length, 0);
+  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" } });
 });
 
 test("a dock re-arrangement that keeps the staged view announces nothing", async () => {

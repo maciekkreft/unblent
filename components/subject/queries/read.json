@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The subject on the stage — a kind, an id and a title — or null when there is none (3.1).",
+    "description": "The subject — the thing shown by the view of that sort last in front on the stage (3.1), a kind, an id, a title and the view that shows it — or null when nothing is open.",
     "type": "object",
     "properties": {
       "subject": {
@@ -19,7 +19,8 @@
             "properties": {
               "kind": { "type": "string", "minLength": 1 },
               "id": { "type": "string", "minLength": 1 },
-              "title": { "type": "string" }
+              "title": { "type": "string" },
+              "view": { "type": "string", "minLength": 1 }
             },
             "required": ["kind", "id", "title"],
             "additionalProperties": false

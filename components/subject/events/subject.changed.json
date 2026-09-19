@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "What the user is working on now — the thing on the stage — as a kind, an id and a title, or null when nothing on the stage is a subject (3.1).",
+  "description": "What the user is working on now — the thing shown by the view of that sort last in front on the stage (3.1) — as a kind, an id, a title and the view that shows it, or null when nothing is open.",
   "type": "object",
   "properties": {
     "subject": {
@@ -11,7 +11,8 @@
           "properties": {
             "kind": { "type": "string", "minLength": 1 },
             "id": { "type": "string", "minLength": 1 },
-            "title": { "type": "string" }
+            "title": { "type": "string" },
+            "view": { "type": "string", "minLength": 1 }
           },
           "required": ["kind", "id", "title"],
           "additionalProperties": false
