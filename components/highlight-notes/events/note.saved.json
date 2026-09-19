@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user paused: the whole draft, and the version it was based on (null for a note this editor just minted). about, when present, replaces the note's links (12); absent leaves them (a new note carries one link to the subject).",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "title": { "type": "string" },
+    "body": { "type": "string" },
+    "baseVersion": { "type": ["integer", "null"], "minimum": 1 },
+    "about": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 },
+          "place": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "chapter": { "type": "integer", "minimum": 0 },
+                  "contentVersion": { "type": "integer", "minimum": 0 },
+                  "start": {
+                    "type": "object",
+                    "properties": {
+                      "block": { "type": "integer", "minimum": 0 },
+                      "offset": { "type": "integer", "minimum": 0 }
+                    },
+                    "required": ["block", "offset"],
+                    "additionalProperties": false
+                  },
+                  "end": {
+                    "type": "object",
+                    "properties": {
+                      "block": { "type": "integer", "minimum": 0 },
+                      "offset": { "type": "integer", "minimum": 0 }
+                    },
+                    "required": ["block", "offset"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["chapter", "contentVersion", "start", "end"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "quote": {
+            "type": "object",
+            "properties": {
+              "exact": { "type": "string" },
+              "prefix": { "type": "string" },
+              "suffix": { "type": "string" }
+            },
+            "required": ["exact", "prefix", "suffix"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["kind", "id"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["id", "title", "body", "baseVersion"],
+  "additionalProperties": false
+}

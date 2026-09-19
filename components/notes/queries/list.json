@@ -26,7 +26,48 @@
                 "type": "object",
                 "properties": {
                   "kind": { "type": "string", "minLength": 1 },
-                  "id": { "type": "string", "minLength": 1 }
+                  "id": { "type": "string", "minLength": 1 },
+                  "place": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "chapter": { "type": "integer", "minimum": 0 },
+                          "contentVersion": { "type": "integer", "minimum": 0 },
+                          "start": {
+                            "type": "object",
+                            "properties": {
+                              "block": { "type": "integer", "minimum": 0 },
+                              "offset": { "type": "integer", "minimum": 0 }
+                            },
+                            "required": ["block", "offset"],
+                            "additionalProperties": false
+                          },
+                          "end": {
+                            "type": "object",
+                            "properties": {
+                              "block": { "type": "integer", "minimum": 0 },
+                              "offset": { "type": "integer", "minimum": 0 }
+                            },
+                            "required": ["block", "offset"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["chapter", "contentVersion", "start", "end"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "exact": { "type": "string" },
+                      "prefix": { "type": "string" },
+                      "suffix": { "type": "string" }
+                    },
+                    "required": ["exact", "prefix", "suffix"],
+                    "additionalProperties": false
+                  }
                 },
                 "required": ["kind", "id"],
                 "additionalProperties": false

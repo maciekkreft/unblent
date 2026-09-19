@@ -673,6 +673,60 @@ test("a subject.changed while a remembered pin is loading keeps the pinned note"
   assert.equal(s.context.subject.id, "bookB", "the new subject was still taken");
 });
 
+// --- The stage survives a reload: the subject race (3.5) ----------------------------
+
+test("reload race: a slow notes reply does not clobber a subject.changed with the read's null", async () => {
+  // subject: read replies null (the book is not open yet), the book comes back on its
+  // own while the notes list is still loading, then the slow notes reply lands last.
+  // The start reply's null must not overwrite the changed subject.
+  let resolveList;
+  const gate = new Promise((r) => (resolveList = r));
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: null });
+    if (name === "list") return gate;
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, ask });
+  actor.send({ type: "subject.changed", subject: SUBJECT });
+  assert.equal(actor.getSnapshot().value, "starting", "still waiting for the notes");
+  assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT, "the change was taken");
+  resolveList({ notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.context.subject, SUBJECT, "the notes reply left the changed subject in place");
+  assert.equal(s.context.id, ID, "and it opened the note about the book, not the newest overall");
+});
+
+test("with no later change, the start reply's subject is the starting picture", async () => {
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.context.subject, SUBJECT, "the read reply set the subject, no change needed");
+  assert.equal(s.context.id, ID, "and opened the note about it");
+});
+
+test("a subject.changed clearing the stage to null is not overwritten by the start reply", async () => {
+  // The stage held the book at read time, then was cleared while the notes list loaded.
+  // The old "subject is non-null" guard let the start reply revive the book; the
+  // observed-change flag keeps the cleared null.
+  let resolveList;
+  const gate = new Promise((r) => (resolveList = r));
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return gate;
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, ask });
+  actor.send({ type: "subject.changed", subject: null });
+  assert.equal(actor.getSnapshot().context.subject, null, "the stage was cleared");
+  resolveList({ notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] });
+  await settle();
+  assert.equal(actor.getSnapshot().context.subject, null, "the start reply did not revive the book");
+});
+
 test("titles are recalled at start, so the About line names a link the session never saw", () => {
   // The open note is about A; the stage holds B. Only A's title, recalled from storage,
   // lets the About line name it.

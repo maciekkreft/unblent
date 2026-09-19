@@ -227,6 +227,27 @@ test("signed in: a new note's link is sent to the server in the outbox row", asy
   assert.deepEqual(api.puts[0].about, [{ kind: "book", id: "b1" }]);
 });
 
+test("a link's place and quote ride note.changed, both replies, and the api put", async () => {
+  const api = fakeApi();
+  const { actor, changed, clock } = start(fakeStore(), { api, ask: askUser("u1") });
+  await ready(actor);
+  // A highlight's link (12): the place (Path B, a book anchor) and the quote.
+  const link = {
+    kind: "book",
+    id: "b1",
+    place: { chapter: 3, contentVersion: 1, start: { block: 12, offset: 45 }, end: { block: 13, offset: 10 } },
+    quote: { exact: "the quoted text", prefix: "before ", suffix: " after" },
+  };
+  actor.send({ type: "note.saved", id: ID, title: "", body: "", baseVersion: null, about: [link] });
+  await flush();
+  await drain(clock);
+
+  assert.deepEqual(changed.at(-1).about, [link], "note.changed carries the place and quote");
+  assert.deepEqual((await askQuery(actor, "read", { id: ID })).note.about, [link], "read replies them");
+  assert.deepEqual((await askQuery(actor, "list")).notes[0].about, [link], "list replies them");
+  assert.deepEqual(api.puts.at(-1).about, [link], "and they reach the api put");
+});
+
 // --- Signed in: pending, outbox, and sync ----------------------------------------
 
 test("signed in: a save is pending, queued in the outbox, then acknowledged by the server", async () => {
@@ -371,6 +392,17 @@ test("sign-in enqueues the anonymous cache and drains it to the account", async 
   assert.equal(api.puts[0].id, ID);
   assert.equal(api.pulls.length, 1, "sign-in pulls at once");
   assert.equal(actor.getSnapshot().context.userId, "u1");
+});
+
+test("sign-in carries the anonymous note's links into the account", async () => {
+  const store = fakeStore([{ id: ID, title: "local", body: "l", version: 1, updatedAt: 5, about: [{ kind: "book", id: "b1" }] }]);
+  const api = fakeApi();
+  const { actor } = start(store, { api, ask: askUser(null) });
+  await ready(actor);
+
+  actor.send({ type: "session.changed", userId: "u1" });
+  await flush();
+  assert.deepEqual(api.puts[0].about, [{ kind: "book", id: "b1" }], "the adopted row keeps its links");
 });
 
 // --- The idle window and the immediate triggers ----------------------------------

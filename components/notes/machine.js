@@ -321,7 +321,7 @@ export const machine = setup({
                 if (!context.outbox.has(note.id)) {
                   // A tombstone uploads as a delete, so an anonymous deletion becomes
                   // the account's too (5).
-                  const row = { id: note.id, title: note.title, body: note.body, baseVersion: note.version };
+                  const row = { id: note.id, title: note.title, body: note.body, baseVersion: note.version, about: note.about ?? [] };
                   if (note.deleted) row.deleted = true;
                   context.outbox.set(note.id, row);
                   enqueue(() => context.store.outboxPut(row).catch(() => {}));

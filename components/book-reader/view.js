@@ -1,8 +1,21 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
+import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine } from "./machine.js";
+import { machine, segments, locate } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
+import saved from "./events/note.saved.json" with { type: "json" };
+import discarded from "./events/note.discarded.json" with { type: "json" };
+
+// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window
+// (the note-list idiom); the token is the one clock, shared with the bubble bar's
+// animation, so they cannot disagree.
+const toMs = (text, fallback = 3000) => {
+  const t = (text || "").trim();
+  const n = parseFloat(t);
+  if (Number.isNaN(n)) return fallback;
+  return t.endsWith("ms") ? n : n * 1000;
+};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -12,9 +25,19 @@ class ActorController {
   }
 
   hostConnected() {
+    // The undo window comes from --duration-undo, read off the host so a stylesheet or a
+    // test can set it; the machine only ever sees the number (importable in Node).
+    const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
-      events: { "book.progressed": progressed },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        mint: ulid,
+        undoMs,
+        // The attributes are parsed by the time hostConnected runs, so the actor is born
+        // knowing whether it paints and makes highlights (Decision 3).
+        highlighting: this.host.highlights,
+      },
+      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -39,6 +62,11 @@ class ActorController {
 const SLOP = 6;
 const SWIPE = 40;
 const EDGE = 0.3; // the fraction of the width, each side, that a tap turns from
+// The gap the bubble keeps from the mark it sits above (or below, when there is no room
+// above): a placement offset computed in JS, not a length that places a box in CSS (7.4).
+const BUBBLE_GAP = 6;
+// How long "Copied" stands on the Copy button after a copy, before it reads Copy again.
+const COPIED_MS = 1200;
 
 class BookReader extends LitElement {
   // The one attribute the tag understands: height="fill" makes the reader take the
@@ -46,6 +74,10 @@ class BookReader extends LitElement {
   // stage scrolling. Mandatory on the page.
   static properties = {
     height: { type: String, reflect: true },
+    // Whether the reader paints highlights and turns a text drag into one (Decision 3).
+    // Reflected so the page's bare `highlights` reads as true and the manifest attribute
+    // is visible. Off is exactly today's reader.
+    highlights: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -209,6 +241,97 @@ class BookReader extends LitElement {
     }
     .strip a {
       color: var(--color-accent);
+    }
+    /* A highlight (Decision 4): one colour, rounded ends that repeat on every wrapped
+       line (box-decoration-break). It must never move the text — no padding, margin,
+       border or inserted glyph — so the painted run measures exactly as the bare text
+       did. A commented highlight carries a thin accent line under it, drawn as an inset
+       shadow so it too adds no box. The mark is clickable (session 3 opens its bubble). */
+    .strip mark {
+      background: var(--color-highlight);
+      color: inherit;
+      border-radius: var(--radius-sm);
+      -webkit-box-decoration-break: clone;
+      box-decoration-break: clone;
+      cursor: pointer;
+    }
+    .strip mark.commented {
+      box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--color-accent);
+    }
+    /* A highlight counting down to its removal (session 3): dimmed while its bubble
+       offers Undo, so the user sees what is going. */
+    .strip mark.removing {
+      opacity: 0.5;
+    }
+    /* The highlight bubble (Decision 3): a small overlay above the tapped mark's first
+       line, inside the clipped .page. Copy and Remove; during the undo window it reads
+       Removed · Undo with the draining bar note-list uses. Placed by --bx/--by set in JS
+       (#positionBubble), so no literal length places it; it lifts above the text and a
+       press on it never turns the page (#pointerdown stops there). */
+    .bubble {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--bx, 0) var(--by, 0);
+      z-index: 1;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: var(--space-2xs) var(--space-xs);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-card);
+      font-size: var(--text-caption);
+      color: var(--color-mute);
+      white-space: nowrap;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .bubble .act {
+      appearance: none;
+      border: 0;
+      background: none;
+      font: inherit;
+      font-size: var(--text-caption);
+      cursor: pointer;
+      padding: var(--space-2xs) var(--space-xs);
+      border-radius: var(--radius-sm);
+      color: var(--color-body);
+    }
+    .bubble .act:hover {
+      color: var(--color-ink);
+      background: var(--color-surface-hover);
+    }
+    .bubble .act:focus-visible {
+      outline: var(--focus-ring);
+    }
+    .bubble .act.remove:hover {
+      color: var(--color-danger);
+    }
+    .bubble .act.undo {
+      color: var(--color-accent);
+    }
+    /* The draining bar is the visible echo of the machine's timer; both read
+       --duration-undo, so they cannot disagree (the note-list idiom). It stays under
+       reduced motion because it is the only sign of how long is left. */
+    .bubble .bar {
+      position: absolute;
+      inset-inline: 0;
+      inset-block-end: 0;
+      height: var(--space-2xs);
+      background: var(--color-accent);
+      transform-origin: left;
+      animation: drain var(--duration-undo) linear forwards;
+    }
+    @keyframes drain {
+      from {
+        transform: scaleX(1);
+      }
+      to {
+        transform: scaleX(0);
+      }
     }
     /* A definition list (the O'Reilly idiom for a set of named things): each term set
        apart, its definition indented beneath it so the pairing reads at a glance. */
@@ -406,6 +529,13 @@ class BookReader extends LitElement {
   // page — the view's own bookkeeping (Decision 4).
   #lastHtml = null;
   #lastPendingKey = null;
+  // What was last painted, so a repaint happens only when the chapter's highlight set
+  // changes (a new highlight saved, a comment added, one removed).
+  #lastHighlightKey = null;
+  // The stale highlights already tried against the chapter now shown (session 7): one
+  // re-anchor attempt per highlight per chapter load, so a passage that is not found is
+  // not searched for again until the reader loads another chapter. Reset on a rebuild.
+  #reanchored = new Set();
   #chapter = 0;
   #page = 0;
   #pages = 1;
@@ -431,6 +561,16 @@ class BookReader extends LitElement {
   // when it is the neighbour that turn asked for. Zero for every other navigation (an
   // in-chapter turn, a contents jump, a link, another device's move): those do not slide.
   #turning = 0;
+  // The highlight whose bubble is open (session 3), the view's own UI state: a click or
+  // tap on a mark opens it, a page turn, a chapter change, Escape, or a tap elsewhere
+  // closes it. Null when no bubble shows.
+  #active = null;
+  // Whether the Copy button is flashing "Copied", and the timer that clears it.
+  #copied = false;
+  #copiedTimer = 0;
+  // The reveal nonce last acted on (machine one-shot): a drag inside an existing
+  // highlight opens that highlight's bubble, told through context.reveal (Decision 6).
+  #lastReveal = 0;
 
   // The fragment element: a bare div with the click handler for in-text chapter links.
   // Made here so #swapStrip can build a second one for a chapter-crossing slide.
@@ -464,6 +604,7 @@ class BookReader extends LitElement {
     this.#leaving = null;
     cancelAnimationFrame(this.#raf);
     clearTimeout(this.#timer);
+    clearTimeout(this.#copiedTimer);
     super.disconnectedCallback();
   }
 
@@ -572,6 +713,227 @@ class BookReader extends LitElement {
       start += node.data.length;
     }
     return nodes;
+  }
+
+  // Each block's text: the concatenation of its descendant text nodes, one string per
+  // block, the basis the machine's places are counted in (12). Built from #textNodes so
+  // the offsets a place carries and the texts the machine snaps in share one origin.
+  #blockTexts() {
+    return [...this.#strip.children].map((_, block) => this.#textNodes(block).map((t) => t.node.data).join(""));
+  }
+
+  // A DOM boundary (node, offset) as a place { block, offset } into the block's text, or
+  // null when it is not inside the strip. A text-node boundary is exact; an element
+  // boundary is measured by the text before it, which a Range concatenates the same way
+  // #textNodes does (the character data of the text nodes, nothing added).
+  #pointOf(node, offset) {
+    let el = node;
+    while (el && el.parentNode !== this.#strip) el = el.parentNode;
+    if (!el || el.parentNode !== this.#strip) return null;
+    const block = [...this.#strip.children].indexOf(el);
+    if (block < 0) return null;
+    const entry = this.#textNodes(block).find((t) => t.node === node);
+    if (entry) return { block, offset: entry.start + offset };
+    const range = document.createRange();
+    range.setStart(el, 0);
+    range.setEnd(node, offset);
+    return { block, offset: range.toString().length };
+  }
+
+  // The current text selection inside the strip as a DOM range, or null when there is
+  // none. getComposedRanges is the standard way to reach across the shadow boundary
+  // (WebKit); a scoped ShadowRoot.getSelection is the fallback (Chromium).
+  #selectionRange() {
+    const doc = document.getSelection();
+    if (doc && typeof doc.getComposedRanges === "function") {
+      const [range] = doc.getComposedRanges({ shadowRoots: [this.renderRoot] });
+      if (range && !(range.startContainer === range.endContainer && range.startOffset === range.endOffset)) return range;
+    }
+    const scoped = this.renderRoot.getSelection?.();
+    if (scoped && !scoped.isCollapsed && scoped.rangeCount) return scoped.getRangeAt(0);
+    return null;
+  }
+
+  #clearSelection() {
+    document.getSelection()?.removeAllRanges?.();
+    this.renderRoot.getSelection?.()?.removeAllRanges?.();
+  }
+
+  // Turn the drag's selection into a highlight (Decision 3): both ends to places, the
+  // earlier one the start, and the message sent with the chapter's block texts. The
+  // native selection is cleared, having been the live feedback during the drag. False
+  // when there is nothing to highlight, so the caller can fall through to a tap.
+  #makeHighlight() {
+    const range = this.#selectionRange();
+    if (!range) return false;
+    const p = this.#pointOf(range.startContainer, range.startOffset);
+    const q = this.#pointOf(range.endContainer, range.endOffset);
+    this.#clearSelection();
+    if (!p || !q) return false;
+    const [start, end] = p.block > q.block || (p.block === q.block && p.offset > q.offset) ? [q, p] : [p, q];
+    if (start.block === end.block && start.offset === end.offset) return false;
+    this.#actor.send({ type: "_highlight", start, end, texts: this.#blockTexts() });
+    return true;
+  }
+
+  // Open the bubble on a highlight (session 3): its own UI state, so a normal mark click
+  // needs no message to the machine. The overlap case reaches here through the reveal
+  // one-shot (updated). A stale "Copied" is cleared, so the bubble opens reading Copy.
+  #openBubble(id) {
+    if (!id) return;
+    clearTimeout(this.#copiedTimer);
+    this.#active = id;
+    this.#copied = false;
+    this.requestUpdate();
+  }
+
+  #closeBubble() {
+    if (this.#active == null && !this.#copied) return;
+    clearTimeout(this.#copiedTimer);
+    this.#active = null;
+    this.#copied = false;
+    this.requestUpdate();
+  }
+
+  // Copy the highlighted text (Decision 3): nothing is ever copied without this, and the
+  // write is inside the click handler, where the clipboard permission holds. The label
+  // reads "Copied" for a moment; a blocked clipboard leaves it as Copy rather than error.
+  async #copyActive(quote) {
+    try {
+      await navigator.clipboard.writeText(quote?.exact ?? "");
+      clearTimeout(this.#copiedTimer);
+      this.#copied = true;
+      this.requestUpdate();
+      this.#copiedTimer = setTimeout(() => {
+        this.#copied = false;
+        this.requestUpdate();
+      }, COPIED_MS);
+    } catch {
+      // no clipboard permission (an insecure context, a denied prompt): leave it as Copy.
+    }
+  }
+
+  // Remove and undo (Decision 3): the mouse's gesture is one message, the machine runs
+  // the delayed delete; the bubble stays open, reading Removed · Undo while the window
+  // drains and Copy · Remove again once undone.
+  #removeActive() {
+    if (this.#active) this.#actor.send({ type: "_remove", id: this.#active });
+  }
+
+  #undoActive() {
+    if (this.#active) this.#actor.send({ type: "_undo", id: this.#active });
+  }
+
+  // Dim the marks counting down to a removal, so the whole passage shows it is going,
+  // not only the bubble (Decision 3). Runs every render, cheap, always in step with the
+  // machine's discarding set.
+  #reflectDiscarding(snapshot) {
+    const discarding = snapshot.context.discarding;
+    for (const mark of this.#strip.querySelectorAll("mark")) {
+      mark.classList.toggle("removing", discarding.has(mark.dataset.id));
+    }
+  }
+
+  // Place the open bubble above its mark's first line, inside the clipped .page: centred
+  // on that line and clamped within the page, above it or, with no room, below. Positions
+  // are set as custom properties (7.4). A mark gone (the chapter changed, the note
+  // removed) closes the bubble.
+  #positionBubble() {
+    const bubble = this.renderRoot.querySelector(".bubble");
+    const page = this.renderRoot.querySelector(".page");
+    if (!bubble || !page) return;
+    const mark = this.#strip.querySelector(`mark[data-id="${this.#active}"]`);
+    if (!mark) {
+      this.#closeBubble();
+      return;
+    }
+    const line = mark.getClientRects()[0] ?? mark.getBoundingClientRect();
+    const box = page.getBoundingClientRect();
+    const bw = bubble.offsetWidth;
+    const bh = bubble.offsetHeight;
+    let x = line.left - box.left + line.width / 2 - bw / 2;
+    x = Math.max(0, Math.min(Math.max(0, box.width - bw), x));
+    let y = line.top - box.top - bh - BUBBLE_GAP;
+    if (y < 0) y = line.bottom - box.top + BUBBLE_GAP;
+    y = Math.max(0, Math.min(Math.max(0, box.height - bh), y));
+    bubble.style.setProperty("--bx", `${Math.round(x)}px`);
+    bubble.style.setProperty("--by", `${Math.round(y)}px`);
+  }
+
+  // The chapter's highlights as one key, so updated() repaints only when the set changes.
+  #highlightKey(snapshot) {
+    const cv = snapshot.context.book?.contentVersion;
+    return snapshot.context.highlights
+      .filter((h) => h.place.chapter === this.#chapter && h.place.contentVersion === cv)
+      .map((h) => `${h.id}:${h.commented ? 1 : 0}:${h.place.start.block}.${h.place.start.offset}-${h.place.end.block}.${h.place.end.offset}`)
+      .sort()
+      .join("|");
+  }
+
+  // Paint the shown chapter's highlights (Decision 4): drop every existing mark first,
+  // then wrap each highlight's text, text node by text node from the last to the first,
+  // so a wrap never shifts an offset not yet used. Only highlights counted in this
+  // book's current content version are painted; a stale one waits for a re-anchor
+  // (session 7). Marks live inside blocks, so #measure and #textNodes are unaffected.
+  #paint() {
+    const strip = this.#strip;
+    if (!strip) return;
+    for (const mark of [...strip.querySelectorAll("mark")]) {
+      const parent = mark.parentNode;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    }
+    const snapshot = this.#actor.snapshot;
+    if (!snapshot?.context.highlighting) return;
+    const cv = snapshot.context.book?.contentVersion;
+    const pieces = [];
+    for (const h of snapshot.context.highlights) {
+      if (h.place.chapter !== this.#chapter || h.place.contentVersion !== cv) continue;
+      const texts = this.#blockTexts();
+      for (const seg of segments({ start: h.place.start, end: h.place.end }, texts)) {
+        for (const { node, start } of this.#textNodes(seg.block)) {
+          const from = Math.max(seg.from, start) - start;
+          const to = Math.min(seg.to, start + node.data.length) - start;
+          if (from < to) pieces.push({ block: seg.block, order: start + from, node, from, to, id: h.id, commented: h.commented });
+        }
+      }
+    }
+    // Last text node first, and within a node the later offset first, so each wrap only
+    // splits text no earlier piece still points into.
+    pieces.sort((a, b) => b.block - a.block || b.order - a.order);
+    for (const piece of pieces) {
+      const mark = document.createElement("mark");
+      mark.dataset.id = piece.id;
+      if (piece.commented) mark.className = "commented";
+      const range = document.createRange();
+      range.setStart(piece.node, piece.from);
+      range.setEnd(piece.node, piece.to);
+      range.surroundContents(mark);
+    }
+  }
+
+  // Try to re-anchor the highlights counted in an older content version (session 7): for
+  // each not yet attempted against the chapter now shown, find its passage again from the
+  // quote it kept — leniently in its own stored chapter, strictly (a single full-context
+  // match) in any other, so a highlight is not moved across chapters by chance. A found
+  // passage is handed to the reader as a corrected place; one that is not found is left
+  // for another chapter load. Only its own text is read, no measure needed, so this runs
+  // as soon as the fragment is in place.
+  #reanchor(snapshot) {
+    const { highlighting, highlights, book } = snapshot.context;
+    if (!highlighting || !book) return;
+    const cv = book.contentVersion;
+    const stale = highlights.filter((h) => h.place.contentVersion !== cv && !this.#reanchored.has(h.id));
+    if (!stale.length) return;
+    const texts = this.#blockTexts();
+    const items = [];
+    for (const h of stale) {
+      this.#reanchored.add(h.id);
+      const found = locate(texts, { place: h.place, quote: h.quote }, h.place.chapter === this.#chapter);
+      if (found) items.push({ id: h.id, place: { chapter: this.#chapter, contentVersion: cv, start: found.start, end: found.end } });
+    }
+    if (items.length) this.#actor.send({ type: "_reanchor", items });
   }
 
   // The page holding the character at an offset into a block. A collapsed space has
@@ -712,6 +1074,7 @@ class BookReader extends LitElement {
   // A turn that stays in the chapter shows the neighbouring page; a turn past the edge
   // loads a neighbour chapter, which schedules its own settling afresh.
   #next() {
+    this.#closeBubble();
     if (this.#page + 1 < this.#pages) {
       this.#endSettle();
       this.#turn(this.#page + 1);
@@ -722,6 +1085,7 @@ class BookReader extends LitElement {
   }
 
   #prev() {
+    this.#closeBubble();
     if (this.#page > 0) {
       this.#endSettle();
       this.#turn(this.#page - 1);
@@ -740,12 +1104,20 @@ class BookReader extends LitElement {
       this.#prev();
     } else if (e.key === "Home") {
       e.preventDefault();
+      this.#closeBubble();
       this.#endSettle();
       this.#turn(0);
     } else if (e.key === "End") {
       e.preventDefault();
+      this.#closeBubble();
       this.#endSettle();
       this.#turn(this.#pages - 1);
+    } else if (e.key === "Escape" && this.#active != null) {
+      // Escape closes an open bubble (Norman: every action reversible in one step). Not
+      // a letter key, so the reader still claims none (staying open for Vim, the plan).
+      e.preventDefault();
+      e.stopPropagation();
+      this.#closeBubble();
     }
   }
 
@@ -791,9 +1163,23 @@ class BookReader extends LitElement {
       else this.#prev();
       return;
     }
+    // A mouse selection over the text is a highlight, not a swipe or a tap (Decision 3):
+    // it is what the abandoned mouse drag left behind, and the native selection was the
+    // live feedback. Nothing is copied; the drag never turns the page.
+    if (this.highlights && d.mouse && this.#makeHighlight()) return;
     if (d.dragging || d.abandoned) return; // a drag that is neither a swipe nor a clean tap
     // A click that ends on a selection (a double-click on a word) is about the text.
-    if (d.mouse && !(this.shadowRoot.getSelection?.() ?? document.getSelection())?.isCollapsed) return;
+    if (d.mouse && !(this.renderRoot.getSelection?.() ?? document.getSelection())?.isCollapsed) return;
+    // A tap or click on a highlight is about that highlight: it opens its bubble (Copy,
+    // Remove), never a page turn (session 3).
+    const mark = e.target.closest("mark");
+    if (mark) {
+      this.#openBubble(mark.dataset.id);
+      return;
+    }
+    // A tap anywhere else closes an open bubble (Norman: forgiveness); a turn below
+    // closes it too, so a tap in the outer third both closes and turns.
+    this.#closeBubble();
     // A tap: the outer third on each side turns; the middle does nothing, so a reach
     // for a link or a figure is never a turn.
     const rel = (e.clientX - e.currentTarget.getBoundingClientRect().left) / d.width;
@@ -815,6 +1201,7 @@ class BookReader extends LitElement {
       if (this.#lastHtml !== null) {
         this.#setFragment("");
         this.#lastHtml = null;
+        this.#lastHighlightKey = null;
       }
       return;
     }
@@ -824,6 +1211,8 @@ class BookReader extends LitElement {
     if (!snapshot.matches({ reading: "ready" })) return;
     const { html: htmlText, pending, chapter } = snapshot.context;
     const pendingKey = pending ? `${pending.chapter}:${pending.block}` : null;
+    // A rebuilt fragment starts with no marks, so it must be repainted whatever the key.
+    let rebuilt = false;
     if (this.#lastHtml !== htmlText || this.#chapter !== chapter) {
       // A turn that crossed into the very neighbour it asked for slides; every other
       // chapter change (a jump, a link, another device's move) does not. Consume the
@@ -833,16 +1222,76 @@ class BookReader extends LitElement {
       const slide =
         dir !== 0 && chapter === this.#chapter + dir && !matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.#lastHtml = htmlText;
+      // A fresh chapter (a turn, a jump, a re-import) rebuilds the marks, so any open
+      // bubble's mark is gone: close it (session 3).
+      this.#closeBubble();
       if (slide) this.#swapStrip(dir);
       this.#chapter = chapter;
+      // A fresh chapter is a fresh re-anchor pass: the stale highlights get one attempt
+      // against this chapter's text (session 7).
+      this.#reanchored = new Set();
       this.#wantBlock = pending && pending.chapter === chapter ? pending.block : 0;
       this.#setFragment(htmlText);
       this.#schedule();
+      rebuilt = true;
     } else if (pendingKey !== this.#lastPendingKey && pending && pending.chapter === chapter) {
       this.#wantBlock = pending.block;
       this.#schedule();
     }
     this.#lastPendingKey = pendingKey;
+    // Paint after the fragment and place are applied: a fresh fragment lost its marks, and
+    // a saved, changed or removed highlight changes the key. Marks are inline, so painting
+    // after the measure never shifts a column (Decision 4).
+    const highlightKey = this.#highlightKey(snapshot);
+    if (rebuilt || highlightKey !== this.#lastHighlightKey) {
+      this.#paint();
+      this.#lastHighlightKey = highlightKey;
+    }
+    // Re-anchor stale highlights against the chapter now laid out (session 7): find each
+    // passage again from its quote and, when found, hand the reader the corrected place. It
+    // adopts the place (repainting on the next render) and re-saves the note.
+    this.#reanchor(snapshot);
+    // A drag inside an existing highlight opens that highlight's bubble (Decision 6),
+    // told through the reveal one-shot; acted on once per nonce so a later render never
+    // re-opens it.
+    const reveal = snapshot.context.reveal;
+    if (reveal && reveal.n !== this.#lastReveal) {
+      this.#lastReveal = reveal.n;
+      this.#openBubble(reveal.id);
+    }
+    // The removal countdown dims its marks; the open bubble is placed after the marks
+    // are painted. A highlight the fact has removed (its window elapsed) closes the bubble.
+    this.#reflectDiscarding(snapshot);
+    if (this.#active != null) {
+      if (snapshot.context.highlights.some((h) => h.id === this.#active)) this.#positionBubble();
+      else this.#closeBubble();
+    }
+  }
+
+  // The bubble for the open highlight (session 3): Copy and Remove, or, while the removal
+  // window drains, Removed · Undo with the bar. Rendered inside .page so it is placed
+  // against the same box #positionBubble measures; a press on it never turns the page.
+  #bubble(snapshot) {
+    if (this.#active == null) return nothing;
+    const h = snapshot.context.highlights.find((x) => x.id === this.#active);
+    if (!h) return nothing;
+    const removing = snapshot.context.discarding.has(this.#active);
+    return html`
+      <div class="bubble" role="group" aria-label="Highlight" @pointerdown=${(e) => e.stopPropagation()}>
+        ${removing
+          ? html`
+              <span class="removed">Removed ·</span>
+              <button class="act undo" type="button" @click=${() => this.#undoActive()}>Undo</button>
+              <span class="bar"></span>
+            `
+          : html`
+              <button class="act" type="button" @click=${() => this.#copyActive(h.quote)}>
+                ${this.#copied ? "Copied" : "Copy"}
+              </button>
+              <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
+            `}
+      </div>
+    `;
   }
 
   render() {
@@ -871,7 +1320,7 @@ class BookReader extends LitElement {
           @pointerup=${(e) => this.#pointerup(e)}
           @pointercancel=${() => (this.#drag = null)}
         >
-          <div class="page"></div>
+          <div class="page">${this.#bubble(snapshot)}</div>
         </div>
         <div class="footer">
           <span class="chap">${title}</span>

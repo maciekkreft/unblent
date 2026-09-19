@@ -354,10 +354,88 @@ test("keeps-open: deleting the open note leaves nothing apart", async () => {
   assert.equal(apartId(actor), null, "the row is gone, so nothing is apart");
 });
 
+// --- Highlights are hidden from the list (Decision 2) ------------------------------
+
+// bk1 is on the stage; A is a plain note about it, H is a highlight of it (a placed
+// link), B a plain note about another book.
+const withHighlight = () =>
+  answering({
+    notes: [
+      { id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] },
+      { id: B, title: "B", updatedAt: 20, about: [{ kind: "book", id: "bk2" }] },
+      {
+        id: C,
+        title: "Highlight",
+        updatedAt: 30,
+        about: [{ kind: "book", id: "bk1", place: { chapter: 0 }, quote: { exact: "x" } }],
+      },
+    ],
+    subject: { kind: "book", id: "bk1", title: "One" },
+  });
+
+test("a highlight of the subject is kept but never shown in the list", async () => {
+  const { actor } = list({ following: true, ask: withHighlight() });
+  await tick();
+  assert.deepEqual(ids(actor), [C, B, A], "every note is kept");
+  assert.deepEqual(shownIds(actor), [A], "the highlight is hidden; the plain note shows");
+});
+
+test("a highlight note open in the editor is not kept apart either", async () => {
+  const { actor } = list({ following: true, keepsOpen: true, ask: withHighlight() });
+  await tick();
+  actor.send({ type: "note.opened", id: C });
+  assert.equal(apartId(actor), null, "a highlight is hidden even when it is the open note");
+});
+
 test("keeps-open: the apart row can be picked like any row", async () => {
   const { actor, selected } = list({ following: true, keepsOpen: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: B });
   actor.send({ type: "_pick", id: B });
   assert.deepEqual(selected, [B], "picking the apart row emits note.selected");
+});
+
+// --- The stage survives a reload: the subject race (3.5) ----------------------------
+
+const SUBJECT_BK1 = { kind: "book", id: "bk1", title: "Dune" };
+
+test("reload race: a slow notes reply does not clobber a subject.changed with the read's null", async () => {
+  // subject: read replies null (the book is not open yet), the book comes back on its
+  // own (subject.changed) while the notes list is still loading, then the slow notes
+  // reply lands last. It must not re-apply the read's stale null over the book.
+  let resolveList;
+  const gate = new Promise((r) => (resolveList = r));
+  const ask = (target, name) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: null });
+    if (name === "list") return gate;
+    return Promise.resolve({});
+  };
+  const { actor } = list({ following: true, ask });
+  await tick();
+  assert.equal(actor.getSnapshot().value, "loading", "the notes list is still loading");
+  actor.send({ type: "subject.changed", subject: SUBJECT_BK1 });
+  assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT_BK1, "the change was taken");
+  resolveList({ notes: [{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }] });
+  await tick();
+  const s = actor.getSnapshot();
+  assert.equal(s.value, "ready");
+  assert.deepEqual(s.context.subject, SUBJECT_BK1, "the notes reply left the changed subject in place");
+  assert.deepEqual(shownIds(actor), [A], "so the list scopes to the book on the stage, not every note");
+});
+
+test("with no later change, the subject read's reply is the starting picture and survives the notes reply", async () => {
+  let resolveList;
+  const gate = new Promise((r) => (resolveList = r));
+  const ask = (target, name) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT_BK1 });
+    if (name === "list") return gate;
+    return Promise.resolve({});
+  };
+  const { actor } = list({ following: true, ask });
+  await tick();
+  assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT_BK1, "the read reply set the subject on its own");
+  resolveList({ notes: [{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }] });
+  await tick();
+  assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT_BK1, "the split did not lose the starting picture");
+  assert.deepEqual(shownIds(actor), [A]);
 });

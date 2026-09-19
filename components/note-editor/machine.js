@@ -160,14 +160,16 @@ export const machine = setup({
     takeSubject: enqueueActions(({ context, event, enqueue }) => {
       const subject = event.subject;
       const titles = withTitle(context.titles, subject);
-      enqueue.assign({ subject, titles });
+      enqueue.assign({ subject, titles, subjectObserved: true });
       if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
     }),
-    // The subject from the start reply is the starting picture (4.3), so it yields to a
-    // subject.changed that raced ahead of it and was taken in `starting` (context.subject
-    // is then already the newer one). Otherwise it sets the subject and keeps its title.
+    // The subject from the start reply is the starting picture (4.3, 3.5), so it yields
+    // to any subject.changed that raced ahead of it while the notes list was still
+    // loading — including one that cleared the stage to null, which the old "subject is
+    // non-null" guard would then overwrite with the read's stale value. Once a change
+    // has been observed (subjectObserved) the reply is the older picture and is dropped.
     takeStartSubject: enqueueActions(({ context, event, enqueue }) => {
-      if (context.subject != null) return;
+      if (context.subjectObserved) return;
       const subject = event.output.subject;
       const titles = withTitle(context.titles, subject);
       enqueue.assign({ subject, titles });
@@ -221,6 +223,10 @@ export const machine = setup({
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
+    // Whether a subject.changed has been observed (3.5): once it has, the start reply's
+    // subject is the older starting picture and must not overwrite the change — even
+    // when the change cleared the stage to null. takeStartSubject reads this.
+    subjectObserved: false,
     // Titles of subjects this browser has seen, so the About line can name a link (D7,
     // D9): recalled from the view's own storage (3.1) and written back through
     // rememberTitles, like the pin.

@@ -54,16 +54,18 @@
     <script type="module" src="/static/components/book-reader/view.js"></script>
     <script type="module" src="/static/components/note-list/view.js"></script>
     <script type="module" src="/static/components/note-editor/view.js"></script>
+    <script type="module" src="/static/components/highlight-notes/view.js"></script>
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
     <dock-desk>
-      <book-reader label="Reader" height="fill"></book-reader>
+      <book-reader label="Reader" height="fill" highlights></book-reader>
       <book-shelf label="Books" side="left" renames></book-shelf>
       <book-toc label="Contents" side="left" shows-on="book.selected"></book-toc>
       <note-list subject keeps-open label="Notes" side="right"></note-list>
       <note-editor follows subject about-new label="Editor" side="right" height="fill" shows-on="note.selected"></note-editor>
+      <highlight-notes label="Highlights" side="right" height="fill"></highlight-notes>
       <layout-switch control></layout-switch>
       <session-switch control></session-switch>
     </dock-desk>

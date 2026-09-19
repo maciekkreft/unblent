@@ -37,13 +37,20 @@ const upsert = (notes, changed) => sorted([...notes.filter((n) => n.id !== chang
 const isAbout = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id);
 
+// A highlight of the subject: a link to it that carries a place (12). The list hides
+// highlight notes — they belong to the Highlights page, not the note list (Decision 2).
+const isHighlight = (note, subject) =>
+  subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
+
 // The rows to show (D6): while following, with a subject on the stage, only the notes
 // about it — a note always belongs to what is on the stage, so there is no "all notes"
 // choice to fall back to. Only when nothing on the stage is a subject (a null subject,
 // or the attribute off) is there nothing to scope by, and every note shows. The draft
 // row is the view's, always on top of whichever set this returns.
 export const shown = ({ notes, following, subject }) =>
-  following && subject != null ? notes.filter((n) => isAbout(n, subject)) : notes;
+  following && subject != null
+    ? notes.filter((n) => isAbout(n, subject) && !isHighlight(n, subject))
+    : notes;
 
 // The note the editor has open, when it is not among the shown notes (12): a pinned
 // note after the stage moved, or one still open after unpinning. Only while following a
@@ -54,7 +61,7 @@ export const shown = ({ notes, following, subject }) =>
 export const apart = ({ notes, following, keepsOpen, subject, open }) => {
   if (!keepsOpen || !following || subject == null || open == null) return null;
   const note = notes.find((n) => n.id === open);
-  return note && !isAbout(note, subject) ? note : null;
+  return note && !isAbout(note, subject) && !isHighlight(note, subject) ? note : null;
 };
 
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
@@ -67,17 +74,18 @@ const without = (set, id) => {
 
 export const machine = setup({
   actors: {
-    // The starting picture (4.3): every note, and — only when following the stage —
-    // the current subject. Each ask holds its own supersession events for us (the
-    // list's note.changed/note.deleted, the subject's subject.changed) until its reply
-    // lands, so a change that races the start is applied after it, in order.
-    load: fromPromise(async ({ input }) => {
-      const [notes, subject] = await Promise.all([
-        input.ask("notes", "list", {}),
-        input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }),
-      ]);
-      return { notes: notes?.notes, subject: subject?.subject ?? null };
-    }),
+    // The notes starting picture (4.3): note.changed / note.deleted are held for this
+    // ask until its reply lands, so a change that races the start is applied after it.
+    load: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // The subject starting picture, asked as its own concern (3.5) so its reply — the
+    // picture at read time — never overwrites a subject.changed that arrived first while
+    // the notes list was still loading. On a reload the notes pull is slow and the book
+    // on the stage comes back on its own after; batching the subject into the notes
+    // reply would let that slow reply re-apply the read's stale null over the book.
+    // subject.changed is held for this ask until its reply lands (subject: read
+    // supersededBy), so it is applied after the starting picture, in order.
+    readSubject: fromPromise(({ input }) =>
+      input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
   },
 }).createMachine({
   id: "note-list",
@@ -119,20 +127,27 @@ export const machine = setup({
     // and note.changed brings its real row, whereupon a fresh one is minted.
     draft: input.mint(),
   }),
+  // The subject read runs for the machine's whole life (3.5), so the notes-load
+  // transition (loading → ready) never cancels it: its reply lands on its own and sets
+  // the subject, and the notes reply never writes the subject, so a slow notes reply
+  // cannot re-apply the read's stale null over a subject.changed that arrived first.
+  invoke: {
+    src: "readSubject",
+    input: ({ context }) => ({ ask: context.ask, following: context.following }),
+    onDone: { actions: assign({ subject: ({ event }) => event.output.subject ?? null }) },
+    onError: { actions: [] },
+  },
   initial: "loading",
   states: {
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ ask: context.ask, following: context.following }),
+        input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           {
             guard: ({ event }) => Array.isArray(event.output.notes),
             target: "ready",
-            actions: assign({
-              notes: ({ event }) => sorted(event.output.notes.map(row)),
-              subject: ({ event }) => event.output.subject,
-            }),
+            actions: assign({ notes: ({ event }) => sorted(event.output.notes.map(row)) }),
           },
           // notes could not answer (offline, no answerer): an honest empty list.
           { target: "failed" },

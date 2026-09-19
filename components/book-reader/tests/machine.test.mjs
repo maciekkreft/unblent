@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine } from "../machine.js";
+import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -272,4 +272,602 @@ test("an unreachable server shows offline, and retry reloads the chapter", async
   await flush();
   assert.ok(actor.getSnapshot().matches({ reading: "ready" }));
   assert.equal(ctx(actor).html, "<p>y</p>");
+});
+
+// --- Highlights (Decision 1-4, session 2) ----------------------------------------
+//
+// The pure text functions first: everything the mouse gesture and the painting rest on
+// works on text positions alone (block, offset), so it is checked here without a browser.
+
+test("snapToWords grows a mid-word range to whole words and trims white space", () => {
+  const texts = ["Hello there world"];
+  assert.deepEqual(snapToWords(texts, { start: { block: 0, offset: 7 }, end: { block: 0, offset: 9 } }), {
+    start: { block: 0, offset: 6 },
+    end: { block: 0, offset: 11 },
+  });
+  // A range that grabbed the trailing space is trimmed back to the word.
+  assert.deepEqual(snapToWords(texts, { start: { block: 0, offset: 6 }, end: { block: 0, offset: 12 } }), {
+    start: { block: 0, offset: 6 },
+    end: { block: 0, offset: 11 },
+  });
+});
+
+test("snapToWords keeps the apostrophe inside a word and crosses blocks by trimming", () => {
+  assert.deepEqual(snapToWords(["don't stop"], { start: { block: 0, offset: 2 }, end: { block: 0, offset: 3 } }), {
+    start: { block: 0, offset: 0 },
+    end: { block: 0, offset: 5 },
+  });
+  // A selection dragged from one block into the white space at the top of the next trims
+  // back into the first block.
+  assert.deepEqual(snapToWords(["one two", "three"], { start: { block: 0, offset: 4 }, end: { block: 1, offset: 0 } }), {
+    start: { block: 0, offset: 4 },
+    end: { block: 0, offset: 7 },
+  });
+});
+
+test("snapToWords returns null when nothing but white space is left", () => {
+  assert.equal(snapToWords(["   "], { start: { block: 0, offset: 0 }, end: { block: 0, offset: 3 } }), null);
+});
+
+test("quoteOf takes the exact text, joins blocks with a newline, and keeps context", () => {
+  const texts = ["one two", "three four"];
+  assert.deepEqual(quoteOf(texts, { start: { block: 0, offset: 4 }, end: { block: 1, offset: 5 } }), {
+    exact: "two\nthree",
+    prefix: "one ",
+    suffix: " four",
+  });
+  // Context is capped at 32 characters, each in its own block.
+  const long = ["x".repeat(50) + "WORD" + "y".repeat(50)];
+  const q = quoteOf(long, { start: { block: 0, offset: 50 }, end: { block: 0, offset: 54 } });
+  assert.equal(q.exact, "WORD");
+  assert.equal(q.prefix, "x".repeat(32));
+  assert.equal(q.suffix, "y".repeat(32));
+});
+
+test("overlaps is true for a nested, an abutting, and a cross-block range, false when apart", () => {
+  const a = { start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } };
+  assert.equal(overlaps(a, { start: { block: 0, offset: 2 }, end: { block: 0, offset: 4 } }), true, "nested");
+  assert.equal(overlaps(a, { start: { block: 0, offset: 5 }, end: { block: 0, offset: 8 } }), true, "touching counts");
+  assert.equal(overlaps(a, { start: { block: 0, offset: 6 }, end: { block: 0, offset: 8 } }), false, "a gap apart");
+  const across = { start: { block: 0, offset: 2 }, end: { block: 1, offset: 3 } };
+  assert.equal(overlaps(across, { start: { block: 1, offset: 0 }, end: { block: 1, offset: 2 } }), true, "cross-block");
+});
+
+test("segments splits a range per block and drops the empty ones", () => {
+  const texts = ["abcdef", "ghij", "klmno"];
+  assert.deepEqual(segments({ start: { block: 0, offset: 4 }, end: { block: 2, offset: 3 } }, texts), [
+    { block: 0, from: 4, to: 6 },
+    { block: 1, from: 0, to: 4 },
+    { block: 2, from: 0, to: 3 },
+  ]);
+  // A range ending exactly at the top of a block paints nothing in that block.
+  assert.deepEqual(segments({ start: { block: 0, offset: 4 }, end: { block: 1, offset: 0 } }, ["abcdef", "ghi"]), [
+    { block: 0, from: 4, to: 6 },
+  ]);
+});
+
+test("highlightsOf keeps only the book's placed links, with the comment flag", () => {
+  const notes = [
+    { id: "n1", title: "", about: [{ kind: "book", id: "bk1", place: { chapter: 0 }, quote: { exact: "a" } }] },
+    { id: "n2", title: "Note", about: [{ kind: "book", id: "bk1", place: { chapter: 1 }, quote: { exact: "b" } }] },
+    { id: "n3", title: "", about: [{ kind: "book", id: "bk1" }] }, // about the book but not a highlight
+    { id: "n4", title: "", about: [{ kind: "book", id: "bk2", place: { chapter: 0 }, quote: { exact: "c" } }] },
+    { id: "n5", title: "", about: [] },
+  ];
+  assert.deepEqual(highlightsOf(notes, "bk1"), [
+    { id: "n1", place: { chapter: 0 }, quote: { exact: "a" }, commented: false },
+    { id: "n2", place: { chapter: 1 }, quote: { exact: "b" }, commented: true },
+  ]);
+});
+
+test("hasComment reads the title, which the Highlights page fills from the comment", () => {
+  assert.equal(hasComment({ title: "" }), false);
+  assert.equal(hasComment({ title: "A remark" }), true);
+});
+
+// --- The _highlight message: snap, guard overlaps, emit note.saved -----------------
+
+const HL_TEXTS = ["Hello there world"];
+const HL_ID = "01ARZ3NDEKTSV4RRFFQ69G5H01";
+
+// A highlight note about the open book (ID), used to seed the reader's known highlights.
+const highlightNote = (id, place, over = {}) => ({
+  id,
+  title: over.title ?? "",
+  about: [{ kind: "book", id: ID, place, quote: { exact: "x", prefix: "", suffix: "" } }],
+});
+
+const PLACE_HELLO = { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } };
+
+// Open a book with highlighting on, a mint, and a notes: list the fake `ask` answers.
+async function openHL({ notes = [], mint } = {}) {
+  const clock = new SimulatedClock();
+  const ask = (target, name) => {
+    if (target === "notes" && name === "list") return Promise.resolve({ notes });
+    if (name === "open") return Promise.resolve({ id: null });
+    if (name === "read") return Promise.resolve(bookReply());
+    if (name === "chapter") return Promise.resolve({ title: "t", html: "<p>x</p>" });
+    return Promise.resolve({});
+  };
+  const actor = createActor(machine, { input: { ask, mint: mint ?? (() => HL_ID), highlighting: true }, clock });
+  const saved = [];
+  actor.on("note.saved", (e) => saved.push(e));
+  actor.start();
+  await flush();
+  actor.send({ type: "book.opened", id: ID });
+  await flush();
+  return { actor, saved, clock };
+}
+
+test("opening a book with highlighting loads its highlights from notes: list", async () => {
+  const { actor } = await openHL({ notes: [highlightNote("n1", PLACE_HELLO, { title: "A note" })] });
+  assert.deepEqual(ctx(actor).highlights, [
+    { id: "n1", place: PLACE_HELLO, quote: { exact: "x", prefix: "", suffix: "" }, commented: true },
+  ]);
+});
+
+test("with highlighting off the reader asks notes nothing and keeps no highlights", async () => {
+  const asked = [];
+  const ask = (target, name) => {
+    asked.push([target, name]);
+    if (name === "open") return Promise.resolve({ id: null });
+    if (name === "read") return Promise.resolve(bookReply());
+    if (name === "chapter") return Promise.resolve({ title: "t", html: "<p>x</p>" });
+    return Promise.resolve({});
+  };
+  const actor = createActor(machine, { input: { ask, mint: () => HL_ID, highlighting: false } });
+  actor.start();
+  await flush();
+  actor.send({ type: "book.opened", id: ID });
+  await flush();
+  assert.deepEqual(ctx(actor).highlights, []);
+  assert.ok(!asked.some(([t, n]) => t === "notes" && n === "list"), "notes: list is never asked");
+});
+
+test("_highlight snaps the range and emits a new note with the place and quote", async () => {
+  const { actor, saved } = await openHL();
+  // A drag inside "there" (offsets 7-9) snaps to the whole word.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 7 }, end: { block: 0, offset: 9 }, texts: HL_TEXTS });
+  await flush();
+  assert.equal(saved.length, 1);
+  const note = saved[0];
+  assert.equal(note.id, HL_ID);
+  assert.equal(note.title, "");
+  assert.equal(note.body, "");
+  assert.equal(note.baseVersion, null);
+  assert.deepEqual(note.about, [
+    {
+      kind: "book",
+      id: ID,
+      place: { chapter: 0, contentVersion: 1, start: { block: 0, offset: 6 }, end: { block: 0, offset: 11 } },
+      quote: { exact: "there", prefix: "Hello ", suffix: " world" },
+    },
+  ]);
+});
+
+test("_highlight over a known highlight of the chapter makes nothing", async () => {
+  const { actor, saved } = await openHL({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  // A drag inside "Hello" (already highlighted) snaps back onto it and emits nothing.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 2 }, end: { block: 0, offset: 4 }, texts: HL_TEXTS });
+  await flush();
+  assert.deepEqual(saved, []);
+});
+
+test("a highlight in another chapter does not block a new one here", async () => {
+  const other = { chapter: 2, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } };
+  const { actor, saved } = await openHL({ notes: [highlightNote("n1", other)] });
+  actor.send({ type: "_highlight", start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 }, texts: HL_TEXTS });
+  await flush();
+  assert.equal(saved.length, 1, "the other chapter's highlight does not overlap this one");
+});
+
+test("_highlight that snaps to nothing (white space) emits nothing", async () => {
+  const { actor, saved } = await openHL();
+  actor.send({ type: "_highlight", start: { block: 0, offset: 5 }, end: { block: 0, offset: 6 }, texts: HL_TEXTS });
+  await flush();
+  assert.deepEqual(saved, []);
+});
+
+test("note.changed adds a highlight, updates its comment, and drops one that lost its place", async () => {
+  const { actor } = await openHL();
+  const placed = highlightNote("n1", PLACE_HELLO);
+  actor.send({ type: "note.changed", ...placed, body: "", version: 1, updatedAt: 10 });
+  assert.equal(ctx(actor).highlights.length, 1);
+  assert.equal(ctx(actor).highlights[0].commented, false);
+  // A comment arrives: the flag flips, no second row.
+  actor.send({ type: "note.changed", ...highlightNote("n1", PLACE_HELLO, { title: "Remark" }), body: "Remark", version: 2, updatedAt: 20 });
+  assert.equal(ctx(actor).highlights.length, 1);
+  assert.equal(ctx(actor).highlights[0].commented, true);
+  // The link loses its place (unhighlighted): it drops out of the painted set.
+  actor.send({ type: "note.changed", id: "n1", title: "Remark", body: "Remark", version: 3, updatedAt: 30, about: [{ kind: "book", id: ID }] });
+  assert.deepEqual(ctx(actor).highlights, []);
+});
+
+test("note.deleted removes a highlight", async () => {
+  const { actor } = await openHL({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  assert.equal(ctx(actor).highlights.length, 1);
+  actor.send({ type: "note.deleted", id: "n1" });
+  assert.deepEqual(ctx(actor).highlights, []);
+});
+
+// --- Merging overlapping highlights (Decision 6, session 6) -------------------------
+//
+// The pure geometry and text first, then the whole exchange with a fake `ask`: a drag that
+// overlaps or touches known highlights combines them into the earliest, grown to the union,
+// its comments joined; the rest are discarded (note.discarded).
+
+test("union covers the earliest start and the latest end of a set of ranges", () => {
+  assert.deepEqual(
+    union([
+      { start: { block: 0, offset: 3 }, end: { block: 0, offset: 8 } },
+      { start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } },
+      { start: { block: 1, offset: 0 }, end: { block: 1, offset: 4 } },
+    ]),
+    { start: { block: 0, offset: 0 }, end: { block: 1, offset: 4 } },
+  );
+  // A single range is its own union.
+  const one = { start: { block: 0, offset: 2 }, end: { block: 0, offset: 6 } };
+  assert.deepEqual(union([one]), one);
+});
+
+test("joined stacks the non-empty comments with a blank line, dropping the bare ones", () => {
+  assert.equal(joined(["First", "", "Second"]), "First\n\nSecond");
+  assert.equal(joined(["  ", "Only"]), "Only");
+  assert.equal(joined(["", "  "]), "");
+});
+
+// A full highlight note (list row plus body/version/about) the fake `ask` answers reads of.
+const fullNote = (id, place, { body = "", title = "", version = 1, extra = [] } = {}) => ({
+  id,
+  title,
+  body,
+  version,
+  updatedAt: 10,
+  about: [{ kind: "book", id: ID, place, quote: { exact: "x", prefix: "", suffix: "" } }, ...extra],
+});
+
+// "Hello there world": Hello 0-5, world 12-17. Open a book highlighting, with a notes: list
+// of the given full notes and a notes: read that answers each by id.
+async function openMerge(notes) {
+  const clock = new SimulatedClock();
+  const byId = Object.fromEntries(notes.map((n) => [n.id, n]));
+  const ask = (target, name, payload) => {
+    if (target === "notes" && name === "list")
+      return Promise.resolve({ notes: notes.map(({ id, title, about }) => ({ id, title, about })) });
+    if (target === "notes" && name === "read")
+      return Promise.resolve(byId[payload.id] ? { note: byId[payload.id] } : { error: "not-found" });
+    if (name === "open") return Promise.resolve({ id: null });
+    if (name === "read") return Promise.resolve(bookReply());
+    if (name === "chapter") return Promise.resolve({ title: "t", html: "<p>x</p>" });
+    return Promise.resolve({});
+  };
+  const actor = createActor(machine, { input: { ask, mint: () => HL_ID, highlighting: true }, clock });
+  const saved = [];
+  const discarded = [];
+  actor.on("note.saved", (e) => saved.push(e));
+  actor.on("note.discarded", (e) => discarded.push(e));
+  actor.start();
+  await flush();
+  actor.send({ type: "book.opened", id: ID });
+  await flush();
+  return { actor, saved, discarded };
+}
+
+const P_HELLO = { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } };
+const P_WORLD = { chapter: 0, contentVersion: 1, start: { block: 0, offset: 12 }, end: { block: 0, offset: 17 } };
+
+test("a drag over two highlights merges them into the earliest, comments joined in book order", async () => {
+  const { actor, saved, discarded } = await openMerge([
+    fullNote("n1", P_HELLO, { title: "First", body: "First comment", version: 3 }),
+    fullNote("n2", P_WORLD, { title: "Second", body: "Second comment", version: 5 }),
+  ]);
+  // Drag from inside "Hello" to inside "world": snaps to the whole span, overlapping both.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 2 }, end: { block: 0, offset: 14 }, texts: HL_TEXTS });
+  await flush();
+  assert.equal(saved.length, 1, "one survivor is saved");
+  const s = saved[0];
+  assert.equal(s.id, "n1", "the earliest highlight survives");
+  assert.equal(s.baseVersion, 3, "saved on the survivor's version");
+  assert.equal(s.body, "First comment\n\nSecond comment", "both comments, book order, a blank line between");
+  assert.equal(s.title, "First comment", "title is the joined comment's first non-empty line");
+  assert.deepEqual(s.about, [
+    {
+      kind: "book",
+      id: ID,
+      place: { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 17 } },
+      quote: { exact: "Hello there world", prefix: "", suffix: "" },
+    },
+  ]);
+  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n2" }], "the other is discarded");
+  assert.equal(ctx(actor).merge, null, "the merge plan is cleared");
+});
+
+test("a drag that extends one highlight grows it, discarding nothing", async () => {
+  const { actor, saved, discarded } = await openMerge([
+    fullNote("n1", P_HELLO, { title: "A note", body: "A note", version: 2 }),
+  ]);
+  // From inside "Hello" out into "there": the snapped range extends past the highlight.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 2 }, end: { block: 0, offset: 8 }, texts: HL_TEXTS });
+  await flush();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].id, "n1");
+  assert.equal(saved[0].body, "A note", "its own comment is kept");
+  assert.deepEqual(saved[0].about[0].place, { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 11 } });
+  assert.deepEqual(discarded, [], "nothing discarded when one highlight simply grows");
+});
+
+test("a merge keeps the survivor's other links and only re-places its book link", async () => {
+  const other = { kind: "note", id: "01ARZ3NDEKTSV4RRFFQ69G5X99" };
+  const { actor, saved } = await openMerge([
+    fullNote("n1", P_HELLO, { title: "First", body: "First", version: 1, extra: [other] }),
+    fullNote("n2", P_WORLD, { title: "", body: "", version: 1 }),
+  ]);
+  actor.send({ type: "_highlight", start: { block: 0, offset: 2 }, end: { block: 0, offset: 14 }, texts: HL_TEXTS });
+  await flush();
+  assert.equal(saved.length, 1);
+  assert.ok(saved[0].about.some((l) => l.kind === "note" && l.id === other.id), "the note link survives the merge");
+  assert.equal(saved[0].body, "First", "a bare highlight adds no comment");
+});
+
+test("a drag entirely inside one highlight makes nothing (no merge, no save)", async () => {
+  const { actor, saved, discarded } = await openMerge([fullNote("n1", P_HELLO, { title: "A", body: "A", version: 1 })]);
+  // Inside "Hello", within [0,5]: snaps back onto it, wholly contained.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 1 }, end: { block: 0, offset: 3 }, texts: HL_TEXTS });
+  await flush();
+  assert.deepEqual(saved, []);
+  assert.deepEqual(discarded, []);
+  assert.equal(ctx(actor).merge, null);
+});
+
+// --- The bubble: reveal a contained highlight, remove with undo (session 3) ---------
+//
+// A drag inside an existing highlight opens its bubble instead of making a note; the
+// bubble's Remove is the same delayed delete as note-list, driven here with a
+// SimulatedClock. All decisions are the actor's; the bubble's placement is the view's
+// (page.test.mjs).
+
+const UNDO_MS = 3000;
+
+// Open a book highlighting, with an undo window and a note.discarded collector.
+async function openRemove({ notes = [] } = {}) {
+  const clock = new SimulatedClock();
+  const ask = (target, name) => {
+    if (target === "notes" && name === "list") return Promise.resolve({ notes });
+    if (name === "open") return Promise.resolve({ id: null });
+    if (name === "read") return Promise.resolve(bookReply());
+    if (name === "chapter") return Promise.resolve({ title: "t", html: "<p>x</p>" });
+    return Promise.resolve({});
+  };
+  const actor = createActor(machine, { input: { ask, mint: () => HL_ID, highlighting: true, undoMs: UNDO_MS }, clock });
+  const discarded = [];
+  actor.on("note.discarded", (e) => discarded.push(e));
+  actor.start();
+  await flush();
+  actor.send({ type: "book.opened", id: ID });
+  await flush();
+  return { actor, discarded, clock };
+}
+
+test("a drag wholly inside a highlight reveals its bubble instead of making a note", async () => {
+  const { actor, saved } = await openHL({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  assert.equal(ctx(actor).reveal, null, "no reveal before any drag");
+  // Inside "Hello" ([0,5]): snaps back onto it, wholly contained.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 1 }, end: { block: 0, offset: 3 }, texts: HL_TEXTS });
+  await flush();
+  assert.deepEqual(saved, [], "no new note is made");
+  assert.equal(ctx(actor).reveal?.id, "n1", "the contained highlight is revealed to the view");
+  const first = ctx(actor).reveal.n;
+  // A second such drag bumps the nonce, so the view acts on it again.
+  actor.send({ type: "_highlight", start: { block: 0, offset: 2 }, end: { block: 0, offset: 4 }, texts: HL_TEXTS });
+  await flush();
+  assert.equal(ctx(actor).reveal.n, first + 1, "the nonce advances so the view re-opens the bubble");
+});
+
+test("_remove starts the undo window and only its elapse discards the highlight", async () => {
+  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  actor.send({ type: "_remove", id: "n1" });
+  await flush();
+  assert.ok(ctx(actor).discarding.has("n1"), "the highlight is counting down");
+  clock.increment(UNDO_MS - 1);
+  await flush();
+  assert.deepEqual(discarded, [], "nothing is discarded before the window closes");
+  clock.increment(1);
+  await flush();
+  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }], "the removal is a fact once the window ends");
+  assert.ok(!ctx(actor).discarding.has("n1"), "the countdown is cleared");
+});
+
+test("_undo cancels the window; an undone removal never becomes a fact", async () => {
+  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  actor.send({ type: "_remove", id: "n1" });
+  await flush();
+  actor.send({ type: "_undo", id: "n1" });
+  await flush();
+  assert.ok(!ctx(actor).discarding.has("n1"), "the countdown is cancelled");
+  clock.increment(UNDO_MS * 2);
+  await flush();
+  assert.deepEqual(discarded, [], "nothing is discarded after an undo");
+});
+
+test("a second _remove while counting down is a no-op (one discard, not two)", async () => {
+  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  actor.send({ type: "_remove", id: "n1" });
+  await flush();
+  actor.send({ type: "_remove", id: "n1" });
+  await flush();
+  clock.increment(UNDO_MS);
+  await flush();
+  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }], "the second remove did not schedule a second discard");
+});
+
+test("note.deleted clears a standing countdown and its timer for that id", async () => {
+  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  actor.send({ type: "_remove", id: "n1" });
+  await flush();
+  // The fact confirms the delete (another device, or this one's own elapse): the
+  // countdown is cleared and its timer cancelled, so no second discard fires.
+  actor.send({ type: "note.deleted", id: "n1" });
+  await flush();
+  assert.ok(!ctx(actor).discarding.has("n1"), "the countdown is cleared");
+  assert.deepEqual(ctx(actor).highlights, [], "the highlight is gone");
+  clock.increment(UNDO_MS * 2);
+  await flush();
+  assert.deepEqual(discarded, [], "no discard fires after the fact already removed it");
+});
+
+test("a chapter turn during the undo window does not cancel the removal", async () => {
+  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
+  actor.send({ type: "_remove", id: "n1" });
+  await flush();
+  // Turn into the next chapter mid-window (reading.ready → fetching → ready): the delayed
+  // removal must survive the substate change.
+  actor.send({ type: "_next" });
+  await flush();
+  assert.ok(actor.getSnapshot().matches({ reading: "ready" }), `expected reading.ready, got ${JSON.stringify(state(actor))}`);
+  clock.increment(UNDO_MS);
+  await flush();
+  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }], "the removal fired despite the chapter turn");
+});
+
+// --- Re-anchoring after a re-import (session 7) -------------------------------------
+//
+// locate is pure text-finding, checked first: from the quote a highlight kept, it finds the
+// passage again in a chapter whose blocks may have shifted under a new content version. Then
+// the whole exchange with a fake `ask`: the view hands the corrected places (_reanchor), the
+// reader adopts them at once and reads, then re-saves each note with its book link re-placed.
+
+test("locate keeps the old coordinates when the text there still matches", () => {
+  const link = { place: { chapter: 0, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } }, quote: { exact: "Hello", prefix: "", suffix: " there world" } };
+  assert.deepEqual(locate(["Hello there world"], link, true), { start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } });
+});
+
+test("locate finds the quote again when a re-import shifted the blocks", () => {
+  // A block was prepended, so the old coordinates point past nothing; the quote is found
+  // in its new block, its surroundings confirming the match.
+  const link = {
+    place: { chapter: 0, start: { block: 0, offset: 6 }, end: { block: 0, offset: 11 } },
+    quote: { exact: "there", prefix: "Hello ", suffix: " world" },
+  };
+  assert.deepEqual(locate(["Intro", "Hello there world"], link, true), {
+    start: { block: 1, offset: 6 },
+    end: { block: 1, offset: 11 },
+  });
+});
+
+test("locate follows a cross-block quote through the shift", () => {
+  const link = {
+    place: { chapter: 0, start: { block: 0, offset: 4 }, end: { block: 1, offset: 5 } },
+    quote: { exact: "two\nthree", prefix: "one ", suffix: " four" },
+  };
+  assert.deepEqual(locate(["intro", "one two", "three four"], link, true), {
+    start: { block: 1, offset: 4 },
+    end: { block: 2, offset: 5 },
+  });
+});
+
+test("locate prefers a match whose surroundings match over the nearest one", () => {
+  // The old coordinates no longer hold the quote (they point at "here"), so the exact text
+  // is searched for: the first "word" is nearer the old start, but the second's surroundings
+  // match the kept prefix and suffix, so it wins.
+  const link = {
+    place: { chapter: 0, start: { block: 0, offset: 5 }, end: { block: 0, offset: 9 } },
+    quote: { exact: "word", prefix: "the ", suffix: " gone" },
+  };
+  assert.deepEqual(locate(["word here", "the word gone"], link, true), {
+    start: { block: 1, offset: 4 },
+    end: { block: 1, offset: 8 },
+  });
+});
+
+test("locate falls back to the nearest match when none has matching surroundings", () => {
+  const link = {
+    // The old coordinates run past the shortened chapter, so the exact text is searched
+    // for; neither "cat" has the kept surroundings, so the one nearest the old start wins.
+    place: { chapter: 0, start: { block: 0, offset: 8 }, end: { block: 0, offset: 30 } },
+    quote: { exact: "cat", prefix: "ZZZ", suffix: "!!!" },
+  };
+  assert.deepEqual(locate(["cat dog cat"], link, true), {
+    start: { block: 0, offset: 8 },
+    end: { block: 0, offset: 11 },
+  });
+});
+
+test("locate in another chapter takes only a single full-context match", () => {
+  const link = {
+    place: { chapter: 9, start: { block: 5, offset: 0 }, end: { block: 5, offset: 5 } },
+    quote: { exact: "there", prefix: "Hello ", suffix: " world" },
+  };
+  // A single match whose surroundings match is accepted across chapters.
+  assert.deepEqual(locate(["Hello there world"], link, false), {
+    start: { block: 0, offset: 6 },
+    end: { block: 0, offset: 11 },
+  });
+  // A match whose surroundings do not match is refused across chapters.
+  assert.equal(locate(["there is a thing"], link, false), null);
+  // Two full-context matches are ambiguous across chapters, so neither is taken.
+  assert.equal(locate(["Hello there world", "Hello there world"], link, false), null);
+});
+
+test("locate returns null when the quote is gone", () => {
+  const link = {
+    place: { chapter: 0, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } },
+    quote: { exact: "there", prefix: "", suffix: "" },
+  };
+  assert.equal(locate(["nothing here"], link, true), null);
+});
+
+// A stale highlight (its place counted in content version 1) while the book is at 2, plus a
+// notes: read that answers with the whole note, so the re-anchor can read and re-save it.
+const NEW_PLACE = { chapter: 2, contentVersion: 2, start: { block: 1, offset: 3 }, end: { block: 1, offset: 8 } };
+
+async function openReanchor(notes) {
+  const clock = new SimulatedClock();
+  const byId = Object.fromEntries(notes.map((n) => [n.id, n]));
+  const ask = (target, name, payload) => {
+    if (target === "notes" && name === "list")
+      return Promise.resolve({ notes: notes.map(({ id, title, about }) => ({ id, title, about })) });
+    if (target === "notes" && name === "read")
+      return Promise.resolve(byId[payload.id] ? { note: byId[payload.id] } : { error: "not-found" });
+    if (name === "open") return Promise.resolve({ id: null });
+    if (name === "read") return Promise.resolve(bookReply({ contentVersion: 2 }));
+    if (name === "chapter") return Promise.resolve({ title: "t", html: "<p>x</p>" });
+    return Promise.resolve({});
+  };
+  const actor = createActor(machine, { input: { ask, mint: () => HL_ID, highlighting: true }, clock });
+  const saved = [];
+  actor.on("note.saved", (e) => saved.push(e));
+  actor.start();
+  await flush();
+  actor.send({ type: "book.opened", id: ID });
+  await flush();
+  return { actor, saved };
+}
+
+test("_reanchor adopts the corrected place at once and re-saves the note", async () => {
+  const { actor, saved } = await openReanchor([
+    fullNote("n1", { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 5 } }, { title: "A note", body: "A comment", version: 4 }),
+  ]);
+  actor.send({ type: "_reanchor", items: [{ id: "n1", place: NEW_PLACE }] });
+  // The place is adopted before the save so the mark paints in the current version at once.
+  assert.deepEqual(ctx(actor).highlights[0].place, NEW_PLACE, "the corrected place is adopted immediately");
+  await flush();
+  assert.equal(saved.length, 1, "the note is re-saved once");
+  const s = saved[0];
+  assert.equal(s.id, "n1");
+  assert.equal(s.title, "A note", "the same title");
+  assert.equal(s.body, "A comment", "the same body");
+  assert.equal(s.baseVersion, 4, "saved on the note's version");
+  assert.deepEqual(s.about[0].place, NEW_PLACE, "only the book link's place is replaced");
+  assert.deepEqual(s.about[0].quote, { exact: "x", prefix: "", suffix: "" }, "the kept quote is unchanged");
+  assert.equal(ctx(actor).reanchor, null, "the plan is cleared");
+  assert.ok(actor.getSnapshot().matches({ reading: "ready" }));
+});
+
+test("_reanchor keeps a note the read cannot find from being re-saved", async () => {
+  const { actor, saved } = await openReanchor([]); // notes: read answers not-found
+  actor.send({ type: "_reanchor", items: [{ id: "gone", place: NEW_PLACE }] });
+  await flush();
+  assert.deepEqual(saved, [], "a note that cannot be read is not re-saved");
+  assert.equal(ctx(actor).reanchor, null);
+  assert.ok(actor.getSnapshot().matches({ reading: "ready" }));
 });

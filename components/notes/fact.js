@@ -22,7 +22,12 @@ const KEEPALIVE_MAX_BYTES = 32 * 1024;
 
 const api = {
   async put(row) {
-    const body = JSON.stringify({ title: row.title, body: row.body, baseVersion: row.baseVersion, deleted: Boolean(row.deleted) });
+    const payload = { title: row.title, body: row.body, baseVersion: row.baseVersion, deleted: Boolean(row.deleted) };
+    // about must ride the write whenever the outbox row carries it, or a signed-in
+    // user's links never reach the server; absent, the server leaves the stored
+    // links unchanged (12, D2).
+    if (row.about !== undefined) payload.about = row.about;
+    const body = JSON.stringify(payload);
     const res = await fetch(`/api/notes/${row.id}`, {
       method: "PUT",
       credentials: "same-origin",
