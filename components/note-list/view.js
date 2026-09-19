@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown } from "./machine.js";
+import { machine, shown, apart } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 
@@ -35,6 +35,9 @@ class ActorController {
         // the notes about it. Parsed by the time hostConnected runs. Off is exactly
         // today's behaviour.
         following: this.host.subject,
+        // The `keeps-open` attribute (12): keep a row for the note the editor has open
+        // even when it is not about the subject.
+        keepsOpen: this.host.keepsOpen,
       },
       events: { "note.selected": selected, "note.discarded": discarded },
     });
@@ -82,6 +85,7 @@ class NoteList extends LitElement {
   // manifest attribute is visible. Off is exactly today's behaviour.
   static properties = {
     subject: { type: Boolean, reflect: true },
+    keepsOpen: { type: Boolean, attribute: "keeps-open", reflect: true },
   };
 
   static styles = css`
@@ -172,6 +176,19 @@ class NoteList extends LitElement {
     .text {
       flex: 1;
       min-width: 0;
+    }
+    /* The open note kept in the list though it is not about the subject (12): a caption
+       naming why it is here, and a rule under the row that sets it off from the notes
+       that are about the subject below it. */
+    .tag {
+      display: block;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
+    .row.apart {
+      border-bottom: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-0);
+      margin-bottom: var(--space-2xs);
     }
     /* The next-note row is one line, centred in a note row's two-line height so the
        list keeps a constant row height. The height is the two line-boxes a note row
@@ -326,7 +343,15 @@ class NoteList extends LitElement {
   #rows(snapshot) {
     const notes = shown(snapshot.context);
     const { draft } = snapshot.context;
-    return draft ? [{ id: draft, draft: true }, ...notes] : notes;
+    // The open note, when it is not about the subject (12), leads the list set apart, so
+    // its highlighted row is never missing. It is a real row: pickable, deletable, and it
+    // takes the roving focus like any other.
+    const kept = apart(snapshot.context);
+    const lead = [
+      ...(kept ? [{ ...kept, apart: true }] : []),
+      ...(draft ? [{ id: draft, draft: true }] : []),
+    ];
+    return [...lead, ...notes];
   }
 
   #focusRow(rows, open) {
@@ -450,6 +475,7 @@ class NoteList extends LitElement {
     const classes = [
       "row",
       r.draft ? "draft" : "",
+      r.apart ? "apart" : "",
       isDiscarding ? "discarding" : "",
       d && d.dragging ? "dragging" : "",
       d && d.armed ? "armed" : "",
@@ -504,6 +530,7 @@ class NoteList extends LitElement {
         <span class="under">Delete</span>
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
+            ${r.apart ? html`<span class="tag">Open from elsewhere</span>` : nothing}
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "Untitled" : r.title}</span>
             <span class="subtitle">${r.subtitle || " "}</span>
           </span>

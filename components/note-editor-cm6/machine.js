@@ -272,6 +272,9 @@ export const machine = setup({
     // A command addressing this instance (4.4). A pinned editor refuses it (D7); the
     // note asked for rides in note.refused. Otherwise it lands like a load always has.
     load: [
+      // Pinned but told to load the note already on screen: nothing changes, and it is
+      // not refused (12) — the list keeps a clickable row for a pinned note (keeps-open).
+      { guard: ({ context, event }) => context.pinned && event.id === context.id },
       { guard: ({ context }) => context.pinned, actions: "refuse" },
       {
         target: ".loading",
@@ -282,6 +285,7 @@ export const machine = setup({
     // selection. A pinned editor refuses it (D7). An unfollowing editor leaves it to the
     // bus to record as ignored.
     "note.selected": [
+      { guard: ({ context, event }) => context.follows && context.pinned && event.id === context.id },
       { guard: ({ context }) => context.follows && context.pinned, actions: "refuse" },
       {
         guard: ({ context }) => context.follows,

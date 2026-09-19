@@ -99,8 +99,10 @@ class BookReader extends LitElement {
       padding-inline: var(--space-lg);
       box-sizing: border-box;
       overflow: hidden;
-      /* A container so the strip can name the page's width as 100cqw (below). */
-      container-type: inline-size;
+      /* A size container, so the strip can name the page's width as 100cqw (below) and
+         an image its height as 100cqh: a percentage on an image resolves against the
+         multicol box, which spans every column, so it must size to the page instead. */
+      container-type: size;
     }
     /* The fragment, built outside Lit's template and appended once (view.js): a single
        tall column box, as wide as the page, whose overflow becomes further columns of
@@ -227,9 +229,17 @@ class BookReader extends LitElement {
     .strip dd > p:first-child {
       margin-block-start: var(--space-2xs);
     }
+    /* An image sizes to the page, never past it: a full-page plate or a cover fills the
+       page without spilling onto a second. Its own percentage cannot say so — inside the
+       multicol it resolves against the box that spans every column (100% width was two
+       pages wide in WebKit, 100% height did not resolve at all) — so it names the page
+       through the .page container (100cqw, 100cqh). It keeps clear of the page edge by
+       the figure's own block margins and one margin more, so a lone full-page figure fits
+       within the one page with room to spare and never tips onto a second (WebKit
+       fragments a box that fills the column to the pixel). */
     .strip img {
-      max-width: 100%;
-      max-height: 100%;
+      max-inline-size: 100cqw;
+      max-block-size: calc(100cqh - 3 * var(--space-md));
       object-fit: contain;
       break-inside: avoid;
     }

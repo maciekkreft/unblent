@@ -34,6 +34,10 @@
   --color-warning: light-dark(#e8590c, #ffa94d);
   --color-warning-subtle: light-dark(rgba(232, 89, 12, 0.08), rgba(255, 169, 77, 0.14));
 
+  /* Highlight: the marker tone behind a highlighted passage in a book. Yellow, so it
+     is never mistaken for the orange text selection that can lie over it. */
+  --color-highlight: light-dark(rgba(250, 204, 21, 0.38), rgba(250, 204, 21, 0.26));
+
   /* Border */
   --color-border: light-dark(#e8e3db, #322b25);
   --color-border-strong: light-dark(#d0cabe, #473f37);

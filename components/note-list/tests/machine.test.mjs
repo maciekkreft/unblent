@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown } from "../machine.js";
+import { machine, shown, apart } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -24,11 +24,11 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, keepsOpen = false } = {}) {
   const selected = [];
   const discarded = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following, keepsOpen }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.start();
@@ -47,6 +47,7 @@ const answering = ({ notes = [], subject = null }) => (target, name) => {
 
 const ids = (actor) => actor.getSnapshot().context.notes.map((n) => n.id);
 const shownIds = (actor) => shown(actor.getSnapshot().context).map((n) => n.id);
+const apartId = (actor) => apart(actor.getSnapshot().context)?.id ?? null;
 
 test("the starting picture is notes: list, sorted newest first", async () => {
   const asked = [];
@@ -298,4 +299,65 @@ test("subject.changed switches which notes are shown", async () => {
   assert.deepEqual(shownIds(actor), [B]);
   actor.send({ type: "subject.changed", subject: null });
   assert.deepEqual(shownIds(actor), [B, A], "no subject on the stage shows every note");
+});
+
+// --- keeps-open: the open note always has a row (12) --------------------------------
+
+// bk1 is on the stage; A is about bk1, B is about bk2. The editor has B open.
+const twoBooks = () =>
+  answering({
+    notes: [
+      { id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] },
+      { id: B, title: "B", updatedAt: 20, about: [{ kind: "book", id: "bk2" }] },
+    ],
+    subject: { kind: "book", id: "bk1", title: "One" },
+  });
+
+test("keeps-open: the open note not about the subject leads apart, the shown set unchanged", async () => {
+  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+  await tick();
+  actor.send({ type: "note.opened", id: B });
+  assert.equal(apartId(actor), B, "the open note is kept apart");
+  assert.deepEqual(shownIds(actor), [A], "the shown set is still only the subject's notes");
+});
+
+test("keeps-open: the open note about the subject is not apart", async () => {
+  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+  await tick();
+  actor.send({ type: "note.opened", id: A });
+  assert.equal(apartId(actor), null, "an open note already in the shown set is not doubled");
+});
+
+test("with keeps-open off, nothing is apart", async () => {
+  const { actor } = list({ following: true, keepsOpen: false, ask: twoBooks() });
+  await tick();
+  actor.send({ type: "note.opened", id: B });
+  assert.equal(apartId(actor), null);
+});
+
+test("keeps-open: subject.changed to the open note's subject folds it back into the list", async () => {
+  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+  await tick();
+  actor.send({ type: "note.opened", id: B });
+  assert.equal(apartId(actor), B);
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "bk2", title: "Two" } });
+  assert.equal(apartId(actor), null, "the open note is now about the subject");
+  assert.deepEqual(shownIds(actor), [B], "so it is in the shown set");
+});
+
+test("keeps-open: deleting the open note leaves nothing apart", async () => {
+  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+  await tick();
+  actor.send({ type: "note.opened", id: B });
+  assert.equal(apartId(actor), B);
+  actor.send({ type: "note.deleted", id: B });
+  assert.equal(apartId(actor), null, "the row is gone, so nothing is apart");
+});
+
+test("keeps-open: the apart row can be picked like any row", async () => {
+  const { actor, selected } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+  await tick();
+  actor.send({ type: "note.opened", id: B });
+  actor.send({ type: "_pick", id: B });
+  assert.deepEqual(selected, [B], "picking the apart row emits note.selected");
 });

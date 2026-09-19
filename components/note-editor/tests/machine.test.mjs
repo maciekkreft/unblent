@@ -472,6 +472,24 @@ test("a pinned editor refuses note.selected and load, naming the note it refused
   assert.equal(actor.getSnapshot().context.id, open);
 });
 
+test("a pinned editor does not refuse a select or load of the note it already shows", async () => {
+  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
+  const { actor, refused } = editor({
+    subjecting: true,
+    follows: true,
+    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
+  });
+  await settle();
+  actor.send({ type: "_togglePin" });
+  const open = actor.getSnapshot().context.id;
+
+  actor.send({ type: "note.selected", id: open });
+  actor.send({ type: "load", id: open });
+  assert.equal(actor.getSnapshot().context.id, open, "the note on screen did not change");
+  assert.equal(actor.getSnapshot().context.flashing, false, "the pin did not flash");
+  assert.deepEqual(refused, [], "its own note is not refused");
+});
+
 test("a refusal flashes the pin for the flash window, and a repeat restarts it", async () => {
   const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
   const { actor, clock } = editor({

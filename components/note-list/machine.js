@@ -45,6 +45,18 @@ const isAbout = (note, subject) =>
 export const shown = ({ notes, following, subject }) =>
   following && subject != null ? notes.filter((n) => isAbout(n, subject)) : notes;
 
+// The note the editor has open, when it is not among the shown notes (12): a pinned
+// note after the stage moved, or one still open after unpinning. Only while following a
+// subject and only with the keeps-open attribute; otherwise the open note is always in
+// the shown set, so there is nothing apart. Its row is the same row as any other; the
+// view sets it apart. Computed from context, so no handler decides it: note.opened,
+// subject.changed, note.changed and note.deleted keep the inputs current.
+export const apart = ({ notes, following, keepsOpen, subject, open }) => {
+  if (!keepsOpen || !following || subject == null || open == null) return null;
+  const note = notes.find((n) => n.id === open);
+  return note && !isAbout(note, subject) ? note : null;
+};
+
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
 // context immutable; the view re-renders on every snapshot regardless).
 const without = (set, id) => {
@@ -75,7 +87,7 @@ export const machine = setup({
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
     // no filtering, every note shown. On, the list shows only the notes about the
     // subject on the stage; there is no switch to all notes.
-    attributes: ["subject"],
+    attributes: ["subject", "keeps-open"],
     asks: ["notes: list", "subject: read"],
   },
   context: ({ input }) => ({
@@ -84,6 +96,10 @@ export const machine = setup({
     // Whether the page set the `subject` attribute (D5); it arrives through input so
     // the machine stays importable in Node.
     following: Boolean(input.following),
+    // The `keeps-open` attribute (12): keep a row for the note the editor has open even
+    // when it is not about the subject, so the highlighted row is never missing. Off by
+    // default; arrives through input so the machine stays importable in Node.
+    keepsOpen: Boolean(input.keepsOpen),
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
