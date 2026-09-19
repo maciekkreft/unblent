@@ -67,8 +67,100 @@ const rightActive = (page) =>
     el.shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]')?.textContent.trim(),
   );
 
+// The right dock's tab labels, in strip order.
+const rightTabs = (page) =>
+  page.locator("dock-desk").evaluate((el) =>
+    [...el.shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]')].map((t) => t.textContent.trim()),
+  );
+
+// Click a strip button by its accessible name, inside the desk's shadow root.
+const clickAction = (page, label) =>
+  page.locator("dock-desk").evaluate((el, label) => {
+    el.shadowRoot.querySelector(`.dock.right .panel [aria-label="${label}"]`).click();
+  }, label);
+
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // The dock stem seeds Trace on the right with arranging on (no settings fact, so
+  // the desk stays arrangeable). Docking a stage tab beside it gives two tabs, and
+  // the reorder arrows (6.4, `reorders` on the stem page) move the shown one; the
+  // order survives a reload because `dock` stores it.
+  test(`reorder arrows move a docked tab and the order persists in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      context.setDefaultTimeout(4000);
+      const page = await context.newPage();
+      const problems = [];
+      page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
+      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+      page.on("requestfailed", (req) =>
+        problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`),
+      );
+      page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
+
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
+      await page.locator("dock-desk").waitFor();
+      await page.waitForFunction(
+        () => document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right .panel [role="tab"]'),
+      );
+
+      // One tab on the right shows no reorder arrows.
+      assert.deepEqual(await rightTabs(page), ["Trace"]);
+      const reorderCount = await page
+        .locator("dock-desk")
+        .evaluate(
+          (el) =>
+            el.shadowRoot.querySelectorAll(
+              '.dock.right [aria-label$="earlier"], .dock.right [aria-label$="later"]',
+            ).length,
+        );
+      assert.equal(reorderCount, 0, "a lone tab shows no reorder arrows");
+
+      // Dock the active stage tab (Tokens) to the right: now two tabs, Tokens shown.
+      await clickInDesk(page, '.stage [aria-label="Dock Tokens right"]');
+      await page.waitForFunction(
+        () =>
+          document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]').length === 2,
+      );
+      assert.deepEqual(await rightTabs(page), ["Trace", "Tokens"]);
+
+      // Tokens is last, so "earlier" is enabled and "later" is disabled.
+      await clickAction(page, "Move Tokens earlier");
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector("dock-desk")
+            .shadowRoot.querySelector('.dock.right .panel [role="tab"]')
+            .textContent.trim() === "Tokens",
+      );
+      assert.deepEqual(await rightTabs(page), ["Tokens", "Trace"], "the shown tab moved one place earlier");
+
+      // The order is a stored fact: a reload keeps it.
+      await page.reload();
+      await page.locator("dock-desk").waitFor();
+      await page.waitForFunction(
+        () =>
+          document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]').length === 2,
+      );
+      assert.deepEqual(await rightTabs(page), ["Tokens", "Trace"], "the reordered layout survives a reload");
+
+      // Move it back: the opposite arrow undoes it, one step (Norman, forgiving).
+      await clickAction(page, "Move Tokens later");
+      await page.waitForFunction(
+        () =>
+          [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]')]
+            .map((t) => t.textContent.trim())
+            .join() === "Trace,Tokens",
+      );
+      assert.deepEqual(await rightTabs(page), ["Trace", "Tokens"], "the opposite arrow undoes the move");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
   // The product page docks Notes and Editor on the right; the Editor follows
   // note.selected with `shows-on` (6.4), so picking a note brings its tab forward.
   test(`picking a note shows the Editor tab on / in ${engine.name}`, async () => {

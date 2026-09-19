@@ -49,6 +49,19 @@ const removeFrom = (docks, name) => {
   return next;
 };
 
+// Swap a docked view with its neighbour `step` places along its side (6.4); the
+// docks come back unchanged when there is no such neighbour. `open` and `active`
+// stay, so the moved tab is still the one shown.
+const shift = (docks, name, step) => {
+  const s = sideOf(docks, name);
+  const views = [...(docks[s]?.views ?? [])];
+  const from = views.indexOf(name);
+  const to = from + step;
+  if (from < 0 || to < 0 || to >= views.length) return docks;
+  [views[from], views[to]] = [views[to], views[from]];
+  return { ...docks, [s]: { ...docks[s], views } };
+};
+
 // Set one side's open flag; a side with nothing docked cannot open.
 const setOpen = (docks, s, open) => (docks[s] ? { ...docks, [s]: { ...docks[s], open } } : docks);
 
@@ -138,7 +151,7 @@ export const machine = setup({
   },
 }).createMachine({
   id: "dock-desk",
-  meta: { kind: "view", emits: ["dock.arranged"], attributes: [], asks: ["dock: read", "settings: read"] },
+  meta: { kind: "view", emits: ["dock.arranged"], attributes: ["reorders"], asks: ["dock: read", "settings: read"] },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
   // `narrow` is a function, like `ask`, so the width is read when the seed is
@@ -215,6 +228,15 @@ export const machine = setup({
           actions: emit(({ context, event }) =>
             arranged(context.stage, addTo(removeFrom(context.docks, event.name), event.side, event.name)),
           ),
+        },
+        // One place earlier or later on its own side (6.4). A step off either end
+        // leaves the docks as they are, so nothing is announced.
+        _shift: {
+          guard: ({ context, event }) =>
+            context.arranging &&
+            [-1, 1].includes(event.step) &&
+            shift(context.docks, event.name, event.step) !== context.docks,
+          actions: emit(({ context, event }) => arranged(context.stage, shift(context.docks, event.name, event.step))),
         },
         // Show a tab on its side; a folded side unfolds, so a rail label is one
         // step from the view it names.

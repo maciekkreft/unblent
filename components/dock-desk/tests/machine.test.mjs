@@ -221,6 +221,46 @@ test("_move to the same side does nothing", async () => {
   assert.deepEqual(emitted, []);
 });
 
+test("_shift swaps a docked tab with its neighbour and keeps the rest (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({
+      stage: null,
+      docks: {
+        left: { open: false, views: ["trace-list"] },
+        right: { open: true, views: ["token-sheet", "contract-list"], active: "contract-list" },
+      },
+    }),
+  );
+  actor.send({ type: "_shift", name: "contract-list", step: -1 });
+  actor.send({ type: "_shift", name: "token-sheet", step: -1 });
+  assert.deepEqual(emitted, [
+    {
+      type: "dock.arranged",
+      stage: null,
+      docks: {
+        left: { open: false, views: ["trace-list"] },
+        right: { open: true, views: ["contract-list", "token-sheet"], active: "contract-list" },
+      },
+    },
+    // The desk assigns nothing itself, so the second gesture still sees the stored
+    // order: token-sheet is first there, and a step off the end announces nothing.
+  ]);
+  actor.send({ type: "_shift", name: "token-sheet", step: 1 });
+  assert.deepEqual(emitted[1].docks.right.views, ["contract-list", "token-sheet"]);
+});
+
+test("_shift off either end, of a stage tab, or by another step does nothing", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "token-sheet", docks: { right: { open: true, views: ["trace-list", "contract-list"] } } }),
+  );
+  actor.send({ type: "_shift", name: "trace-list", step: -1 });
+  actor.send({ type: "_shift", name: "contract-list", step: 1 });
+  actor.send({ type: "_shift", name: "token-sheet", step: 1 });
+  actor.send({ type: "_shift", name: "trace-list", step: 2 });
+  actor.send({ type: "_shift", name: "trace-list" });
+  assert.deepEqual(emitted, []);
+});
+
 test("_activate shows the tab and unfolds its side", async () => {
   const { actor, emitted } = await settle(
     stored({ stage: null, docks: { left: { open: false, views: ["token-sheet", "trace-list"] } } }),
@@ -273,7 +313,8 @@ test("a desk not being arranged bars arranging, but folds and switches tabs", as
   actor.send({ type: "_dock", name: "token-sheet", side: "left" });
   actor.send({ type: "_undock", name: "trace-list" });
   actor.send({ type: "_move", name: "trace-list", side: "bottom" });
-  assert.deepEqual(emitted, [], "no dock/undock/move gesture is honoured while not arranging");
+  actor.send({ type: "_shift", name: "trace-list", step: 1 });
+  assert.deepEqual(emitted, [], "no dock/undock/move/shift gesture is honoured while not arranging");
 
   // Folding is daily use, not a layout change: it stays while not arranging.
   actor.send({ type: "_fold", side: "right" });

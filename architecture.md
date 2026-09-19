@@ -283,6 +283,8 @@ Each later component used only contracts that already existed, and the component
 
 A page may declare a view's home side with a `side="left|right|bottom"` attribute on a `dock-desk` child, read like the `label` convention (neither is a `dock-desk` tag attribute). `dock-desk` seeds the initial layout from the declared sides — open, or with left and right folded where the desk is too narrow to hold a dock beside the stage — only when the `dock` fact has no stored arrangement; the first user gesture stores a layout, and that stored layout wins thereafter. The layout fact stays owned by `dock` — `dock-desk` only chooses a starting picture when the fact has none. A `dock-desk` child carrying `control` is not a view: it gets no tab and no place in the layout, and sits at the trailing end of the stage header. A `dock-desk` child may also carry `shows-on="<event>"`, naming one of the selection gestures `dock-desk` consumes (`book.selected`, `note.selected`): when that event arrives the desk shows the child's tab where it sits — on the stage, or on its side, unfolding it — the same as a click on the tab, stored through `dock.arranged` like any gesture. The gesture is followed, not the fact's `*.opened` news, so a reload or another device's pull never moves a tab.
 
+A `dock-desk` carrying the `reorders` attribute offers, while the desk is being arranged, two buttons in each dock's strip that move the shown tab one place earlier or later on its own side, stored through `dock.arranged` like any gesture. The buttons appear only on a side that holds more than one tab, and each is disabled at its end of the strip. The stage's tabs keep the page's order, which the layout does not store.
+
 ---
 
 ## 7. Contracts

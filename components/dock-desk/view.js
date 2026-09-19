@@ -90,6 +90,13 @@ class DockDesk extends LitElement {
   // any child, so the desk never touches another component.
   static shadowRootOptions = { ...LitElement.shadowRootOptions, slotAssignment: "manual" };
 
+  // The one attribute the tag understands: present means a dock's tabs can be
+  // reordered while arranging (6.4). Reflected so a page's bare `reorders` reads as
+  // true and the manifest attribute is visible. Off leaves the strip as it was.
+  static properties = {
+    reorders: { type: Boolean, reflect: true },
+  };
+
   static styles = css`
     /* base.css makes the body a flex column exactly one viewport tall (7.4), so a
        view fills the height left below page-nav by flexing, then owns its own
@@ -217,8 +224,12 @@ class DockDesk extends LitElement {
       font-size: var(--text-body);
       color: var(--color-body-mid);
     }
-    .action:hover {
+    .action:hover:not(:disabled) {
       color: var(--color-ink);
+    }
+    .action:disabled {
+      color: var(--color-border);
+      cursor: default;
     }
     .action svg {
       display: block;
@@ -563,10 +574,11 @@ class DockDesk extends LitElement {
   // The sides drawn at their size; a side not here is entering.
   #present = new Set();
 
-  #send(type, name, side) {
+  #send(type, name, side, step) {
     const event = { type };
     if (name !== undefined) event.name = name;
     if (side !== undefined) event.side = side;
+    if (step !== undefined) event.step = step;
     this.#actor.send(event);
   }
 
@@ -661,10 +673,11 @@ class DockDesk extends LitElement {
 
   // The three other groups, in the fixed order, so the same arrow is always in
   // the same place: an edge sends to the other edges and returns to the stage.
-  #actions(group, name, labelOf) {
+  #actions(group, name, labelOf, views) {
     const label = labelOf(name);
     return html`
       <div class="actions">
+        ${this.#reorder(group, name, label, views)}
         ${GROUPS.filter((g) => g !== group).map((g) =>
           g === "stage"
             ? this.#action(RETURN, `Return ${label} to the stage`, () => this.#send("_undock", name))
@@ -678,9 +691,47 @@ class DockDesk extends LitElement {
     `;
   }
 
-  #action(glyph, label, act) {
+  // Move the shown tab one place along its own side (6.4), behind the `reorders`
+  // attribute and only on a side that holds more than one tab, so the stage and a
+  // lone tab show nothing. An arrow at its end is disabled; when a click reaches an
+  // end its own button goes dead, so focus moves to the surviving arrow (updated).
+  #reorder(group, name, label, views) {
+    if (!this.reorders || group === "stage" || !views || views.length < 2) return nothing;
+    const at = views.indexOf(name);
     return html`
-      <button class="action" aria-label=${label} title=${label} @click=${act}>${glyph}</button>
+      ${this.#action(
+        icon("caret-left"),
+        `Move ${label} earlier`,
+        () => this.#shift(name, -1, group),
+        at === 0,
+      )}
+      ${this.#action(
+        icon("caret-right"),
+        `Move ${label} later`,
+        () => this.#shift(name, 1, group),
+        at === views.length - 1,
+      )}
+    `;
+  }
+
+  // Send the shift, then keep the keyboard on the pair: if the click landed the tab
+  // at an end, its own arrow is now disabled, so focus the surviving one. Moving
+  // earlier (step < 0) to the front disables "earlier", so focus "later", and back.
+  #shift(name, step, side) {
+    this.#send("_shift", name, undefined, step);
+    this.updateComplete.then(() => {
+      const surviving = step < 0 ? "later" : "earlier";
+      const actions = this.renderRoot.querySelector(`aside.dock.${side} .panel .actions`);
+      const arrow = actions?.querySelector(`[aria-label$="${surviving}"]`);
+      if (this.renderRoot.activeElement?.disabled) arrow?.focus();
+    });
+  }
+
+  #action(glyph, label, act, disabled = false) {
+    return html`
+      <button class="action" aria-label=${label} title=${label} ?disabled=${disabled} @click=${act}>
+        ${glyph}
+      </button>
     `;
   }
 
@@ -702,7 +753,7 @@ class DockDesk extends LitElement {
         <div class="panel">
           <div class="strip" @click=${fold}>
             ${this.#tablist(group, dock.views, active, labelOf, show)}
-            ${arranging ? this.#actions(side, active, labelOf) : nothing}
+            ${arranging ? this.#actions(side, active, labelOf, dock.views) : nothing}
             ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
           </div>
           <div class="body" data-side=${side}>
