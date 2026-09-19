@@ -98,18 +98,35 @@ async function open(engine, { phone = false } = {}) {
 
 const clean = (page) => page.evaluate(() => localStorage.clear());
 
-// The Note editor swap select (Step 5), read from the sheet's shadow root.
-const editorSelect = (page) =>
-  page.evaluate(() => {
-    const sel = document.querySelector("settings-sheet").shadowRoot.querySelector("label.select select");
+// A role's humanized label, the way settings-sheet writes it above its select
+// ("note-editor" → "Note editor"), so a swap select is found by the role it is for
+// (there is one per role now: note-editor and highlight-notes).
+const roleLabel = (role) => {
+  const words = role.replace(/-/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+// A role's swap select (Step 5, 3.6), read from the sheet's shadow root by its label.
+const editorSelect = (page, role = "note-editor") =>
+  page.evaluate((label) => {
+    const wrap = [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll("label.select")].find((l) =>
+      l.textContent.trim().startsWith(label),
+    );
+    const sel = wrap?.querySelector("select");
     return sel ? { options: [...sel.options].map((o) => o.value), value: sel.value } : null;
-  });
-const pickEditor = (page, value) =>
-  page.evaluate((value) => {
-    const sel = document.querySelector("settings-sheet").shadowRoot.querySelector("label.select select");
-    sel.value = value;
-    sel.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
+  }, roleLabel(role));
+const pickEditor = (page, value, role = "note-editor") =>
+  page.evaluate(
+    ({ value, label }) => {
+      const wrap = [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll("label.select")].find((l) =>
+        l.textContent.trim().startsWith(label),
+      );
+      const sel = wrap.querySelector("select");
+      sel.value = value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    { value, label: roleLabel(role) },
+  );
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
@@ -158,6 +175,12 @@ for (const engine of ENGINES) {
       assert.equal(sel.value, "note-editor", "the plain editor is the default");
       await pickEditor(page, "note-editor-cm6");
       await until(async () => (await stored(page)).editors?.["note-editor"] === "note-editor-cm6");
+
+      // Each role that has more than one member gets its own swap select: the highlights
+      // role lists its two members and defaults to the plain one (3.6, 7.3).
+      const hn = await editorSelect(page, "highlight-notes");
+      assert.deepEqual(hn.options, ["highlight-notes", "highlight-notes-vim"], "the highlights role's members are listed");
+      assert.equal(hn.value, "highlight-notes", "the plain highlights view is the default");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `settings-${engine.name}.png`), fullPage: true });

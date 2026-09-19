@@ -108,15 +108,16 @@ const editorTheme = EditorView.theme({
 // the discarding state flips (eq), so the bar's animation starts fresh each time, the
 // note-list idiom. A phone has no hover, so it is always visible.
 class BinWidget extends WidgetType {
-  constructor(id, discarding, send) {
+  constructor(id, discarding, active, send) {
     super();
     this.id = id;
     this.discarding = discarding;
+    this.active = active;
     this.send = send;
   }
 
   eq(other) {
-    return other.id === this.id && other.discarding === this.discarding;
+    return other.id === this.id && other.discarding === this.discarding && other.active === this.active;
   }
 
   toDOM() {
@@ -134,7 +135,7 @@ class BinWidget extends WidgetType {
     } else {
       const bin = document.createElement("button");
       bin.type = "button";
-      bin.className = "cm-bin";
+      bin.className = this.active ? "cm-bin cm-active" : "cm-bin";
       bin.setAttribute("aria-label", "Remove highlight");
       bin.addEventListener("mousedown", (e) => e.preventDefault());
       bin.addEventListener("click", () => this.send({ type: "_discard", id: this.id }));
@@ -252,6 +253,17 @@ class HighlightNotes extends LitElement {
       display: inline-flex;
       font-size: var(--text-body);
       color: var(--color-body-mid);
+      visibility: hidden;
+    }
+    /* The bin stays out of the way until it is wanted: it appears when the highlight is
+       hovered, or, while the editor is focused, in the highlight the caret sits in —
+       the phone path, since a phone has no hover, where tapping a comment focuses the
+       editor there. An unfocused panel shows no bin, so a stale caret never keeps one
+       lit. Undo, during the undo window, is always shown so the removal can still be
+       taken back. */
+    .cm-line.cm-quote:hover .cm-bin,
+    .cm-focused .cm-bin.cm-active {
+      visibility: visible;
     }
     .cm-bin:hover {
       color: var(--color-danger);
@@ -331,7 +343,7 @@ class HighlightNotes extends LitElement {
       drawSelection(),
       EditorView.lineWrapping,
       EditorView.decorations.compute([quoteField, discardField], (state) => this.#dimLines(state)),
-      EditorView.decorations.compute([quoteField, discardField], (state) => this.#marksAndBins(state)),
+      EditorView.decorations.compute([quoteField, discardField, "selection"], (state) => this.#marksAndBins(state)),
       EditorView.updateListener.of(this.#onUpdate),
       EditorView.domEventHandlers({ blur: () => this.#actor.send({ type: "_blurred" }) }),
     ];
@@ -382,14 +394,33 @@ class HighlightNotes extends LitElement {
   #marksAndBins(state) {
     const discarding = state.field(discardField);
     const send = (event) => this.#actor.send(event);
+    // The highlight whose region holds the caret shows its bin without a hover, so the
+    // control is still reachable on a phone, which has no hover (2, forgiveness).
+    const active = this.#activeId(state);
     const ranges = [];
     for (let it = state.field(quoteField).iter(); it.value; it.next()) {
       const id = it.value.spec.attributes["data-id"];
       const line = state.doc.lineAt(it.from);
       if (line.to > line.from) ranges.push(Decoration.mark({ class: "cm-quote-text" }).range(line.from, line.to));
-      ranges.push(Decoration.widget({ widget: new BinWidget(id, discarding.has(id), send), side: 1 }).range(line.to));
+      ranges.push(Decoration.widget({ widget: new BinWidget(id, discarding.has(id), id === active, send), side: 1 }).range(line.to));
     }
     return Decoration.set(ranges, true);
+  }
+
+  // The note whose region (its quote line through the comment lines under it) holds the
+  // main cursor, or null when the caret is nowhere in the document. It reveals that one
+  // highlight's bin without a hover, the phone path (2).
+  #activeId(state) {
+    const head = state.selection.main.head;
+    const quotes = [];
+    for (let it = state.field(quoteField).iter(); it.value; it.next())
+      quotes.push({ id: it.value.spec.attributes["data-id"], from: it.from });
+    let found = null;
+    for (let i = 0; i < quotes.length; i += 1) {
+      const to = i + 1 < quotes.length ? quotes[i + 1].from - 1 : state.doc.length;
+      if (head >= quotes[i].from && head <= to) found = quotes[i].id;
+    }
+    return found;
   }
 
   // The user edited a comment (never a quote line: the filter forbids it): read each

@@ -182,6 +182,7 @@ export const machine = setup({
   id: "highlight-notes",
   meta: {
     kind: "view",
+    role: "highlight-notes",
     emits: ["note.saved", "note.discarded"],
     attributes: ["height"],
     asks: ["notes: list", "notes: read", "subject: read"],
