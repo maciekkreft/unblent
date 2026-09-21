@@ -1,0 +1,3 @@
+{"type": "text", "text": "A plain answ"}
+{"type": "text", "text": "er."}
+{"type": "end", "status": "done", "raw": [{"type": "text", "text": "A plain answer."}], "usage": {"input_tokens": 24, "output_tokens": 3, "cache_read_input_tokens": 8, "cache_creation_input_tokens": 0}, "provider": "echo", "model": "echo"}

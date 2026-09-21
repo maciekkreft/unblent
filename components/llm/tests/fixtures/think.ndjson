@@ -1,0 +1,7 @@
+{"type": "thinking", "text": "Considering the question"}
+{"type": "thinking", "text": " and how to answer it"}
+{"type": "thinking", "text": "\u2026"}
+{"type": "text", "text": "/think a tho"}
+{"type": "text", "text": "ughtful repl"}
+{"type": "text", "text": "y"}
+{"type": "end", "status": "done", "raw": [{"type": "text", "text": "/think a thoughtful reply"}], "usage": {"input_tokens": 24, "output_tokens": 6, "cache_read_input_tokens": 8, "cache_creation_input_tokens": 0}, "provider": "echo", "model": "echo"}
