@@ -106,17 +106,41 @@ export const machine = setup({
       if (context.announce) enqueue.emit({ type: "llm.changed", ...context.picture });
       enqueue.assign({ announce: false });
     }),
-    accumulate: assign({ run: ({ context, event }) => fold(context.run, event.piece) }),
-    emitProgress: emit(({ context }) => progress(context.run, {})),
-    markDirty: assign({ run: ({ context }) => ({ ...context.run, dirty: true }) }),
-    clearDirty: assign({ run: ({ context }) => ({ ...context.run, dirty: false }) }),
+    // The throttle (at most one completion.progressed every 50 ms, plus the final one):
+    // the first piece of a window emits at once and arms a `_flush` timer; later pieces
+    // only accumulate and mark the run dirty. The timer is a self-re-raised delayed
+    // event with a fixed id that arriving pieces never touch, so it keeps firing every
+    // 50 ms through a fast steady stream (an `after` on the state stops re-firing when
+    // pieces arrive faster than the window).
+    onPiece: enqueueActions(({ context, event, enqueue }) => {
+      const run = fold(context.run, event.piece);
+      if (context.run.armed) {
+        run.dirty = true;
+        enqueue.assign({ run });
+        return;
+      }
+      run.armed = true;
+      run.dirty = false;
+      enqueue.assign({ run });
+      enqueue.emit(progress(run, {}));
+      enqueue.raise({ type: "_flush" }, { delay: 50, id: "flush" });
+    }),
+    onFlush: enqueueActions(({ context, enqueue }) => {
+      if (context.run.dirty) {
+        const run = { ...context.run, dirty: false };
+        enqueue.assign({ run });
+        enqueue.emit(progress(run, {}));
+        enqueue.raise({ type: "_flush" }, { delay: 50, id: "flush" });
+      } else {
+        enqueue.assign({ run: { ...context.run, armed: false } });
+      }
+    }),
     emitEnd: emit(({ context, event }) => ended(context.run, event.piece)),
     emitStopped: emit(({ context }) => progress(context.run, { done: true, status: "stopped" })),
   },
   guards: {
     signedIn: ({ event }) => event.userId != null,
     isEnd: ({ event }) => event.piece.type === "end",
-    dirty: ({ context }) => context.run.dirty,
     stopping: ({ context, event }) => event.action === "stop" && event.turnId === context.run.id,
   },
 }).createMachine({
@@ -208,7 +232,9 @@ export const machine = setup({
           },
         },
         running: {
-          entry: assign({ run: ({ event }) => ({ id: event.payload.id, text: "", thinking: "", calls: [], dirty: false }) }),
+          entry: assign({ run: ({ event }) => ({ id: event.payload.id, text: "", thinking: "", calls: [], dirty: false, armed: false }) }),
+          // Leaving cancels a pending flush, so it never fires against the next answer.
+          exit: enqueueActions(({ enqueue }) => enqueue.cancel("flush")),
           invoke: { src: "stream", input: ({ context, event }) => ({ stream: context.stream, request: event.payload }) },
           on: {
             // A second answer while one runs is refused (a completion at a time, 12).
@@ -216,34 +242,11 @@ export const machine = setup({
             // Stop (12): announce what arrived as stopped, then leave running, which
             // stops the stream actor and so cancels the provider call.
             "turn.steered": { guard: "stopping", target: "idle", actions: "emitStopped" },
-          },
-          // The throttle (at most one completion.progressed every 50 ms, plus the
-          // final one at the end): the first piece emits at once, later pieces
-          // within the window coalesce, and the window flushes what accumulated.
-          initial: "settled",
-          states: {
-            settled: {
-              on: {
-                _piece: [
-                  { guard: "isEnd", target: "#llm.completion.idle", actions: "emitEnd" },
-                  { target: "coalescing", actions: ["accumulate", "emitProgress"] },
-                ],
-              },
-            },
-            coalescing: {
-              on: {
-                _piece: [
-                  { guard: "isEnd", target: "#llm.completion.idle", actions: "emitEnd" },
-                  { actions: ["accumulate", "markDirty"] },
-                ],
-              },
-              after: {
-                50: [
-                  { guard: "dirty", target: "coalescing", actions: ["emitProgress", "clearDirty"] },
-                  { target: "settled" },
-                ],
-              },
-            },
+            _piece: [
+              { guard: "isEnd", target: "idle", actions: "emitEnd" },
+              { actions: "onPiece" },
+            ],
+            _flush: { actions: "onFlush" },
           },
         },
       },

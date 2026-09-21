@@ -79,8 +79,12 @@ def read_conversation(conversation_id: str, user_id: str = Depends(require_user)
         row = connection.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404)
+        # Turns sort by when they were saved, not by id: a question is always saved
+        # before its answer, so save order is the true order, while two turns minted in
+        # the same millisecond by different components (the input box and this fact) can
+        # have ids that sort the wrong way.
         turns = connection.execute(
-            "SELECT body FROM turns WHERE conversation_id = ? ORDER BY id", (conversation_id,)
+            "SELECT body FROM turns WHERE conversation_id = ? ORDER BY rowid", (conversation_id,)
         ).fetchall()
     return {
         "id": row["id"],

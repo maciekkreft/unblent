@@ -1,0 +1,174 @@
+[
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "A plain answ",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "A plain answer.",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "A plain answer.",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": "A plain answer."
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 24,
+          "output_tokens": 3,
+          "cache_read_input_tokens": 8,
+          "cache_creation_input_tokens": 0
+        }
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "A plain answer.",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": "A plain answer."
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 24,
+          "output_tokens": 3,
+          "cache_read_input_tokens": 8,
+          "cache_creation_input_tokens": 0
+        }
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  }
+]

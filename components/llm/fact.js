@@ -33,53 +33,96 @@ const savePatch = async (patch) => {
   return res.json();
 };
 
-// POST the request and read the NDJSON answer piece by piece (section 10). The
-// returned cancel aborts the fetch, which closes the server stream so spending
-// stops (12); an abort is silent, because the machine has already announced the
-// stop. A read or network failure surfaces as a failed end on the turn (12).
+// The stream in flight, and whether the page is going away. An answer still arriving
+// when the page is discarded is not kept (decision 4): as the page leaves we abort the
+// request and mark it leaving, so its read error is not turned into a saved failure —
+// after a reload the chat ends with the question, for Continue to resume. A genuine
+// network drop on a page that stays still surfaces as a failed turn (12).
+let active = null;
+let leaving = false;
+// beforeunload and pagehide mean the page is genuinely going away (a reload, a close),
+// not merely backgrounded — a tab switch must not abort an answer, which keeps streaming
+// while the tab is hidden. pageshow restores the flag if the page comes back from the
+// back/forward cache.
+addEventListener("beforeunload", () => {
+  leaving = true;
+  active?.abort();
+});
+addEventListener("pagehide", () => {
+  leaving = true;
+  active?.abort();
+});
+addEventListener("pageshow", () => {
+  leaving = false;
+});
+
+// POST the request and read the NDJSON answer piece by piece (section 10). The returned
+// cancel aborts the fetch, which closes the server stream so spending stops (12); an
+// abort is silent, because the machine has already announced the stop. A read or network
+// failure on a page that stays surfaces as a failed end on the turn (12).
 const stream = (request, onPiece) => {
   const controller = new AbortController();
-  const fail = () => onPiece({ type: "end", status: "failed", error: "unavailable" });
+  active = controller;
+  // The machine runs the returned cancel on cleanup, which happens both on a real Stop
+  // and when the answer ends on its own. Abort only while the stream is genuinely in
+  // flight, so a natural end does not cancel an already-finished request (a Stop still
+  // aborts mid-stream, which closes the server stream so spending stops, 12).
+  let live = true;
+  // Once an `end` piece is out, the answer is over: the machine reacts to it by stopping
+  // this stream, which runs the cancel below; marking it not live first makes that cancel
+  // a no-op, so a finished answer never cancels its own request.
+  const emit = (piece) => {
+    if (piece.type === "end") live = false;
+    onPiece(piece);
+  };
+  const fail = () => emit({ type: "end", status: "failed", error: "unavailable" });
   (async () => {
-    let res;
     try {
-      res = await fetch("/api/llm/complete", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json", Accept: "application/x-ndjson" },
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      });
-    } catch {
-      if (!controller.signal.aborted) fail();
-      return;
-    }
-    if (!res.ok || !res.body) return fail();
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const drain = (final) => {
-      let nl;
-      while ((nl = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (line) onPiece(JSON.parse(line));
+      let res;
+      try {
+        res = await fetch("/api/llm/complete", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json", Accept: "application/x-ndjson" },
+          body: JSON.stringify(request),
+          signal: controller.signal,
+        });
+      } catch {
+        if (!controller.signal.aborted && !leaving) fail();
+        return;
       }
-      if (final && buffer.trim()) onPiece(JSON.parse(buffer.trim()));
-    };
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        drain(false);
+      if (!res.ok || !res.body) return fail();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const drain = (final) => {
+        let nl;
+        while ((nl = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, nl).trim();
+          buffer = buffer.slice(nl + 1);
+          if (line) emit(JSON.parse(line));
+        }
+        if (final && buffer.trim()) emit(JSON.parse(buffer.trim()));
+      };
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          drain(false);
+        }
+        drain(true);
+      } catch {
+        if (!controller.signal.aborted && !leaving) fail();
       }
-      drain(true);
-    } catch {
-      if (!controller.signal.aborted) fail();
+    } finally {
+      live = false;
+      if (active === controller) active = null;
     }
   })();
-  return () => controller.abort();
+  return () => {
+    if (live) controller.abort();
+  };
 };
 
 mount(machine, {

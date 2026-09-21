@@ -73,13 +73,15 @@ test("a finished turn is added once and never rewritten (5)", async () => {
   assert.equal(got.turns[0].text, "first", "the stored turn is kept, not overwritten");
 });
 
-test("turns added by two devices are both kept and ordered by id", async () => {
+test("turns added across writes are all kept, in save order", async () => {
   const cookie = cookieFor(freshUser());
-  // Device two writes the later turn first; device one writes the earlier turn.
-  await put(CHAT, chat({ turns: [turn(U("A2"), "assistant", "second", { status: "done" })] }), cookie);
+  // A chat is remote-only: every turn needs the server, so turns reach it in the order
+  // they were made. They are kept and returned in that save order (not by id, which two
+  // components minting in the same millisecond cannot be trusted to sort right).
   await put(CHAT, chat({ turns: [turn(U("A1"), "user", "first")] }), cookie);
+  await put(CHAT, chat({ turns: [turn(U("A2"), "assistant", "second", { status: "done" })] }), cookie);
   const got = await (await get(`/${CHAT}`, cookie)).json();
-  assert.deepEqual(got.turns.map((t) => t.text), ["first", "second"], "both kept, ordered by id");
+  assert.deepEqual(got.turns.map((t) => t.text), ["first", "second"], "both kept, in save order");
 });
 
 test("start is written once; title and links are last write wins", async () => {
