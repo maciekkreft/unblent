@@ -56,12 +56,16 @@ export const pendingTurn = (conversation) => {
   return last && last.role === "assistant" && last.status === "pending" ? last : null;
 };
 
-// The chat was left hanging at the reader's question: Continue asks the model again with
-// everything saved, no new text needed (5: a finished turn is always on the server, so
-// the model can be re-asked after an interruption).
+// The chat was left hanging, and Continue resumes it with everything saved, no new text
+// needed (5: a finished turn is always on the server, so the chat can be resumed after an
+// interruption). Two endings can be resumed: the reader's question with no answer yet
+// (case a), or a finished answer that asked for lookups nobody ran — a reload or a Stop
+// during a round (case b); the lookups only read, so running them now is harmless.
 export const canContinue = (conversation) => {
   const last = lastTurn(conversation);
-  return Boolean(last && last.role === "user");
+  if (!last) return false;
+  if (last.role === "user") return true;
+  return last.role === "assistant" && last.status === "done" && Boolean(last.calls && last.calls.length);
 };
 
 // The question to resend when an answer failed or was stopped with nothing worth

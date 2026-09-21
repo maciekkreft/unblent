@@ -1,0 +1,452 @@
+[
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "calls": [
+          {
+            "id": "call-1",
+            "target": "books",
+            "name": "chapter",
+            "payload": {
+              "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+              "chapter": 0
+            },
+            "label": "Reading a chapter"
+          }
+        ]
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X1",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "calls": [
+          {
+            "id": "call-1",
+            "target": "books",
+            "name": "chapter",
+            "payload": {
+              "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+              "chapter": 0
+            },
+            "label": "Reading a chapter"
+          }
+        ]
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X1",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "calls": [
+          {
+            "id": "call-1",
+            "target": "books",
+            "name": "chapter",
+            "payload": {
+              "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+              "chapter": 0
+            },
+            "label": "Reading a chapter"
+          }
+        ]
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X2",
+        "role": "user",
+        "text": "",
+        "results": [
+          {
+            "callId": "call-1",
+            "size": 30
+          }
+        ],
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X1",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "calls": [
+          {
+            "id": "call-1",
+            "target": "books",
+            "name": "chapter",
+            "payload": {
+              "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+              "chapter": 0
+            },
+            "label": "Reading a chapter"
+          }
+        ]
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X2",
+        "role": "user",
+        "text": "",
+        "results": [
+          {
+            "callId": "call-1",
+            "size": 30
+          }
+        ],
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X1",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "calls": [
+          {
+            "id": "call-1",
+            "target": "books",
+            "name": "chapter",
+            "payload": {
+              "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+              "chapter": 0
+            },
+            "label": "Reading a chapter"
+          }
+        ]
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X2",
+        "role": "user",
+        "text": "",
+        "results": [
+          {
+            "callId": "call-1",
+            "size": 30
+          }
+        ],
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X1",
+        "role": "assistant",
+        "text": "The chapter is titled One.",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": "The chapter is titled One."
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        }
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        },
+        "calls": [
+          {
+            "id": "call-1",
+            "target": "books",
+            "name": "chapter",
+            "payload": {
+              "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+              "chapter": 0
+            },
+            "label": "Reading a chapter"
+          }
+        ]
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X2",
+        "role": "user",
+        "text": "",
+        "results": [
+          {
+            "callId": "call-1",
+            "size": 30
+          }
+        ],
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1X1",
+        "role": "assistant",
+        "text": "The chapter is titled One.",
+        "status": "done",
+        "at": 1,
+        "raw": [
+          {
+            "type": "text",
+            "text": "The chapter is titled One."
+          }
+        ],
+        "provider": "echo",
+        "model": "echo",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        }
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  }
+]

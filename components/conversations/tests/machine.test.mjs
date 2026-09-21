@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine } from "../machine.js";
+import { machine, toMarkdown } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -31,6 +31,14 @@ const other = (component, kind, name) =>
 const SESSION_READ = other("session", "queries", "read");
 const SUBJECT_READ = other("subject", "queries", "read");
 const COMPLETE = other("llm", "queries", "complete");
+const CONTRACTS = other("catalog", "queries", "contracts");
+const BOOKS_CHAPTER = other("books", "queries", "chapter");
+
+// A catalog: contracts reply carrying one query as a tool (7.7): what the loop reads to
+// build the tool list and to convert a tool's HTML reply to markdown.
+const toolQuery = (target, name, q) => ({ target, name, payload: q.payload, reply: q.reply, supersededBy: q.supersededBy ?? [], askers: [], tool: q.tool });
+const CHAPTER_TOOL = toolQuery("books", "chapter", BOOKS_CHAPTER);
+const SUBJECT_TOOL = toolQuery("subject", "read", SUBJECT_READ);
 
 // Valid ULIDs (^[0-9A-HJKMNP-TV-Z]{26}$). ANSWER equals the id in the progressed-*
 // fixtures, so an injected ulid mints that id for the pending answer and the fixtures'
@@ -40,6 +48,14 @@ const ANSWER = U("W2");
 const USER = U("W3");
 const CHAT = U("W4");
 const CHAT2 = U("W5");
+const ANSWER2 = U("X1");
+const RESULT1 = U("X2");
+const BOOK = U("W6");
+
+// A generator for the ids a test does not pin, so a loop that mints many turn ids gets
+// distinct valid ULIDs (Crockford base32, no I L O U).
+const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const twoChar = (n) => B32[(n >> 5) & 31] + B32[n & 31];
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 async function until(pred, label = "condition") {
@@ -66,13 +82,16 @@ function start(options = {}) {
     chatsById = {},
     onComplete = (request) => Promise.resolve({ id: request.id }),
     onSave = () => Promise.resolve({ updatedAt: 900 }),
+    contracts = { queries: [] },
+    askTool = () => Promise.resolve({}),
     listValues,
     now,
   } = options;
 
-  const calls = { saved: [], deleted: [], savedTools: [], completes: [], reads: [], list: 0 };
+  const calls = { saved: [], deleted: [], savedTools: [], completes: [], reads: [], tools: [], list: 0, contracts: 0 };
   let storeValue = stored;
   const idQueue = [...ids];
+  let auto = 0;
   let clock = 1000;
   const lists = listValues ? [...listValues] : null;
 
@@ -89,6 +108,17 @@ function start(options = {}) {
       see(request, COMPLETE.payload);
       calls.completes.push(request);
       return onComplete(request);
+    },
+    contracts: () => {
+      see({}, CONTRACTS.payload);
+      calls.contracts += 1;
+      return Promise.resolve(contracts);
+    },
+    askTool: (target, name, payload) => {
+      const q = (contracts.queries || []).find((x) => x.target === target && x.name === name);
+      if (q) see(payload, q.payload);
+      calls.tools.push({ target, name, payload });
+      return askTool(target, name, payload);
     },
     list: () => {
       calls.list += 1;
@@ -112,7 +142,7 @@ function start(options = {}) {
       return Promise.resolve();
     },
     store: { read: () => storeValue, write: (id) => (storeValue = id) },
-    ulid: () => idQueue.shift() || U("Z9"),
+    ulid: () => (idQueue.length ? idQueue.shift() : U(twoChar(auto++))),
     now: now || (() => clock++),
     subscribe: undefined,
   };
@@ -385,6 +415,170 @@ test("tools.edited saves the preferences and announces them", async () => {
   assert.ok(h.emitted.some((e) => e.type === "tools.changed" && e.tools["notes: list"] === false));
 });
 
+// --- the markdown converter (Decision 10) -------------------------------------------
+
+test("toMarkdown turns a chapter's XHTML into plain markdown", () => {
+  assert.equal(toMarkdown("<h1>Title</h1>"), "# Title");
+  assert.equal(toMarkdown("<h3>Sub</h3>"), "### Sub");
+  assert.equal(toMarkdown("<p>One.</p><p>Two.</p>"), "One.\n\nTwo.");
+  assert.equal(toMarkdown("<p>A <em>word</em> and <strong>bold</strong>.</p>"), "A *word* and **bold**.");
+  assert.equal(toMarkdown("<p>line one<br/>line two</p>"), "line one\nline two");
+  assert.equal(toMarkdown("<ul><li>a</li><li>b</li></ul>"), "- a\n\n- b");
+  assert.equal(toMarkdown("<ol><li>first</li><li>second</li></ol>"), "1. first\n\n2. second");
+  assert.equal(toMarkdown("<blockquote><p>quoted</p></blockquote>"), "> quoted");
+  assert.equal(toMarkdown('<p>see <a href="http://x">the link</a> here</p>'), "see the link here", "a link becomes its text");
+  assert.equal(toMarkdown('<p><img src="x.png" alt="a cat"/></p>'), "[image: a cat]");
+  assert.equal(toMarkdown("<p>Tom &amp; Jerry &#38; &#x26; friends &lt;3</p>"), "Tom & Jerry & & friends <3");
+  assert.equal(toMarkdown("<?xml version='1.0'?><p>fragment</p>"), "fragment", "a processing instruction is dropped");
+});
+
+// --- the tool loop (7.7) ------------------------------------------------------------
+
+const TOOLS = { queries: [CHAPTER_TOOL, SUBJECT_TOOL] };
+// An assistant answer that ends done and asks for one lookup (as `llm` reports it: no
+// label; `conversations` adds the label from the catalog).
+const callAnswer = (id, call) => ({ type: "completion.progressed", id, text: "", calls: [call], done: true, status: "done", raw: [{ type: "text", text: "" }], provider: "echo", model: "echo", usage: { input_tokens: 1, output_tokens: 1 } });
+const chapterCall = (callId) => ({ id: callId, target: "books", name: "chapter", payload: { id: BOOK, chapter: 0 } });
+const subjectCall = (callId) => ({ id: callId, target: "subject", name: "read", payload: {} });
+const plainAnswer = (id, text) => ({ type: "completion.progressed", id, text, calls: [], done: true, status: "done", raw: [{ type: "text", text }], provider: "echo", model: "echo", usage: { input_tokens: 1, output_tokens: 1 } });
+const CHAPTER = "<h1>One</h1><p>A <em>short</em> chapter.</p>";
+
+test("a tool round asks the lookup and feeds its result back to the model (7.7)", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ title: "One", html: CHAPTER }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  const first = h.calls.completes[0];
+  assert.equal(first.tools.length, 2, "the question is asked with the marked tools");
+  assert.deepEqual(
+    first.tools.map((t) => `${t.target}: ${t.name}`),
+    ["books: chapter", "subject: read"],
+    "sorted by name so the provider caches a stable order",
+  );
+  await feed(h, [callAnswer(ANSWER, chapterCall("call-1"))]);
+  await until(() => h.calls.completes.length === 2, "the model is asked again with the result");
+  assert.deepEqual(h.calls.tools, [{ target: "books", name: "chapter", payload: { id: BOOK, chapter: 0 } }], "the tool query was asked");
+  const second = h.calls.completes[1];
+  const results = second.turns.find((t) => t.role === "user" && t.results)?.results;
+  assert.ok(results && results[0].content.includes("# One"), "the chapter came back as markdown");
+  const answerTurn = second.turns.find((t) => t.role === "assistant" && t.calls);
+  assert.ok(answerTurn && answerTurn.calls[0].label === "Reading a chapter", "the assistant turn carries the calls, labelled, only when followed by their results");
+  await feed(h, [plainAnswer(ANSWER2, "The chapter is titled One.")]);
+  assert.equal(lastAssistant(h).status, "done");
+  assert.equal(lastAssistant(h).text, "The chapter is titled One.");
+});
+
+test("two rounds in a row", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ subject: null }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, subjectCall("c1"))]);
+  await until(() => h.calls.completes.length === 2, "second complete");
+  await feed(h, [callAnswer(ANSWER2, subjectCall("c2"))]);
+  await until(() => h.calls.completes.length === 3, "third complete");
+  const last = h.calls.completes[2];
+  assert.equal(last.turns.filter((t) => t.role === "user" && t.results).length, 2, "both rounds' results are sent");
+});
+
+test("a call the catalog does not list is rejected, not asked", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS });
+  await ready(h);
+  submit(h);
+  await flush();
+  const unknown = { id: "u1", target: "made", name: "up", payload: {}, invalid: "unknown tool" };
+  await feed(h, [callAnswer(ANSWER, unknown)]);
+  await until(() => h.calls.completes.length === 2, "the round still runs");
+  assert.deepEqual(h.calls.tools, [], "the invalid call was never asked");
+  const results = h.calls.completes[1].turns.find((t) => t.results)?.results;
+  assert.equal(results[0].isError, true);
+  assert.match(results[0].content, /could not be used: unknown tool/);
+  const stored = lastChange(h).turns.find((t) => t.role === "assistant" && t.calls);
+  assert.equal(stored.calls[0].label, "made: up", "the label is the literal tool name, not a made-up activity");
+});
+
+test("a tool that errors is fed back as an error result", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ error: "not-found" }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, chapterCall("c1"))]);
+  await until(() => h.calls.completes.length === 2, "second complete");
+  const results = h.calls.completes[1].turns.find((t) => t.results)?.results;
+  assert.equal(results[0].isError, true);
+  assert.match(results[0].content, /returned an error: not-found/);
+});
+
+test("a result is cut at the guard length (Decision 9)", async () => {
+  const huge = "<p>" + "x".repeat(130000) + "</p>";
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ title: "Big", html: huge }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, chapterCall("c1"))]);
+  await until(() => h.calls.completes.length === 2, "second complete");
+  const content = h.calls.completes[1].turns.find((t) => t.results).results[0].content;
+  assert.ok(content.length <= 120000 + 60, "the content is cut near the guard");
+  assert.match(content, /cut off at 120,000 characters/);
+});
+
+test("a huge result never bloats what rides the bus (results ride as size, 4.3)", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ title: "Big", html: "<p>" + "x".repeat(120000) + "</p>" }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, chapterCall("c1"))]);
+  await until(() => h.calls.completes.length === 2, "second complete");
+  for (const change of changes(h)) assert.ok(JSON.stringify(change).length < 20000, "conversation.changed stays small");
+});
+
+test("the round limit stops the chat after too many lookups (Decision 9)", async () => {
+  const h = start({ contracts: TOOLS, askTool: () => Promise.resolve({ subject: null }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  for (let i = 0; i < 9; i++) {
+    await until(() => h.calls.completes.length >= i + 1, `complete ${i + 1}`);
+    await feed(h, [callAnswer(h.calls.completes[i].id, subjectCall(`c${i}`))]);
+    await flush();
+  }
+  await flush();
+  assert.equal(h.calls.completes.length, 9, "at most eight rounds of lookups run");
+  assert.equal(lastAssistant(h).status, "failed");
+  assert.equal(lastAssistant(h).error, "too-many-lookups");
+});
+
+test("Stop during the lookups leaves the answer with its calls for Continue (case b)", async () => {
+  // The lookup never replies, so the round is stuck waiting: Stop is conversations' to act
+  // on then (llm is not running), and it ends the round rather than the stream (12).
+  const h = start({ ids: [ANSWER, ANSWER2], contracts: TOOLS, askTool: () => new Promise(() => {}) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, chapterCall("c1"))]);
+  await flush();
+  assert.equal(lastAssistant(h).status, "pending", "the next answer is pending while the lookup runs");
+  h.actor.send({ type: "turn.steered", conversationId: CHAT, turnId: ANSWER2, action: "stop" });
+  await flush();
+  const turns = lastChange(h).turns;
+  const last = turns[turns.length - 1];
+  assert.equal(last.role, "assistant");
+  assert.equal(last.status, "done");
+  assert.ok(last.calls && last.calls.length, "the chat rests at the done answer with its unrun calls");
+  assert.equal(h.calls.completes.length, 1, "no further round was asked");
+});
+
+test("a reload during a round finds the answer with its calls saved (case b)", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ subject: null }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, subjectCall("c1"))]);
+  await until(() => h.calls.saved.some((s) => s.body.turns.some((t) => t.id === ANSWER)), "the done answer is saved");
+  const saved = h.calls.saved.flatMap((s) => s.body.turns).find((t) => t.id === ANSWER);
+  assert.ok(saved.calls && saved.calls.length, "the saved answer carries its calls, so a reload can Continue");
+});
+
 // The seam fixtures sessions 6 and 10 replay into the views (Testing): the exact
 // conversation.changed events this machine emits across a whole exchange — the pending
 // answer, its arriving text, its end, then the save clearing pending. RECORD=1 rewrites
@@ -417,6 +611,32 @@ test("the recorded conversation.changed exchanges are what the machine emits (se
     }
     assert.deepEqual(events, JSON.parse(readFileSync(file, "utf8")), `changed-${name}.json is stale; re-run with RECORD=1`);
   }
+});
+
+// The tool-run seam (session 8): a whole exchange with one lookup, recorded as the
+// conversation.changed events the machine emits, for the views to replay (Testing).
+async function toolExchange() {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], now: () => 1, onSave: () => Promise.resolve({ updatedAt: 900 }), contracts: TOOLS, askTool: () => Promise.resolve({ title: "One", html: CHAPTER }) });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, [callAnswer(ANSWER, chapterCall("call-1"))]);
+  await until(() => h.calls.completes.length === 2, "second complete");
+  await feed(h, [plainAnswer(ANSWER2, "The chapter is titled One.")]);
+  await until(() => h.calls.saved.some((s) => s.body.turns.some((t) => t.id === ANSWER2)), "final answer saved");
+  await flush();
+  await flush();
+  return changes(h);
+}
+
+test("the recorded tool exchange is what the machine emits (seam for the views)", async () => {
+  const events = await toolExchange();
+  const file = resolve(HERE, "fixtures", "changed-tools.json");
+  if (process.env.RECORD === "1") {
+    writeFileSync(file, JSON.stringify(events, null, 2) + "\n");
+    return;
+  }
+  assert.deepEqual(events, JSON.parse(readFileSync(file, "utf8")), "changed-tools.json is stale; re-run with RECORD=1");
 });
 
 test("every payload matches its schema", () => {

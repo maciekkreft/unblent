@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+
+// The books fixture is imported over HTTP so a real chapter can be read as a tool (7.7),
+// then converted to markdown; it is another component's test fixture, read as data, not
+// imported as code (11.2 covers import specifiers, not a data file a test reads).
+const SAMPLE = readFileSync(new URL("../../books/tests/fixtures/sample.epub", import.meta.url));
+const BOOK_ID = "01HQ8ZK7M4N5P6Q7R8S9T0V1W6";
 
 const PLAYWRIGHT_MODULE = process.env.PLAYWRIGHT_MODULE;
 assert.ok(PLAYWRIGHT_MODULE, "PLAYWRIGHT_MODULE must be set (checks/check.py reads it from .env)");
@@ -59,6 +65,24 @@ async function open(engine, name) {
   await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
   const put = await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } });
   assert.ok(put.ok(), "the account is set to Echo");
+  const page = await context.newPage();
+  const problems = watch(page);
+  await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
+  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+  return { browser, context, page, problems };
+}
+
+// The same, with the sample book imported first, so `books: chapter` has a real chapter
+// to return. Imported before the page loads, so the browser's `books` fact pulls it.
+async function openWithBook(engine, name) {
+  const browser = await engine.launch();
+  const userId = `chat-${engine.name}-${name}-${Date.now()}`;
+  const context = await browser.newContext();
+  context.setDefaultTimeout(4000);
+  await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
+  assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
+  const put = await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE });
+  assert.ok(put.ok(), "the sample book is imported");
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
@@ -228,6 +252,37 @@ for (const engine of ENGINES) {
       await until(async () => await action(page, "Continue")); // the chat ends at the question
       assert.equal(await lastAnswer(page), "", "the in-progress answer was not kept");
       assert.deepEqual(realProblems(problems), [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a lookup runs and its result is fed back in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "tool-subject");
+    try {
+      // Echo asks for the subject lookup, conversations runs it, and Echo repeats the
+      // result so what the model would read is on screen. Nothing is open here, so the
+      // reader's context is "nothing open" (the conversations page shows no book).
+      await send(page, "/tool subject: read {}");
+      // Wait for the lookup's result to be echoed back (nothing is open here, so the
+      // subject is null), not just the typed request that also contains the word.
+      await until(async () => (await threadText(page)).includes('"subject":null'));
+      assert.match(await threadText(page), /Checking what's open/, "the lookup is named on screen");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a chapter is read and comes back as markdown in ${engine.name}`, async () => {
+    const { browser, page, problems } = await openWithBook(engine, "tool-chapter");
+    try {
+      await send(page, `/tool books: chapter {"id":"${BOOK_ID}","chapter":0}`);
+      await until(async () => (await threadText(page)).includes("A LINKED HEADING"));
+      const text = await threadText(page);
+      assert.match(text, /# Chapter One/, "the chapter's markup came back as markdown, headings as #");
+      assert.match(text, /Reading a chapter/, "the lookup is named on screen");
+      assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();
     }

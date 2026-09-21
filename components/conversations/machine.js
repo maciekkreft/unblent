@@ -9,11 +9,12 @@ import { setup, fromPromise, fromCallback, enqueueActions } from "xstate";
 // when the page goes away is not kept (5): after a reload the chat ends with the
 // question and Continue asks again. It answers `list`, `read`, `open` (which chat is
 // open, per device) and `tools`; it emits `conversation.changed`,
-// `conversation.deleted`, `conversation.opened` and `tools.changed`. It is where the
-// tool loop will live (7.7), so it asks `llm: complete` and learns what the user did
-// from events; it follows `subject.changed` to open the right chat (12) and
-// `session.changed` to sync. Everything with a side effect — the network, the store,
-// the clock, the id source — arrives through `input`, so this stays a pure
+// `conversation.deleted`, `conversation.opened` and `tools.changed`. It runs the tool
+// loop (7.7): a tool is one of the system's own queries, opted in by its owner, so it
+// asks `llm: complete`, `catalog: contracts` for the tool list, and any marked query
+// through the `*: tool` wildcard. It follows `subject.changed` to open the right chat
+// (12) and `session.changed` to sync. Everything with a side effect — the network, the
+// store, the clock, the id source — arrives through `input`, so this stays a pure
 // definition importable in Node.
 
 // A chat's title is the first non-empty line of the first message, cut short (12).
@@ -81,11 +82,198 @@ const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], upd
 // reason in `error`.
 const END_STATUS = { done: "done", stopped: "stopped", failed: "failed", refused: "failed", truncated: "failed" };
 
-// The finished assistant turn from the final completion.progressed: `raw` only on done
-// (kept so the same model can be replayed exactly what it produced), the reason in
-// `error` for refused and truncated, and a truncated turn's calls dropped, because a
-// cut-off call must never run. No tools are sent yet, so no turn carries calls.
-const finalize = (turn, e) => {
+// Guards on the loop (Decision 9): a tool result is cut so one lookup cannot fill the
+// request, and a question runs at most this many rounds of lookups.
+const RESULT_CUT = 120000;
+const MAX_ROUNDS = 8;
+
+const cut = (text) => (text.length > RESULT_CUT ? text.slice(0, RESULT_CUT) + "\n\n[This result was cut off at 120,000 characters.]" : text);
+
+// The five XML entities plus numeric character references, decoded for the markdown a
+// chapter is converted to (below).
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const decodeEntities = (s) =>
+  s.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, body) => {
+    if (body[0] === "#") {
+      const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+    }
+    return ENTITIES[body] ?? whole;
+  });
+
+// Convert a chapter's strict-XHTML fragment to plain markdown, so the model reads clean
+// text rather than markup (Decision 10). Small on purpose: headings, paragraphs,
+// emphasis, lists, block quotes, line breaks; a link becomes its text, an image its alt.
+// Chapter files are strict XHTML, so tags are well formed and a light tokenizer suffices.
+export const toMarkdown = (xhtml) => {
+  const tokens = String(xhtml).split(/(<[^>]+>)/);
+  const out = [];
+  let buf = "";
+  const list = []; // stack of { ordered, count } for nested lists
+  let quoteDepth = 0;
+  let headingLevel = 0;
+
+  const flush = () => {
+    // A <br/> was kept as a sentinel so it survives whitespace collapsing; it becomes a
+    // hard line break, with the spaces around it dropped.
+    const text = buf.replace(/[ \t\r\n]+/g, " ").replace(/ ?\u0000 ?/g, "\n").trim();
+    buf = "";
+    if (!text) return;
+    let line;
+    if (headingLevel) line = "#".repeat(headingLevel) + " " + text;
+    else if (list.length) {
+      const top = list[list.length - 1];
+      line = "  ".repeat(list.length - 1) + (top.ordered ? `${top.count}. ` : "- ") + text;
+    } else line = text;
+    out.push((quoteDepth ? "> ".repeat(quoteDepth) : "") + line);
+  };
+
+  for (const tok of tokens) {
+    if (!tok) continue;
+    if (tok[0] !== "<") {
+      buf += decodeEntities(tok);
+      continue;
+    }
+    const match = /^<\s*(\/?)\s*([a-zA-Z0-9]+)/.exec(tok);
+    if (!match) continue; // a comment, doctype or processing instruction
+    const closing = match[1] === "/";
+    const tag = match[2].toLowerCase();
+    switch (tag) {
+      case "br":
+        buf += "\u0000";
+        break;
+      case "img":
+        if (!closing) buf += `[image: ${/alt\s*=\s*"([^"]*)"/.exec(tok)?.[1] ?? /alt\s*=\s*'([^']*)'/.exec(tok)?.[1] ?? ""}]`;
+        break;
+      case "em":
+      case "i":
+        buf += "*";
+        break;
+      case "strong":
+      case "b":
+        buf += "**";
+        break;
+      case "h1":
+      case "h2":
+      case "h3":
+      case "h4":
+      case "h5":
+      case "h6":
+        flush();
+        headingLevel = closing ? 0 : Number(tag[1]);
+        break;
+      case "p":
+      case "div":
+        flush();
+        break;
+      case "blockquote":
+        flush();
+        quoteDepth = Math.max(0, quoteDepth + (closing ? -1 : 1));
+        break;
+      case "ul":
+      case "ol":
+        flush();
+        if (closing) list.pop();
+        else list.push({ ordered: tag === "ol", count: 1 });
+        break;
+      case "li":
+        flush();
+        if (closing && list.length) list[list.length - 1].count += 1;
+        break;
+      default:
+        break; // a, span, code and the rest are transparent: their text stays, a link's target drops
+    }
+  }
+  flush();
+  return out.join("\n\n");
+};
+
+// The names of a reply's string fields marked as HTML (7.2), so the loop converts them
+// to markdown (Decision 10). It looks at the top-level properties and inside each oneOf
+// or anyOf branch, because a reply is often one of an answer or an error.
+const htmlFieldNames = (schema) => {
+  const names = new Set();
+  const scan = (props) => {
+    if (props) for (const [key, sub] of Object.entries(props)) if (sub && sub.contentMediaType === "text/html") names.add(key);
+  };
+  if (schema) {
+    scan(schema.properties);
+    for (const key of ["oneOf", "anyOf"]) if (Array.isArray(schema[key])) for (const branch of schema[key]) scan(branch.properties);
+  }
+  return names;
+};
+
+const sortKeys = (value) => {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === "object")
+    return Object.fromEntries(Object.keys(value).sort().map((k) => [k, sortKeys(value[k])]));
+  return value;
+};
+
+// What one tool result becomes for the model: an error reply as one plain line; a reply
+// whose only large field is HTML sent as that markdown under its other short fields; any
+// other reply as compact JSON with sorted keys (Decision 10), so the same bytes go back
+// each round and the provider's cache holds (Decision 9).
+const convertReply = (reply, replySchema) => {
+  if (reply && reply.error !== undefined) return `This lookup returned an error: ${reply.error}.`;
+  const htmlFields = htmlFieldNames(replySchema);
+  const converted = {};
+  const convertedKeys = [];
+  for (const [key, value] of Object.entries(reply || {})) {
+    if (htmlFields.has(key) && typeof value === "string") {
+      converted[key] = toMarkdown(value);
+      convertedKeys.push(key);
+    } else converted[key] = value;
+  }
+  if (convertedKeys.length === 1) {
+    const only = convertedKeys[0];
+    const heads = Object.entries(converted)
+      .filter(([k]) => k !== only)
+      .map(([, v]) => v)
+      .filter((v) => typeof v === "string");
+    return (heads.length ? heads.join(" — ") + "\n\n" : "") + converted[only];
+  }
+  return JSON.stringify(sortKeys(converted));
+};
+
+// The tool list a question is asked with, and the per-tool metadata the loop keeps: the
+// queries the owners marked as tools (7.7), sorted by name so the provider caches a
+// stable order, each carrying its payload schema (sent to the model) and its reply
+// schema and label (kept for converting results and naming the lookup). A tool switched
+// off by the user (session 12) is kept in the metadata but left out of what is offered.
+const buildTools = (context, reply) => {
+  const queries = (reply && reply.queries) || [];
+  const meta = {};
+  const offered = [];
+  for (const q of queries) {
+    if (!q.tool) continue;
+    const key = `${q.target}: ${q.name}`;
+    meta[key] = { label: q.tool.label, reply: q.reply };
+    if (context.tools[key] === false) continue;
+    offered.push({ key, target: q.target, name: q.name, description: q.tool.description, payload: q.payload });
+  }
+  offered.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return { tools: offered.map(({ target, name, description, payload }) => ({ target, name, description, payload })), meta };
+};
+
+// A stored call always carries a label (the turn shape requires it). A recognised tool
+// gets its owner's label; a call the catalog does not list (the server marked it invalid)
+// gets the literal tool name the model asked for — a fact, not a made-up activity — and
+// the view does not show it as a lookup in progress.
+const withLabel = (call, meta) => {
+  const key = `${call.target}: ${call.name}`;
+  const entry = meta && meta[key];
+  const out = { id: call.id, target: call.target, name: call.name, payload: call.payload, label: (entry && entry.label) || key };
+  if (call.invalid !== undefined) out.invalid = call.invalid;
+  return out;
+};
+
+// The finished assistant turn from the final completion.progressed: `raw` and the tool
+// calls only on done (raw is kept so the same model is replayed what it produced, and a
+// call must not run when the answer did not truly finish), the reason in `error` for
+// refused and truncated, and a truncated turn's calls dropped, because a cut-off call
+// must never run.
+const finalize = (turn, e, meta) => {
   const t = { id: turn.id, role: "assistant", text: e.text, status: END_STATUS[e.status] || "failed" };
   if (turn.at !== undefined) t.at = turn.at;
   if (e.thinking) t.thinking = e.thinking;
@@ -93,6 +281,7 @@ const finalize = (turn, e) => {
   if (e.status === "done") {
     if (e.raw !== undefined) t.raw = e.raw;
     for (const field of ["provider", "model", "usage"]) if (e[field] !== undefined) t[field] = e[field];
+    if (e.calls && e.calls.length) t.calls = e.calls.map((c) => withLabel(c, meta));
   }
   if (e.status === "refused") t.error = "refused";
   else if (e.status === "truncated") t.error = "truncated";
@@ -100,24 +289,37 @@ const finalize = (turn, e) => {
   return t;
 };
 
-// What is sent to the model: an empty assistant turn is left out; a done assistant turn
-// carries its `raw` (and provider/model) so the same model is replayed what it produced;
-// user turns carry their results with content. No tool rounds (calls followed by
-// results) are built yet.
+// What is sent to the model (Contracts, "What is sent to the model"): an empty or still
+// pending assistant turn is left out; a done assistant turn keeps its `calls` and `raw`
+// only when the next turn holds their results, so an unanswered round is sent as text
+// alone and thinking blocks are replayed unchanged only inside a completed round; user
+// turns carry their results with content.
 const forModel = (turns) => {
   const out = [];
-  for (const turn of turns) {
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
     if (turn.role === "user") {
       const u = { id: turn.id, role: "user", text: turn.text };
       if (turn.at !== undefined) u.at = turn.at;
-      if (turn.results) u.results = turn.results;
+      if (turn.results && turn.results.length)
+        u.results = turn.results.map((r) => {
+          const rr = { callId: r.callId, content: r.content ?? "" };
+          if (r.isError !== undefined) rr.isError = r.isError;
+          return rr;
+        });
       out.push(u);
     } else {
-      if (!turn.text && !(turn.calls && turn.calls.length)) continue;
+      if (turn.status === "pending") continue;
+      const next = turns[i + 1];
+      const answeredCalls = Boolean(turn.calls && turn.calls.length && next && next.role === "user" && next.results && next.results.length);
+      if (!turn.text && !answeredCalls) continue;
       const a = { id: turn.id, role: "assistant", text: turn.text, status: turn.status };
       if (turn.at !== undefined) a.at = turn.at;
-      if (turn.raw !== undefined) a.raw = turn.raw;
-      for (const field of ["provider", "model", "usage"]) if (turn[field] !== undefined) a[field] = turn[field];
+      if (answeredCalls) {
+        a.calls = turn.calls;
+        if (turn.raw !== undefined) a.raw = turn.raw;
+        for (const field of ["provider", "model", "usage"]) if (turn[field] !== undefined) a[field] = turn[field];
+      }
       out.push(a);
     }
   }
@@ -131,6 +333,8 @@ const findTurn = (context, turnId) => {
   }
   return null;
 };
+
+const roundsWithCalls = (turns) => turns.filter((t) => t.role === "assistant" && t.calls && t.calls.length).length;
 
 const chatsWithUnsent = (context) => {
   const ids = new Set();
@@ -179,6 +383,39 @@ const fireComplete = (context, self, turnId, request) => {
     .catch(() => self.send({ type: "_completeReply", turnId, reply: { error: "unavailable" } }));
 };
 
+// The tool list is gathered once per question (7.7) from the catalog, then reused for
+// every round, because the tools are part of what the provider caches.
+const fireContracts = (context, self, turnId) => {
+  context
+    .contracts()
+    .then((reply) => self.send({ type: "_contracts", turnId, reply }))
+    .catch(() => self.send({ type: "_contracts", turnId, reply: {} }));
+};
+
+// Run one round of lookups: a tool is one of the system's own queries (7.7), so each
+// call asks that query through the bus, all together. A call the server marked invalid
+// is not asked; it is answered with an error result. Each reply is converted to what the
+// model reads and cut to the guard length.
+const runCall = async (context, call, meta) => {
+  if (call.invalid) return { callId: call.id, content: `This tool could not be used: ${call.invalid}.`, isError: true };
+  let reply;
+  try {
+    reply = await context.askTool(call.target, call.name, call.payload);
+  } catch {
+    reply = { error: "unavailable" };
+  }
+  const entry = meta && meta[`${call.target}: ${call.name}`];
+  const result = { callId: call.id, content: cut(convertReply(reply, entry && entry.reply)) };
+  if (reply && reply.error !== undefined) result.isError = true;
+  return result;
+};
+
+const fireLookups = (context, self, chatId, calls, meta) => {
+  Promise.all(calls.map((call) => runCall(context, call, meta)))
+    .then((results) => self.send({ type: "_lookups", chatId, results }))
+    .catch(() => self.send({ type: "_lookups", chatId, results: calls.map((c) => ({ callId: c.id, content: "This lookup failed.", isError: true })) }));
+};
+
 const fireList = (context, self) => {
   context
     .list()
@@ -207,28 +444,54 @@ const onSubmit = (context, event, enqueue, self) => {
   chat.turns.push({ id: turn.id, role: "user", text: turn.text, at: context.now() });
   const answerId = context.ulid();
   chat.turns.push({ id: answerId, role: "assistant", text: "", status: "pending", at: context.now() });
-  context.running = { chatId: conversationId, turnId: answerId };
+  context.running = { chatId: conversationId, turnId: answerId, phase: "contracts", tools: [], meta: {} };
   setOpen(context, enqueue, conversationId);
   context.unsent.add(turn.id); // the user turn is finished the moment it is sent (5)
   upsertHeading(context, chat);
   enqueue(() => fireSave(context, self, conversationId));
-  enqueue(() => fireComplete(context, self, answerId, { id: answerId, start: chat.start, turns: forModel(chat.turns), tools: [] }));
+  enqueue(() => fireContracts(context, self, answerId)); // gather the tool list, then ask the model
   enqueue.emit(changedPayload(context, chat));
 };
 
-// Continue when the chat ends with a user turn: ask the model again with everything
-// saved, so an interruption loses nothing (5). Continuing a done answer that carries
-// unrun lookups is not built yet.
+// Continue after an interruption, losing nothing that was completed (5). Two endings ask
+// the model again: the chat ends at the reader's question (case a), or it ends at a done
+// answer that carries lookups nobody ran yet (case b, after a reload or a Stop during a
+// round). Both append the pending answer and gather the tool list; `proceed` then runs
+// the pending lookups or asks the model.
 const onContinue = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.conversationId);
   if (!chat) return;
   const last = chat.turns[chat.turns.length - 1];
-  if (!last || last.role !== "user") return;
+  if (!last) return;
+  const endsAtQuestion = last.role === "user";
+  const endsAtUnrunCalls = last.role === "assistant" && last.status === "done" && Boolean(last.calls && last.calls.length);
+  if (!endsAtQuestion && !endsAtUnrunCalls) return;
   const answerId = context.ulid();
   chat.turns.push({ id: answerId, role: "assistant", text: "", status: "pending", at: context.now() });
-  context.running = { chatId: chat.id, turnId: answerId };
-  enqueue(() => fireComplete(context, self, answerId, { id: answerId, start: chat.start, turns: forModel(chat.turns), tools: [] }));
+  context.running = { chatId: chat.id, turnId: answerId, phase: "contracts", tools: [], meta: {} };
+  enqueue(() => fireContracts(context, self, answerId));
   enqueue.emit(changedPayload(context, chat));
+};
+
+// The tool list has arrived (or the catalog was unavailable, so there are no tools). With
+// it in hand, either run the lookups the answer before the pending turn is waiting on
+// (Continue, case b) or ask the model.
+const onContracts = (context, event, enqueue, self) => {
+  if (!context.running || context.running.turnId !== event.turnId) return; // stale: stopped or superseded
+  const chat = context.chats.get(context.running.chatId);
+  if (!chat) return;
+  const { tools, meta } = buildTools(context, event.reply);
+  context.running.tools = tools;
+  context.running.meta = meta;
+  const answerId = context.running.turnId;
+  const prior = chat.turns[chat.turns.length - 2]; // the turn before the pending answer
+  if (prior && prior.role === "assistant" && prior.calls && prior.calls.length) {
+    context.running.phase = "lookups";
+    enqueue(() => fireLookups(context, self, chat.id, prior.calls, meta));
+  } else {
+    context.running.phase = "model";
+    enqueue(() => fireComplete(context, self, answerId, { id: answerId, start: chat.start, turns: forModel(chat.turns), tools }));
+  }
 };
 
 const onProgress = (context, event, enqueue, self) => {
@@ -242,13 +505,81 @@ const onProgress = (context, event, enqueue, self) => {
     enqueue.emit(changedPayload(context, chat));
     return;
   }
-  chat.turns[index] = finalize(chat.turns[index], event);
-  context.running = null;
-  context.unsent.add(chat.turns[index].id);
+  const running = context.running && context.running.turnId === event.id ? context.running : null;
+  const finished = finalize(chat.turns[index], event, running ? running.meta : {});
+  chat.turns[index] = finished;
+  context.unsent.add(finished.id);
   chat.updatedAt = context.now();
   upsertHeading(context, chat);
+
+  const calls = running && finished.status === "done" && finished.calls ? finished.calls : null;
+  if (calls && calls.length) {
+    if (roundsWithCalls(chat.turns) > MAX_ROUNDS) {
+      // Too many rounds in a row (Decision 9): keep the answer and its calls, run nothing,
+      // and end the chat with a short failed turn the view names in plain words.
+      const failId = context.ulid();
+      chat.turns.push({ id: failId, role: "assistant", text: "", status: "failed", error: "too-many-lookups", at: context.now() });
+      context.unsent.add(failId);
+      context.running = null;
+      enqueue(() => fireSave(context, self, chat.id));
+      enqueue.emit(changedPayload(context, chat));
+      return;
+    }
+    // Run a round: save the done answer, append the next pending answer, keep `running`
+    // set for the whole round (so the focus reload does not replace memory mid-round), and
+    // ask the lookups. Send stays Stop for the reader with no change to `chat-input`.
+    const nextId = context.ulid();
+    chat.turns.push({ id: nextId, role: "assistant", text: "", status: "pending", at: context.now() });
+    context.running = { ...running, turnId: nextId, phase: "lookups" };
+    enqueue(() => fireSave(context, self, chat.id));
+    enqueue(() => fireLookups(context, self, chat.id, finished.calls, context.running.meta));
+    enqueue.emit(changedPayload(context, chat));
+    return;
+  }
+  // A plain end: the answer is finished.
+  if (running) context.running = null;
   enqueue(() => fireSave(context, self, chat.id));
   enqueue.emit(changedPayload(context, chat));
+};
+
+// A round's lookups have all replied. Insert the user turn holding their results before
+// the pending answer (so memory reads answer, results, pending answer, which is also the
+// order the three are saved in), save it, and ask the model again.
+const onLookups = (context, event, enqueue, self) => {
+  const chat = context.chats.get(event.chatId);
+  const running = context.running;
+  if (!chat || !running || running.chatId !== event.chatId || running.phase !== "lookups") return; // stale: stopped
+  const pendingIndex = chat.turns.length - 1;
+  const pending = chat.turns[pendingIndex];
+  if (!pending || pending.id !== running.turnId) return;
+  const userTurn = { id: context.ulid(), role: "user", text: "", results: event.results, at: context.now() };
+  chat.turns.splice(pendingIndex, 0, userTurn);
+  context.unsent.add(userTurn.id);
+  chat.updatedAt = context.now();
+  upsertHeading(context, chat);
+  running.phase = "model";
+  enqueue(() => fireSave(context, self, chat.id));
+  enqueue(() => fireComplete(context, self, running.turnId, { id: running.turnId, start: chat.start, turns: forModel(chat.turns), tools: running.tools }));
+  enqueue.emit(changedPayload(context, chat));
+};
+
+// Stop (12). While the model streams, `llm` owns Stop and its completion.progressed
+// (status stopped) ends the turn above, so `conversations` leaves that alone. Between
+// rounds — while a lookup runs or the tool list is being gathered — `llm` is not
+// running, so `conversations` ends the round itself: forget it (late replies are then
+// ignored) and drop the never-saved pending turn. The chat rests at the done answer with
+// its unrun calls, which Continue resumes (case b), the same state a reload would leave.
+const onStop = (context, event, enqueue) => {
+  const running = context.running;
+  if (!running || running.turnId !== event.turnId || running.phase === "model") return;
+  const chat = context.chats.get(running.chatId);
+  context.running = null;
+  if (!chat) return;
+  const last = chat.turns[chat.turns.length - 1];
+  if (last && last.role === "assistant" && last.status === "pending" && last.id === event.turnId) {
+    chat.turns.pop();
+    enqueue.emit(changedPayload(context, chat));
+  }
 };
 
 // A `complete` refusal (busy, signed-out, no-key, unavailable) or a network error:
@@ -260,7 +591,7 @@ const onCompleteReply = (context, event, enqueue, self) => {
   const { chat, index } = loc;
   if (chat.turns[index].status !== "pending") return;
   chat.turns[index] = { ...chat.turns[index], status: "failed", error: (event.reply && event.reply.error) || "unavailable" };
-  context.running = null;
+  if (context.running && context.running.turnId === event.turnId) context.running = null;
   context.unsent.add(chat.turns[index].id);
   chat.updatedAt = context.now();
   upsertHeading(context, chat);
@@ -378,7 +709,8 @@ const onFocus = (context, enqueue, self) => {
   enqueue(() => fireList(context, self));
   // Do not reload a chat that still has finished turns the server has not confirmed: the
   // server's copy is missing them, so replacing memory with it would drop turns that can
-  // never be sent (5: nothing that was completed is lost). Retry the save instead.
+  // never be sent (5: nothing that was completed is lost). A round in flight (running) is
+  // not reloaded either, so it is not replaced under itself. Retry the save instead.
   if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && context.headings.some((h) => h.id === context.openId))
     enqueue(() => fireLoad(context, self, context.openId));
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
@@ -447,12 +779,15 @@ export const machine = setup({
     shape: "remote-only",
     owns: "the chats",
     emits: ["conversation.changed", "conversation.deleted", "conversation.opened", "tools.changed"],
-    asks: ["session: read", "subject: read", "llm: complete", "catalog: contracts"],
+    // `*: tool` lets the loop ask any query its owner marked as a tool (7.7).
+    asks: ["session: read", "subject: read", "llm: complete", "catalog: contracts", "*: tool"],
   },
   context: ({ input }) => ({
     session: input.session,
     subject: input.subject,
     complete: input.complete,
+    contracts: input.contracts,
+    askTool: input.askTool,
     list: input.list,
     read: input.read,
     saveChat: input.saveChat,
@@ -474,7 +809,7 @@ export const machine = setup({
     lastSubject: null,
     tools: {},
     approval: "auto",
-    running: null, // { chatId, turnId } while an answer streams
+    running: null, // { chatId, turnId, phase, tools, meta } while a question is being answered
     queued: [],
   }),
   initial: "loading",
@@ -509,7 +844,7 @@ export const machine = setup({
         "turn.steered": {
           actions: enqueueActions(({ context, event, enqueue, self }) => {
             if (event.action === "continue") onContinue(context, event, enqueue, self);
-            // stop is llm's to act on (12): the resulting completion.progressed ends the turn here.
+            else if (event.action === "stop") onStop(context, event, enqueue);
           }),
         },
         "completion.progressed": { actions: enqueueActions(({ context, event, enqueue, self }) => onProgress(context, event, enqueue, self)) },
@@ -522,6 +857,8 @@ export const machine = setup({
         "session.changed": [
           { guard: ({ context, event }) => (event.userId ?? null) !== context.userId, target: "loading" },
         ],
+        _contracts: { actions: enqueueActions(({ context, event, enqueue, self }) => onContracts(context, event, enqueue, self)) },
+        _lookups: { actions: enqueueActions(({ context, event, enqueue, self }) => onLookups(context, event, enqueue, self)) },
         _completeReply: { actions: enqueueActions(({ context, event, enqueue, self }) => onCompleteReply(context, event, enqueue, self)) },
         _saved: { actions: enqueueActions(({ context, event, enqueue }) => onSaved(context, event, enqueue)) },
         _saveFailed: {}, // the unsent turns stay, so pending stays true; a later trigger retries

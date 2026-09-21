@@ -151,6 +151,27 @@ test("pendingTurn, canContinue and retryText read the seam fixtures", () => {
   assert.ok(pendingTurn(arriving), "while the answer streams there is a pending turn");
 });
 
+test("Continue is offered when a done answer left lookups unrun (case b, 7.7)", () => {
+  // A reload or a Stop during a round leaves the chat at a done answer carrying calls but
+  // no results: Continue runs that round (the lookups only read, so it is harmless).
+  const withUnrunCalls = {
+    id: CHAT, title: "t", about: [], start: "s", pending: false, updatedAt: 1,
+    turns: [
+      { id: USER, role: "user", text: "hi" },
+      { id: ANSWER, role: "assistant", text: "", status: "done", calls: [{ id: "c1", target: "books", name: "chapter", payload: {}, label: "Reading a chapter" }] },
+    ],
+  };
+  assert.equal(canContinue(withUnrunCalls), true);
+});
+
+test("the tool exchange seam ends without a Continue (a plain final answer)", () => {
+  const events = loadFixture("changed-tools");
+  assert.ok(pendingTurn(events[0]), "a pending answer while the round runs keeps Send as Stop");
+  const last = events.at(-1);
+  assert.equal(pendingTurn(last), null);
+  assert.equal(canContinue(last), false, "a finished answer with no unrun calls is not a Continue");
+});
+
 test("Stop steers the pending answer", async () => {
   const conversation = { id: CHAT, title: "t", about: [], start: "s", pending: false, updatedAt: 1, turns: [
     { id: USER, role: "user", text: "hi" },

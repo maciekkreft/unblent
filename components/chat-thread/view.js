@@ -47,6 +47,8 @@ const errorText = (error) => {
       return "The answer was cut off — it reached the length limit.";
     case "refused":
       return "The model declined to answer.";
+    case "too-many-lookups":
+      return "Stopped after too many lookups — try a more specific question.";
     default:
       return error || "Something went wrong.";
   }
@@ -163,6 +165,17 @@ class ChatThread extends LitElement {
       overflow-wrap: anywhere;
       color: var(--color-body-mid);
     }
+    /* What the model is reading, or read, during a round of lookups (7.7): a dim line per
+       recognised tool call, naming the lookup by its owner's label. It reads as a live
+       line while the round runs (the pending answer follows it) and stays as a quiet
+       record after. A call the system did not recognise is not shown as a lookup. */
+    .lookups {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+      font-size: var(--text-sm);
+      color: var(--color-mute);
+    }
     /* A finished answer's footer: a status word when the answer was stopped or failed. */
     .foot {
       display: flex;
@@ -233,7 +246,10 @@ class ChatThread extends LitElement {
     `;
   }
 
+  // The reader's own message. A turn that only carries tool results has no text (7.7): it
+  // is for the model, not the reader, so it shows nothing rather than an empty bubble.
   #user(turn) {
+    if (!turn.text) return nothing;
     return html`<div class="turn user">${turn.text}</div>`;
   }
 
@@ -253,9 +269,19 @@ class ChatThread extends LitElement {
         ${turn.thinking && !(pending && !hasText) ? this.#thinking(turn) : nothing}
         ${waiting}
         ${hasText ? html`<div class="answer">${turn.text}</div>` : nothing}
+        ${this.#lookups(turn)}
         ${this.#foot(turn)}
       </div>
     `;
+  }
+
+  // The lookups this answer asked for (7.7): a dim line per recognised tool call. A call
+  // the system did not recognise (`invalid`) is not named as a lookup — it was rejected,
+  // not run.
+  #lookups(turn) {
+    const named = (turn.calls ?? []).filter((call) => !call.invalid);
+    if (!named.length) return nothing;
+    return html`<div class="lookups">${named.map((call) => html`<span>${call.label}</span>`)}</div>`;
   }
 
   #thinking(turn) {
