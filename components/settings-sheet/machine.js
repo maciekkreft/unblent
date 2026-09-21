@@ -45,6 +45,8 @@ const rowsOf = (context) => merge(context.pages, context.settings.nav);
 const indexOf = (context, path) => rowsOf(context).findIndex((r) => r.path === path);
 
 const edited = (settings) => ({ type: "settings.edited", ...settings });
+// An account gesture (7.7): the changed field only, which `llm` saves and announces.
+const llmEdited = (patch) => ({ type: "llm.edited", ...patch });
 const setHidden = (context, path, hidden) => {
   const rows = rowsOf(context).map((r) => (r.path === path ? { ...r, hidden } : r));
   return edited(withNav(context.settings, rows));
@@ -75,18 +77,32 @@ export const machine = setup({
     pages: fromPromise(({ input }) => input.ask("pages", "list", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     catalog: fromPromise(({ input }) => input.ask("catalog", "list", {})),
+    llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
   },
 }).createMachine({
   id: "settings-sheet",
   meta: {
     kind: "view",
-    emits: ["settings.edited"],
-    attributes: [],
-    asks: ["pages: list", "settings: read", "catalog: list"],
+    emits: ["settings.edited", "llm.edited"],
+    // `account` (7.7): with it the sheet shows the "Your account" section beside
+    // "This device"; without it, the page-links sheet exactly as before.
+    attributes: ["account"],
+    asks: ["pages: list", "settings: read", "catalog: list", "llm: read"],
   },
   // The active profile (§12), adopted from settings; a page without settings
   // stays in `workshop`, the full sheet, exactly as before profiles existed.
-  context: ({ input }) => ({ ask: input.ask, current: input.current, pages: [], settings: { ...DEFAULT }, roles: {}, profile: "workshop" }),
+  // `account` is off unless the page set the attribute; `llm` is the account
+  // picture (7.7), asked only when the account section is shown, null otherwise.
+  context: ({ input }) => ({
+    ask: input.ask,
+    current: input.current,
+    account: Boolean(input.account),
+    pages: [],
+    settings: { ...DEFAULT },
+    roles: {},
+    profile: "workshop",
+    llm: null,
+  }),
   initial: "loadingPages",
   states: {
     loadingPages: {
@@ -125,8 +141,30 @@ export const machine = setup({
         src: "catalog",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "afterCatalog" },
+          { target: "afterCatalog", actions: assign({ roles: ({ event }) => membersByRole(event.output.components) }) },
+        ],
+        onError: { target: "afterCatalog" },
+      },
+    },
+    // The account picture (7.7) is asked only when the page shows the account
+    // section; every other page skips the ask and goes straight to ready.
+    afterCatalog: {
+      always: [
+        { guard: ({ context }) => context.account, target: "loadingLlm" },
+        { target: "ready" },
+      ],
+    },
+    loadingLlm: {
+      invoke: {
+        src: "llm",
+        input: ({ context }) => ({ ask: context.ask }),
+        // A signed-out or no-answerer reply leaves `llm` null, so the account
+        // section shows "Sign in to set up the chat." (7.7); llm.changed corrects
+        // it after (4.3).
+        onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "ready", actions: assign({ roles: ({ event }) => membersByRole(event.output.components) }) },
+          { target: "ready", actions: assign({ llm: ({ event }) => event.output }) },
         ],
         onError: { target: "ready" },
       },
@@ -183,6 +221,13 @@ export const machine = setup({
           ),
         },
         _reset: { actions: emit(() => edited({ ...DEFAULT })) },
+        // Account gestures (7.7): each emits only the field it changed; `llm` saves
+        // it and announces llm.changed, which the sheet adopts below (4.3). An empty
+        // key removes the stored key.
+        _setProvider: { actions: emit(({ event }) => llmEdited({ provider: event.provider })) },
+        _setModel: { actions: emit(({ event }) => llmEdited({ model: event.model })) },
+        _saveKey: { actions: emit(({ event }) => llmEdited({ key: event.key })) },
+        _removeKey: { actions: emit(() => llmEdited({ key: "" })) },
       },
     },
     failed: {},
@@ -192,6 +237,23 @@ export const machine = setup({
       actions: assign({
         settings: ({ event }) => adopt(event),
         profile: ({ event, context }) => event.profile ?? context.profile,
+      }),
+    },
+    // The account picture, followed after the starting ask (4.3): a save, a sign-in
+    // or a sign-out arrives here. Only the fields the reply carries, so type is
+    // dropped by taking them by name.
+    "llm.changed": {
+      actions: assign({
+        llm: ({ event }) => ({
+          signedIn: event.signedIn,
+          provider: event.provider,
+          providers: event.providers,
+          model: event.model,
+          models: event.models,
+          effort: event.effort,
+          efforts: event.efforts,
+          ttl: event.ttl,
+        }),
       }),
     },
   },

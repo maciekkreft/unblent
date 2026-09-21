@@ -1,0 +1,38 @@
+[
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "A plain answ",
+    "calls": [],
+    "done": false
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "A plain answer.",
+    "calls": [],
+    "done": false
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "A plain answer.",
+    "calls": [],
+    "done": true,
+    "status": "done",
+    "raw": [
+      {
+        "type": "text",
+        "text": "A plain answer."
+      }
+    ],
+    "provider": "echo",
+    "model": "echo",
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 3,
+      "cache_read_input_tokens": 8,
+      "cache_creation_input_tokens": 0
+    }
+  }
+]

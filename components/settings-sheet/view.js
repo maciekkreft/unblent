@@ -3,6 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { machine, merge } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
+import llmEdited from "./events/llm.edited.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -18,8 +19,11 @@ class ActorController {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         current: location.pathname,
+        // The `account` attribute (7.7): read from the host's light DOM, so the
+        // machine learns it through input and stays importable in Node.
+        account: this.host.hasAttribute("account"),
       },
-      events: { "settings.edited": edited },
+      events: { "settings.edited": edited, "llm.edited": llmEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -39,6 +43,19 @@ class ActorController {
 }
 
 class SettingsSheet extends LitElement {
+  // `account` (7.7): reflected so the page's bare attribute reads as true and the
+  // manifest is visible. `keyDraft` holds what the user typed in the key box until
+  // they save it, and is cleared after, so the key never lingers in the field.
+  static properties = {
+    account: { type: Boolean, reflect: true },
+    keyDraft: { state: true },
+  };
+
+  constructor() {
+    super();
+    this.keyDraft = "";
+  }
+
   static styles = css`
     :host {
       display: block;
@@ -49,6 +66,82 @@ class SettingsSheet extends LitElement {
       font-size: var(--text-body);
       font-weight: var(--weight-semibold);
       color: var(--color-ink);
+    }
+    /* A section heading over each group when the account section is shown (7.7). */
+    h3 {
+      margin: 0 0 var(--space-sm);
+      font-size: var(--text-body);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    .account {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+    }
+    .field {
+      /* Override the base label rule, which centres its content (7.4). */
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-2xs);
+    }
+    .field > span {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .key {
+      display: flex;
+      gap: var(--space-2xs);
+    }
+    .key input {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      color: var(--color-body);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-xs);
+    }
+    .key input:focus-visible {
+      outline: var(--focus-ring);
+    }
+    .field select {
+      font: inherit;
+      color: var(--color-body);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-xs);
+      cursor: pointer;
+    }
+    .field select:focus-visible {
+      outline: var(--focus-ring);
+    }
+    button.act {
+      font: inherit;
+      color: var(--color-body);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-md);
+      cursor: pointer;
+    }
+    button.act:hover:not(:disabled) {
+      background: var(--color-surface-hover);
+    }
+    button.act:disabled {
+      color: var(--color-border);
+      cursor: default;
+    }
+    button.act:focus-visible {
+      outline: var(--focus-ring);
+    }
+    .hint {
+      margin: 0;
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
     }
     ul {
       list-style: none;
@@ -192,21 +285,15 @@ class SettingsSheet extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (
-      !snapshot ||
-      snapshot.matches("loadingPages") ||
-      snapshot.matches("loadingSettings") ||
-      snapshot.matches("loadingCatalog")
-    )
-      return nothing;
+    if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current, roles, profile } = snapshot.context;
+    const { pages, settings, current, roles, profile, account, llm } = snapshot.context;
     const rows = merge(pages, settings.nav);
     // The product profile (§12) shows only the production options: the editor
     // selects and the layout-switch row. The page order and the viewport switch
     // are workshop-only, so the product sheet never offers them.
     const workshop = profile !== "product";
-    return html`
+    const device = html`
       ${workshop
         ? html`
       <h2>Workshop page links</h2>
@@ -281,6 +368,85 @@ class SettingsSheet extends LitElement {
         ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>Reset to defaults</button>
+    `;
+    // Without the `account` attribute the sheet is the page-links sheet exactly as
+    // before; with it, "This device" and "Your account" stand as two named sections
+    // (7.7, §12).
+    if (!account) return device;
+    return html`
+      <h3>This device</h3>
+      ${device}
+      <h3>Your account</h3>
+      ${this.#account(llm, profile)}
+    `;
+  }
+
+  // The account section (7.7): signed out it invites a sign-in; signed in it offers
+  // the provider, the API key and the model. Effort and cache lifetime come later
+  // (§13). Every gesture emits llm.edited and is reversible by choosing the previous
+  // value; removing the key can only be undone by entering it again, so its button
+  // is plainly labelled (Don Norman: forgiveness, honest signifiers).
+  #account(llm, profile) {
+    if (!llm || !llm.signedIn) return html`<p class="hint">Sign in to set up the chat.</p>`;
+    const current = llm.providers.find((p) => p.id === llm.provider);
+    // Echo is a test provider (§12): offered only in the workshop, except that an
+    // account left on it in the product keeps it, named "Echo (test)", so it can be
+    // switched away from.
+    const providers = llm.providers.filter((p) => p.id !== "echo" || profile !== "product" || llm.provider === "echo");
+    const providerLabel = (p) => (p.id === "echo" && profile === "product" ? "Echo (test)" : p.label);
+    return html`
+      <div class="account">
+        <label class="field">
+          <span>Provider</span>
+          <select @change=${(e) => this.#actor.send({ type: "_setProvider", provider: e.target.value })}>
+            ${providers.map(
+              (p) => html`<option value=${p.id} ?selected=${p.id === llm.provider}>${providerLabel(p)}</option>`,
+            )}
+          </select>
+        </label>
+        ${current?.needsKey
+          ? html`
+              <div class="field">
+                <span>API key</span>
+                <div class="key">
+                  <input
+                    type="password"
+                    placeholder=${current.keySet ? "Key set" : "No key yet"}
+                    .value=${this.keyDraft}
+                    @input=${(e) => (this.keyDraft = e.target.value)}
+                  />
+                  <button
+                    class="act"
+                    ?disabled=${this.keyDraft.length === 0}
+                    @click=${() => {
+                      this.#actor.send({ type: "_saveKey", key: this.keyDraft });
+                      this.keyDraft = "";
+                    }}
+                  >
+                    Save
+                  </button>
+                  ${current.keySet
+                    ? html`<button class="act" @click=${() => this.#actor.send({ type: "_removeKey" })}>
+                        Remove key
+                      </button>`
+                    : nothing}
+                </div>
+              </div>
+            `
+          : nothing}
+        ${llm.models.length
+          ? html`
+              <label class="field">
+                <span>Model</span>
+                <select @change=${(e) => this.#actor.send({ type: "_setModel", model: e.target.value })}>
+                  ${llm.models.map(
+                    (m) => html`<option value=${m.id} ?selected=${m.id === llm.model}>${m.label}</option>`,
+                  )}
+                </select>
+              </label>
+            `
+          : html`<p class="hint">Add your API key to choose a model.</p>`}
+      </div>
     `;
   }
 }

@@ -1,0 +1,13 @@
+[
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "",
+    "calls": [],
+    "done": true,
+    "status": "failed",
+    "provider": "echo",
+    "model": "echo",
+    "error": "echo-failure"
+  }
+]

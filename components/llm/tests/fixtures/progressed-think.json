@@ -1,0 +1,73 @@
+[
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "",
+    "calls": [],
+    "done": false,
+    "thinking": "Considering the question"
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "",
+    "calls": [],
+    "done": false,
+    "thinking": "Considering the question and how to answer it"
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "",
+    "calls": [],
+    "done": false,
+    "thinking": "Considering the question and how to answer it…"
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/think a tho",
+    "calls": [],
+    "done": false,
+    "thinking": "Considering the question and how to answer it…"
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/think a thoughtful repl",
+    "calls": [],
+    "done": false,
+    "thinking": "Considering the question and how to answer it…"
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/think a thoughtful reply",
+    "calls": [],
+    "done": false,
+    "thinking": "Considering the question and how to answer it…"
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/think a thoughtful reply",
+    "calls": [],
+    "done": true,
+    "status": "done",
+    "thinking": "Considering the question and how to answer it…",
+    "raw": [
+      {
+        "type": "text",
+        "text": "/think a thoughtful reply"
+      }
+    ],
+    "provider": "echo",
+    "model": "echo",
+    "usage": {
+      "input_tokens": 24,
+      "output_tokens": 6,
+      "cache_read_input_tokens": 8,
+      "cache_creation_input_tokens": 0
+    }
+  }
+]

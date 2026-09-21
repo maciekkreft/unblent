@@ -1,7 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
+import { Validator } from "@cfworker/json-schema";
 import { machine, merge } from "../machine.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SCHEMAS = {
+  "settings.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "settings.edited.json"), "utf8")),
+  "llm.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "llm.edited.json"), "utf8")),
+};
+// Every event the tests below emit, with the schema it must match (Testing, shape
+// test); the final test validates them all.
+const recorded = [];
 
 const PAGES = [
   { path: "/a", title: "A", kind: "stem" },
@@ -15,22 +28,49 @@ const COMPONENTS = [
   { name: "notes", role: null },
 ];
 
-// Drive the actor with a fake ask (4.2): pages, then settings, then catalog.
-const start = (settings, current = "/a") => {
+// The account picture as `llm` answers it (7.7): signed in, on the Echo test
+// provider, with Anthropic offered but keyless.
+const LLM_PICTURE = {
+  signedIn: true,
+  provider: "echo",
+  providers: [
+    { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
+    { id: "echo", label: "Echo", keySet: true, needsKey: false },
+  ],
+  model: "echo",
+  models: [{ id: "echo", label: "Echo" }],
+  effort: "default",
+  efforts: ["default", "low", "medium", "high", "xhigh", "max"],
+  ttl: "1h",
+};
+
+// Drive the actor with a fake ask (4.2): pages, then settings, then catalog, and —
+// only when the account section is shown — llm. `account` mirrors the tag attribute.
+const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE } = {}) => {
   const ask = (target) =>
     Promise.resolve(
       target === "pages"
         ? { pages: PAGES }
         : target === "catalog"
           ? { components: COMPONENTS }
-          : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
+          : target === "llm"
+            ? llm
+            : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
     );
-  const actor = createActor(machine, { input: { ask, current } });
+  const actor = createActor(machine, { input: { ask, current, account } });
   const emitted = [];
-  actor.on("settings.edited", (e) => emitted.push(e));
+  const emittedLlm = [];
+  actor.on("settings.edited", (e) => {
+    emitted.push(e);
+    recorded.push({ value: e, schema: SCHEMAS["settings.edited"] });
+  });
+  actor.on("llm.edited", (e) => {
+    emittedLlm.push(e);
+    recorded.push({ value: e, schema: SCHEMAS["llm.edited"] });
+  });
   return new Promise((resolve) => {
     actor.subscribe((s) => {
-      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, snapshot: s });
+      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, emittedLlm, snapshot: s });
     });
     actor.start();
   });
@@ -155,4 +195,49 @@ test("settings.changed is adopted (4.3, fourth rule)", async () => {
   });
   assert.equal(actor.getSnapshot().context.settings.viewportSwitchHidden, true);
   assert.deepEqual(actor.getSnapshot().context.settings.nav, [{ path: "/c", hidden: false }]);
+});
+
+test("without the account attribute the llm picture is never loaded", async () => {
+  const { snapshot } = await start();
+  assert.equal(snapshot.context.account, false);
+  assert.equal(snapshot.context.llm, null, "no account section, no llm ask");
+});
+
+test("with the account attribute the llm picture is loaded (7.7)", async () => {
+  const { snapshot } = await start(undefined, "/a", { account: true });
+  assert.equal(snapshot.context.account, true);
+  assert.deepEqual(snapshot.context.llm, LLM_PICTURE);
+});
+
+test("a no-answerer or signed-out llm leaves the account picture null", async () => {
+  const { snapshot } = await start(undefined, "/a", { account: true, llm: { error: "no-answerer" } });
+  assert.equal(snapshot.context.llm, null, "the account section then shows the sign-in line");
+});
+
+test("each account gesture emits only the field it changed (7.7)", async () => {
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true });
+  actor.send({ type: "_setProvider", provider: "anthropic" });
+  assert.deepEqual(emittedLlm[0], { type: "llm.edited", provider: "anthropic" });
+  actor.send({ type: "_saveKey", key: "sk-typed" });
+  assert.deepEqual(emittedLlm[1], { type: "llm.edited", key: "sk-typed" });
+  actor.send({ type: "_removeKey" });
+  assert.deepEqual(emittedLlm[2], { type: "llm.edited", key: "" }, "an empty key removes it");
+  actor.send({ type: "_setModel", model: "echo" });
+  assert.deepEqual(emittedLlm[3], { type: "llm.edited", model: "echo" });
+});
+
+test("llm.changed is adopted after the starting ask (4.3)", async () => {
+  const { actor } = await start(undefined, "/a", { account: true });
+  const next = { ...LLM_PICTURE, provider: "anthropic", model: "claude-opus-5", models: [{ id: "claude-opus-5", label: "Claude Opus 5" }] };
+  actor.send({ type: "llm.changed", ...next });
+  assert.deepEqual(actor.getSnapshot().context.llm, next);
+});
+
+test("every payload matches its schema", () => {
+  assert.ok(recorded.length > 0, "the tests above emitted events");
+  for (const { value, schema } of recorded) {
+    const { type, ...rest } = value;
+    const result = new Validator(schema, "2020-12").validate(rest);
+    assert.ok(result.valid, `${JSON.stringify(value)} against its schema: ${JSON.stringify(result.errors?.[0])}`);
+  }
 });

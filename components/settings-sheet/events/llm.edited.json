@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A change the user made in the account section of Settings (7.7): any of the provider, the API key, the model, the thinking effort and the cache lifetime. `llm` saves it on the server and announces llm.changed. Only the fields that changed are present; an empty `key` removes the stored key. The key is marked secret (7.2), so the bus keeps it out of the trace.",
+  "type": "object",
+  "properties": {
+    "provider": { "type": "string" },
+    "key": { "type": "string", "x-secret": true },
+    "model": { "type": "string" },
+    "effort": { "type": "string" },
+    "ttl": { "type": "string" }
+  },
+  "additionalProperties": false
+}
