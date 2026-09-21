@@ -1,0 +1,170 @@
+[
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "/slow this a",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "/slow this answer arrive",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "/slow this answer arrives slowly so ",
+        "status": "pending",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "/slow this answer arrives slowly so ",
+        "status": "stopped",
+        "at": 1
+      }
+    ],
+    "pending": true,
+    "updatedAt": 1
+  },
+  {
+    "type": "conversation.changed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W4",
+    "title": "hello",
+    "about": [],
+    "start": "You help with books.",
+    "turns": [
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W3",
+        "role": "user",
+        "text": "hello",
+        "at": 1
+      },
+      {
+        "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+        "role": "assistant",
+        "text": "/slow this answer arrives slowly so ",
+        "status": "stopped",
+        "at": 1
+      }
+    ],
+    "pending": false,
+    "updatedAt": 900
+  }
+]

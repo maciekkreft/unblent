@@ -1,0 +1,31 @@
+[
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/slow this a",
+    "calls": [],
+    "done": false
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/slow this answer arrive",
+    "calls": [],
+    "done": false
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/slow this answer arrives slowly so ",
+    "calls": [],
+    "done": false
+  },
+  {
+    "type": "completion.progressed",
+    "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W2",
+    "text": "/slow this answer arrives slowly so ",
+    "calls": [],
+    "done": true,
+    "status": "stopped"
+  }
+]

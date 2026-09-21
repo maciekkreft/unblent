@@ -11,7 +11,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The whole chat, or an honest error when there is none by that id.",
+    "description": "The whole chat, or an honest error when there is none by that id or the server cannot be reached. A tool result rides as its `size`, not its `content` (4.3): `conversations` keeps the content and sends only its length.",
     "oneOf": [
       {
         "type": "object",
@@ -52,9 +52,10 @@
                             "properties": {
                               "callId": { "type": "string" },
                               "content": { "type": "string" },
+                              "size": { "type": "integer" },
                               "isError": { "type": "boolean" }
                             },
-                            "required": ["callId", "content"],
+                            "required": ["callId"],
                             "additionalProperties": false
                           }
                         }
@@ -112,6 +113,12 @@
       {
         "type": "object",
         "properties": { "error": { "const": "not-found" } },
+        "required": ["error"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "unavailable" } },
         "required": ["error"],
         "additionalProperties": false
       }

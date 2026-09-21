@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Each chat's heading (12): id, title, what it is linked to, when it changed, and whether it is still syncing.",
+    "description": "Each chat's heading (12): id, title, what it is linked to, when it changed, and whether it still has a finished turn the server has not confirmed. Or an honest error when the server cannot be reached; exactly one of `conversations` or `error` is present.",
     "type": "object",
     "properties": {
       "conversations": {
@@ -36,9 +36,9 @@
           "required": ["id", "title", "about", "updatedAt", "pending"],
           "additionalProperties": false
         }
-      }
+      },
+      "error": { "const": "unavailable" }
     },
-    "required": ["conversations"],
     "additionalProperties": false
   },
   "supersededBy": ["conversation.changed", "conversation.deleted"]

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A chat now looks like this (4, third rule): the whole conversation, pending until the server acknowledges its latest turns (5). `about` is what the chat is linked to (12); `start` is the instructions it began with (12); `turns` is every turn in order.",
+  "description": "A chat now looks like this (4, third rule): the whole conversation, pending until the server has the chat's finished turns (5). `about` is what the chat is linked to (12); `start` is the instructions it began with (12); `turns` is every turn in order. A tool result rides as its `size`, not its `content`: the content can be very large and this event is announced many times a second, so `conversations` keeps the content and sends only its length.",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
@@ -36,9 +36,10 @@
                   "properties": {
                     "callId": { "type": "string" },
                     "content": { "type": "string" },
+                    "size": { "type": "integer" },
                     "isError": { "type": "boolean" }
                   },
-                  "required": ["callId", "content"],
+                  "required": ["callId"],
                   "additionalProperties": false
                 }
               }
