@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMachine, emit, setup, fromPromise } from "xstate";
 import { mount, unmount, ask, tap } from "bus";
+import { compile } from "../validate.js";
 
 // The bus is infrastructure, not a component, so it is tested here rather than
 // under components/. Fake machines stand in for real ones: a producer that emits
@@ -724,4 +725,174 @@ test("an XState asker sees a superseding event after the reply, in ready not ign
   sub();
   unmount(f);
   unmount(a);
+});
+
+// ── Payload validation (this session) ───────────────────────────────────────
+// The bus checks every event, query payload and reply against its schema and refuses a
+// wrong one (architecture.md 3.3, 7.2). Strict schemas here so a mismatch is real; a
+// sentinel value proves the value never reaches the trace or the console (7.2).
+const STRICT_EVENT = {
+  type: "object",
+  properties: { value: { type: "integer" } },
+  required: ["value"],
+  additionalProperties: false,
+};
+const STRICT_Q = {
+  payload: { type: "object", properties: { id: { type: "integer" } }, required: ["id"], additionalProperties: false },
+  reply: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false },
+};
+
+// A fact that answers `read` by doubling and `ping` with a constant, both to a strict
+// reply schema. `read` can be told to answer with a wrong-shaped value, so an invalid
+// reply can be provoked while `ping` proves the actor is still running afterwards.
+function strictFact(id, readReply) {
+  return createMachine({
+    id,
+    meta: { kind: "fact", shape: "local-only", emits: [], owns: "strict" },
+    on: {
+      "read?": { actions: ({ event }) => event.reply(readReply ?? { value: event.payload.id * 2 }) },
+      "ping?": { actions: ({ event }) => event.reply({ value: 1 }) },
+    },
+  });
+}
+
+test("a valid event, query and reply pass and are recorded as before", async () => {
+  const { records, sub } = collect();
+  const p = mount(producer("v-p"), { events: { "thing.happened": STRICT_EVENT } });
+  const c = mount(consumer("v-c", []), {});
+  p.send({ type: "go", value: 3 });
+  const ev = records.at(-1);
+  assert.equal(ev.outcome, "delivered");
+  assert.equal(ev.reason, null);
+  const f = mount(strictFact("v-f"), { queries: { read: STRICT_Q, ping: STRICT_Q } });
+  const a = asker("v-a", ["v-f: read"]);
+  assert.deepEqual(await ask(a, "v-f", "read", { id: 5 }), { value: 10 });
+  assert.equal(records.filter((r) => r.kind === "query").at(-1).outcome, "asked");
+  assert.equal(records.filter((r) => r.kind === "reply").at(-1).outcome, "replied");
+  sub();
+  unmount(p);
+  unmount(c);
+  unmount(f);
+});
+
+test("an invalid event is refused, recorded, and reaches no subscriber", async () => {
+  const { records, sub } = collect();
+  const received = [];
+  const c = mount(consumer("ie-c", received), {});
+  const p = mount(producer("ie-p"), { events: { "thing.happened": STRICT_EVENT } });
+  // As with an undeclared emit, XState rethrows the refusal in a macrotask; take over
+  // uncaughtException for the moment so node:test does not attribute it to this test.
+  const saved = process.listeners("uncaughtException");
+  process.removeAllListeners("uncaughtException");
+  const caught = new Promise((resolve) => process.once("uncaughtException", resolve));
+  p.send({ type: "go", value: "SENSITIVE-9k" }); // value must be an integer
+  const err = await caught;
+  for (const listener of saved) process.on("uncaughtException", listener);
+  assert.match(err.message, /invalid payload/);
+  assert.ok(!err.message.includes("SENSITIVE-9k"), "the throw names no value");
+  assert.deepEqual(received, []);
+  const ref = records.filter((r) => r.kind === "event" && r.name === "thing.happened").at(-1);
+  assert.equal(ref.outcome, "refused");
+  assert.match(ref.reason, /^invalid payload:/);
+  assert.equal(ref.payload, null);
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-9k"), "no record carries the value");
+  sub();
+  unmount(p);
+  unmount(c);
+});
+
+test("an invalid query payload is not delivered; the asker gets invalid-payload", async () => {
+  const { records, sub } = collect();
+  const original = console.error;
+  const errs = [];
+  console.error = (...a) => errs.push(a.join(" "));
+  let handled = false;
+  const f = mount(
+    createMachine({
+      id: "iqp-f",
+      meta: { kind: "fact", shape: "local-only", emits: [], owns: "strict" },
+      on: { "read?": { actions: ({ event }) => { handled = true; event.reply({ value: 1 }); } } },
+    }),
+    { queries: { read: STRICT_Q } },
+  );
+  const a = asker("iqp-a", ["iqp-f: read"]);
+  let reply;
+  try {
+    reply = await ask(a, "iqp-f", "read", { id: "SENSITIVE-x" }); // id must be an integer
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(reply, { error: "invalid-payload" });
+  assert.equal(handled, false, "the fact never saw it");
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /^bus: invalid query read/);
+  assert.ok(!errs[0].includes("SENSITIVE-x"), "the printed line names no value");
+  const ref = records.filter((r) => r.kind === "query").at(-1);
+  assert.equal(ref.outcome, "refused");
+  assert.equal(ref.payload, null);
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-x"), "no record carries the value");
+  sub();
+  unmount(f);
+});
+
+test("an invalid reply is refused; the asker gets invalid-reply and the fact keeps running", async () => {
+  const { records, sub } = collect();
+  const original = console.error;
+  const errs = [];
+  console.error = (...a) => errs.push(a.join(" "));
+  const f = mount(strictFact("irp-f", { value: "SENSITIVE-r" }), { queries: { read: STRICT_Q, ping: STRICT_Q } });
+  const a = asker("irp-a", ["irp-f: read", "irp-f: ping"]);
+  let reply;
+  try {
+    reply = await ask(a, "irp-f", "read", { id: 2 });
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(reply, { error: "invalid-reply" });
+  assert.equal(errs.length, 1);
+  assert.match(errs[0], /^bus: invalid reply read/);
+  assert.ok(!errs[0].includes("SENSITIVE-r"), "the printed line names no value");
+  assert.deepEqual(await ask(a, "irp-f", "ping", { id: 0 }), { value: 1 }, "the actor is still running");
+  const ref = records.filter((r) => r.kind === "reply" && r.name === "read").at(-1);
+  assert.equal(ref.outcome, "refused");
+  assert.equal(ref.payload, null);
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-r"), "no record carries the value");
+  sub();
+  unmount(f);
+});
+
+test("record keys stay within the trace's key set for refused-shape records", async () => {
+  const { records, sub } = collect();
+  const original = console.error;
+  console.error = () => {};
+  const f = mount(strictFact("rk-f", { value: "x" }), { queries: { read: STRICT_Q, ping: STRICT_Q } });
+  const a = asker("rk-a", ["rk-f: read"]);
+  try {
+    await ask(a, "rk-f", "read", { id: 1 }); // invalid reply
+    await ask(a, "rk-f", "read", { id: "no" }); // invalid payload
+  } finally {
+    console.error = original;
+  }
+  for (const r of records) for (const k of Object.keys(r)) assert.ok(TRACE_KEYS.has(k), `record key ${k} is in trace.recorded`);
+  sub();
+  unmount(f);
+});
+
+test("compile ignores unknown keywords (x-secret, contentMediaType, description)", () => {
+  for (const extra of [{ "x-secret": true }, { contentMediaType: "text/html" }, { description: "for the model" }]) {
+    const check = compile({ type: "object", properties: { k: { type: "string", ...extra } }, required: ["k"], additionalProperties: false });
+    assert.equal(check({ k: "ok" }), null, `${Object.keys(extra)[0]} does not break a valid value`);
+    assert.ok(check({ k: 5 }) !== null, `${Object.keys(extra)[0]} does not stop the known keyword rejecting a wrong value`);
+  }
+});
+
+test("a schema is compiled once per mount: 2000 events validate well within budget", () => {
+  const p = mount(producer("perf-p"), { events: { "thing.happened": STRICT_EVENT } });
+  const c = mount(consumer("perf-c", []), {});
+  const start = performance.now();
+  for (let i = 0; i < 2000; i++) p.send({ type: "go", value: i });
+  const ms = performance.now() - start;
+  assert.ok(ms < 2000, `2000 validated events took ${ms.toFixed(0)}ms — a per-message compile would be far slower`);
+  unmount(p);
+  unmount(c);
 });

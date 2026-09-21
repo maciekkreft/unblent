@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A piece of the model's answer to a `complete` (6.3). `text` is the whole text so far and `thinking` the whole readable thinking so far, if the provider gives any (events are self-contained, 4.3); `calls` are the tool calls asked for so far; when `done`, `status` says how it ended. `llm` is never told a call's label, so it sends none; `conversations` adds it. `id` is the pending assistant turn's id.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "text": { "type": "string" },
+    "thinking": { "type": "string" },
+    "calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "target": { "type": "string" },
+          "name": { "type": "string" },
+          "payload": { "type": "object" },
+          "label": { "type": "string" },
+          "invalid": { "type": "string" }
+        },
+        "required": ["id", "target", "name", "payload"],
+        "additionalProperties": false
+      }
+    },
+    "done": { "type": "boolean" },
+    "status": { "enum": ["done", "stopped", "failed", "refused", "truncated"] },
+    "raw": { "type": "array" },
+    "provider": { "type": "string" },
+    "model": { "type": "string" },
+    "usage": { "type": "object" },
+    "error": { "type": "string" }
+  },
+  "required": ["id", "text", "calls", "done"],
+  "additionalProperties": false
+}

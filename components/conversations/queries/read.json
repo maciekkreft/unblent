@@ -1,0 +1,121 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read names one chat by id.",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The whole chat, or an honest error when there is none by that id.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+              "title": { "type": "string" },
+              "about": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": { "type": "string", "minLength": 1 },
+                    "id": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["kind", "id"],
+                  "additionalProperties": false
+                }
+              },
+              "start": { "type": "string" },
+              "turns": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+                        "role": { "const": "user" },
+                        "text": { "type": "string" },
+                        "at": { "type": "integer" },
+                        "results": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "callId": { "type": "string" },
+                              "content": { "type": "string" },
+                              "isError": { "type": "boolean" }
+                            },
+                            "required": ["callId", "content"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": ["id", "role", "text"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+                        "role": { "const": "assistant" },
+                        "text": { "type": "string" },
+                        "at": { "type": "integer" },
+                        "thinking": { "type": "string" },
+                        "status": { "enum": ["pending", "waiting", "done", "stopped", "failed"] },
+                        "calls": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string" },
+                              "target": { "type": "string" },
+                              "name": { "type": "string" },
+                              "payload": { "type": "object" },
+                              "label": { "type": "string" },
+                              "invalid": { "type": "string" }
+                            },
+                            "required": ["id", "target", "name", "payload", "label"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "raw": { "type": "array" },
+                        "provider": { "type": "string" },
+                        "model": { "type": "string" },
+                        "usage": { "type": "object" },
+                        "error": { "type": "string" }
+                      },
+                      "required": ["id", "role", "text", "status"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "pending": { "type": "boolean" },
+              "updatedAt": { "type": "integer" }
+            },
+            "required": ["id", "title", "about", "start", "turns", "pending", "updatedAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["conversation"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "const": "not-found" } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["conversation.changed", "conversation.deleted"]
+}

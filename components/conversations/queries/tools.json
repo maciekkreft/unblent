@@ -1,0 +1,24 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "tools takes nothing; it returns the tool preferences of the loop.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which tools are on (a tool missing from the map is on) and whether lookups are approved by hand or automatically (7.7).",
+    "type": "object",
+    "properties": {
+      "tools": {
+        "type": "object",
+        "additionalProperties": { "type": "boolean" }
+      },
+      "approval": { "enum": ["manual", "auto"] }
+    },
+    "required": ["tools", "approval"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["tools.changed"]
+}

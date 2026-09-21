@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Which chat is open changed (12): a chat's id, or null when none is open. Per device (5).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "oneOf": [
+        { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

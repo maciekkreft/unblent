@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The account's language-model picture changed (7.7): who is signed in, the chosen provider, model, thinking effort and cache lifetime, and the choices offered. Never a key.",
+  "type": "object",
+  "properties": {
+    "signedIn": { "type": "boolean" },
+    "provider": { "type": "string" },
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "keySet": { "type": "boolean" },
+          "needsKey": { "type": "boolean" }
+        },
+        "required": ["id", "label", "keySet", "needsKey"],
+        "additionalProperties": false
+      }
+    },
+    "model": { "type": "string" },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" }
+        },
+        "required": ["id", "label"],
+        "additionalProperties": false
+      }
+    },
+    "effort": { "type": "string" },
+    "efforts": { "type": "array", "items": { "type": "string" } },
+    "ttl": { "type": "string" }
+  },
+  "required": ["signedIn", "provider", "providers", "model", "models", "effort", "efforts", "ttl"],
+  "additionalProperties": false
+}

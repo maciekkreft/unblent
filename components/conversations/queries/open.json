@@ -1,0 +1,25 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "open takes nothing; it returns which chat is open on this device.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The open chat's id, or null when none is open (12).",
+    "type": "object",
+    "properties": {
+      "id": {
+        "oneOf": [
+          { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+          { "type": "null" }
+        ]
+      }
+    },
+    "required": ["id"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["conversation.opened", "conversation.deleted"]
+}

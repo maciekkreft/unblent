@@ -5,6 +5,7 @@
       "xstate": "/static/vendor/xstate/xstate.esm.js",
       "ulid": "/static/vendor/ulid/index.js",
       "dexie": "/static/vendor/dexie/dexie.mjs",
+      "@cfworker/json-schema": "/static/vendor/@cfworker/json-schema/dist/esm/index.js",
       "bus": "/static/bus/bus.js",
       "store": "/static/store/store.js",
       "icons": "/static/tokens/icons.js",
@@ -69,6 +70,24 @@
         "dexie/LICENSE": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
         "dexie/dexie.mjs": "8711109b9a6770e3e6b0d09ba764f059a871039bae924364922e3dcaf8e8279e",
         "dexie/dexie.mjs.map": "56381b22b368e888197ba9af99cdbebed9082bf38bacaf21c77426463936524f"
+      }
+    },
+    {
+      "name": "@cfworker/json-schema",
+      "version": "4.1.1",
+      "licence": "MIT",
+      "source": "https://registry.npmjs.org/@cfworker/json-schema/-/json-schema-4.1.1.tgz",
+      "files": {
+        "@cfworker/json-schema/LICENSE": "376944252ab78ca6b41aee44ddea8894927ee67891e77e61eb9d59af63e35094",
+        "@cfworker/json-schema/dist/esm/deep-compare-strict.js": "22e2f69237e382c7c7bf0ab2c28ef9368550e2aeec71b51a45a1ff2939ed91de",
+        "@cfworker/json-schema/dist/esm/dereference.js": "31f6e9efa95a71467802ef4748d41d1fb953490aaae236fc2118ab0d9f3a63ad",
+        "@cfworker/json-schema/dist/esm/format.js": "5520a0a12d84540f476ae92d88271e99a2e786b7d2ed8f4515f4a61fb6374738",
+        "@cfworker/json-schema/dist/esm/index.js": "a204e4f8f148eacfce004a47fb7920ffce1e7744323c2018731d288bf805c590",
+        "@cfworker/json-schema/dist/esm/pointer.js": "1eb10df554449bf31729cc216c216c6ca2d769c5179b82844fd693864a40afb2",
+        "@cfworker/json-schema/dist/esm/types.js": "dc94711ff6619f343c5bb4bfba437a51bdc5c9d8dd26c69eac83bee16183ad67",
+        "@cfworker/json-schema/dist/esm/ucs2-length.js": "8bf05de7b72b8a522df0fd0eb3e61cc5dfd03ab1dd12baee2eb2df0db106a184",
+        "@cfworker/json-schema/dist/esm/validate.js": "d79f5c0fbe509843822380b5b0e22818c0cac27ed1b2ee1686a246e52444e32f",
+        "@cfworker/json-schema/dist/esm/validator.js": "47d8b3faf0dbf0a40d063621161556206220ca9585f2c793dbb6183a7975ec39"
       }
     },
     {

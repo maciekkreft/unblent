@@ -1,0 +1,111 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Start one answer (6.3). `id` is the pending assistant turn to fill; `start` is the general instructions the chat began with (12); `turns` are the finished turns to send; `tools` are the queries the model may ask, each with its payload schema (7.7). The answer arrives as `completion.progressed` events, not in the reply.",
+    "type": "object",
+    "properties": {
+      "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+      "start": { "type": "string" },
+      "turns": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+                "role": { "const": "user" },
+                "text": { "type": "string" },
+                "at": { "type": "integer" },
+                "results": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "callId": { "type": "string" },
+                      "content": { "type": "string" },
+                      "isError": { "type": "boolean" }
+                    },
+                    "required": ["callId", "content"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["id", "role", "text"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+                "role": { "const": "assistant" },
+                "text": { "type": "string" },
+                "at": { "type": "integer" },
+                "thinking": { "type": "string" },
+                "status": { "enum": ["pending", "waiting", "done", "stopped", "failed"] },
+                "calls": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "target": { "type": "string" },
+                      "name": { "type": "string" },
+                      "payload": { "type": "object" },
+                      "label": { "type": "string" },
+                      "invalid": { "type": "string" }
+                    },
+                    "required": ["id", "target", "name", "payload", "label"],
+                    "additionalProperties": false
+                  }
+                },
+                "raw": { "type": "array" },
+                "provider": { "type": "string" },
+                "model": { "type": "string" },
+                "usage": { "type": "object" },
+                "error": { "type": "string" }
+              },
+              "required": ["id", "role", "text", "status"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "tools": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "target": { "type": "string" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "payload": { "type": "object" }
+          },
+          "required": ["target", "name", "description", "payload"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["id", "start", "turns", "tools"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Accepted, echoing the turn id; or an honest refusal (4.2). The answer follows as `completion.progressed` events.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": { "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" } },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "enum": ["busy", "signed-out", "no-key", "unavailable"] } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": []
+}

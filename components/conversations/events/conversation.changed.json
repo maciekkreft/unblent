@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A chat now looks like this (4, third rule): the whole conversation, pending until the server acknowledges its latest turns (5). `about` is what the chat is linked to (12); `start` is the instructions it began with (12); `turns` is every turn in order.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "title": { "type": "string" },
+    "about": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 }
+        },
+        "required": ["kind", "id"],
+        "additionalProperties": false
+      }
+    },
+    "start": { "type": "string" },
+    "turns": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+              "role": { "const": "user" },
+              "text": { "type": "string" },
+              "at": { "type": "integer" },
+              "results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "callId": { "type": "string" },
+                    "content": { "type": "string" },
+                    "isError": { "type": "boolean" }
+                  },
+                  "required": ["callId", "content"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["id", "role", "text"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+              "role": { "const": "assistant" },
+              "text": { "type": "string" },
+              "at": { "type": "integer" },
+              "thinking": { "type": "string" },
+              "status": { "enum": ["pending", "waiting", "done", "stopped", "failed"] },
+              "calls": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "target": { "type": "string" },
+                    "name": { "type": "string" },
+                    "payload": { "type": "object" },
+                    "label": { "type": "string" },
+                    "invalid": { "type": "string" }
+                  },
+                  "required": ["id", "target", "name", "payload", "label"],
+                  "additionalProperties": false
+                }
+              },
+              "raw": { "type": "array" },
+              "provider": { "type": "string" },
+              "model": { "type": "string" },
+              "usage": { "type": "object" },
+              "error": { "type": "string" }
+            },
+            "required": ["id", "role", "text", "status"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "pending": { "type": "boolean" },
+    "updatedAt": { "type": "integer" }
+  },
+  "required": ["id", "title", "about", "start", "turns", "pending", "updatedAt"],
+  "additionalProperties": false
+}

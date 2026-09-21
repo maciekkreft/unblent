@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The tool preferences of the loop changed (7.7): which tools are on (a tool missing from the map is on) and whether lookups are approved by hand or automatically. One value per account.",
+  "type": "object",
+  "properties": {
+    "tools": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "approval": { "enum": ["manual", "auto"] }
+  },
+  "required": ["tools", "approval"],
+  "additionalProperties": false
+}

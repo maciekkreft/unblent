@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user steered the answer to a turn: `stop` or `continue` from the input, `allow` or `reject` from a lookup-approval card (7.7). `continue` resumes a chat left at an interruption and needs no new text. Each owner keeps its own copy of this schema.",
+  "type": "object",
+  "properties": {
+    "conversationId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "turnId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "action": { "enum": ["allow", "reject", "stop", "continue"] }
+  },
+  "required": ["conversationId", "turnId", "action"],
+  "additionalProperties": false
+}

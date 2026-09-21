@@ -6,11 +6,18 @@
 // anywhere (3.2).
 import { createActor } from "xstate";
 import { ulid } from "ulid";
+import { compile } from "./validate.js";
 
 const mounted = new Map(); // id → actor, so a second mount of an id can be refused
 const machines = new Map(); // id → machine, so `ask` can read the target's kind and handlers
 const registry = new Map(); // event name → schema, so every emit is validated (3.3)
 const queryRegistry = new Map(); // "target: name" → { payload, reply, supersededBy }, so every query is validated (3.3, 7.2)
+// Compiled validators (bus/validate.js), built once per mount beside the schemas above,
+// so every message is checked with no per-message setup (3.3, 7.2). Keyed as the
+// registries are: an event by name, a query's payload and reply by "target: name".
+const eventValidators = new Map();
+const queryPayloadValidators = new Map();
+const queryReplyValidators = new Map();
 const subscribers = new Map();
 // Section 4.2: while an asker's query is open, the events its schema declares as
 // superseding the answer are held for that asker alone, so it sees the starting
@@ -75,6 +82,46 @@ function idOf(actor) {
 // a view's gesture from a fact's fact without asking the manifest (4.3, fifth rule).
 function kindOf(machine) {
   return machine.config.meta?.kind;
+}
+
+// XState hands an event as `{ type, ...fields }`; the schemas describe the fields and
+// close the object without a `type`, so a copy without `type` is what is validated. The
+// delivered event is never touched.
+function withoutType(event) {
+  const { type, ...fields } = event;
+  return fields;
+}
+
+// A message whose shape does not match its schema, recorded as refused with a value-free
+// reason: the location and the failing keyword only, never the value, so a wrong number
+// or a secret (7.2) is not carried into the trace or another tab (3.3). The malformed
+// payload itself is not recorded, for the same reason. `refused` is an outcome the trace
+// already has, so the record's key set is unchanged. `fromKind` is passed in, as the
+// caller already has it (an asker's machine need not be mounted). Printing is left to the
+// call site, because an invalid emit fails by throwing instead (as an undeclared emit does).
+function invalid(kind, name, from, fromKind, to, cid, error) {
+  const prefix = kind === "reply" ? "invalid reply" : "invalid payload";
+  record({
+    kind,
+    name,
+    from,
+    fromKind,
+    to,
+    outcome: "refused",
+    reason: `${prefix}: ${error}`,
+    cid,
+    payload: null,
+  });
+}
+
+// Compile one schema at mount, naming the component and the schema's key if it cannot be
+// resolved, so a broken schema fails at mount rather than on the first message it meets.
+function compileFor(schema, id, what) {
+  try {
+    return compile(schema);
+  } catch (err) {
+    throw new Error(`mount ${id}: cannot compile schema for ${what}: ${err.message}`);
+  }
 }
 
 function subscribe(name, actor) {
@@ -185,6 +232,14 @@ function forward(machine, emitter, event) {
     record({ kind: "event", name, from, fromKind, to: [], outcome: "refused", reason: "unknown event", payload: event });
     throw new Error(`unknown event: "${name}" is not in the registry`);
   }
+  // Section 3.3, 7.2: the payload must match the event's schema. A wrong one is refused,
+  // exactly as an undeclared emit is, by recording then throwing so it fails loudly and
+  // reaches no subscriber.
+  const evError = eventValidators.get(name)(withoutType(event));
+  if (evError) {
+    invalid("event", name, from, fromKind, [], null, evError);
+    throw new Error(`invalid payload: ${from} emitted "${name}": ${evError}`);
+  }
   // Section 4.1: an event names no target; it reaches every subscriber but never
   // returns to the one that emitted it. A recipient whose current state does not
   // handle the event is `ignored` (its `can` is false); the bus still sends it, so
@@ -238,6 +293,7 @@ export function mount(machine, { input, events = {}, queries = {} } = {}) {
   for (const name of machine.config.meta?.emits ?? []) {
     if (!(name in events)) throw new Error(`mount ${id}: no schema passed for declared emit "${name}"`);
     registry.set(name, events[name]);
+    eventValidators.set(name, compileFor(events[name], id, `event "${name}"`));
   }
   // Every query the machine answers (a `name?` handler, 7.2) reaches the bus with
   // its `{ payload, reply }` schema, the same way an emit does, so a query schema
@@ -257,6 +313,8 @@ export function mount(machine, { input, events = {}, queries = {} } = {}) {
       if (!(machine.config.meta?.emits ?? []).includes(ev))
         throw new Error(`mount ${id}: query "${name}" is superseded by "${ev}", not in meta.emits`);
     queryRegistry.set(`${id}: ${name}`, schema);
+    queryPayloadValidators.set(`${id}: ${name}`, compileFor(schema.payload, id, `query "${name}" payload`));
+    queryReplyValidators.set(`${id}: ${name}`, compileFor(schema.reply, id, `query "${name}" reply`));
   }
   const actor = createActor(machine, { input });
   // Subscriptions are derived by the 7.2 key convention: a dotted message type the
@@ -322,15 +380,20 @@ export function ask(machine, target, name, payload = {}) {
     record({ kind: "query", name, from, fromKind, to, outcome: "unknown-query", cid, payload });
     return Promise.resolve({ error: "unknown-query" });
   }
+  // Section 3.3, 7.2: past the exits that do not deliver, the payload must match the
+  // query's schema. A wrong one is not delivered and the asker gets a reply saying so,
+  // because a query always gets a reply (4.2); no hold opens for it.
+  const payloadError = queryPayloadValidators.get(key)(payload);
+  if (payloadError) {
+    invalid("query", name, from, fromKind, to, cid, payloadError);
+    console.error(`bus: invalid query ${name}: ${payloadError}`);
+    return Promise.resolve({ error: "invalid-payload" });
+  }
   // Section 4.2: the hold opens only past the four non-holding exits, so a refused or
   // unanswerable query holds nothing, and it opens before the answerer is sent to,
   // so an event the answerer emits while handling this query is inside the window.
   const superseded = queryRegistry.get(key).supersededBy ?? [];
   if (superseded.length) openHold(from, cid, superseded);
-  // The query's schema is registered (`queryRegistry.get(key)`); payload and reply
-  // validation against it lands with the JSON Schema validator (7.2, section 10),
-  // the same task that adds payload validation to events. Registration now is what
-  // lets both kinds be validated together then.
   const message = { type, cid, payload };
   const handled = answerer.getSnapshot().can({ ...message, reply: () => {} });
   return new Promise((resolve) => {
@@ -350,6 +413,17 @@ export function ask(machine, target, name, payload = {}) {
       if (answered) return;
       answered = true;
       clearTimeout(timer);
+      // Section 3.3, 7.2: the reply must match the query's schema. A wrong one does not
+      // reach the asker, which gets `invalid-reply` instead. The answerer is never thrown
+      // into, so one bad reply cannot take its actor down (4.2).
+      const replyError = queryReplyValidators.get(key)(value);
+      if (replyError) {
+        invalid("reply", name, target, "fact", [from], cid, replyError);
+        console.error(`bus: invalid reply ${name}: ${replyError}`);
+        resolve({ error: "invalid-reply" });
+        setTimeout(() => release(from, cid), 0);
+        return;
+      }
       record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
       resolve(value);
       // 4.2: a macrotask always runs after XState's `fromPromise` continuation (one

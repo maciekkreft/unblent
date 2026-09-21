@@ -1,0 +1,45 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "list takes nothing; it returns every chat's heading, newest first.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Each chat's heading (12): id, title, what it is linked to, when it changed, and whether it is still syncing.",
+    "type": "object",
+    "properties": {
+      "conversations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+            "title": { "type": "string" },
+            "about": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "minLength": 1 },
+                  "id": { "type": "string", "minLength": 1 }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              }
+            },
+            "updatedAt": { "type": "integer" },
+            "pending": { "type": "boolean" }
+          },
+          "required": ["id", "title", "about", "updatedAt", "pending"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["conversations"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["conversation.changed", "conversation.deleted"]
+}

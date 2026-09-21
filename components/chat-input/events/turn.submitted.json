@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user sent a message (4, fifth rule). `conversationId` is the open chat, or a fresh id for a new chat, in which case `about` (what it is linked to) and `start` (its opening instructions) are given too (12).",
+  "type": "object",
+  "properties": {
+    "conversationId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "turn": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+        "text": { "type": "string" }
+      },
+      "required": ["id", "text"],
+      "additionalProperties": false
+    },
+    "about": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "minLength": 1 },
+          "id": { "type": "string", "minLength": 1 }
+        },
+        "required": ["kind", "id"],
+        "additionalProperties": false
+      }
+    },
+    "start": { "type": "string" }
+  },
+  "required": ["conversationId", "turn"],
+  "additionalProperties": false
+}
