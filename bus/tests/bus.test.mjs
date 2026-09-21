@@ -896,3 +896,69 @@ test("a schema is compiled once per mount: 2000 events validate well within budg
   unmount(p);
   unmount(c);
 });
+
+// --- Tool asks: the wildcard `*: tool` (architecture.md 7.7) ---------------------
+// A query whose schema carries a `tool` entry may be asked by anyone holding the
+// wildcard, without declaring the exact key. queryRegistry stores each schema whole,
+// so the marker is readable at ask time.
+const TOOL_Q = {
+  payload: { type: "object", properties: { id: { type: "integer" } }, required: ["id"], additionalProperties: false },
+  reply: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false },
+  tool: { description: "doubles a number", label: "Doubling" },
+};
+
+test("a wildcard tool ask reaches a tool-marked query", async () => {
+  const f = mount(strictFact("wt-f"), { queries: { read: TOOL_Q, ping: STRICT_Q } });
+  const a = asker("wt-a", ["*: tool"]); // no exact "wt-f: read" declared
+  assert.deepEqual(await ask(a, "wt-f", "read", { id: 5 }), { value: 10 });
+  unmount(f);
+});
+
+test("a wildcard tool ask to a query with no tool entry throws", () => {
+  const f = mount(strictFact("wt-f2"), { queries: { read: STRICT_Q, ping: STRICT_Q } });
+  const a = asker("wt-a2", ["*: tool"]);
+  assert.throws(() => ask(a, "wt-f2", "read", { id: 1 }), /undeclared ask/);
+  unmount(f);
+});
+
+test("a wildcard tool ask to an unmounted target replies no-answerer", async () => {
+  const a = asker("wt-a3", ["*: tool"]);
+  assert.deepEqual(await ask(a, "nobody", "read", { id: 1 }), { error: "no-answerer" });
+});
+
+test("a wildcard tool ask aimed at a view throws", () => {
+  const v = mount(consumer("wt-v", []), {});
+  const a = asker("wt-a4", ["*: tool"]);
+  assert.throws(() => ask(a, "wt-v", "read", { id: 1 }), /undeclared ask/);
+  unmount(v);
+});
+
+test("an invalid payload on a wildcard tool ask is refused quietly (no console.error)", async () => {
+  const { records, sub } = collect();
+  const original = console.error;
+  const errs = [];
+  console.error = (...a) => errs.push(a.join(" "));
+  let handled = false;
+  const f = mount(
+    createMachine({
+      id: "wt-f5",
+      meta: { kind: "fact", shape: "local-only", emits: [], owns: "strict" },
+      on: { "read?": { actions: ({ event }) => { handled = true; event.reply({ value: 1 }); } } },
+    }),
+    { queries: { read: TOOL_Q } },
+  );
+  const a = asker("wt-a5", ["*: tool"]);
+  let reply;
+  try {
+    reply = await ask(a, "wt-f5", "read", { id: "not-an-int" }); // id must be an integer
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(reply, { error: "invalid-payload" });
+  assert.equal(handled, false, "the fact never saw it");
+  assert.equal(errs.length, 0, "a model's wrong tool input is expected traffic, not a defect to shout about");
+  const ref = records.filter((r) => r.kind === "query").at(-1);
+  assert.equal(ref.outcome, "refused");
+  sub();
+  unmount(f);
+});

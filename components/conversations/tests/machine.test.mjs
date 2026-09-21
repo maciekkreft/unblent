@@ -279,6 +279,29 @@ test("a failed save is retried when the tab regains focus", async () => {
   await until(() => lastChange(h).pending === false, "retry clears pending");
 });
 
+test("a focus reload does not drop finished turns still waiting to be saved", async () => {
+  // The open chat holds a turn the server has not confirmed. A reload would replace
+  // memory with the server's copy, which lacks that turn, losing it while its id stays
+  // unsent. onFocus must keep memory and only retry the save (5: nothing completed is lost).
+  const h = start({
+    onSave: () => Promise.reject(new Error("offline")),
+    chatsById: { [CHAT]: { id: CHAT, title: "", about: [], start: "", turns: [], updatedAt: 0 } },
+  });
+  await ready(h);
+  submit(h);
+  await until(() => h.calls.saved.length === 1, "first save tried");
+  await flush();
+  assert.equal(lastChange(h).pending, true, "an unsent turn keeps the chat pending");
+  const before = h.calls.saved.length;
+  h.actor.send({ type: "_focus" });
+  await until(() => h.calls.saved.length > before, "the save is retried on focus");
+  await flush();
+  assert.ok(!h.calls.reads.includes(CHAT), "the open chat with unsent turns is not reloaded from the server");
+  const reply = await query(h.actor, "read", { id: CHAT }, QUERIES.read.reply);
+  assert.ok(reply.conversation, "the chat is still in memory");
+  assert.ok(reply.conversation.turns.some((t) => t.id === USER), "the unsent user turn survives the focus");
+});
+
 test("the open chat follows the subject (12)", async () => {
   const conversations = [
     { id: CHAT, title: "older", about: [{ kind: "book", id: "b1" }], updatedAt: 5 },

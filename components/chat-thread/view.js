@@ -100,8 +100,9 @@ class ChatThread extends LitElement {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
-    /* The model's answer: plain text across the width, its line breaks kept (there is
-       no markdown renderer, 6.3). */
+    /* The model's answer: plain text across the width, its line breaks kept. The
+       architecture has no markdown renderer (10, the Rich editor row: no markdown
+       grammar). */
     .turn.assistant {
       align-self: stretch;
       display: flex;
@@ -139,8 +140,8 @@ class ChatThread extends LitElement {
         animation: none;
       }
     }
-    /* The thinking record (D11): a dim disclosure, closed by default, that opens to
-       read what the model thought. */
+    /* The thinking record: a dim disclosure, closed by default, that opens to read what
+       the model thought (12: a live line while the model works, then a dim record). */
     .thinking {
       font-size: var(--text-sm);
       color: var(--color-body-mid);
@@ -240,7 +241,7 @@ class ChatThread extends LitElement {
     const pending = turn.status === "pending";
     const hasText = Boolean(turn.text);
     // Before any text: a neutral pulse, or "Thinking…" only when the model is really
-    // thinking (D11).
+    // thinking (12: a live line says what the model is doing).
     const waiting =
       pending && !hasText
         ? turn.thinking

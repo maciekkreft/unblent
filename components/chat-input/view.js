@@ -49,8 +49,8 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
-        // Monotonic ids, so two turns sent in the same millisecond keep their order
-        // (Contracts, "Turn ids and order").
+        // Monotonic ids, so two turns minted in the same millisecond keep the order they
+        // were made in.
         mint: monotonicFactory(),
       },
       events: { "turn.submitted": submitted, "turn.steered": steered },
@@ -219,6 +219,12 @@ class ChatInput extends LitElement {
 
   #send() {
     if (!this.#draft.trim()) return;
+    // Keep the draft when the machine cannot send it: while an answer is arriving (the
+    // button is Stop) or before the machine is ready. Otherwise a doomed Enter would clear
+    // the box, though 12 says the box stays editable while an answer arrives.
+    const snapshot = this.#actor.snapshot;
+    if (!snapshot?.matches("ready")) return;
+    if (pendingTurn(snapshot.context.conversation)) return;
     this.#actor.send({ type: "_send", text: this.#draft });
     this.#draft = "";
     draftStore.write("");

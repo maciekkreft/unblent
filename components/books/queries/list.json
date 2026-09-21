@@ -41,5 +41,9 @@
     "required": ["books"],
     "additionalProperties": false
   },
-  "supersededBy": ["book.changed", "book.deleted"]
+  "supersededBy": ["book.changed", "book.deleted"],
+  "tool": {
+    "description": "Lists every book in the reader's library — id, title, author, where they are up to, and chapter count. Use to find a book by title or survey the whole library; gives the ids that the other book lookups and the notes lookups need. Takes no arguments.",
+    "label": "Listing the books"
+  }
 }

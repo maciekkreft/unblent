@@ -76,5 +76,29 @@ class Breaks(unittest.TestCase):
         self.assertIn("supersedes it", detail)
 
 
+class Wildcard(unittest.TestCase):
+    # The wildcard ask `*: tool` (7.7) asks no specific query, so its holder is not made
+    # to consume a tool's supersededBy events; only an exact ask carries that duty.
+    def test_wildcard_asker_is_not_held_to_follow_a_tool(self):
+        recs = {
+            "notes": manifest("fact", emits=["note.changed", "note.deleted"]),
+            # A tool-asker that consumes neither superseding event; it must not be flagged.
+            "conversations": manifest("fact", emits=[], asks=["*: tool"], consumes=[]),
+        }
+        schemas = {("notes", "list"): {"supersededBy": ["note.changed", "note.deleted"]}}
+        self.assertEqual(breaks(recs, schemas), [])
+
+    def test_exact_asker_alongside_a_wildcard_is_still_checked(self):
+        # An exact asker missing a superseding event is still a break, wildcard or not.
+        recs = {
+            "notes": manifest("fact", emits=["note.changed", "note.deleted"]),
+            "note-list": manifest("view", asks=["notes: list", "*: tool"], consumes=["note.changed"]),
+        }
+        schemas = {("notes", "list"): {"supersededBy": ["note.changed", "note.deleted"]}}
+        out = breaks(recs, schemas)
+        self.assertEqual(len(out), 1)
+        self.assertIn("note.deleted", out[0][2])
+
+
 if __name__ == "__main__":
     unittest.main()

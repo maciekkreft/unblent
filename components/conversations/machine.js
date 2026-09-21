@@ -76,15 +76,15 @@ const heading = (chat) => ({ id: chat.id, title: chat.title, about: chat.about, 
 
 const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0 });
 
-// A completion.progressed `status` mapped to how the turn stores its end (Contracts,
-// "How an answer's end is stored on the turn"): a chat knows done, stopped, failed;
-// refused and truncated are kept as failed with the reason in `error`.
+// A completion.progressed `status` mapped to how the turn stores its end: a turn knows
+// only done, stopped and failed, so refused and truncated are kept as failed with the
+// reason in `error`.
 const END_STATUS = { done: "done", stopped: "stopped", failed: "failed", refused: "failed", truncated: "failed" };
 
-// The finished assistant turn from the final completion.progressed (Contracts): `raw`
-// only on done (kept so the same model can be replayed), the reason in `error` for
-// refused and truncated, and a truncated turn's calls dropped (a cut-off call must
-// never run). Session 5 carries no calls (no tools are sent).
+// The finished assistant turn from the final completion.progressed: `raw` only on done
+// (kept so the same model can be replayed exactly what it produced), the reason in
+// `error` for refused and truncated, and a truncated turn's calls dropped, because a
+// cut-off call must never run. No tools are sent yet, so no turn carries calls.
 const finalize = (turn, e) => {
   const t = { id: turn.id, role: "assistant", text: e.text, status: END_STATUS[e.status] || "failed" };
   if (turn.at !== undefined) t.at = turn.at;
@@ -100,10 +100,10 @@ const finalize = (turn, e) => {
   return t;
 };
 
-// What is sent to the model (Contracts): an empty assistant turn is left out; a done
-// assistant turn carries its `raw` (and provider/model) so the same model is replayed
-// what it produced; user turns carry their results with content. Tool rounds (calls
-// followed by results) arrive in session 8.
+// What is sent to the model: an empty assistant turn is left out; a done assistant turn
+// carries its `raw` (and provider/model) so the same model is replayed what it produced;
+// user turns carry their results with content. No tool rounds (calls followed by
+// results) are built yet.
 const forModel = (turns) => {
   const out = [];
   for (const turn of turns) {
@@ -216,9 +216,9 @@ const onSubmit = (context, event, enqueue, self) => {
   enqueue.emit(changedPayload(context, chat));
 };
 
-// Continue when the chat ends with a user turn (Contracts, "Going on after an
-// interruption", case (a)): ask again with everything saved. The done-with-calls case
-// (b) arrives with the tool loop in session 8.
+// Continue when the chat ends with a user turn: ask the model again with everything
+// saved, so an interruption loses nothing (5). Continuing a done answer that carries
+// unrun lookups is not built yet.
 const onContinue = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.conversationId);
   if (!chat) return;
@@ -376,7 +376,10 @@ const onListed = (context, event) => {
 const onFocus = (context, enqueue, self) => {
   if (!context.signedIn) return;
   enqueue(() => fireList(context, self));
-  if (context.openId != null && !context.running && context.headings.some((h) => h.id === context.openId))
+  // Do not reload a chat that still has finished turns the server has not confirmed: the
+  // server's copy is missing them, so replacing memory with it would drop turns that can
+  // never be sent (5: nothing that was completed is lost). Retry the save instead.
+  if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && context.headings.some((h) => h.id === context.openId))
     enqueue(() => fireLoad(context, self, context.openId));
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
 };

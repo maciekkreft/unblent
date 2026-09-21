@@ -37,7 +37,16 @@
                 "payload": { "type": "object" },
                 "reply": { "type": "object" },
                 "supersededBy": { "type": "array", "items": { "type": "string" } },
-                "askers": { "type": "array", "items": { "type": "string" } }
+                "askers": { "type": "array", "items": { "type": "string" } },
+                "tool": {
+                  "type": "object",
+                  "properties": {
+                    "description": { "type": "string" },
+                    "label": { "type": "string" }
+                  },
+                  "required": ["description", "label"],
+                  "additionalProperties": false
+                }
               },
               "required": ["target", "name", "payload", "reply", "askers"],
               "additionalProperties": false

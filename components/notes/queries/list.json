@@ -82,5 +82,9 @@
     "required": ["notes"],
     "additionalProperties": false
   },
-  "supersededBy": ["note.changed", "note.deleted"]
+  "supersededBy": ["note.changed", "note.deleted"],
+  "tool": {
+    "description": "Lists every note and highlight the reader has written — title, a preview line, and what each is about. Their notes and highlights show what caught their attention, so they are worth reading when relevant. Gives the ids that reading a note needs. Takes no arguments.",
+    "label": "Listing the notes"
+  }
 }

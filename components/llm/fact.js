@@ -34,7 +34,8 @@ const savePatch = async (patch) => {
 };
 
 // The stream in flight, and whether the page is going away. An answer still arriving
-// when the page is discarded is not kept (decision 4): as the page leaves we abort the
+// when the page is discarded is not kept (5: it ends with the question, and Continue asks
+// again): as the page leaves we abort the
 // request and mark it leaving, so its read error is not turned into a saved failure —
 // after a reload the chat ends with the question, for Continue to resume. A genuine
 // network drop on a page that stays still surfaces as a failed turn (12).

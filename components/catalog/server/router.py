@@ -59,8 +59,20 @@ def _records(manifests: dict) -> list:
     return sorted(records, key=lambda r: r["name"])
 
 
+def _tools(records: list) -> list:
+    """Section 7.7: every (owner, query) whose schema carries a tool entry, so the
+    wildcard ask `*: tool` can be expanded to the components it reaches."""
+    out = []
+    for record in records:
+        for name in record["answers"]:
+            if isinstance(_schema(record["name"], "queries", name).get("tool"), dict):
+                out.append((record["name"], name))
+    return out
+
+
 def _link(records: list) -> None:
     """Section 7.3: from manifests alone, who each component interacts with."""
+    tools = _tools(records)
     for record in records:
         for event in record["emits"]:
             for other in records:
@@ -71,11 +83,20 @@ def _link(records: list) -> None:
                 if other is not record and event in other["emits"]:
                     record["interacts"].append({"with": other["name"], "via": event, "how": "consumes"})
         for ask in record["asks"]:
+            # The wildcard reaches every tool-marked query (7.7); a plain ask names one.
+            if ask == "*: tool":
+                for owner, query in tools:
+                    if owner != record["name"]:
+                        record["interacts"].append({"with": owner, "via": query, "how": "asks"})
+                continue
             target, _, query = ask.partition(": ")
             record["interacts"].append({"with": target, "via": query, "how": "asks"})
         for query in record["answers"]:
+            is_tool = (record["name"], query) in tools
             for other in records:
-                if other is not record and f"{record['name']}: {query}" in other["asks"]:
+                if other is record:
+                    continue
+                if f"{record['name']}: {query}" in other["asks"] or (is_tool and "*: tool" in other["asks"]):
                     record["interacts"].append({"with": other["name"], "via": query, "how": "answers"})
         record["interacts"].sort(key=lambda i: (i["with"], i["via"], i["how"]))
 
@@ -100,14 +121,22 @@ def _contracts(records: list) -> dict:
             })
         for name in record["answers"]:
             schema = _schema(owner, "queries", name)
-            queries.append({
+            is_tool = isinstance(schema.get("tool"), dict)
+            entry = {
                 "target": owner,
                 "name": name,
                 "payload": schema["payload"],
                 "reply": schema["reply"],
                 "supersededBy": schema.get("supersededBy", []),
-                "askers": sorted(o["name"] for o in records if f"{owner}: {name}" in o["asks"]),
-            })
+                # A tool-marked query is also asked by anyone holding the wildcard (7.7).
+                "askers": sorted(
+                    o["name"] for o in records
+                    if f"{owner}: {name}" in o["asks"] or (is_tool and "*: tool" in o["asks"])
+                ),
+            }
+            if is_tool:
+                entry["tool"] = schema["tool"]
+            queries.append(entry)
         for name in record["accepts"]:
             commands.append({
                 "target": owner,

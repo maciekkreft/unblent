@@ -119,7 +119,7 @@ test("a chat the server has no record of is an empty page", async () => {
 
 // The seam fixtures recorded by conversations (Testing): the exact conversation.changed
 // events of a whole exchange. Feeding the final one, the thread shows the finished turn.
-test("the recorded exchanges end in a done, stopped and failed turn (seam from session 5)", async () => {
+test("the recorded exchanges end in a done, stopped and failed turn (replayed seam fixtures)", async () => {
   for (const [name, status] of [["done", "done"], ["stopped", "stopped"], ["failed", "failed"]]) {
     const h = start({ openId: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
     await until(() => state(h) === "showing", "showing");

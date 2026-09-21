@@ -361,7 +361,12 @@ export function ask(machine, target, name, payload = {}) {
   // apart queries from several tabs; the first reply wins. It is minted up front so
   // every record about this query, even a refusal, carries it.
   const cid = ulid();
-  if (!asks.includes(key)) {
+  const declared = asks.includes(key);
+  // A tool ask (7.7): an asker holding the wildcard `*: tool` may ask any query whose
+  // registered schema carries a `tool` entry. The input comes from a model, so a wrong
+  // one is expected traffic, not a defect — its invalid-payload refusal is quiet (below).
+  const viaTool = !declared && asks.includes("*: tool");
+  if (!declared && !viaTool) {
     record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "undeclared ask", cid, payload });
     throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", not in meta.asks`);
   }
@@ -369,6 +374,14 @@ export function ask(machine, target, name, payload = {}) {
   if (!answerer) {
     record({ kind: "query", name, from, fromKind, to, outcome: "no-answerer", cid, payload });
     return Promise.resolve({ error: "no-answerer" });
+  }
+  // A wildcard ask reaches a query only when that query's registered schema is a tool
+  // (7.7). Any other target — a view, or an unmarked or unknown query — is an undeclared
+  // ask, exactly as if the wildcard were not held; queryRegistry holds a schema only for
+  // a mounted fact's answered queries, so its absence covers both cases.
+  if (viaTool && !queryRegistry.get(key)?.tool) {
+    record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "undeclared ask", cid, payload });
+    throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", which is not a tool`);
   }
   const targetMachine = machines.get(target);
   if (targetMachine.config.meta?.kind !== "fact") {
@@ -386,7 +399,9 @@ export function ask(machine, target, name, payload = {}) {
   const payloadError = queryPayloadValidators.get(key)(payload);
   if (payloadError) {
     invalid("query", name, from, fromKind, to, cid, payloadError);
-    console.error(`bus: invalid query ${name}: ${payloadError}`);
+    // A model's proposed tool input is expected to be wrong sometimes (7.7); only a
+    // component's own miswired ask is a defect worth shouting about.
+    if (!viaTool) console.error(`bus: invalid query ${name}: ${payloadError}`);
     return Promise.resolve({ error: "invalid-payload" });
   }
   // Section 4.2: the hold opens only past the four non-holding exits, so a refused or

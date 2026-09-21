@@ -41,7 +41,8 @@ def contract_lines(contracts: dict) -> list:
     events = [(e["name"], "owner: " + e["owner"], _fields(e["schema"])) for e in contracts["events"]]
     queries = [
         (f"{q['target']}: {q['name']}", _fields(q["payload"]),
-         "→ " + _fields(q["reply"]) + "; superseded by " + ", ".join(q.get("supersededBy") or ["nothing"]))
+         "→ " + _fields(q["reply"]) + "; superseded by " + ", ".join(q.get("supersededBy") or ["nothing"])
+         + (f"; tool: {q['tool']['label']}" if q.get("tool") else ""))
         for q in contracts["queries"]
     ]
     commands = [(f"{c['target']}: {c['name']}", _fields(c["payload"])) for c in contracts["commands"]]

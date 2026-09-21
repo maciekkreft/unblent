@@ -135,7 +135,7 @@ test("inputState disables with a line when signed out or the provider has no key
   assert.deepEqual(inputState(null), { disabled: true, notice: null }, "while loading, disabled with no line");
 });
 
-test("pendingTurn, canContinue and retryText read the seam fixtures (from session 5)", () => {
+test("pendingTurn, canContinue and retryText read the seam fixtures", () => {
   const done = loadFixture("changed-done").at(-1);
   assert.equal(pendingTurn(done), null);
   assert.equal(canContinue(done), false);
@@ -199,6 +199,45 @@ test("subject.changed changes what a new chat links to", async () => {
   h.actor.send({ type: "_send", text: "hi" });
   await flush();
   assert.deepEqual(emittedOf(h, "turn.submitted").at(-1).about, [{ kind: "book", id: "b2" }]);
+});
+
+test("events that arrive while starting are not lost: a new chat links to the book", async () => {
+  // The review's experiment: subject:read answers null and llm:read stays open, so the
+  // machine sits in `starting`. The book (subject.changed) and the open chat
+  // (conversation.opened) arrive as events during that wait. They must not be dropped,
+  // and the start actor's late reply must not overwrite them.
+  const CHAT2 = "01HQ8ZK7M4N5P6Q7R8S9T0V1WZ";
+  let releaseLlm;
+  const llmReady = new Promise((r) => (releaseLlm = r));
+  const input = {
+    mint: mkMint(),
+    ask: (target, name, payload) => {
+      const key = `${target}: ${name}`;
+      if (key === "conversations: open") return see(payload, OPEN.payload), Promise.resolve({ id: null });
+      if (key === "conversations: read") return see(payload, READ.payload), Promise.resolve({ error: "not-found" });
+      if (key === "subject: read") return see(payload, SUBJECT.payload), Promise.resolve({ subject: null });
+      if (key === "llm: read") return see(payload, LLM.payload), llmReady.then(() => ECHO);
+      throw new Error(`unexpected ask ${key}`);
+    },
+  };
+  const actor = createActor(machine, { input });
+  const emitted = [];
+  actor.on("turn.submitted", (e) => (emitted.push(e), see(e, SUBMITTED)));
+  actor.start();
+  await flush(); // open and subject have replied; llm is still open, so it is `starting`
+  assert.ok(!actor.getSnapshot().matches("ready"), "still starting while llm: read waits");
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "b9", title: "Deep Book", view: "book-reader" } });
+  actor.send({ type: "conversation.opened", id: CHAT2 });
+  await flush();
+  releaseLlm();
+  await until(() => actor.getSnapshot().matches("ready"), "ready");
+  await flush(); // let the opened read settle
+  actor.send({ type: "_send", text: "hi" });
+  await flush();
+  const e = emitted.at(-1);
+  assert.equal(e.conversationId, CHAT2, "the message goes to the chat opened while starting");
+  assert.deepEqual(e.about, [{ kind: "book", id: "b9" }], "the new chat links to the book the event carried");
+  assert.ok(e.start.includes('The reader currently has open: book "Deep Book".'), "the start text names the book");
 });
 
 test("llm.changed enables or disables the box", async () => {

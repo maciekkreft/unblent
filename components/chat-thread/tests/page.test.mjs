@@ -88,8 +88,9 @@ const lastAnswer = (page) =>
   });
 
 // Stopping an answer and reloading mid-answer both cancel the in-flight streaming
-// request on purpose (decision 4); the browser records that cancellation as a failed
-// request, which the reader never sees. These two tests drop that expected noise but
+// request on purpose (5: an answer still arriving when the page goes away is not kept);
+// the browser records that cancellation as a failed request, which the reader never
+// sees. These two tests drop that expected noise but
 // keep every real error (a console error, an HTTP 4xx/5xx).
 const ABORT_NOISE = /Load request cancelled|access control checks|NS_BINDING_ABORTED|aborted|cancelled/i;
 const realProblems = (problems) => problems.filter((p) => !ABORT_NOISE.test(p));
@@ -150,10 +151,32 @@ for (const engine of ENGINES) {
       // A long answer, so it is still arriving when Escape stops it.
       await send(page, "/slow " + "the answer keeps arriving slowly here. ".repeat(3));
       await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
-      // Escape stops (as the plan lists), and is not subject to the button's change guard.
+      // Escape stops the answer (12), and is not subject to the button's change guard.
       await page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector("textarea").focus());
       await page.keyboard.press("Escape");
       await until(async () => (await threadText(page)).includes("Stopped."));
+      assert.deepEqual(realProblems(problems), [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`Enter while an answer arrives keeps the typed text in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "keepdraft");
+    try {
+      // A long answer, so it is still arriving. The box stays editable (12): a question
+      // typed and sent with Enter now must survive, not be cleared by a doomed send.
+      await send(page, "/slow " + "a long answer that keeps arriving here. ".repeat(3));
+      await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
+      await page.evaluate(() => {
+        const area = document.querySelector("chat-input").shadowRoot.querySelector("textarea");
+        area.value = "a thought to send next";
+        area.dispatchEvent(new Event("input", { bubbles: true }));
+        area.focus();
+      });
+      await page.keyboard.press("Enter");
+      const value = await page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector("textarea").value);
+      assert.equal(value, "a thought to send next", "the text stays in the box while an answer arrives");
       assert.deepEqual(realProblems(problems), [], problems.join("; "));
     } finally {
       await browser.close();
@@ -192,7 +215,7 @@ for (const engine of ENGINES) {
     const { browser, page, problems } = await open(engine, "continue");
     try {
       // A long answer, reloaded while it is still arriving: the question is saved but the
-      // in-progress answer is not (decision 4).
+      // in-progress answer is not (5: an arriving answer is not kept when the page goes away).
       await send(page, "/slow " + "a long answer that is still arriving. ".repeat(3));
       // Arriving, and the question is on the server (not "Not saved yet"), so a reload
       // finds the chat ending at the question.

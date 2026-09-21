@@ -296,7 +296,31 @@ test("pieces within one 50 ms window coalesce into a single progressed", async (
   assert.equal(p[1].text, "abc");
 });
 
-// The seam fixtures session 5 replays into `conversations` (Testing): the exact
+test("a fast steady stream keeps flushing, each event holding the whole text so far", async () => {
+  const h = start();
+  await ready(h.actor);
+  const reply = await query(h.actor, "complete?", completePayload(), COMPLETE.reply);
+  assert.deepEqual(reply, { id: TURN });
+  // 30 pieces 12 ms apart, faster than the 50 ms window: a throttle that re-arms only
+  // through an `after` on the state would emit once and then stall until the end. The
+  // self-re-raised _flush timer keeps firing, so several events land while the answer
+  // is still arriving.
+  let expected = "";
+  for (let i = 0; i < 30; i++) {
+    const ch = String.fromCharCode(97 + (i % 26));
+    expected += ch;
+    h.streamer.onPiece({ type: "text", text: ch });
+    await flush();
+    h.clock.increment(12);
+    await flush();
+  }
+  const p = progressed(h.emitted);
+  assert.ok(p.length >= 6, `a fast stream flushes repeatedly; got ${p.length} progressed events`);
+  for (const e of p) assert.ok(expected.startsWith(e.text), `each event holds the whole text so far, not "${e.text}"`);
+  assert.ok(p.length >= 2 && p.at(-1).text.length > p[0].text.length, "later events carry more text than the first");
+});
+
+// The seam fixtures `conversations` replays (Testing): the exact
 // completion.progressed events this machine emits for each recorded run. RECORD=1
 // rewrites them from the machine; otherwise the committed files are checked to
 // still be what it emits, so the two sides never drift.
@@ -311,7 +335,7 @@ async function progressedForRun(name, { stop = false } = {}) {
   return progressed(h.emitted);
 }
 
-test("the recorded progressed fixtures are what the machine emits (seam for session 5)", async () => {
+test("the recorded progressed fixtures are what the machine emits (seam for conversations)", async () => {
   const runs = [
     ["plain", {}],
     ["think", {}],

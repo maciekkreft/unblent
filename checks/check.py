@@ -142,8 +142,10 @@ def check_manifests(manifests: dict) -> None:
         if not isinstance(meta.get("emits"), list):
             fail(path, "manifest check (7.3)", "meta.emits must be a list, empty if it emits nothing")
         asks = meta.get("asks", [])
-        if not (isinstance(asks, list) and all(isinstance(a, str) and _ASK.match(a) for a in asks)):
-            fail(path, "manifest check (7.3)", 'meta.asks must be a list of "target: query" strings')
+        # The wildcard `*: tool` (7.7) lets an asker ask any query marked as a tool; every
+        # other ask names one target and query.
+        if not (isinstance(asks, list) and all(isinstance(a, str) and (a == "*: tool" or _ASK.match(a)) for a in asks)):
+            fail(path, "manifest check (7.3)", 'meta.asks must be a list of "target: query" strings (or the wildcard "*: tool")')
         if meta["kind"] == "fact":
             if meta.get("shape") not in _SHAPES:
                 fail(path, "manifest check (7.3)", f"a fact component's meta.shape must be one of {sorted(_SHAPES)}")
@@ -331,6 +333,21 @@ def check_contracts(manifests: dict) -> None:
                             fail(schema_path, "contract check (11.2)",
                                  f"a query schema must have a {key!r} key ({{ payload, reply }})")
                         _check_draft(schema_path, schema[key], key)
+                    # Section 7.2, 7.7: a query schema file holds only these keys; `tool`
+                    # opts the query in as a tool and must be a { description, label } of
+                    # non-empty strings.
+                    for key in schema:
+                        if key not in ("payload", "reply", "supersededBy", "tool"):
+                            fail(schema_path, "contract check (11.2)",
+                                 f"unknown top-level key {key!r} in a query schema (only payload, reply, supersededBy, tool)")
+                    if "tool" in schema:
+                        tool = schema["tool"]
+                        ok = isinstance(tool, dict) and all(
+                            isinstance(tool.get(f), str) and tool.get(f).strip() for f in ("description", "label")
+                        )
+                        if not ok:
+                            fail(schema_path, "contract check (11.2)",
+                                 "a query's tool entry must be a { description, label } of non-empty strings (7.7)")
                 else:
                     _check_draft(schema_path, schema, "the schema")
 
@@ -357,7 +374,10 @@ def supersession_breaks(recs: dict, schemas: dict) -> list:
                 out.append((owner, q, f"{owner}: {q} is superseded by {ev}, which {owner} does not emit"))
         for name in sorted(recs):
             m = recs[name]
-            if f"{owner}: {q}" not in m["meta"].get("asks", []):
+            # The wildcard `*: tool` (7.7) asks no specific query, so it does not bring the
+            # follow-what-you-ask duty: its holder need not consume a tool's supersededBy.
+            asks = [a for a in m["meta"].get("asks", []) if a != "*: tool"]
+            if f"{owner}: {q}" not in asks:
                 continue
             for ev in sup:
                 if ev not in m["consumes"]:
@@ -504,12 +524,32 @@ def schema_breaks(old: object, new: object, path: str = "") -> list:
     return breaks
 
 
+def _tool_queries(manifests: dict) -> list:
+    """Section 7.7: every (owner, query) whose schema carries a tool entry, read from
+    the tree, so the wildcard ask `*: tool` can be expanded to the queries it reaches."""
+    out = []
+    for path in manifests:
+        comp = ROOT / Path(path).parent
+        qdir = comp / "queries"
+        if not qdir.is_dir():
+            continue
+        for f in sorted(qdir.glob("*.json")):
+            try:
+                schema = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(schema, dict) and isinstance(schema.get("tool"), dict):
+                out.append((comp.name, f.stem))
+    return out
+
+
 def _contract_parties(manifests: dict) -> dict:
     """Section 7.3: who a contract's change affects, from manifests alone. For an
     event, its emitters and consumers; for a query, its answerer and askers; for a
     command, only the acceptor, since nothing records who sends one. Reimplemented
     like _interaction_graph because the check cannot import a component (11.2)."""
     recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    tools = _tool_queries(manifests)
     parties = {"events": {}, "queries": {}, "commands": {}}
     for name, m in recs.items():
         for ev in m["meta"].get("emits", []):
@@ -519,6 +559,11 @@ def _contract_parties(manifests: dict) -> dict:
         for q in m["answers"]:
             parties["queries"].setdefault(q, {"answerers": set(), "askers": set()})["answerers"].add(name)
         for ask in m["meta"].get("asks", []):
+            # The wildcard reaches every tool-marked query (7.7); a plain ask names one.
+            if ask == "*: tool":
+                for _owner, q in tools:
+                    parties["queries"].setdefault(q, {"answerers": set(), "askers": set()})["askers"].add(name)
+                continue
             q = ask.split(":", 1)[1].strip() if ":" in ask else ask.strip()
             parties["queries"].setdefault(q, {"answerers": set(), "askers": set()})["askers"].add(name)
         for cmd in m["accepts"]:
@@ -1055,6 +1100,7 @@ def _interaction_graph(manifests: dict) -> dict:
     cannot import a component. Undirected: a contract-preserving edit can only break
     a component's own tests and those of its direct bus partners."""
     recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    tools = _tool_queries(manifests)
     adj = {name: set() for name in recs}
     for name, m in recs.items():
         emits = set(m["meta"].get("emits", []))
@@ -1066,10 +1112,12 @@ def _interaction_graph(manifests: dict) -> dict:
                 adj[name].add(other)
                 adj[other].add(name)
         for ask in m["meta"].get("asks", []):
-            target = ask.split(":", 1)[0].strip()
-            if target in recs and target != name:
-                adj[name].add(target)
-                adj[target].add(name)
+            # The wildcard reaches every component owning a tool-marked query (7.7).
+            targets = {owner for owner, _q in tools} if ask == "*: tool" else {ask.split(":", 1)[0].strip()}
+            for target in targets:
+                if target in recs and target != name:
+                    adj[name].add(target)
+                    adj[target].add(name)
     return adj
 
 

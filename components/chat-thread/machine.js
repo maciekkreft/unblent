@@ -2,7 +2,7 @@ import { setup, assign, fromPromise } from "xstate";
 
 // The view that shows the open conversation (architecture.md 3.1): headless of the
 // fact, it owns only its own UI state (the transcript scroll, which thinking records
-// are open, a just-copied flash — all in the view). It asks `conversations` which chat
+// are open — all in the view). It asks `conversations` which chat
 // is open and reads it for the starting picture (4.3), then follows the conversation
 // events for everything after. The question box is a separate view shown through a
 // default slot (6.3), so this component emits nothing. Everything with a side effect —

@@ -10,7 +10,8 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // events. Everything with a side effect — the queries, minting an id — arrives through
 // input, so this stays a pure definition importable in Node.
 
-// The instructions a new chat begins with (12, decision 6). Written once when the chat
+// The instructions a new chat begins with (12: the text a chat starts with is filled
+// once, by the view where the user acted, and never changes). Written once when the chat
 // is created and never changed, so the provider's cache holds and the chat is an honest
 // record of what the model was told. General on purpose: the specific request is what
 // the reader types. The open item, if any, is named on one appended line.
@@ -31,6 +32,17 @@ const asConversation = (event) => {
   return rest;
 };
 
+// The starting picture must not overwrite a value an event already set while the four
+// asks were in flight (4.3, fourth rule: an event is the authority, the ask reply is the
+// baseline). The event handlers live at the root so they apply in every state, including
+// `starting`; each marks the fields it set, and the start actor's onDone assigns a field
+// only when no event has touched it since the machine started.
+const mark = (touched, ...fields) => {
+  const next = { ...touched };
+  for (const f of fields) next[f] = true;
+  return next;
+};
+
 const turns = (conversation) => conversation?.turns ?? [];
 const lastTurn = (conversation) => {
   const t = turns(conversation);
@@ -44,8 +56,9 @@ export const pendingTurn = (conversation) => {
   return last && last.role === "assistant" && last.status === "pending" ? last : null;
 };
 
-// The chat was left hanging at the reader's question (Contracts, case (a)): Continue
-// asks the model again with everything saved, no new text needed.
+// The chat was left hanging at the reader's question: Continue asks the model again with
+// everything saved, no new text needed (5: a finished turn is always on the server, so
+// the model can be re-asked after an interruption).
 export const canContinue = (conversation) => {
   const last = lastTurn(conversation);
   return Boolean(last && last.role === "user");
@@ -146,8 +159,52 @@ export const machine = setup({
     conversation: null,
     subject: null,
     llm: null,
+    // Which fields an event set while the start actor was in flight, so onDone leaves
+    // those alone.
+    touched: {},
   }),
   initial: "starting",
+  // The fact's news, applied in every state so nothing that arrives while the machine is
+  // still starting is lost (4.3).
+  on: {
+    // The open chat changed on this device (12): read the new one for the starting
+    // picture; conversation.changed keeps it current after (4.3), held until the read
+    // lands (4.2).
+    "conversation.opened": {
+      actions: enqueueActions(({ context, event, enqueue, self }) => {
+        enqueue.assign({ openId: event.id, conversation: null, touched: mark(context.touched, "openId", "conversation") });
+        if (event.id != null) {
+          const id = event.id;
+          enqueue(() =>
+            context
+              .ask("conversations", "read", { id })
+              .then((reply) => self.send({ type: "_openLoaded", id, conversation: reply?.conversation ?? null }))
+              .catch(() => {}),
+          );
+        }
+      }),
+    },
+    _openLoaded: {
+      guard: ({ context, event }) => event.id === context.openId,
+      actions: assign({ conversation: ({ event }) => event.conversation, touched: ({ context }) => mark(context.touched, "conversation") }),
+    },
+    "conversation.changed": {
+      guard: ({ context, event }) => event.id === context.openId,
+      actions: assign({ conversation: ({ event }) => asConversation(event), touched: ({ context }) => mark(context.touched, "conversation") }),
+    },
+    "conversation.deleted": {
+      guard: ({ context, event }) => event.id === context.openId,
+      actions: assign({ openId: null, conversation: null, touched: ({ context }) => mark(context.touched, "openId", "conversation") }),
+    },
+    // The stage moved (4.3): a new chat links to the subject now on the stage.
+    "subject.changed": {
+      actions: assign({ subject: ({ event }) => event.subject ?? null, touched: ({ context }) => mark(context.touched, "subject") }),
+    },
+    // The account picture changed (4.3): the box enables or disables to match.
+    "llm.changed": {
+      actions: assign({ llm: ({ event }) => asPicture(event), touched: ({ context }) => mark(context.touched, "llm") }),
+    },
+  },
   states: {
     starting: {
       invoke: {
@@ -155,11 +212,15 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: {
           target: "ready",
-          actions: assign({
-            openId: ({ event }) => event.output.openId,
-            subject: ({ event }) => event.output.subject,
-            llm: ({ event }) => event.output.llm,
-            conversation: ({ event }) => event.output.conversation,
+          actions: assign(({ context, event }) => {
+            const t = context.touched;
+            const o = event.output;
+            return {
+              openId: t.openId ? context.openId : o.openId,
+              subject: t.subject ? context.subject : o.subject,
+              llm: t.llm ? context.llm : o.llm,
+              conversation: t.conversation ? context.conversation : o.conversation,
+            };
           }),
         },
         // A failed start leaves the box disabled with no line, as while loading.
@@ -173,39 +234,6 @@ export const machine = setup({
         _retry: { actions: enqueueActions(({ context, enqueue }) => retry(context, enqueue)) },
         _stop: { actions: enqueueActions(({ context, enqueue }) => stop(context, enqueue)) },
         _continue: { actions: enqueueActions(({ context, enqueue }) => resume(context, enqueue)) },
-        // The open chat changed on this device (12): read the new one for the starting
-        // picture; conversation.changed keeps it current after (4.3), held until the read
-        // lands (4.2).
-        "conversation.opened": {
-          actions: enqueueActions(({ context, event, enqueue, self }) => {
-            enqueue.assign({ openId: event.id, conversation: null });
-            if (event.id != null) {
-              const id = event.id;
-              enqueue(() =>
-                context
-                  .ask("conversations", "read", { id })
-                  .then((reply) => self.send({ type: "_openLoaded", id, conversation: reply?.conversation ?? null }))
-                  .catch(() => {}),
-              );
-            }
-          }),
-        },
-        _openLoaded: {
-          guard: ({ context, event }) => event.id === context.openId,
-          actions: assign({ conversation: ({ event }) => event.conversation }),
-        },
-        "conversation.changed": {
-          guard: ({ context, event }) => event.id === context.openId,
-          actions: assign({ conversation: ({ event }) => asConversation(event) }),
-        },
-        "conversation.deleted": {
-          guard: ({ context, event }) => event.id === context.openId,
-          actions: assign({ openId: null, conversation: null }),
-        },
-        // The stage moved (4.3): a new chat links to the subject now on the stage.
-        "subject.changed": { actions: assign({ subject: ({ event }) => event.subject ?? null }) },
-        // The account picture changed (4.3): the box enables or disables to match.
-        "llm.changed": { actions: assign({ llm: ({ event }) => asPicture(event) }) },
       },
     },
   },

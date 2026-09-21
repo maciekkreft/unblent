@@ -94,5 +94,9 @@
       }
     ]
   },
-  "supersededBy": ["note.changed", "note.deleted"]
+  "supersededBy": ["note.changed", "note.deleted"],
+  "tool": {
+    "description": "Returns one note in full: its text, and the passage it highlights if any. Use to read what the reader wrote. The id comes from listing the notes.",
+    "label": "Reading a note"
+  }
 }
