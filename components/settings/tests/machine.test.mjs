@@ -1,7 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
+import { Validator } from "@cfworker/json-schema";
 import { machine } from "../machine.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const json = (...path) => JSON.parse(readFileSync(resolve(HERE, "..", ...path), "utf8"));
+const CHANGED = json("events", "settings.changed.json");
+const READ = json("queries", "read.json").reply;
+// Every emit and reply the tests below produce, checked against its schema last.
+const recorded = [];
 
 // The actor is where decisions live (3.2): it is driven with fake stores and its
 // reply/emit are read directly, so no browser is needed. `stored` is the workshop
@@ -23,7 +34,10 @@ const start = (stored, opts = {}) => {
     },
   });
   const emitted = [];
-  actor.on("settings.changed", (e) => emitted.push(e));
+  actor.on("settings.changed", (e) => {
+    emitted.push(e);
+    recorded.push({ value: e, schema: CHANGED });
+  });
   actor.start();
   return { actor, saved, emitted };
 };
@@ -31,6 +45,7 @@ const start = (stored, opts = {}) => {
 const read = (actor) => {
   let reply;
   actor.send({ type: "read?", cid: 1, reply: (v) => (reply = v) });
+  recorded.push({ value: reply, schema: READ });
   return reply;
 };
 
@@ -41,6 +56,7 @@ test("garbage parses to defaults, arranging on", () => {
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
+    vimKeys: false,
     editors: {},
     profile: "workshop",
   });
@@ -152,6 +168,7 @@ test("the product page starts in the product profile with its own defaults", () 
     viewportSwitchHidden: true,
     layoutSwitchHidden: true,
     arranging: false,
+    vimKeys: false,
     editors: {},
     profile: "product",
   });
@@ -208,4 +225,45 @@ test("switching to the already-active profile is a no-op", () => {
   actor.send({ type: "profile.switched", profile: "product" });
   assert.equal(saved.profile.length, 0);
   assert.equal(emitted.length, 0);
+});
+
+const edit = (actor, fields) =>
+  actor.send({ type: "settings.edited", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, ...fields });
+
+test("vimKeys is stored and announced; a repeat emits nothing", () => {
+  const { actor, saved, emitted } = start(null);
+  edit(actor, { vimKeys: true });
+  assert.equal(read(actor).vimKeys, true);
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].vimKeys, true);
+  assert.equal(JSON.parse(saved.workshop[0]).vimKeys, true);
+  edit(actor, { vimKeys: true });
+  assert.equal(emitted.length, 1, "the same value again is no change");
+  edit(actor, { vimKeys: false });
+  assert.equal(read(actor).vimKeys, false);
+  assert.equal(emitted.length, 2);
+});
+
+test("a stored vimKeys survives a reload; anything but true is off", () => {
+  assert.equal(read(start(JSON.stringify({ vimKeys: true })).actor).vimKeys, true);
+  assert.equal(read(start(JSON.stringify({ vimKeys: "yes" })).actor).vimKeys, false);
+  assert.equal(read(start(JSON.stringify({ nav: [] })).actor).vimKeys, false, "a copy from before the switch is off");
+});
+
+test("vimKeys turned on in the product never shows in the workshop", () => {
+  const { actor, saved } = start(null, { product: true });
+  edit(actor, { viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, vimKeys: true });
+  assert.equal(read(actor).vimKeys, true);
+  assert.equal(saved.workshop.length, 0);
+  actor.send({ type: "profile.switched", profile: "workshop" });
+  assert.equal(read(actor).vimKeys, false, "the workshop copy keeps its own");
+});
+
+test("every payload matches its schema", () => {
+  assert.ok(recorded.length > 0, "the tests above recorded traffic");
+  for (const { value, schema } of recorded) {
+    const { type, ...rest } = value;
+    const result = new Validator(schema, "2020-12").validate(rest);
+    assert.ok(result.valid, `${JSON.stringify(value).slice(0, 160)}: ${JSON.stringify(result.errors?.[0])}`);
+  }
 });

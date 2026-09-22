@@ -2,8 +2,8 @@ import { setup, assign, emit } from "xstate";
 
 // A local-only fact component (3.1): headless owner of the user's page
 // preferences — the order and visibility of pages in the navigation, whether the
-// viewport switch and the layout switch are shown, and whether the desk layout is
-// being arranged. It keeps two independent copies (§12), one per profile
+// viewport switch and the layout switch are shown, whether the desk layout is
+// being arranged, and whether editors take Vim keys. It keeps two independent copies (§12), one per profile
 // (product and workshop), and reports the active one through settings: read and
 // settings.changed; a view takes its starting picture by query (4.3) and follows
 // settings.changed after. The stores arrive through `input`, so the machine is a
@@ -11,8 +11,8 @@ import { setup, assign, emit } from "xstate";
 
 // Each profile has its own defaults: the workshop is the full development surface,
 // the product hides the switches and does not arrange (§12, plan step 6).
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {} };
-const PRODUCT_DEFAULT = { nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, editors: {} };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, editors: {} };
+const PRODUCT_DEFAULT = { nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, vimKeys: false, editors: {} };
 
 // Sanitise any candidate into the contract shape (7.2): nav a list of
 // { path: string, hidden: boolean } deduped by path (a page is listed once);
@@ -45,6 +45,7 @@ const clean = (value) => {
     viewportSwitchHidden: v.viewportSwitchHidden === true,
     layoutSwitchHidden,
     arranging: v.arranging !== false && !layoutSwitchHidden,
+    vimKeys: v.vimKeys === true,
     editors,
   };
 };
@@ -75,6 +76,7 @@ const same = (a, b) =>
   a.viewportSwitchHidden === b.viewportSwitchHidden &&
   a.layoutSwitchHidden === b.layoutSwitchHidden &&
   a.arranging === b.arranging &&
+  a.vimKeys === b.vimKeys &&
   sameEditors(a.editors, b.editors);
 
 // The active copy, and the news about it: every emit and reply carries the copy
@@ -88,7 +90,7 @@ export const machine = setup({}).createMachine({
     kind: "fact",
     shape: "local-only",
     emits: ["settings.changed"],
-    owns: "the user's page preferences, one copy per profile (product and workshop): the order and visibility of pages in the navigation, whether the viewport switch and the layout switch are shown, and whether the desk layout is being arranged; it reports the active profile's copy",
+    owns: "the user's page preferences, one copy per profile (product and workshop): the order and visibility of pages in the navigation, whether the viewport switch and the layout switch are shown, whether the desk layout is being arranged, and whether editors take Vim keys; it reports the active profile's copy",
   },
   context: ({ input }) => ({
     onProduct: input.product,

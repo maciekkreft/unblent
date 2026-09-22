@@ -208,4 +208,28 @@ for (const engine of ENGINES) {
       await browser.close();
     }
   });
+  test(`the Vim keys switch is kept across a reload in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine);
+    const checked = () =>
+      page.evaluate(() =>
+        [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".switches label")]
+          .find((l) => l.textContent.includes("Vim keys"))
+          .querySelector("input").checked,
+      );
+    try {
+      assert.equal(await checked(), false, "off by default");
+      await clickSwitch(page, "Vim keys");
+      await until(async () => (await stored(page))?.vimKeys === true);
+      await page.reload();
+      await ready(page);
+      await until(checked);
+      await clickSwitch(page, "Vim keys");
+      await until(async () => (await stored(page)).vimKeys === false);
+
+      await clean(page);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
 }

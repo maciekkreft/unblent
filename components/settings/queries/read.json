@@ -26,6 +26,7 @@
       "viewportSwitchHidden": { "type": "boolean" },
       "layoutSwitchHidden": { "type": "boolean" },
       "arranging": { "type": "boolean" },
+      "vimKeys": { "type": "boolean", "description": "Vim keys on in every editor that has them; missing means off." },
       "editors": {
         "type": "object",
         "additionalProperties": { "type": "string" }
