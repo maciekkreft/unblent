@@ -19,6 +19,7 @@ const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
 const SUBJECT = other("subject", "read");
 const LLM = other("llm", "read");
+const SETTINGS = other("settings", "read");
 
 const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
 const ANSWER = "01HQ8ZK7M4N5P6Q7R8S9T0V1W2";
@@ -62,7 +63,7 @@ const mkMint = () => {
 };
 
 function start(options = {}) {
-  const { openId = null, subject = null, llm = ECHO, conversation = null } = options;
+  const { openId = null, subject = null, llm = ECHO, conversation = null, vimKeys = false } = options;
   const input = {
     mint: mkMint(),
     ask: (target, name, payload) => {
@@ -71,6 +72,7 @@ function start(options = {}) {
       if (key === "conversations: read") return see(payload, READ.payload), Promise.resolve(conversation ? { conversation } : { error: "not-found" });
       if (key === "subject: read") return see(payload, SUBJECT.payload), Promise.resolve({ subject });
       if (key === "llm: read") return see(payload, LLM.payload), Promise.resolve(llm);
+      if (key === "settings: read") return see(payload, SETTINGS.payload), Promise.resolve({ vimKeys });
       throw new Error(`unexpected ask ${key}`);
     },
   };
@@ -238,6 +240,7 @@ test("events that arrive while starting are not lost: a new chat links to the bo
       if (key === "conversations: read") return see(payload, READ.payload), Promise.resolve({ error: "not-found" });
       if (key === "subject: read") return see(payload, SUBJECT.payload), Promise.resolve({ subject: null });
       if (key === "llm: read") return see(payload, LLM.payload), llmReady.then(() => ECHO);
+      if (key === "settings: read") return see(payload, SETTINGS.payload), Promise.resolve({ vimKeys: false });
       throw new Error(`unexpected ask ${key}`);
     },
   };
@@ -268,6 +271,27 @@ test("llm.changed enables or disables the box", async () => {
   h.actor.send({ type: "llm.changed", ...ECHO });
   await flush();
   assert.equal(inputState(h.actor.getSnapshot().context.llm).disabled, false);
+});
+
+test("the settings read sets vimKeys, and settings.changed follows", async () => {
+  const h = start({ vimKeys: true });
+  await ready(h);
+  assert.equal(h.actor.getSnapshot().context.vimKeys, true, "the read turns it on");
+  h.actor.send({ type: "settings.changed", vimKeys: false });
+  await flush();
+  assert.equal(h.actor.getSnapshot().context.vimKeys, false, "a change turns it off");
+  h.actor.send({ type: "settings.changed", vimKeys: true });
+  await flush();
+  assert.equal(h.actor.getSnapshot().context.vimKeys, true, "and back on");
+});
+
+test("vimKeys is off when settings answers nothing or omits it", async () => {
+  const h = start(); // vimKeys defaults to false in the read reply
+  await ready(h);
+  assert.equal(h.actor.getSnapshot().context.vimKeys, false, "missing means off (a page without a value)");
+  h.actor.send({ type: "settings.changed" }); // no vimKeys field
+  await flush();
+  assert.equal(h.actor.getSnapshot().context.vimKeys, false, "a change without the field is off");
 });
 
 test("every payload matches its schema", () => {

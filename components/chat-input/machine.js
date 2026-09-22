@@ -147,6 +147,9 @@ export const machine = setup({
       }
       return { openId, subject: subject?.subject ?? null, llm, conversation };
     }),
+    // The "Vim keys" device preference (12), owned by `settings`. Read on its own so the
+    // box works on a page with no settings fact (the ask replies no-answerer, Vim off).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
 }).createMachine({
   id: "chat-input",
@@ -154,7 +157,7 @@ export const machine = setup({
     kind: "view",
     attributes: [],
     emits: ["turn.submitted", "turn.steered"],
-    asks: ["conversations: open", "conversations: read", "subject: read", "llm: read"],
+    asks: ["conversations: open", "conversations: read", "subject: read", "llm: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -163,14 +166,26 @@ export const machine = setup({
     conversation: null,
     subject: null,
     llm: null,
+    // The "Vim keys" preference (12): off until settings says otherwise, and off on a
+    // page without a settings fact.
+    vimKeys: false,
     // Which fields an event set while the start actor was in flight, so onDone leaves
     // those alone.
     touched: {},
   }),
   initial: "starting",
+  // Beside the states, so the preference arrives whatever the box is doing and a
+  // keystroke never waits for it. A settings.changed that races it is held for us until
+  // the reply lands (settings: read supersededBy).
+  invoke: {
+    src: "settings",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+  },
   // The fact's news, applied in every state so nothing that arrives while the machine is
   // still starting is lost (4.3).
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // The open chat changed on this device (12): read the new one for the starting
     // picture; conversation.changed keeps it current after (4.3), held until the read
     // lands (4.2).

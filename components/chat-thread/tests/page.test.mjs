@@ -83,7 +83,7 @@ async function open(engine, name, undoMs, tools) {
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
-  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
   return { browser, context, page, problems };
 }
 
@@ -132,7 +132,7 @@ async function openWithBook(engine, name) {
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
-  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
   return { browser, context, page, problems };
 }
 
@@ -153,7 +153,7 @@ async function openTestbed(engine, name) {
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/apps/chat`, { waitUntil: "domcontentloaded" });
-  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
   return { browser, context, page, problems };
 }
 
@@ -162,30 +162,36 @@ async function openTestbed(engine, name) {
 const bookIsSubject = (page) =>
   page.evaluate(() => Boolean(document.querySelector("dock-desk").shadowRoot.querySelector(".mark")));
 
-// Set the draft and send it. updateComplete waits for Lit to enable the Send button
-// (it turns on once the draft has text) before the click, as a typing user would.
-const send = (page, text) =>
+// The chat box is a CodeMirror document. Reach its EditorView through the handle CM6
+// hangs on the content node, as the note tests do. Set the draft with a dispatch, then
+// send it with the Send button.
+// updateComplete waits for Lit to enable the button (it turns on once the draft has text)
+// before the click, as a typing user would.
+const setDraft = (page, text) =>
   page.evaluate(async (text) => {
     const host = document.querySelector("chat-input");
-    const area = host.shadowRoot.querySelector("textarea");
-    area.value = text;
-    area.dispatchEvent(new Event("input", { bubbles: true }));
+    const view = host.shadowRoot.querySelector(".cm-content").cmView.rootView.view;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
     await host.updateComplete;
-    host.shadowRoot.querySelector(".send").click();
   }, text);
+
+const draftText = (page) =>
+  page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
+
+const send = async (page, text) => {
+  await setDraft(page, text);
+  await page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector(".send").click());
+};
 
 // Send with the Enter key rather than the Send button. Enter reaches the machine directly,
 // so it is not swallowed by the button's brief post-change guard (12) — needed when a
-// message is sent right after the button last flipped between Send and Stop.
-const sendEnter = (page, text) =>
-  page.evaluate(async (text) => {
-    const host = document.querySelector("chat-input");
-    const area = host.shadowRoot.querySelector("textarea");
-    area.value = text;
-    area.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  }, text);
+// message is sent right after the button last flipped between Send and Stop. The test's
+// account leaves Vim keys off, so Enter sends (D10).
+const sendEnter = async (page, text) => {
+  await setDraft(page, text);
+  await page.locator("chat-input .cm-content").click();
+  await page.keyboard.press("Enter");
+};
 
 const threadText = (page) =>
   page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelector(".transcript").textContent);
@@ -293,7 +299,7 @@ for (const engine of ENGINES) {
       await send(page, "/slow " + "the answer keeps arriving slowly here. ".repeat(3));
       await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
       // Escape stops the answer (12), and is not subject to the button's change guard.
-      await page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector("textarea").focus());
+      await page.locator("chat-input .cm-content").click();
       await page.keyboard.press("Escape");
       await until(async () => (await threadText(page)).includes("Stopped."));
       assert.deepEqual(realProblems(problems), [], problems.join("; "));
@@ -309,14 +315,10 @@ for (const engine of ENGINES) {
       // typed and sent with Enter now must survive, not be cleared by a doomed send.
       await send(page, "/slow " + "a long answer that keeps arriving here. ".repeat(3));
       await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
-      await page.evaluate(() => {
-        const area = document.querySelector("chat-input").shadowRoot.querySelector("textarea");
-        area.value = "a thought to send next";
-        area.dispatchEvent(new Event("input", { bubbles: true }));
-        area.focus();
-      });
+      await setDraft(page, "a thought to send next");
+      await page.locator("chat-input .cm-content").click();
       await page.keyboard.press("Enter");
-      const value = await page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector("textarea").value);
+      const value = await draftText(page);
       assert.equal(value, "a thought to send next", "the text stays in the box while an answer arrives");
       assert.deepEqual(realProblems(problems), [], problems.join("; "));
     } finally {
@@ -342,7 +344,7 @@ for (const engine of ENGINES) {
       await until(async () => (await lastAnswer(page)).includes("keep me"));
       await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
       await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
       await until(async () => (await threadText(page)).includes("keep me"));
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `conversations-${engine.name}.png`), fullPage: true });
@@ -365,7 +367,7 @@ for (const engine of ENGINES) {
         return (await lastAnswer(page)).length > 0 && !t.includes("Not saved yet");
       });
       await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
       await until(async () => await action(page, "Continue")); // the chat ends at the question
       assert.equal(await lastAnswer(page), "", "the in-progress answer was not kept");
       assert.deepEqual(realProblems(problems), [], problems.join("; "));
@@ -509,7 +511,7 @@ for (const engine of ENGINES) {
       await until(async () => (await lastAnswer(page)).includes("about this book"));
       await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
       await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
       // With the book as subject again, conversation-list scopes to the book's chats; the
       // chat's presence there proves it was linked to the book (about), not left unlinked.
       await until(async () => await bookIsSubject(page));

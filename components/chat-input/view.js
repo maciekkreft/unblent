@@ -2,9 +2,18 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { monotonicFactory } from "ulid";
 import { icon } from "icons";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
+import { EditorView, keymap, drawSelection, placeholder } from "@codemirror/view";
+import { history, historyKeymap, insertNewline } from "@codemirror/commands";
+import { vim, getCM } from "@replit/codemirror-vim";
 import { machine, inputState, pendingTurn, canContinue, retryText } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
+
+// The question box (3.1): a CodeMirror document owning only its draft. The box is one
+// editor for both modes: Vim lives in a compartment the "Vim keys" preference (12) turns
+// on and off in place, so the draft and the history survive the switch, and the box is
+// never torn down — even disabled it stays mounted, so a sign-out keeps the draft (12).
 
 // The draft, kept across reloads (3.1): the view's own UI state under a key named for
 // the component, so it follows the browser, not the account, and losing it loses
@@ -38,6 +47,54 @@ const toMs = (text, fallback = 300) => {
   if (Number.isNaN(n)) return fallback;
   return t.endsWith("ms") ? n : n * 1000;
 };
+
+// The structural theme, keyed to tokens like the note editors'; line spacing is padding,
+// never margin. The box grows from one line to six, then scrolls inside, so it never
+// pushes the transcript off screen.
+const editorTheme = EditorView.theme({
+  "&": { color: "var(--color-ink)", backgroundColor: "transparent" },
+  "&.cm-focused": { outline: "none" },
+  ".cm-scroller": {
+    fontFamily: "var(--font-sans)",
+    lineHeight: "var(--leading-normal)",
+    overflowY: "auto",
+    maxHeight: "calc(var(--text-body) * var(--leading-normal) * 6)",
+  },
+  ".cm-content": {
+    caretColor: "var(--color-accent)",
+    padding: "var(--space-xs) var(--space-sm)",
+    minHeight: "calc(var(--text-body) * var(--leading-normal))",
+  },
+  ".cm-line": { fontSize: "var(--text-body)", padding: "0" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
+  ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
+  ".cm-placeholder": { color: "var(--color-mute)" },
+});
+
+// The Vim block cursor, keyed to tokens, copied from note-editor (components never
+// import each other, 11.2). The plugin ships its own Prec.highest theme, so this raises
+// precedence and marks the competing properties !important to win regardless of order.
+// Focused, it fills with the accent; unfocused, it is hollowed with an inset shadow,
+// which no edge clip can reach — the plugin draws an outline outside an absolutely
+// positioned span, and Safari clips its top and left.
+const fatCursorTheme = Prec.highest(
+  EditorView.theme({
+    ".cm-fat-cursor": {
+      background: "var(--color-accent) !important",
+      color: "var(--color-accent-text) !important",
+    },
+    "&:not(.cm-focused) .cm-fat-cursor": {
+      background: "none !important",
+      outline: "none !important",
+      color: "var(--color-ink) !important",
+      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
+    },
+  }),
+);
+
+// Vim and its block cursor, or nothing: what the Vim compartment holds for the
+// "Vim keys" preference (12).
+const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
 
 class ActorController {
   constructor(host) {
@@ -112,30 +169,19 @@ class ChatInput extends LitElement {
       align-items: flex-end;
       gap: var(--space-sm);
     }
-    textarea {
+    /* CM6 owns everything inside .region; the frame is drawn here, around it. */
+    .region {
       flex: 1;
-      font: inherit;
+      min-width: 0;
       color: var(--color-ink);
       background: var(--color-canvas-soft);
       border: var(--border-width) solid var(--color-border);
       border-radius: var(--radius-md);
-      padding: var(--space-xs) var(--space-sm);
       box-sizing: border-box;
-      /* One line to a few: grows with the text, then scrolls inside so the box never
-         pushes the transcript off screen. */
-      field-sizing: content;
-      min-height: calc(var(--text-body) * var(--leading-normal));
-      max-height: calc(var(--text-body) * var(--leading-normal) * 6);
-      overflow-y: auto;
-      overflow-wrap: anywhere;
-      resize: none;
-      line-height: var(--leading-normal);
+      overflow: hidden;
     }
-    textarea:focus-visible {
+    .region:focus-within {
       outline: var(--focus-ring);
-    }
-    textarea:disabled {
-      color: var(--color-mute);
     }
     ::selection {
       background: var(--color-accent-selection);
@@ -182,6 +228,14 @@ class ChatInput extends LitElement {
 
   #actor = new ActorController(this);
   #draft = draftStore.read();
+  #view = null;
+  // Vim lives in a compartment so the "Vim keys" preference (12) turns it on or off in
+  // place, keeping the draft and the history. A second compartment carries editable, so
+  // a disabled box (signed out, no key) is still the same mounted editor (12).
+  #vim = new Compartment();
+  #vimOn = false;
+  #editable = new Compartment();
+  #editableOn = false;
   // The Send/Stop button ignores clicks for a moment after it changes role, so a click
   // aimed at Send does not land on the freshly-appeared Stop, and vice versa.
   #pendingWas = false;
@@ -193,43 +247,125 @@ class ChatInput extends LitElement {
     return this.#guardMs;
   }
 
+  #extensions() {
+    this.#vimOn = this.#actor.snapshot?.context.vimKeys === true;
+    this.#editableOn = !inputState(this.#actor.snapshot?.context.llm).disabled;
+    return [
+      // First: the Vim plugin must see a key before any other keymap at its level does.
+      this.#vim.of(vimExtensions(this.#vimOn)),
+      this.#keys(),
+      // Vim hides the native selection (its own theme paints ::selection transparent), so
+      // the visual-mode range shows only through CM6's own selection layer.
+      drawSelection(),
+      history(),
+      keymap.of(historyKeymap),
+      EditorView.lineWrapping,
+      this.#editable.of(EditorView.editable.of(this.#editableOn)),
+      editorTheme,
+      placeholder("Ask about your library…"),
+      EditorView.updateListener.of(this.#onUpdate),
+    ];
+  }
+
+  // Enter, Shift+Enter and Escape (12). A keydown handler at Prec.highest, not a keymap:
+  // CM6 runs every keymap from one default-precedence handler, which the Vim plugin's own
+  // handler precedes, so Vim would take Enter in normal mode before a keymap saw it.
+  // getCM reports insert mode only while Vim is on; guarded by the preference so a stale
+  // handle never reads true.
+  #keys() {
+    const vimOn = () => this.#actor.snapshot?.context.vimKeys === true;
+    const inserting = (view) => vimOn() && getCM(view)?.state?.vim?.insertMode === true;
+    return Prec.highest(
+      EditorView.domEventHandlers({
+        keydown: (event, view) => {
+          // An Enter that confirms an input-method composition is not a send.
+          if (event.isComposing) return false;
+          if (event.key === "Enter" && event.shiftKey) {
+            if (vimOn() && !inserting(view)) return false; // Vim normal mode: Vim's own
+            // Made here, because WebKit's native line break doubles at the end of the text.
+            event.preventDefault();
+            return insertNewline(view);
+          }
+          if (event.key === "Enter") {
+            if (inserting(view)) return false; // Vim insert mode: Vim's own new line
+            event.preventDefault(); // a doomed Enter never drops a stray newline
+            this.#send();
+            return true;
+          }
+          if (event.key === "Escape") {
+            if (inserting(view)) return false; // the first Escape leaves insert, Vim's own
+            if (!pendingTurn(this.#actor.snapshot?.context.conversation)) return false;
+            event.preventDefault();
+            this.#actor.send({ type: "_stop" });
+            return true;
+          }
+          return false;
+        },
+      }),
+    );
+  }
+
+  #onUpdate = (update) => {
+    if (!update.docChanged) return;
+    this.#draft = update.state.doc.toString();
+    draftStore.write(this.#draft);
+    this.requestUpdate(); // enable/disable Send as the draft gains or loses text
+  };
+
+  firstUpdated() {
+    const parent = this.renderRoot.querySelector(".region");
+    this.#view = new EditorView({
+      parent,
+      // Shadow-DOM: CM6 reads the selection through the root and style-mod mounts its
+      // sheet there, not on document (7.5), so it must know the shadow root.
+      root: this.renderRoot,
+      state: EditorState.create({ doc: this.#draft, extensions: this.#extensions() }),
+    });
+  }
+
   updated() {
-    const pending = Boolean(pendingTurn(this.#actor.snapshot?.context.conversation));
+    const snapshot = this.#actor.snapshot;
+    if (snapshot && this.#view) {
+      const vimKeys = snapshot.context.vimKeys === true;
+      if (vimKeys !== this.#vimOn) {
+        this.#vimOn = vimKeys;
+        this.#view.dispatch({ effects: this.#vim.reconfigure(vimExtensions(vimKeys)) });
+      }
+      const editableOn = !inputState(snapshot.context.llm).disabled;
+      if (editableOn !== this.#editableOn) {
+        this.#editableOn = editableOn;
+        this.#view.dispatch({ effects: this.#editable.reconfigure(EditorView.editable.of(editableOn)) });
+      }
+    }
+    const pending = Boolean(pendingTurn(snapshot?.context.conversation));
     if (pending !== this.#pendingWas) {
       this.#pendingWas = pending;
       this.#guardUntil = performance.now() + this.#guard();
     }
   }
 
-  #typed(event) {
-    this.#draft = event.currentTarget.value;
-    draftStore.write(this.#draft);
-    this.requestUpdate(); // enable/disable Send as the draft gains or loses text
-  }
-
-  #keydown(event, disabled) {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      if (!disabled) this.#send();
-    } else if (event.key === "Escape" && pendingTurn(this.#actor.snapshot?.context.conversation)) {
-      event.preventDefault();
-      this.#actor.send({ type: "_stop" });
-    }
+  disconnectedCallback() {
+    this.#view?.destroy();
+    this.#view = null;
+    super.disconnectedCallback();
   }
 
   #send() {
-    if (!this.#draft.trim()) return;
     // Keep the draft when the machine cannot send it: while an answer is arriving (the
-    // button is Stop) or before the machine is ready. Otherwise a doomed Enter would clear
-    // the box, though 12 says the box stays editable while an answer arrives.
+    // button is Stop) or before the machine is ready. Otherwise a doomed Enter would
+    // clear the box, though 12 says the box stays editable while an answer arrives.
     const snapshot = this.#actor.snapshot;
     if (!snapshot?.matches("ready")) return;
     if (pendingTurn(snapshot.context.conversation)) return;
+    if (!this.#draft.trim()) return;
     this.#actor.send({ type: "_send", text: this.#draft });
+    this.#clearDraft();
+  }
+
+  #clearDraft() {
     this.#draft = "";
     draftStore.write("");
-    const area = this.renderRoot.querySelector("textarea");
-    if (area) area.value = "";
+    if (this.#view) this.#view.dispatch({ changes: { from: 0, to: this.#view.state.doc.length, insert: "" } });
     this.requestUpdate();
   }
 
@@ -244,15 +380,18 @@ class ChatInput extends LitElement {
     if (!snapshot) return nothing;
     const context = snapshot.context;
     const { disabled, notice } = inputState(context.llm);
-    if (disabled && notice) return html`<p class="notice">${notice}</p>`;
+    // Signed out or no key: show the line, but keep the box mounted and hide its row, so
+    // the one editor survives sign-out and sign-in with its draft (12).
+    const blocked = disabled && notice;
 
     const pending = Boolean(pendingTurn(context.conversation));
-    const showContinue = !pending && canContinue(context.conversation);
-    const showRetry = !pending && retryText(context.conversation) != null;
+    const showContinue = !blocked && !pending && canContinue(context.conversation);
+    const showRetry = !blocked && !pending && retryText(context.conversation) != null;
     const canSend = pending || (!disabled && Boolean(this.#draft.trim()));
 
     return html`
       <div class="box">
+        ${blocked ? html`<p class="notice">${notice}</p>` : nothing}
         ${showContinue || showRetry
           ? html`<div class="actions">
               ${showContinue
@@ -267,15 +406,8 @@ class ChatInput extends LitElement {
                 : nothing}
             </div>`
           : nothing}
-        <div class="row">
-          <textarea
-            .value=${this.#draft}
-            placeholder="Ask about your library…"
-            ?disabled=${disabled}
-            aria-label="Message"
-            @input=${(e) => this.#typed(e)}
-            @keydown=${(e) => this.#keydown(e, disabled)}
-          ></textarea>
+        <div class="row" ?hidden=${blocked}>
+          <div class="region" role="textbox" aria-label="Message"></div>
           <button
             class="send"
             type="button"
