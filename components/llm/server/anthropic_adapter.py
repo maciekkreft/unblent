@@ -1,7 +1,9 @@
 """The Anthropic provider (architecture.md 10): the official Python client behind
 our neutral interface. It streams a completion, mapping our turns to the provider's
-messages and its stream events back to our neutral pieces. This session sends no
-tools; the tool-use mapping is added when the chat first reads the library.
+messages and its stream events back to our neutral pieces. It offers the model the
+tools the chat gathered (7.7), replays a prior round's tool calls and results as the
+provider's tool_use and tool_result blocks, and reports each new tool call the model
+makes back as a neutral `call` piece.
 """
 
 import anthropic
@@ -15,13 +17,13 @@ def list_models(key: str) -> list[dict]:
     return [{"id": model.id, "label": model.display_name} for model in result.data]
 
 
-async def stream(settings, key, request, forward):
+async def stream(settings, key, request, forward, tool_name):
     if not key:
         yield {"type": "end", "status": "failed", "error": "bad-key"}
         return
     model = settings["model"]
     ttl = settings["ttl"]
-    messages = _messages(request.get("turns") or [], settings)
+    messages = _messages(request.get("turns") or [], settings, tool_name)
     kwargs = dict(
         model=model,
         # Streaming lets max_tokens be generous without an HTTP timeout (claude-api
@@ -34,6 +36,16 @@ async def stream(settings, key, request, forward):
         messages=messages,
         thinking={"type": "adaptive", "display": "summarized"},
     )
+    # The tools the chat opted in (7.7), in a stable order so the provider caches them
+    # (the caller already sorts by our name; sorting by the provider name here keeps the
+    # order independent of the caller). eager_input_streaming streams large tool inputs as
+    # they are generated (claude-api skill); the shared layer validates each input, and we
+    # only read a call from the completed message, so a truncated input is never run.
+    if forward:
+        kwargs["tools"] = [
+            {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"], "eager_input_streaming": True}
+            for t in sorted(forward, key=lambda t: t["name"])
+        ]
     if settings["effort"] != "default":
         kwargs["output_config"] = {"effort": settings["effort"]}
     _cache_tail(messages, ttl)
@@ -47,7 +59,16 @@ async def stream(settings, key, request, forward):
                     elif delta.type == "thinking_delta":
                         yield {"type": "thinking", "text": delta.thinking}
             final = await reply.get_final_message()
-        yield _end(final)
+        end = _end(final)
+        # A tool call only counts when the answer truly finished: a max_tokens (truncated)
+        # end may hold a half-built call, which must never run (7.7). The calls ride before
+        # the end piece, as the neutral protocol expects (6.3), in the provider's name space
+        # for the shared layer to map back.
+        if end["status"] == "done":
+            for block in final.content:
+                if block.type == "tool_use":
+                    yield {"type": "call", "id": block.id, "name": block.name, "payload": block.input}
+        yield end
     except anthropic.AuthenticationError:
         yield {"type": "end", "status": "failed", "error": "bad-key"}
     except anthropic.RateLimitError:
@@ -73,7 +94,7 @@ def _status_error(error) -> str:
     return "unavailable"
 
 
-def _messages(turns, settings):
+def _messages(turns, settings, tool_name):
     provider, model = settings["provider"], settings["model"]
     messages = []
     for turn in turns:
@@ -95,7 +116,17 @@ def _messages(turns, settings):
                 # replay unchanged and the provider's cache holds (7.7).
                 messages.append({"role": "assistant", "content": raw})
             elif turn.get("text") or turn.get("calls"):
-                messages.append({"role": "assistant", "content": [{"type": "text", "text": turn.get("text", "")}]})
+                # No raw to replay (another provider or model, or none): rebuild from the
+                # turn's text and calls. The API rejects an empty text block, so the text
+                # goes in only when it is non-empty; each call becomes a tool_use block in
+                # the provider's name space, and the next user turn answers every one.
+                content = []
+                if turn.get("text"):
+                    content.append({"type": "text", "text": turn["text"]})
+                for call in turn.get("calls") or []:
+                    content.append({"type": "tool_use", "id": call["id"], "name": tool_name(call["target"], call["name"]), "input": call.get("payload", {})})
+                if content:
+                    messages.append({"role": "assistant", "content": content})
     return messages
 
 

@@ -415,7 +415,7 @@ test("tools.edited saves the preferences and announces them", async () => {
   assert.ok(h.emitted.some((e) => e.type === "tools.changed" && e.tools["notes: list"] === false));
 });
 
-// --- the markdown converter (Decision 10) -------------------------------------------
+// --- the markdown converter (7.7) ---------------------------------------------------
 
 test("toMarkdown turns a chapter's XHTML into plain markdown", () => {
   assert.equal(toMarkdown("<h1>Title</h1>"), "# Title");
@@ -509,7 +509,7 @@ test("a tool that errors is fed back as an error result", async () => {
   assert.match(results[0].content, /returned an error: not-found/);
 });
 
-test("a result is cut at the guard length (Decision 9)", async () => {
+test("a result is cut at the guard length (7.7)", async () => {
   const huge = "<p>" + "x".repeat(130000) + "</p>";
   const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ title: "Big", html: huge }) });
   await ready(h);
@@ -532,7 +532,7 @@ test("a huge result never bloats what rides the bus (results ride as size, 4.3)"
   for (const change of changes(h)) assert.ok(JSON.stringify(change).length < 20000, "conversation.changed stays small");
 });
 
-test("the round limit stops the chat after too many lookups (Decision 9)", async () => {
+test("the round limit stops the chat after too many lookups (7.7)", async () => {
   const h = start({ contracts: TOOLS, askTool: () => Promise.resolve({ subject: null }) });
   await ready(h);
   submit(h);
@@ -546,6 +546,66 @@ test("the round limit stops the chat after too many lookups (Decision 9)", async
   assert.equal(h.calls.completes.length, 9, "at most eight rounds of lookups run");
   assert.equal(lastAssistant(h).status, "failed");
   assert.equal(lastAssistant(h).error, "too-many-lookups");
+});
+
+test("the round limit is per question, not per chat: many questions each with a lookup all run", async () => {
+  // Nine questions in one chat, each answered after a single lookup. The eight-round limit
+  // is per question (7.7), so the count resets each question and none fails — the fault the
+  // review of session 8 found, where the count spanned the whole chat.
+  const h = start({ ids: [], contracts: TOOLS, askTool: () => Promise.resolve({ subject: null }) });
+  await ready(h);
+  for (let q = 0; q < 9; q++) {
+    const before = h.calls.completes.length;
+    h.actor.send({ type: "turn.submitted", conversationId: CHAT, turn: { id: U(twoChar(200 + q)), text: "q" }, about: [], start: "s" });
+    await until(() => h.calls.completes.length === before + 1, `question ${q} asked`);
+    await feed(h, [callAnswer(h.calls.completes[before].id, subjectCall(`q${q}`))]);
+    await until(() => h.calls.completes.length === before + 2, `question ${q} round ran`);
+    await feed(h, [plainAnswer(h.calls.completes[before + 1].id, `answer ${q}`)]);
+    await until(() => lastAssistant(h).status === "done", `question ${q} answered`);
+  }
+  assert.equal(h.calls.completes.length, 18, "two completes per question across nine questions");
+  assert.ok(!lastChange(h).turns.some((t) => t.error === "too-many-lookups"), "no question failed for lookups");
+});
+
+test("a plain done answer is replayed to the next question with its own raw (A2)", async () => {
+  // A done answer with no calls carries `raw`/provider so the same model replays exactly
+  // what it produced and its cache holds; only an answer with unanswered calls is stripped.
+  const h = start({ ids: [ANSWER], contracts: { queries: [] } });
+  await ready(h);
+  submit(h);
+  await flush();
+  await feed(h, loadFixture("progressed-plain"));
+  await until(() => lastAssistant(h).status === "done", "first answer done");
+  h.actor.send({ type: "turn.submitted", conversationId: CHAT, turn: { id: U("Y1"), text: "again" } });
+  await until(() => h.calls.completes.length === 2, "the second question is asked");
+  const prior = h.calls.completes[1].turns.find((t) => t.role === "assistant");
+  assert.ok(prior.raw, "the earlier plain answer is replayed with its raw");
+  assert.equal(prior.provider, "echo", "and its provider");
+  assert.ok(!prior.calls, "it had no calls");
+});
+
+test("a done answer whose calls were never run is sent as text alone (A2)", async () => {
+  // After a Stop during a lookup a chat rests at a done answer with unrun calls (case b);
+  // if the reader types a new question instead of Continue, that answer's tool_use blocks
+  // must not be replayed without their results, so its `calls` and `raw` are dropped.
+  const chat = {
+    id: CHAT, title: "t", about: [], start: "s", updatedAt: 5,
+    turns: [
+      { id: USER, role: "user", text: "first" },
+      { id: ANSWER, role: "assistant", text: "let me look", status: "done", calls: [{ id: "c1", target: "subject", name: "read", payload: {}, label: "Checking what's open" }], raw: [{ type: "text", text: "let me look" }], provider: "echo", model: "echo" },
+    ],
+  };
+  const h = start({ conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5 }], chatsById: { [CHAT]: chat }, contracts: { queries: [] } });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length > 0, "loaded");
+  h.actor.send({ type: "turn.submitted", conversationId: CHAT, turn: { id: U("Y2"), text: "never mind" } });
+  await until(() => h.calls.completes.length === 1, "the new question is asked");
+  const prior = h.calls.completes[0].turns.find((t) => t.id === ANSWER);
+  assert.ok(prior, "the earlier answer is still sent");
+  assert.ok(!prior.calls, "but without its unrun calls");
+  assert.ok(!prior.raw, "and without its raw (tool_use blocks demand results)");
+  assert.equal(prior.text, "let me look");
 });
 
 test("Stop during the lookups leaves the answer with its calls for Continue (case b)", async () => {
@@ -613,8 +673,8 @@ test("the recorded conversation.changed exchanges are what the machine emits (se
   }
 });
 
-// The tool-run seam (session 8): a whole exchange with one lookup, recorded as the
-// conversation.changed events the machine emits, for the views to replay (Testing).
+// A tool-run seam: a whole exchange with one lookup, recorded as the conversation.changed
+// events the machine emits, for the views to replay against the same bytes (Testing).
 async function toolExchange() {
   const h = start({ ids: [ANSWER, ANSWER2, RESULT1], now: () => 1, onSave: () => Promise.resolve({ updatedAt: 900 }), contracts: TOOLS, askTool: () => Promise.resolve({ title: "One", html: CHAPTER }) });
   await ready(h);

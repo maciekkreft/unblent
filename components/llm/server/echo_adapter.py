@@ -17,7 +17,7 @@ _SLOW = 0.3  # /slow: long enough to Stop mid-answer
 _TOOL = re.compile(r"([^:]+):\s*(\S+)\s*(.*)")
 
 
-async def stream(settings, key, request, forward):
+async def stream(settings, key, request, forward, tool_name=None):
     turns = request.get("turns") or []
     last = _last_user(turns)
     text = (last.get("text") if last else "") or ""

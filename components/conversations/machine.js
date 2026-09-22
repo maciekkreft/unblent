@@ -82,7 +82,7 @@ const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], upd
 // reason in `error`.
 const END_STATUS = { done: "done", stopped: "stopped", failed: "failed", refused: "failed", truncated: "failed" };
 
-// Guards on the loop (Decision 9): a tool result is cut so one lookup cannot fill the
+// Guards on the loop (7.7): a tool result is cut so one lookup cannot fill the
 // request, and a question runs at most this many rounds of lookups.
 const RESULT_CUT = 120000;
 const MAX_ROUNDS = 8;
@@ -102,7 +102,7 @@ const decodeEntities = (s) =>
   });
 
 // Convert a chapter's strict-XHTML fragment to plain markdown, so the model reads clean
-// text rather than markup (Decision 10). Small on purpose: headings, paragraphs,
+// text rather than markup (7.7). Small on purpose: headings, paragraphs,
 // emphasis, lists, block quotes, line breaks; a link becomes its text, an image its alt.
 // Chapter files are strict XHTML, so tags are well formed and a light tokenizer suffices.
 export const toMarkdown = (xhtml) => {
@@ -189,7 +189,7 @@ export const toMarkdown = (xhtml) => {
 };
 
 // The names of a reply's string fields marked as HTML (7.2), so the loop converts them
-// to markdown (Decision 10). It looks at the top-level properties and inside each oneOf
+// to markdown (7.7). It looks at the top-level properties and inside each oneOf
 // or anyOf branch, because a reply is often one of an answer or an error.
 const htmlFieldNames = (schema) => {
   const names = new Set();
@@ -212,8 +212,8 @@ const sortKeys = (value) => {
 
 // What one tool result becomes for the model: an error reply as one plain line; a reply
 // whose only large field is HTML sent as that markdown under its other short fields; any
-// other reply as compact JSON with sorted keys (Decision 10), so the same bytes go back
-// each round and the provider's cache holds (Decision 9).
+// other reply as compact JSON with sorted keys (7.7), so the same bytes go back
+// each round and the provider's cache holds (7.7).
 const convertReply = (reply, replySchema) => {
   if (reply && reply.error !== undefined) return `This lookup returned an error: ${reply.error}.`;
   const htmlFields = htmlFieldNames(replySchema);
@@ -239,8 +239,8 @@ const convertReply = (reply, replySchema) => {
 // The tool list a question is asked with, and the per-tool metadata the loop keeps: the
 // queries the owners marked as tools (7.7), sorted by name so the provider caches a
 // stable order, each carrying its payload schema (sent to the model) and its reply
-// schema and label (kept for converting results and naming the lookup). A tool switched
-// off by the user (session 12) is kept in the metadata but left out of what is offered.
+// schema and label (kept for converting results and naming the lookup). A tool the user
+// keeps off (7.7) is kept in the metadata but left out of what is offered.
 const buildTools = (context, reply) => {
   const queries = (reply && reply.queries) || [];
   const meta = {};
@@ -289,11 +289,12 @@ const finalize = (turn, e, meta) => {
   return t;
 };
 
-// What is sent to the model (Contracts, "What is sent to the model"): an empty or still
-// pending assistant turn is left out; a done assistant turn keeps its `calls` and `raw`
-// only when the next turn holds their results, so an unanswered round is sent as text
-// alone and thinking blocks are replayed unchanged only inside a completed round; user
-// turns carry their results with content.
+// What is sent to the model: an empty or still pending assistant turn is left out. A done
+// answer keeps its `raw` (so the same model replays its own content, thinking blocks
+// unchanged) unless it carries tool calls nobody answered — those `raw` and `calls` hold
+// tool_use blocks that demand results, so an unanswered round is sent as text alone; the
+// calls go back only when the next turn holds their results. User turns carry their
+// results with content.
 const forModel = (turns) => {
   const out = [];
   for (let i = 0; i < turns.length; i++) {
@@ -311,12 +312,14 @@ const forModel = (turns) => {
     } else {
       if (turn.status === "pending") continue;
       const next = turns[i + 1];
-      const answeredCalls = Boolean(turn.calls && turn.calls.length && next && next.role === "user" && next.results && next.results.length);
+      const hasCalls = Boolean(turn.calls && turn.calls.length);
+      const answeredCalls = Boolean(hasCalls && next && next.role === "user" && next.results && next.results.length);
+      const unansweredCalls = hasCalls && !answeredCalls;
       if (!turn.text && !answeredCalls) continue;
       const a = { id: turn.id, role: "assistant", text: turn.text, status: turn.status };
       if (turn.at !== undefined) a.at = turn.at;
-      if (answeredCalls) {
-        a.calls = turn.calls;
+      if (answeredCalls) a.calls = turn.calls;
+      if (!unansweredCalls) {
         if (turn.raw !== undefined) a.raw = turn.raw;
         for (const field of ["provider", "model", "usage"]) if (turn[field] !== undefined) a[field] = turn[field];
       }
@@ -333,8 +336,6 @@ const findTurn = (context, turnId) => {
   }
   return null;
 };
-
-const roundsWithCalls = (turns) => turns.filter((t) => t.role === "assistant" && t.calls && t.calls.length).length;
 
 const chatsWithUnsent = (context) => {
   const ids = new Set();
@@ -444,7 +445,7 @@ const onSubmit = (context, event, enqueue, self) => {
   chat.turns.push({ id: turn.id, role: "user", text: turn.text, at: context.now() });
   const answerId = context.ulid();
   chat.turns.push({ id: answerId, role: "assistant", text: "", status: "pending", at: context.now() });
-  context.running = { chatId: conversationId, turnId: answerId, phase: "contracts", tools: [], meta: {} };
+  context.running = { chatId: conversationId, turnId: answerId, phase: "contracts", tools: [], meta: {}, rounds: 0 };
   setOpen(context, enqueue, conversationId);
   context.unsent.add(turn.id); // the user turn is finished the moment it is sent (5)
   upsertHeading(context, chat);
@@ -468,7 +469,7 @@ const onContinue = (context, event, enqueue, self) => {
   if (!endsAtQuestion && !endsAtUnrunCalls) return;
   const answerId = context.ulid();
   chat.turns.push({ id: answerId, role: "assistant", text: "", status: "pending", at: context.now() });
-  context.running = { chatId: chat.id, turnId: answerId, phase: "contracts", tools: [], meta: {} };
+  context.running = { chatId: chat.id, turnId: answerId, phase: "contracts", tools: [], meta: {}, rounds: 0 };
   enqueue(() => fireContracts(context, self, answerId));
   enqueue.emit(changedPayload(context, chat));
 };
@@ -514,9 +515,11 @@ const onProgress = (context, event, enqueue, self) => {
 
   const calls = running && finished.status === "done" && finished.calls ? finished.calls : null;
   if (calls && calls.length) {
-    if (roundsWithCalls(chat.turns) > MAX_ROUNDS) {
-      // Too many rounds in a row (Decision 9): keep the answer and its calls, run nothing,
-      // and end the chat with a short failed turn the view names in plain words.
+    if (running.rounds >= MAX_ROUNDS) {
+      // Too many rounds for this question (7.7): keep the answer and its calls, run nothing,
+      // and end the chat with a short failed turn the view names in plain words. The count
+      // lives on `running` and resets each question, so a long chat is never cut short for
+      // lookups an earlier question made.
       const failId = context.ulid();
       chat.turns.push({ id: failId, role: "assistant", text: "", status: "failed", error: "too-many-lookups", at: context.now() });
       context.unsent.add(failId);
@@ -526,11 +529,12 @@ const onProgress = (context, event, enqueue, self) => {
       return;
     }
     // Run a round: save the done answer, append the next pending answer, keep `running`
-    // set for the whole round (so the focus reload does not replace memory mid-round), and
-    // ask the lookups. Send stays Stop for the reader with no change to `chat-input`.
+    // set for the whole round (so the focus reload does not replace memory mid-round) and
+    // count the round, and ask the lookups. Send stays Stop for the reader with no change
+    // to `chat-input`.
     const nextId = context.ulid();
     chat.turns.push({ id: nextId, role: "assistant", text: "", status: "pending", at: context.now() });
-    context.running = { ...running, turnId: nextId, phase: "lookups" };
+    context.running = { ...running, turnId: nextId, phase: "lookups", rounds: running.rounds + 1 };
     enqueue(() => fireSave(context, self, chat.id));
     enqueue(() => fireLookups(context, self, chat.id, finished.calls, context.running.meta));
     enqueue.emit(changedPayload(context, chat));
@@ -809,7 +813,7 @@ export const machine = setup({
     lastSubject: null,
     tools: {},
     approval: "auto",
-    running: null, // { chatId, turnId, phase, tools, meta } while a question is being answered
+    running: null, // { chatId, turnId, phase, tools, meta, rounds } while a question is being answered
     queued: [],
   }),
   initial: "loading",

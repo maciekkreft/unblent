@@ -131,8 +131,8 @@ test("the recorded exchanges end in a done, stopped and failed turn (replayed se
   }
 });
 
-// The tool-run seam (session 8): replaying the whole exchange, the open chat ends with a
-// done answer that carries the labelled lookup, which the view renders as a dim line (7.7).
+// The tool-run seam: replaying the whole exchange, the open chat ends with a done answer
+// that carries the labelled lookup, which the view renders as a dim line (7.7).
 test("a tool exchange leaves the answer carrying its labelled lookup", async () => {
   const h = start({ openId: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
   await until(() => state(h) === "showing", "showing");

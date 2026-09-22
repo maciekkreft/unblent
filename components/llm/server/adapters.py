@@ -40,7 +40,9 @@ async def complete(provider: str, settings: dict, key: str | None, request: dict
         back[pname] = tool
         validators[pname] = Draft202012Validator(tool["payload"])
     stream = echo_adapter.stream if provider == "echo" else anthropic_adapter.stream
-    async for piece in stream(settings, key, request, forward):
+    # The adapter maps a replayed call back to the provider's tool name; give it the
+    # mapping, since this module imports the adapter and the adapter cannot import back.
+    async for piece in stream(settings, key, request, forward, provider_tool_name):
         yield _named(piece, back, validators) if piece["type"] == "call" else piece
 
 
