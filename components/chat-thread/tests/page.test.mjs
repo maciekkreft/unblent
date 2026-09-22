@@ -230,8 +230,14 @@ for (const engine of ENGINES) {
     const { browser, page, problems } = await open(engine, "md");
     try {
       await send(page, "# A Heading\n\nA **bold** point.");
+      // The answer streams block by block: the heading (first block) renders before the
+      // bold span (second block). Wait until both are present, so the read below is not
+      // taken between the two while the ** is still an unclosed run of text.
       await until(async () =>
-        await page.evaluate(() => Boolean(document.querySelector("chat-thread").shadowRoot.querySelector(".answer.prose h1.md-h"))),
+        await page.evaluate(() => {
+          const root = document.querySelector("chat-thread").shadowRoot;
+          return Boolean(root.querySelector(".answer.prose h1.md-h") && root.querySelector(".answer.prose strong"));
+        }),
       );
       const rendered = await page.evaluate(() => {
         const root = document.querySelector("chat-thread").shadowRoot;

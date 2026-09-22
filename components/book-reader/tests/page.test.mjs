@@ -601,11 +601,14 @@ for (const engine of ENGINES) {
       watch(page, problems);
       // The cold GETs must land before the reload below, or the reload aborts them
       // and the watch reports a cancelled request; waiters are armed before goto fires
-      // them. catalog's manifest fetch is one of them: the product page mounts catalog.
+      // them. catalog's two fetches are among them: the product page mounts catalog,
+      // and conversations and settings-sheet ask its contracts, so /api/catalog/contracts
+      // is fetched on every load and must land before the reload too.
       const synced = Promise.all([
         page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
         page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
         page.waitForResponse((r) => /\/api\/catalog(\?|$)/.test(r.url()), { timeout: WAIT.timeout }),
+        page.waitForResponse((r) => /\/api\/catalog\/contracts(\?|$)/.test(r.url()), { timeout: WAIT.timeout }),
       ]);
       await page.goto(`${BASE_URL}/`);
       // Every view mounted (its shadow root exists); the reader is on the stage and each
