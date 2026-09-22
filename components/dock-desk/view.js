@@ -25,6 +25,12 @@ const FOLD = icon("sidebar-simple");
 const NARROW_REM = 45;
 const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 
+// A child's address (4.1): its role or tag name, with `#id` when the page gave it
+// one so two instances of a view on one page are distinct tabs. The subject mark
+// (12) compares against `subject.view`, which is an address too.
+const addressOf = (child) =>
+  (child.getAttribute("data-role") ?? child.localName) + (child.id ? "#" + child.id : "");
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -43,8 +49,8 @@ class ActorController {
       .map((child) => ({
         // A view is keyed by its role, not its tag, so a composer swap (3.6, 12)
         // keeps its dock slot: the chosen member carries data-role, the page default
-        // is named by its tag.
-        name: child.getAttribute("data-role") ?? child.localName,
+        // is named by its tag. The `#id` (4.1) makes two instances distinct tabs.
+        name: addressOf(child),
         label: child.getAttribute("label") ?? child.localName,
         side: child.getAttribute("side") ?? undefined,
         showsOn: child.getAttribute("shows-on") ?? undefined,
@@ -617,7 +623,7 @@ class DockDesk extends LitElement {
     const labelOf = (name) => views.find((v) => v.name === name)?.label ?? name;
     // The tab to mark (12): only with the attribute, and only a subject that names a
     // view. The address may carry an instance suffix (4.1); a tab is keyed by base name.
-    this.#marked = this.marksSubject && subject?.view ? subject.view.split("#")[0] : null;
+    this.#marked = this.marksSubject ? (subject?.view ?? null) : null;
     this.#markedTitle = subject?.title ?? "";
     const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
     const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
@@ -828,7 +834,7 @@ class DockDesk extends LitElement {
   updated() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return;
-    const child = (name) => [...this.children].find((c) => (c.getAttribute("data-role") ?? c.localName) === name);
+    const child = (name) => [...this.children].find((c) => addressOf(c) === name);
     // Reading a width commits the docks' new sizes before any slot is reassigned:
     // a dock that opened, or entered at nothing, starts its slide now, whereas
     // WebKit rebuilds the tree on a reassignment and would draw it at its end.

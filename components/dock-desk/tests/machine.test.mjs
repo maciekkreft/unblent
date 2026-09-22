@@ -43,6 +43,24 @@ test("the starting picture is reconciled to the children present", async () => {
   });
 });
 
+test("an instanced view (name#id, 4.1) is reconciled, staged and docked like any name", async () => {
+  // The machine treats a name as an opaque string, so the `#id` a page gives two
+  // instances of one view flows through reconcile untouched. The page-level check
+  // that two instances live as distinct tabs waits for a page that holds two.
+  const views = [
+    { name: "list-then-item#books", label: "Books", side: "left" },
+    { name: "list-then-item#notes", label: "Notes", side: "right" },
+  ];
+  const { snapshot } = await settle(
+    stored({ stage: "list-then-item#books", docks: { right: { open: true, views: ["list-then-item#notes"] } } }),
+    { views },
+  );
+  assert.deepEqual(layout(snapshot.context), {
+    stage: "list-then-item#books",
+    docks: { right: { open: true, views: ["list-then-item#notes"] } },
+  });
+});
+
 test("a side left empty after reconciling is dropped", async () => {
   const { snapshot } = await settle(stored({ stage: "token-sheet", docks: { right: { open: true, views: ["ghost"] } } }));
   assert.deepEqual(layout(snapshot.context), { stage: "token-sheet", docks: {} });
