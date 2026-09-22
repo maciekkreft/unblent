@@ -751,6 +751,7 @@ class PageChecker(HTMLParser):
         self._script_src = None
         self._script_data = ""
         self.kinds = []
+        self.custom = []
 
     def _fail(self, detail: str) -> None:
         fail(self.path, "page check (8)", detail)
@@ -762,6 +763,7 @@ class PageChecker(HTMLParser):
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if "-" in tag:
+            self.custom.append((tag, attrs.get("id")))
             return
         if tag in ("html", "head", "body", "meta", "title"):
             if tag == "meta" and attrs.get("name") == "kind":
@@ -812,6 +814,26 @@ class PageChecker(HTMLParser):
         self._script_data = ""
 
 
+def duplicate_id_problems(custom: list) -> list:
+    """The distinct-id rule (4.1): a page addresses two instances of one view as
+    `<name>#<id>`, so a tag used more than once needs an id on each occurrence,
+    all distinct, and no id is reused on the page. `custom` is (tag, id-or-None)
+    for every custom element in document order. Returns one detail per problem."""
+    problems = []
+    seen_tags = [t for t, _ in custom]
+    for tag in dict.fromkeys(seen_tags):
+        if seen_tags.count(tag) > 1:
+            ids = [i for t, i in custom if t == tag]
+            if any(i is None for i in ids):
+                problems.append(f"<{tag}> appears {len(ids)} times; each needs a distinct id (4.1)")
+            elif len(set(ids)) != len(ids):
+                problems.append(f"<{tag}> appears {len(ids)} times with a repeated id (4.1)")
+    ids_all = [i for _, i in custom if i is not None]
+    for dup in dict.fromkeys(i for i in ids_all if ids_all.count(i) > 1):
+        problems.append(f'id "{dup}" is used more than once on the page (4.1)')
+    return problems
+
+
 def check_pages() -> None:
     for path in sorted(glob.glob("pages/**/*.html", root_dir=ROOT, recursive=True)):
         checker = PageChecker(path)
@@ -820,6 +842,8 @@ def check_pages() -> None:
             fail(path, "page check (8)",
                  f"a page needs exactly one meta[name=kind] naming one of "
                  f"{PAGE_KINDS}, got {checker.kinds}")
+        for detail in duplicate_id_problems(checker.custom):
+            fail(path, "page check (8)", detail)
 
 
 # --- Page composition check (architecture.md 8) ----------------------------------
