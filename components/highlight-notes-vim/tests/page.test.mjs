@@ -133,18 +133,25 @@ const dragOver = async (page, r) => {
 // visibilitychange), so a test need not wait out the debounce for a write to reach the server.
 const drain = (page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
 
-// Show the Highlights tab in the right dock (its tab may sit in the open strip or, on a
-// narrow desk, in the folded rail): click whichever "Highlights" tab is visible.
-const showHighlights = (page) =>
-  page.evaluate(() => {
-    const tabs = [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('[role="tab"]')].filter(
-      (t) => t.textContent.trim() === "Highlights",
-    );
-    (tabs.find((t) => t.offsetParent !== null) ?? tabs[0])?.click();
-  });
+// The elements the Notes container (list-then-item#notes) has assigned to its slot: the
+// list, or the item shown after a pick (4.1).
+const assignedNotes = (page) =>
+  page.evaluate(() =>
+    document.querySelector("list-then-item#notes").shadowRoot.querySelector("slot").assignedElements().map((el) => el.localName),
+  );
 
-// The element the composer swapped into the dock slot, and whether a "Highlights" tab is
-// present, so the swap keeping its slot (12) is proven.
+// Show the Highlights document: pick the Highlights row in the Notes list, then wait for
+// the container to show the (Vim) document in place of the editor. The row lives in Notes.
+const showHighlights = async (page) => {
+  await until(async () =>
+    page.evaluate(() => Boolean(document.querySelector("note-list").shadowRoot.querySelector(".row.highlights"))),
+  );
+  await page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.highlights").click());
+  await until(async () => (await assignedNotes(page)).includes("highlight-notes-vim"));
+};
+
+// The element the composer swapped in, so the swap keeping its place in the Notes pair
+// (12) is proven: the chosen member carries data-role to keep the container's shown state.
 const swapped = (page) =>
   page.evaluate(() => {
     const el = document.querySelector("highlight-notes-vim");
@@ -215,12 +222,14 @@ for (const engine of ENGINES) {
       await ready(page);
       await readerHasText(page);
 
-      // Make a highlight in the book, then open the Vim tab: the composer swapped it in.
+      // Make a highlight in the book, then pick the Highlights row: the composer swapped the
+      // Vim member in, and picking the row shows it in the Notes pair, keeping its place (12).
       await dragOver(page, await dragRect(page));
       await until(async () => (await marks(page)).length > 0);
       await page.waitForFunction(() => document.querySelector("highlight-notes-vim")?.shadowRoot?.querySelector(".cm-content"));
       assert.deepEqual(await swapped(page), { tag: "highlight-notes-vim", role: "highlight-notes" }, "the Vim member took the slot");
       await showHighlights(page);
+      assert.ok((await assignedNotes(page)).includes("highlight-notes-vim"), "the pair shows the Vim document, keeping its place");
       await until(async () => (await hnQuotes(page)).length > 0);
 
       // The highlight note must reach the server before its comment is written, so the

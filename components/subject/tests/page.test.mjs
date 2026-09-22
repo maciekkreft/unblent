@@ -170,10 +170,11 @@ const noticeText = (page) =>
       .join(" "),
   );
 
-// The titles the list actually shows (the next-note draft and the apart row excluded).
+// The titles the list actually shows (the next-note draft, the apart row and the fixed
+// Highlights row excluded).
 const shownTitles = (page) =>
   page.evaluate(() =>
-    [...document.querySelector("note-list").shadowRoot.querySelectorAll(".row:not(.draft):not(.apart)")].map((r) =>
+    [...document.querySelector("note-list").shadowRoot.querySelectorAll(".row:not(.draft):not(.apart):not(.highlights)")].map((r) =>
       r.querySelector(".name").textContent.trim(),
     ),
   );
@@ -192,6 +193,33 @@ const hasSwitch = (page) =>
   page.evaluate(() => Boolean(document.querySelector("note-list").shadowRoot.querySelector(".scope")));
 
 const sameSet = (a, b) => a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
+
+// The Notes container's Back bar label (null when the list is shown, so no bar).
+const notesBarLabel = (page) =>
+  page.evaluate(() => {
+    const b = document.querySelector("list-then-item#notes").shadowRoot.querySelector(".bar button span");
+    return b ? b.textContent.trim() : null;
+  });
+
+// The fixed Highlights row (Decision 5): its count subtitle and whether it reads as the
+// selected row, or null when the row is not shown.
+const highlightsRow = (page) =>
+  page.evaluate(() => {
+    const r = document.querySelector("note-list").shadowRoot.querySelector(".row.highlights");
+    return r
+      ? { subtitle: r.querySelector(".subtitle").textContent.trim(), selected: r.getAttribute("aria-selected") }
+      : null;
+  });
+
+// Click the Notes container's Back bar (return from the shown item to the list).
+const clickNotesBack = (page) =>
+  page.evaluate(() => document.querySelector("list-then-item#notes").shadowRoot.querySelector(".bar button").click());
+
+// Whether the "New note" draft row reads as the selected one, or null when it is absent.
+const draftSelected = (page) =>
+  page.evaluate(
+    () => document.querySelector("note-list").shadowRoot.querySelector(".row.draft")?.getAttribute("aria-selected") ?? null,
+  );
 
 // The reader's "Page N of M" footer, to prove a highlight never moves the text (D4).
 const pageLabel = (page) =>
@@ -257,15 +285,23 @@ const dragOver = async (page, r) => {
   await page.mouse.up();
 };
 
-// Show the Highlights tab in the right dock (its tab may sit in the open strip or, on a
-// narrow desk, in the folded rail): click whichever "Highlights" tab is visible.
-const showHighlights = (page) =>
-  page.evaluate(() => {
-    const tabs = [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('[role="tab"]')].filter(
-      (t) => t.textContent.trim() === "Highlights",
-    );
-    (tabs.find((t) => t.offsetParent !== null) ?? tabs[0])?.click();
-  });
+// The elements the Notes container (list-then-item#notes) has assigned to its slot: the
+// list, or the item shown after a pick. The pair is named by its instance id (4.1).
+const assignedNotes = (page) =>
+  page.evaluate(() =>
+    document.querySelector("list-then-item#notes").shadowRoot.querySelector("slot").assignedElements().map((el) => el.localName),
+  );
+
+// Show the Highlights document: pick the Highlights row in the Notes list, then wait for
+// the container to show the document in place of the editor (Decision 2). The row lives in
+// Notes, so no dock tab need be brought forward.
+const showHighlights = async (page) => {
+  await until(async () =>
+    page.evaluate(() => Boolean(document.querySelector("note-list").shadowRoot.querySelector(".row.highlights"))),
+  );
+  await page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.highlights").click());
+  await until(async () => (await assignedNotes(page)).includes("highlight-notes"));
+};
 
 // The tab that carries the subject mark (12): its label and the mark's hover title, or
 // null when no tab is marked. The mark is a span.mark inside a [role="tab"] button.
@@ -277,17 +313,16 @@ const markedTab = (page) =>
     return { label: tab.textContent.trim(), title: mark.getAttribute("title") };
   });
 
-// Bring the docked Highlights to the stage: show its tab, then click the desk's
-// "Return Highlights to the stage" action (shown while the desk is being arranged).
-const stageHighlights = async (page) => {
-  await showHighlights(page);
-  await page.evaluate(() => {
+// Bring the docked Notes container to the stage: click the desk's "Return Notes to the
+// stage" action (shown while the desk is being arranged; workshop arranges by default).
+// The Highlights document lives inside Notes now, so staging Notes stages the document.
+const stageNotes = (page) =>
+  page.evaluate(() => {
     const btn = [...document.querySelector("dock-desk").shadowRoot.querySelectorAll("button")].find((b) =>
-      /Return Highlights to the stage/.test(b.getAttribute("aria-label") ?? ""),
+      /Return Notes to the stage/.test(b.getAttribute("aria-label") ?? ""),
     );
     btn?.click();
   });
-};
 
 // The label of the view shown on the stage (its active stage tab).
 const stagedTab = (page) =>
@@ -882,10 +917,51 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
-    // The book stays the subject when Highlights is on the stage (12): the Reader tab
-    // keeps the mark, Highlights on the stage shows its quotes, and Notes does not list
-    // the highlight as a plain note (the bug this change fixes).
-    test("Highlights on the stage keeps the book the subject and marks the Reader tab", async () => {
+    // The Highlights row opens the document inside the Notes pair (Decision 1, 2, 5, 7):
+    // it stands in the list showing the count, picking it shows the document under the
+    // Notes Back bar, the book stays the subject (the Reader tab keeps the mark), the
+    // highlight is never a plain note, and Back returns to the list with the row selected.
+    test("the Highlights row opens the document in the Notes pair and keeps the book the subject", async () => {
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ready(page);
+
+      // The Highlights row stands in the list showing one highlight, not yet selected; the
+      // book is the subject (the Reader tab is marked) and no plain note is listed for it.
+      await until(async () => (await highlightsRow(page))?.subtitle === "1 highlight", 8000);
+      await until(async () => (await markedTab(page))?.label === "Reader");
+      assert.match((await markedTab(page)).title, /^Working on: .+/);
+      assert.deepEqual(await shownTitles(page), [], "the highlight is not among the plain notes");
+      assert.equal((await highlightsRow(page)).selected, "false", "the row is not selected before it is picked");
+
+      // Pick it: the document shows under the "Notes" Back bar, its quote the book's
+      // highlight, and the Reader tab keeps the mark (the book is still the subject).
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length > 0);
+      assert.equal(await notesBarLabel(page), "Notes", "the document opens under the Notes Back bar");
+      assert.equal((await markedTab(page))?.label, "Reader", "the mark stays on the Reader tab");
+      assert.deepEqual(await shownTitles(page), [], "still no plain note for the highlight");
+
+      // Back returns to the list, and the Highlights row reads as the open one.
+      await clickNotesBack(page);
+      await until(async () => (await assignedNotes(page)).includes("note-list"));
+      await until(async () => (await highlightsRow(page))?.selected === "true");
+
+      // Picking New note shows the editor, and the Highlights row is no longer selected.
+      await clickNew(page);
+      await until(async () => (await assignedNotes(page)).includes("note-editor"));
+      await until(async () => (await highlightsRow(page))?.selected === "false");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // The document stays inside the Notes pair even when Notes is brought to the stage (12):
+    // the book remains the subject (the Reader tab keeps its mark) and the highlight is never
+    // listed as a plain note, whether the pair is docked or staged.
+    test("the highlights document holds the Notes pair when it is staged, the mark on Reader", async () => {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
@@ -894,23 +970,72 @@ for (const engine of ENGINES) {
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0, 8000);
 
-      // Reader on the stage: its tab carries the mark, and the mark names the open book.
-      await until(async () => (await markedTab(page))?.label === "Reader");
-      assert.match((await markedTab(page)).title, /^Working on: .+/);
-      // Notes does not list the highlight as a plain note.
-      assert.deepEqual(await shownTitles(page), [], "the highlight is not among the plain notes");
-
-      // Bring Highlights to the stage: it still shows its quotes there, Notes still does
-      // not list the highlight, and the mark stays on the Reader tab (the book is still
-      // the subject, because Highlights is a view about it).
-      await stageHighlights(page);
-      await until(async () => (await stagedTab(page)) === "Highlights");
+      // Bring the Notes container to the stage: the document still shows there, Notes still
+      // does not list the highlight, and the mark stays on the Reader tab (the book is the
+      // subject; the highlights document is a view about it, not a thing of its own).
+      await stageNotes(page);
+      await until(async () => (await stagedTab(page)) === "Notes");
       await until(async () => (await hnQuotes(page)).length > 0);
-      assert.deepEqual(await shownTitles(page), [], "Notes does not list the highlight with Highlights staged");
+      assert.deepEqual(await shownTitles(page), [], "Notes does not list the highlight with the document staged");
       assert.equal((await markedTab(page))?.label, "Reader", "the mark stays on the Reader tab");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
+
+    // Only one row is ever selected (Decision 7): opening a new note marks the New note row
+    // as open; then picking Highlights must move the selection, not add a second one. This is
+    // the New-note-first order, where the draft row is the open one when Highlights is picked.
+    test("opening New note then Highlights leaves only the Highlights row selected", async () => {
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ready(page);
+      await until(async () => (await highlightsRow(page)) != null, 8000);
+
+      // Open a new note, then return to the list: the New note row reads as the open one.
+      await clickNew(page);
+      await until(async () => (await assignedNotes(page)).includes("note-editor"));
+      await clickNotesBack(page);
+      await until(async () => (await assignedNotes(page)).includes("note-list"));
+      await until(async () => (await draftSelected(page)) === "true");
+
+      // Pick Highlights and come back: the selection moves to it, and the New note row is
+      // no longer selected — never two selected rows at once.
+      await showHighlights(page);
+      await clickNotesBack(page);
+      await until(async () => (await assignedNotes(page)).includes("note-list"));
+      await until(async () => (await highlightsRow(page)).selected === "true");
+      assert.equal(await draftSelected(page), "false", "the New note row is no longer selected");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // The phone preview shows either the list or the picked item in the Notes tab, so the
+    // row opens the document and Back returns to the list there too (Decision, phone flow).
+    if (engine.name === "webkit") {
+      test("the Highlights row opens and closes on the phone preview", async () => {
+        const problems = [];
+        const page = await context.newPage();
+        watch(page, problems);
+        await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await ready(page);
+        await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
+
+        await showHighlights(page);
+        await until(async () => (await hnQuotes(page)).length > 0);
+        assert.equal(await notesBarLabel(page), "Notes", "the document opens under the Notes Back bar");
+
+        await clickNotesBack(page);
+        await until(async () => (await assignedNotes(page)).includes("note-list"));
+        assert.equal(await notesBarLabel(page), null, "Back returns to the list");
+
+        assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+        await page.close();
+      });
+    }
   });
 }

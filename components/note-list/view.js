@@ -2,9 +2,15 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart } from "./machine.js";
+import { machine, shown, apart, highlights } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
+import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
+
+// The Highlights row's id (Decision 2): a fixed constant, never a note id, so the machine
+// never mistakes it for a note. It is only a name the view routes on; the machine hears
+// _pickHighlights, not this id.
+const HIGHLIGHTS = "highlights";
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo
 // window; the token is the one clock, shared with the bar's animation.
@@ -38,8 +44,14 @@ class ActorController {
         // The `keeps-open` attribute (12): keep a row for the note the editor has open
         // even when it is not about the subject.
         keepsOpen: this.host.keepsOpen,
+        // The `highlights` attribute (Decision 4): show the Highlights row.
+        showsHighlights: this.host.highlights,
       },
-      events: { "note.selected": selected, "note.discarded": discarded },
+      events: {
+        "note.selected": selected,
+        "note.discarded": discarded,
+        "highlights.selected": highlightsSelected,
+      },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -86,6 +98,7 @@ class NoteList extends LitElement {
   static properties = {
     subject: { type: Boolean, reflect: true },
     keepsOpen: { type: Boolean, attribute: "keeps-open", reflect: true },
+    highlights: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -281,6 +294,12 @@ class NoteList extends LitElement {
     .row:focus-within .time {
       visibility: hidden;
     }
+    /* The Highlights row has no bin to reveal (Decision 5), so its time stays put on
+       hover rather than vanishing to make room for a trash that is not there. */
+    .row.highlights:hover .time,
+    .row.highlights:focus-within .time {
+      visibility: visible;
+    }
     .bin:hover {
       color: var(--color-danger);
     }
@@ -347,9 +366,13 @@ class NoteList extends LitElement {
     // its highlighted row is never missing. It is a real row: pickable, deletable, and it
     // takes the roving focus like any other.
     const kept = apart(snapshot.context);
+    // The Highlights row (Decision 1): under the New note row and above the notes, shown
+    // only while the subject has a highlight. It is not a note; the view sets it apart.
+    const hs = highlights(snapshot.context);
     const lead = [
       ...(kept ? [{ ...kept, apart: true }] : []),
       ...(draft ? [{ id: draft, draft: true }] : []),
+      ...(hs ? [{ id: HIGHLIGHTS, highlights: true, count: hs.count, updatedAt: hs.updatedAt }] : []),
     ];
     return [...lead, ...notes];
   }
@@ -398,7 +421,9 @@ class NoteList extends LitElement {
 
   #pick(id) {
     this.#focusId = id;
-    this.#actor.send({ type: "_pick", id });
+    // The Highlights row is not a note (Decision 2): it sends its own gesture, so the
+    // machine never sees this fixed id as a note pick.
+    this.#actor.send(id === HIGHLIGHTS ? { type: "_pickHighlights" } : { type: "_pick", id });
   }
 
   #discard(event, id) {
@@ -451,7 +476,7 @@ class NoteList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { open, discarding } = snapshot.context;
+    const { open, discarding, highlightsOpen } = snapshot.context;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, open);
     // The failed state is the one time no rows show: notes could not answer, so the
@@ -462,19 +487,20 @@ class NoteList extends LitElement {
         ? html`<p class="empty">Notes unavailable.</p>`
         : html`
             <ul class="list" role="listbox" aria-label="Notes" @keydown=${(e) => this.#keydown(e, rows)}>
-              ${rows.map((r) => this.#row(r, open, focusId, discarding))}
+              ${rows.map((r) => this.#row(r, open, focusId, discarding, highlightsOpen))}
             </ul>
           `}
     `;
   }
 
-  #row(r, open, focusId, discarding) {
+  #row(r, open, focusId, discarding, highlightsOpen) {
     const isDiscarding = discarding.has(r.id);
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
     const dx = d ? d.dx : 0;
     const classes = [
       "row",
       r.draft ? "draft" : "",
+      r.highlights ? "highlights" : "",
       r.apart ? "apart" : "",
       isDiscarding ? "discarding" : "",
       d && d.dragging ? "dragging" : "",
@@ -483,15 +509,41 @@ class NoteList extends LitElement {
       .filter(Boolean)
       .join(" ");
 
+    // The Highlights row (Decision 5): a note-shaped row — a name with the highlighter
+    // mark, a count subtitle, the latest time trailing — but not a note: no bin, no swipe,
+    // and it reads as the selected row while it is the picked one (Decision 7).
+    if (r.highlights) {
+      return html`
+        <li
+          class=${classes}
+          role="option"
+          data-id=${r.id}
+          aria-selected=${highlightsOpen}
+          tabindex=${r.id === focusId ? 0 : -1}
+          @click=${() => this.#clickRow(r.id)}
+        >
+          <span class="slide">
+            <span class="text">
+              <span class="name"><span class="mark">${icon("highlighter")}</span>Highlights</span>
+              <span class="subtitle">${r.count} highlight${r.count === 1 ? "" : "s"}</span>
+            </span>
+            <span class="trailing"><span class="time">${when(r.updatedAt)}</span></span>
+          </span>
+        </li>
+      `;
+    }
+
     // The next-note row is one centered line, not a note with a blank second line, and
-    // it has no delete: it is the blank page to write on, not an existing note.
+    // it has no delete: it is the blank page to write on, not an existing note. It reads as
+    // the open row when the editor is on the blank note, but never while the Highlights row
+    // is the picked one (Decision 7): only one row is ever selected.
     if (r.draft) {
       return html`
         <li
           class=${classes}
           role="option"
           data-id=${r.id}
-          aria-selected=${r.id === open}
+          aria-selected=${r.id === open && !highlightsOpen}
           tabindex=${r.id === focusId ? 0 : -1}
           @click=${() => this.#clickRow(r.id)}
         >
@@ -519,7 +571,7 @@ class NoteList extends LitElement {
         class=${classes}
         role="option"
         data-id=${r.id}
-        aria-selected=${r.id === open}
+        aria-selected=${r.id === open && !highlightsOpen}
         tabindex=${r.id === focusId ? 0 : -1}
         @click=${() => this.#clickRow(r.id)}
         @pointerdown=${(e) => this.#pointerdown(e, r.id)}

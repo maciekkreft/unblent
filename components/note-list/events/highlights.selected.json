@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user picked the Highlights row of the list (4.3, fifth rule): the view that shows the subject's highlights is shown.",
+  "type": "object",
+  "properties": {
+    "about": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["kind", "id"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["about"],
+  "additionalProperties": false
+}

@@ -42,6 +42,16 @@ const isAbout = (note, subject) =>
 const isHighlight = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
 
+// The Highlights row (Decision 1, 5, 6): while following, with the attribute on and a
+// subject on the stage, one fixed row standing for every highlight of the subject — null
+// unless at least one note is a highlight of it. Its count and latest time come from the
+// notes the list already holds (no new query), so it is pure like `shown` and `apart`.
+export const highlights = ({ notes, following, showsHighlights, subject }) => {
+  if (!showsHighlights || !following || subject == null) return null;
+  const hs = notes.filter((n) => isHighlight(n, subject));
+  return hs.length ? { count: hs.length, updatedAt: Math.max(...hs.map((n) => n.updatedAt)) } : null;
+};
+
 // The rows to show (D6): while following, with a subject on the stage, only the notes
 // about it — a note always belongs to what is on the stage, so there is no "all notes"
 // choice to fall back to. Only when nothing on the stage is a subject (a null subject,
@@ -91,11 +101,12 @@ export const machine = setup({
   id: "note-list",
   meta: {
     kind: "view",
-    emits: ["note.selected", "note.discarded"],
+    emits: ["note.selected", "note.discarded", "highlights.selected"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
     // no filtering, every note shown. On, the list shows only the notes about the
-    // subject on the stage; there is no switch to all notes.
-    attributes: ["subject", "keeps-open"],
+    // subject on the stage; there is no switch to all notes. The highlights attribute
+    // (Decision 4) adds the Highlights row; without it the list behaves as today.
+    attributes: ["subject", "keeps-open", "highlights"],
     asks: ["notes: list", "subject: read"],
   },
   context: ({ input }) => ({
@@ -108,6 +119,15 @@ export const machine = setup({
     // when it is not about the subject, so the highlighted row is never missing. Off by
     // default; arrives through input so the machine stays importable in Node.
     keepsOpen: Boolean(input.keepsOpen),
+    // The `highlights` attribute (Decision 4): show the Highlights row while the subject
+    // has at least one highlight. Off by default; arrives through input so the machine
+    // stays importable in Node.
+    showsHighlights: Boolean(input.showsHighlights),
+    // Whether the Highlights row is the picked one (Decision 7). UI state: set when it is
+    // picked, cleared when a note row is picked or the editor announces a note. Not kept
+    // across a reload; the small mismatch after one is accepted (the list is not visible
+    // while the item is shown, and the next pick corrects it).
+    highlightsOpen: false,
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
@@ -214,20 +234,38 @@ export const machine = setup({
         enqueue.emit({ type: "note.discarded", id: event.id });
       }),
     },
-    // The editor announced the note it now shows (6.4): highlight that row. The
-    // draft is untouched — the next-note row stands whatever else is open, and its
-    // id is only a name, so opening it again lands the editor in blank all the same.
+    // The editor announced the note it now shows (6.4): highlight that row, and the
+    // Highlights row is no longer the picked one (Decision 7). The draft is untouched —
+    // the next-note row stands whatever else is open, and its id is only a name, so
+    // opening it again lands the editor in blank all the same.
     "note.opened": {
-      actions: assign({ open: ({ event }) => event.id }),
+      actions: assign({ open: ({ event }) => event.id, highlightsOpen: false }),
     },
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.
+    // Picking a note clears the Highlights row's picked mark (Decision 7).
     _pick: {
       guard: ({ context, event }) =>
         !context.discarding.has(event.id) &&
         (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
-      actions: emit(({ event }) => ({ type: "note.selected", id: event.id })),
+      actions: [
+        assign({ highlightsOpen: false }),
+        emit(({ event }) => ({ type: "note.selected", id: event.id })),
+      ],
+    },
+    // The user picked the Highlights row (7.2, internal gesture; Decision 2, 7): announce
+    // the gesture the container consumes to show the highlights document, and mark the row
+    // as the picked one. Guarded on the row actually being shown, so a stale pick is inert.
+    _pickHighlights: {
+      guard: ({ context }) => highlights(context) != null,
+      actions: [
+        assign({ highlightsOpen: true }),
+        emit(({ context }) => ({
+          type: "highlights.selected",
+          about: { kind: context.subject.kind, id: context.subject.id },
+        })),
+      ],
     },
   },
 });
