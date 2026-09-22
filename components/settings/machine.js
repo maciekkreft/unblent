@@ -3,11 +3,11 @@ import { setup, assign, emit } from "xstate";
 // A local-only fact component (3.1): headless owner of the user's page
 // preferences — the order and visibility of pages in the navigation, whether the
 // viewport switch and the layout switch are shown, whether the desk layout is
-// being arranged, and whether editors take Vim keys. It keeps two independent copies (§12), one per profile
-// (product and workshop), and reports the active one through settings: read and
-// settings.changed; a view takes its starting picture by query (4.3) and follows
-// settings.changed after. The stores arrive through `input`, so the machine is a
-// pure definition importable in Node.
+// being arranged, and whether editors take Vim keys. It keeps two independent
+// copies (§12), one per profile (product and workshop), and reports the active one
+// through settings: read and settings.changed; a view takes its starting picture by
+// query (4.3) and follows settings.changed after. The stores arrive through `input`,
+// so the machine is a pure definition importable in Node.
 
 // Each profile has its own defaults: the workshop is the full development surface,
 // the product hides the switches and does not arrange (§12, plan step 6).
