@@ -405,6 +405,10 @@ class SettingsSheet extends LitElement {
           `
           : nothing}
         <label>
+          <input type="checkbox" .checked=${settings.vimKeys} @change=${() => this.#actor.send({ type: "_toggleVim" })} />
+          Vim keys
+        </label>
+        <label>
           <input
             type="checkbox"
             .checked=${!settings.layoutSwitchHidden}

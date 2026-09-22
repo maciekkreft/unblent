@@ -67,13 +67,14 @@ const setHidden = (context, path, hidden) => {
   return edited(withNav(context.settings, rows));
 };
 
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {} };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, editors: {} };
 
 const adopt = (event) => ({
   nav: event.nav.map((r) => ({ ...r })),
   viewportSwitchHidden: event.viewportSwitchHidden,
   layoutSwitchHidden: event.layoutSwitchHidden,
   arranging: event.arranging,
+  vimKeys: event.vimKeys === true,
   editors: { ...(event.editors ?? {}) },
 });
 
@@ -256,6 +257,9 @@ export const machine = setup({
           actions: emit(({ context }) =>
             edited({ ...context.settings, layoutSwitchHidden: !context.settings.layoutSwitchHidden }),
           ),
+        },
+        _toggleVim: {
+          actions: emit(({ context }) => edited({ ...context.settings, vimKeys: !context.settings.vimKeys })),
         },
         // Choose the implementation for a swappable role (3.6, 7.3): the whole
         // settings with this role's choice set, like every other gesture here.

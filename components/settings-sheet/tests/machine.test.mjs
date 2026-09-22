@@ -161,6 +161,8 @@ test("the switch toggles flip their flag", async () => {
   assert.equal(emitted[0].viewportSwitchHidden, true);
   actor.send({ type: "_toggleLayout" });
   assert.equal(emitted[1].layoutSwitchHidden, true);
+  actor.send({ type: "_toggleVim" });
+  assert.equal(emitted[2].vimKeys, true);
 });
 
 test("_reset emits the defaults", async () => {
@@ -172,6 +174,7 @@ test("_reset emits the defaults", async () => {
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
+    vimKeys: false,
     editors: {},
   });
 });
@@ -223,6 +226,17 @@ test("settings.changed is adopted (4.3, fourth rule)", async () => {
   });
   assert.equal(actor.getSnapshot().context.settings.viewportSwitchHidden, true);
   assert.deepEqual(actor.getSnapshot().context.settings.nav, [{ path: "/c", hidden: false }]);
+});
+
+test("vimKeys is adopted from the read and from settings.changed, missing means off", async () => {
+  assert.equal((await start()).snapshot.context.settings.vimKeys, false);
+  const { actor, snapshot, emitted } = await start({ vimKeys: true });
+  assert.equal(snapshot.context.settings.vimKeys, true);
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false });
+  assert.equal(actor.getSnapshot().context.settings.vimKeys, false);
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: true });
+  actor.send({ type: "_toggleViewport" });
+  assert.equal(emitted[0].vimKeys, true, "another gesture carries vimKeys along");
 });
 
 test("without the account attribute the llm picture is never loaded", async () => {
