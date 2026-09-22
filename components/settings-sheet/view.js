@@ -6,6 +6,21 @@ import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
 
+// The account's thinking effort and cache lifetime shown in plain words (7.7). The
+// effort choices come from `llm: read`; an unknown one falls back to its own name. The
+// two cache lifetimes are the fixed product options; a longer one caches for longer and
+// pays off over more questions on the same context.
+const EFFORT_LABELS = {
+  default: "Provider default",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Maximum",
+};
+const TTLS = ["5m", "1h"];
+const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -115,6 +130,10 @@ class SettingsSheet extends LitElement {
       gap: var(--space-2xs);
     }
     .field > span {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .ttl-note {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
@@ -438,8 +457,8 @@ class SettingsSheet extends LitElement {
   }
 
   // The account section (7.7): signed out it invites a sign-in; signed in it offers
-  // the provider, the API key, the model and the tool switches. Effort and cache
-  // lifetime come later (§13). Every gesture emits llm.edited (or tools.edited) and is
+  // the provider, the API key, the model, the thinking effort, the cache lifetime and
+  // the tool switches. Every gesture emits llm.edited (or tools.edited) and is
   // reversible by choosing the previous value; removing the key can only be undone by
   // entering it again, so its button is plainly labelled (Don Norman: forgiveness,
   // honest signifiers).
@@ -503,6 +522,21 @@ class SettingsSheet extends LitElement {
               </label>
             `
           : html`<p class="hint">Add your API key to choose a model.</p>`}
+        <label class="field">
+          <span>Thinking effort</span>
+          <select @change=${(e) => this.#actor.send({ type: "_setEffort", effort: e.target.value })}>
+            ${llm.efforts.map(
+              (e) => html`<option value=${e} ?selected=${e === llm.effort}>${EFFORT_LABELS[e] ?? this.#label(e)}</option>`,
+            )}
+          </select>
+        </label>
+        <label class="field">
+          <span>Cache lifetime</span>
+          <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
+            ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
+          </select>
+        </label>
+        <span class="ttl-note">1 hour costs more to start and pays off from the third question within the hour.</span>
         ${this.#tools(toolList, tools)}
       </div>
     `;

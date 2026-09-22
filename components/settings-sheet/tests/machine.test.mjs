@@ -254,6 +254,14 @@ test("each account gesture emits only the field it changed (7.7)", async () => {
   assert.deepEqual(emittedLlm[3], { type: "llm.edited", model: "echo" });
 });
 
+test("the thinking effort and cache lifetime each emit only their field (§13)", async () => {
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true });
+  actor.send({ type: "_setEffort", effort: "high" });
+  assert.deepEqual(emittedLlm[0], { type: "llm.edited", effort: "high" });
+  actor.send({ type: "_setTtl", ttl: "5m" });
+  assert.deepEqual(emittedLlm[1], { type: "llm.edited", ttl: "5m" });
+});
+
 test("llm.changed is adopted after the starting ask (4.3)", async () => {
   const { actor } = await start(undefined, "/a", { account: true });
   const next = { ...LLM_PICTURE, provider: "anthropic", model: "claude-opus-5", models: [{ id: "claude-opus-5", label: "Claude Opus 5" }] };

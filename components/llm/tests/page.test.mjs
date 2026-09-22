@@ -128,6 +128,18 @@ for (const engine of ENGINES) {
       await until(async () => (await accountSelect(page, "Provider"))?.value === "echo");
       await until(async () => (await accountSelect(page, "Model"))?.value === "echo");
 
+      // Thinking effort and cache lifetime (§13) render from the same picture: a fresh
+      // account starts at the provider default and the 1-hour cache, and a change to each
+      // is chosen the same way. The server round trip itself is covered by api.test.mjs.
+      const effort = await accountSelect(page, "Thinking effort");
+      assert.deepEqual(effort.options, ["default", "low", "medium", "high", "xhigh", "max"]);
+      assert.equal(effort.value, "default", "a fresh account uses the provider default");
+      const ttl = await accountSelect(page, "Cache lifetime");
+      assert.deepEqual(ttl.options, ["5m", "1h"]);
+      assert.equal(ttl.value, "1h", "a fresh account caches for an hour");
+      await pickAccount(page, "Thinking effort", "high");
+      await until(async () => (await accountSelect(page, "Thinking effort"))?.value === "high");
+
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `llm-${engine.name}.png`), fullPage: true });
 
@@ -136,6 +148,7 @@ for (const engine of ENGINES) {
       await ready(page);
       await until(async () => (await accountSelect(page, "Provider"))?.value === "echo", 6000);
       await until(async () => (await accountSelect(page, "Model"))?.value === "echo");
+      await until(async () => (await accountSelect(page, "Thinking effort"))?.value === "high");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

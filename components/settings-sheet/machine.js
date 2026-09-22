@@ -275,6 +275,8 @@ export const machine = setup({
         _setModel: { actions: emit(({ event }) => llmEdited({ model: event.model })) },
         _saveKey: { actions: emit(({ event }) => llmEdited({ key: event.key })) },
         _removeKey: { actions: emit(() => llmEdited({ key: "" })) },
+        _setEffort: { actions: emit(({ event }) => llmEdited({ effort: event.effort })) },
+        _setTtl: { actions: emit(({ event }) => llmEdited({ ttl: event.ttl })) },
         // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
         // it and announces tools.changed, adopted below (4.3). Reversible by flipping back.
         _toggleTool: { actions: emit(({ event }) => toolsEdited(event.key, event.on)) },
