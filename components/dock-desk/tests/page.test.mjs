@@ -188,12 +188,12 @@ for (const engine of ENGINES) {
       // Show another right tab, so the Notes pair sits behind it.
       await page.evaluate(() =>
         [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]')]
-          .find((t) => t.textContent.trim() === "Highlights")
+          .find((t) => t.textContent.trim() === "Chat")
           ?.click(),
       );
       await page.waitForFunction(() => {
         const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
-        return t && t.textContent.trim() === "Highlights";
+        return t && t.textContent.trim() === "Chat";
       });
 
       // Pick the next-note row in the Notes list: note-list emits note.selected, which
