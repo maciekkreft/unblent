@@ -640,11 +640,12 @@ for (const engine of ENGINES) {
 const navCount = (page) => page.evaluate(() => document.querySelector("page-nav").shadowRoot.querySelectorAll("a").length);
 const navHeight = (page) => page.evaluate(() => document.querySelector("page-nav").getBoundingClientRect().height);
 // The control tags the page slotted into the stage strip (6.4): their tag names in
-// the order the unnamed slot in the stage's strip assigns them.
+// page order, each in its own named slot (a `button` child draws a pill instead, with
+// no slot, so this lists the controls the header carries).
 const stageControls = (page) =>
   page.evaluate(() => {
-    const slot = document.querySelector("dock-desk").shadowRoot.querySelector(".stage .strip .controls slot:not([name])");
-    return slot ? slot.assignedElements().map((e) => e.localName) : null;
+    const wrap = document.querySelector("dock-desk").shadowRoot.querySelector(".stage .strip .controls");
+    return wrap ? [...wrap.querySelectorAll("slot")].flatMap((s) => s.assignedElements()).map((e) => e.localName) : null;
   });
 const switchHidden = (page, tag) => page.evaluate((t) => getComputedStyle(document.querySelector(t)).display === "none", tag);
 const arrangeControls = (page) => page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelectorAll(".action:not(.fold)").length);

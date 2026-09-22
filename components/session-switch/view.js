@@ -46,20 +46,21 @@ class SessionSwitch extends LitElement {
     :host {
       display: inline-flex;
       align-items: center;
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
     }
     :host([hidden]) {
       display: none;
     }
-    /* A tight pill hugging one 1em glyph. font-size is set here, not left to the
-       button's UA default, so the icon reads at --text-body like the layout switch
-       in every engine. */
+    /* One size for every header button (6.4): a 20px glyph in 8px of padding is 36px
+       across, an easy target on a phone, lined up with the gear and the layout
+       switch. font-size is set here, not left to the button's UA default, so the
+       glyph reads that size in every engine. */
     button {
       border: none;
       background: none;
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
       cursor: pointer;
-      padding: var(--space-xs);
+      padding: var(--space-sm);
       border-radius: var(--radius-full);
       display: inline-flex;
       align-items: center;

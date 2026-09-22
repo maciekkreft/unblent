@@ -24,6 +24,19 @@ function tokenPx(name) {
   return Number(match[1]);
 }
 
+// A token given in rem (--text-subtitle) resolves to px only against the live root
+// font-size, so it is measured in the page rather than read from the file.
+const tokenResolved = (page, name) =>
+  page.evaluate((n) => {
+    const probe = document.createElement("div");
+    probe.style.position = "absolute";
+    probe.style.width = `var(${n})`;
+    document.body.appendChild(probe);
+    const w = probe.getBoundingClientRect().width;
+    probe.remove();
+    return w;
+  }, name);
+
 // The dock stem seeds one view docked on the right (pages/design/dock), so the
 // side is `right` here; the phone drawer is symmetric across left and right.
 const state = (page) =>
@@ -313,6 +326,201 @@ for (const engine of ENGINES) {
       assert.equal(reopened.dockPos, "absolute", "tapping the button floats the drawer back over the stage");
       assert.ok(reopened.scrimOn, "the scrim returns with the drawer");
       assert.equal(reopened.stageWidth, open.stageWidth, "opening the drawer does not resize the stage");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // The gear (6.4) shows the Settings sheet on the stage in place of a stage tab, lit
+  // while pressed, and leaves it by every route: the gear again, a stage tab, Escape,
+  // and (a reload) not at all, since pressed rides no fact. Every header button is one
+  // size, 36px (--text-subtitle in --space-sm padding).
+  test(`the gear shows Settings on the stage and every route leaves it in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      context.setDefaultTimeout(4000);
+      const page = await context.newPage();
+      const problems = [];
+      page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
+      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+      page.on("requestfailed", (req) =>
+        problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`),
+      );
+      page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
+
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
+      await page.locator("dock-desk").waitFor();
+      await page.waitForFunction(() =>
+        document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
+      );
+
+      const pillAttr = (attr) =>
+        page
+          .locator("dock-desk")
+          .evaluate((el, a) => el.shadowRoot.querySelector(".controls .pill").getAttribute(a), attr);
+      const clickPill = () =>
+        page.locator("dock-desk").evaluate((el) => el.shadowRoot.querySelector(".controls .pill").click());
+      const pressed = () =>
+        page.waitForFunction(
+          () =>
+            document.querySelector("dock-desk").shadowRoot.querySelector(".controls .pill").getAttribute("aria-pressed") === "true",
+        );
+      const staged = () =>
+        page.waitForFunction(() => {
+          const root = document.querySelector("dock-desk").shadowRoot;
+          return (
+            root.querySelector(".controls .pill").getAttribute("aria-pressed") === "false" &&
+            root.querySelector('.stage [role="tab"][aria-selected="true"]')
+          );
+        });
+
+      // The gear renders unpressed, named Settings, after the page's one control.
+      assert.equal(await pillAttr("aria-pressed"), "false");
+      assert.equal(await pillAttr("title"), "Settings");
+      assert.deepEqual(
+        await page
+          .locator("dock-desk")
+          .evaluate((el) =>
+            [...el.shadowRoot.querySelector(".controls").children].map(
+              (c) => c.localName + (c.classList.contains("pill") ? ".pill" : ""),
+            ),
+          ),
+        ["slot", "button.pill"],
+        "the gear follows the slotted controls in page order",
+      );
+
+      // Every header button is one size: 36px = --text-subtitle + 2 * --space-sm.
+      const expected = (await tokenResolved(page, "--text-subtitle")) + 2 * (await tokenResolved(page, "--space-sm"));
+      const sizes = await page.locator("dock-desk").evaluate((el) => {
+        const nodes = [...el.shadowRoot.querySelectorAll(".pill, .action")];
+        const ctrl = document.querySelector("layout-switch")?.shadowRoot?.querySelector("button");
+        if (ctrl) nodes.push(ctrl);
+        return nodes.map((n) => {
+          const b = n.getBoundingClientRect();
+          return [b.width, b.height];
+        });
+      });
+      assert.ok(sizes.length >= 2, "the desk drew header buttons to measure");
+      for (const [w, h] of sizes) {
+        assert.ok(Math.abs(w - expected) <= 0.5, `a header button is ${w}px wide, not ${expected}px`);
+        assert.ok(Math.abs(h - expected) <= 0.5, `a header button is ${h}px tall, not ${expected}px`);
+      }
+
+      // Press: Settings takes the stage, the staged tab hides, no tab is selected and
+      // the stage's arranging actions are gone.
+      await clickPill();
+      await pressed();
+      const on = await page.evaluate(() => {
+        const root = document.querySelector("dock-desk").shadowRoot;
+        const sheet = document.querySelector("settings-sheet").getBoundingClientRect();
+        return {
+          sheetShown: sheet.width > 0 && sheet.height > 0,
+          tabHidden: root.querySelector('.body[data-side="stage"] slot[name="token-sheet"]').hidden,
+          anySelected: Boolean(root.querySelector('.stage [role="tab"][aria-selected="true"]')),
+          stageActions: Boolean(root.querySelector(".stage .strip .actions")),
+        };
+      });
+      assert.ok(on.sheetShown, "Settings takes the stage");
+      assert.ok(on.tabHidden, "the staged view hides behind Settings");
+      assert.ok(!on.anySelected, "no stage tab is selected while pressed");
+      assert.ok(!on.stageActions, "no stage arranging actions while pressed");
+
+      // The gear again shows the stage.
+      await clickPill();
+      await staged();
+
+      // A stage tab click leaves Settings and selects that tab.
+      await clickPill();
+      await pressed();
+      await page.locator("dock-desk").evaluate((el) => {
+        [...el.shadowRoot.querySelectorAll('.stage [role="tab"]')]
+          .find((t) => t.textContent.trim() === "Contracts")
+          .click();
+      });
+      await page.waitForFunction(() => {
+        const root = document.querySelector("dock-desk").shadowRoot;
+        const t = root.querySelector('.stage [role="tab"][aria-selected="true"]');
+        return root.querySelector(".controls .pill").getAttribute("aria-pressed") === "false" && t && t.textContent.trim() === "Contracts";
+      });
+
+      // Escape leaves Settings and returns focus to the gear. Focus the gear first so
+      // the keydown bubbles through the desk (WebKit does not focus a button on click).
+      await clickPill();
+      await pressed();
+      await page.locator("dock-desk").evaluate((el) => el.shadowRoot.querySelector(".controls .pill").focus());
+      await page.keyboard.press("Escape");
+      await staged();
+      assert.ok(
+        await page.locator("dock-desk").evaluate((el) => el.shadowRoot.activeElement?.classList.contains("pill")),
+        "Escape returns focus to the gear",
+      );
+
+      // A reload shows the stage: pressed rides no fact.
+      await clickPill();
+      await pressed();
+      await page.reload();
+      await page.locator("dock-desk").waitFor();
+      await page.waitForFunction(() =>
+        document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
+      );
+      assert.equal(await pillAttr("aria-pressed"), "false", "a reload shows the stage, not Settings");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`the gear fills the stage on the phone in ${engine.name}`, async () => {
+    const rail = tokenPx("--space-xl");
+    const browser = await engine.launch();
+    try {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      context.setDefaultTimeout(4000);
+      await context.addInitScript(() => localStorage.setItem("viewport", "phone"));
+      const page = await context.newPage();
+      const problems = [];
+      page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
+      page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+      page.on("requestfailed", (req) =>
+        problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`),
+      );
+      page.on("response", (res) => res.status() >= 400 && problems.push(`HTTP ${res.status()}: ${res.url()}`));
+
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
+      await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
+      await page.locator("dock-desk").waitFor();
+      await page.waitForFunction(() =>
+        document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
+      );
+
+      await page.locator("dock-desk").evaluate((el) => el.shadowRoot.querySelector(".controls .pill").click());
+      await page.waitForFunction(
+        () =>
+          document.querySelector("dock-desk").shadowRoot.querySelector(".controls .pill").getAttribute("aria-pressed") === "true",
+      );
+
+      const m = await page.evaluate(() => {
+        const el = document.querySelector("dock-desk");
+        const body = el.shadowRoot.querySelector('.body[data-side="stage"]').getBoundingClientRect();
+        const sheet = document.querySelector("settings-sheet").getBoundingClientRect();
+        const corner = el.shadowRoot.querySelector(".dock.right");
+        const cb = corner.getBoundingClientRect();
+        const btn = corner.querySelector(".rail .action").getBoundingClientRect();
+        return { bodyW: body.width, sheetW: sheet.width, cornerW: cb.width, cornerH: cb.height, btnW: btn.width, btnH: btn.height };
+      });
+      assert.ok(Math.abs(m.sheetW - m.bodyW) <= 1, "Settings fills the stage width on the phone");
+      assert.ok(
+        Math.abs(m.cornerW - rail) <= 1 && Math.abs(m.cornerH - rail) <= 1,
+        "the folded side dock stays a header-corner square while Settings shows",
+      );
+      assert.ok(m.btnW <= rail + 0.5 && m.btnH <= rail + 0.5, "the corner button fits inside its square");
+
+      mkdirSync(SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: resolve(SCREENSHOTS, `dock-desk-gear-phone-${engine.name}.png`) });
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

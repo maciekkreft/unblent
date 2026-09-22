@@ -478,3 +478,80 @@ test("with marks-subject and no subject answerer the context stays null", async 
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(actor.getSnapshot().context.subject, null);
 });
+
+// A header button (6.4): pressing shows its child on the stage, pressing again or
+// choosing something else returns to the stage. `pressed` is the desk's own state,
+// never emitted, so a reload starts on the stage.
+test("_press toggles pressed and a second name replaces it", async () => {
+  const { actor, emitted } = await settle(fresh);
+  actor.send({ type: "_press", name: "settings-sheet" });
+  assert.equal(actor.getSnapshot().context.pressed, "settings-sheet");
+  // A second name replaces, so only one child ever holds the stage.
+  actor.send({ type: "_press", name: "help-sheet" });
+  assert.equal(actor.getSnapshot().context.pressed, "help-sheet");
+  // The same name again toggles back to the stage.
+  actor.send({ type: "_press", name: "help-sheet" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.deepEqual(emitted, [], "pressing a header button stores nothing");
+});
+
+test("a stage tab click clears the pressed header button and still emits the layout", async () => {
+  const { actor, emitted } = await settle(fresh);
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "_open", name: "trace-list" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.deepEqual(emitted, [{ type: "dock.arranged", stage: "trace-list", docks: {} }]);
+  assert.ok(!("pressed" in emitted[0]), "pressed rides no fact");
+});
+
+test("an _open whose guard fails still clears the pressed button and emits nothing", async () => {
+  const { actor, emitted } = await settle(fresh);
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "_open", name: "ghost" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.deepEqual(emitted, [], "a non-stage-tab name stores nothing");
+});
+
+test("a selection gesture that changes the layout clears pressed and emits its layout", async () => {
+  const { actor, emitted } = await settle(stored({ stage: "reader", docks: {} }), { views: FOLLOWERS });
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "note.selected", id: "n1" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.deepEqual(emitted, [{ type: "dock.arranged", stage: "note-editor", docks: {} }]);
+});
+
+test("a selection gesture that changes nothing still clears pressed and emits nothing", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: { left: { open: true, views: ["book-toc"], active: "book-toc" } } }),
+    { views: FOLLOWERS },
+  );
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "book.selected", id: "b1" });
+  assert.equal(actor.getSnapshot().context.pressed, null, "choosing something else ends the detour");
+  assert.deepEqual(emitted, [], "the tab is already shown, so `dock` stores nothing");
+});
+
+test("clicking a dock tab, folding, and the fact's news leave the pressed button alone", async () => {
+  const { actor } = await settle(
+    stored({ stage: "token-sheet", docks: { right: { open: true, views: ["trace-list"] } } }),
+  );
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "_activate", name: "trace-list", side: "right" });
+  actor.send({ type: "_fold", side: "right" });
+  actor.send({ type: "dock.changed", stage: "token-sheet", docks: {} });
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: false });
+  assert.equal(actor.getSnapshot().context.pressed, "settings-sheet", "only leaving the detour clears it");
+});
+
+test("in failed, _press toggles and a stage tab or a gesture clears it", async () => {
+  const { actor, emitted } = await settle(stored({ error: "unavailable" }));
+  actor.send({ type: "_press", name: "settings-sheet" });
+  assert.equal(actor.getSnapshot().context.pressed, "settings-sheet");
+  actor.send({ type: "_open", name: "trace-list" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.equal(actor.getSnapshot().context.stage, "trace-list");
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "note.selected", id: "n1" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.deepEqual(emitted, [], "a failed desk stores nothing");
+});

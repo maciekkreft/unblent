@@ -124,7 +124,7 @@ for (const engine of ENGINES) {
     context.setDefaultTimeout(4000);
     const page = await context.newPage();
     try {
-      await page.goto(`${BASE_URL}/workshop/design/dock`);
+      await page.goto(`${BASE_URL}/workshop/design/session`);
       // The bar renders a slot, and the page's <layout-switch> is assigned into it
       // (right-aligned) and renders its own button — the control lives in the bar.
       await page.waitForFunction(

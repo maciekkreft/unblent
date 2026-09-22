@@ -19,6 +19,10 @@ const RETURN = icon("arrows-in-simple");
 // side (mirrored on the right, turned down on the bottom, turned down on every
 // sheet on the phone). Fold and unfold are the same glyph in the same place.
 const FOLD = icon("sidebar-simple");
+// The glyphs a header button (6.4) may name in `button="<glyph>"`. The desk owns the
+// table, so a page names one and the icon stays a literal the icon check reads (11.2);
+// a name not here throws at render, naming the value, as an unknown icon does.
+const BUTTONS = { gear: icon("gear") };
 // The narrow-desk breakpoint (6.4): the same 45rem the @container rule below uses,
 // a literal in both places because 7.4 admits no token for a container breakpoint.
 // rem is relative to the root font-size, so a resolved px width reads it once.
@@ -42,10 +46,11 @@ class ActorController {
     // The children are what the page put on the desk (8); reading them is a read
     // of this element's own light DOM, and the machine only sees name and label.
     // The label falls back to the tag name when the child declares none. A child
-    // carrying `control` (6.4) is not a view: it gets no tab and no place in the
-    // layout, so it is left out of `views` and slotted into the stage header.
+    // carrying `control` or `button` (6.4) is not a view: it gets no tab and no
+    // place in the layout. A control is slotted into the stage header; a button is
+    // shown from a header button. Both are left out of `views`.
     const views = [...this.host.children]
-      .filter((child) => !child.hasAttribute("control"))
+      .filter((child) => !child.hasAttribute("control") && !child.hasAttribute("button"))
       .map((child) => ({
         // A view is keyed by its role, not its tag, so a composer swap (3.6, 12)
         // keeps its dock slot: the chosen member carries data-role, the page default
@@ -224,24 +229,27 @@ class DockDesk extends LitElement {
       display: flex;
       align-items: center;
     }
-    /* Page controls (6.4) slotted at the trailing end of the stage strip, past the
-       tabs and their actions; empty on a desk with no control children, so it adds
-       nothing there. */
+    /* The controls and header buttons (6.4) at the trailing end of the stage strip,
+       past the tabs and their actions; empty on a desk with none, so it adds nothing
+       there. */
     .controls {
       flex: none;
       display: inline-flex;
       align-items: center;
       gap: var(--space-sm);
     }
+    /* Every header button is one size, easy to hit on a phone: a 20px glyph in 8px of
+       padding is 36px across, sitting in the 40px strip with a hair of air. The gear
+       pill (6.4) and the three slotted controls match it (their own view files). */
     .action {
       box-sizing: border-box;
-      width: calc(var(--space-lg) + var(--space-xs) * 2);
-      height: calc(var(--space-lg) + var(--space-xs) * 2);
-      padding: var(--space-xs);
+      width: calc(var(--text-subtitle) + var(--space-sm) * 2);
+      height: calc(var(--text-subtitle) + var(--space-sm) * 2);
+      padding: var(--space-sm);
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
       color: var(--color-body-mid);
     }
     .action:hover:not(:disabled) {
@@ -252,6 +260,28 @@ class DockDesk extends LitElement {
       cursor: default;
     }
     .action svg {
+      display: block;
+    }
+    /* The gear (6.4): a round pill among the controls, in the bar's own ink, lit with
+       the accent while its child holds the stage — the same fill the layout switch
+       takes while arranging. Sized like every header button. */
+    .pill {
+      color: var(--color-body);
+      padding: var(--space-sm);
+      border-radius: var(--radius-full);
+      font-size: var(--text-subtitle);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .pill:hover {
+      color: var(--color-ink);
+    }
+    .pill[aria-pressed="true"] {
+      background: var(--color-accent-subtle);
+      color: var(--color-accent-active);
+    }
+    .pill svg {
       display: block;
     }
     /* One fold glyph, oriented per side: the left needs nothing, the right is
@@ -619,8 +649,14 @@ class DockDesk extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading") || snapshot.matches("loadingSettings")) return nothing;
     const ready = snapshot.matches("ready");
-    const { views, stage, docks, arranging, subject } = snapshot.context;
+    const { views, stage, docks, arranging, subject, pressed } = snapshot.context;
     const labelOf = (name) => views.find((v) => v.name === name)?.label ?? name;
+    // The children that sit at the trailing end of the stage header (6.4), in page
+    // order: a `control` is slotted as it is; a `button` names the child the desk
+    // shows from a header button it draws itself. Read from this element's own light
+    // DOM, like `views`.
+    const extras = [...this.children].filter((c) => c.hasAttribute("control") || c.hasAttribute("button"));
+    const buttons = extras.filter((c) => c.hasAttribute("button"));
     // The tab to mark (12): only with the attribute, and only a subject that names a
     // view. The address may carry an instance suffix (4.1); a tab is keyed by base name.
     this.#marked = this.marksSubject ? (subject?.view ?? null) : null;
@@ -636,23 +672,25 @@ class DockDesk extends LitElement {
     const closeDrawers = () => drawers.forEach((s) => this.#send("_fold", undefined, s));
 
     return html`
-      <div class="desk ${this.#settled ? "settled" : ""}">
+      <div class="desk ${this.#settled ? "settled" : ""}" @keydown=${(e) => this.#escape(e)}>
         <div class="row">
           ${dock("left")}
           <section class="stage">
             <div class="strip">
-              ${this.#tablist("Stage", tabs, stage, labelOf, (name) => this.#send("_open", name))}
-              ${ready && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
-              <span class="controls"><slot></slot></span>
+              ${this.#tablist("Stage", tabs, pressed ? null : stage, labelOf, (name) => this.#send("_open", name))}
+              ${ready && !pressed && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
+              <span class="controls">${this.#extras(extras, pressed)}</span>
             </div>
             <div class="body" data-side="stage">
-              ${stage
-                ? tabs.map((name) => html`<slot name=${name} ?hidden=${name !== stage}></slot>`)
-                : arranging
+              ${tabs.map((name) => html`<slot name=${name} ?hidden=${pressed || name !== stage}></slot>`)}
+              ${buttons.map((c) => html`<slot name=${addressOf(c)} ?hidden=${pressed !== addressOf(c)}></slot>`)}
+              ${!pressed && !stage
+                ? arranging
                   ? html`<p class="empty">
                       Everything is docked. Use ${RETURN} in a dock to bring a view back.
                     </p>`
-                  : html`<p class="empty">Everything is docked. Turn on arranging to bring a view back.</p>`}
+                  : html`<p class="empty">Everything is docked. Turn on arranging to bring a view back.</p>`
+                : nothing}
             </div>
           </section>
           ${dock("right")}
@@ -661,6 +699,48 @@ class DockDesk extends LitElement {
         <div class="scrim ${drawers.length ? "on" : ""}" @click=${closeDrawers}></div>
       </div>
     `;
+  }
+
+  // The trailing end of the stage header (6.4), in page order: a `control` child gets
+  // its own named slot, so the page decides where a `button` sits among the controls;
+  // a `button` child gets a pill the desk draws, lit while its child holds the stage.
+  // The child address (4.1) is the slot name and the pressed key. `data-address` lets
+  // Escape put focus back on the pressed button after clearing it.
+  #extras(extras, pressed) {
+    return extras.map((c) => {
+      const address = addressOf(c);
+      if (!c.hasAttribute("button")) return html`<slot name=${address}></slot>`;
+      const glyph = c.getAttribute("button");
+      const drawn = BUTTONS[glyph];
+      if (!drawn) throw new Error(`dock-desk: unknown button glyph "${glyph}"`);
+      const label = c.getAttribute("label") ?? c.localName;
+      return html`
+        <button
+          class="pill"
+          data-address=${address}
+          aria-pressed=${pressed === address}
+          aria-label=${label}
+          title=${label}
+          @click=${() => this.#send("_press", address)}
+        >
+          ${drawn}
+        </button>
+      `;
+    });
+  }
+
+  // Escape leaves the header-button detour (6.4): the child is light DOM, so a key
+  // pressed inside it bubbles here. Only acts while a button is pressed, so other
+  // views' Escape handling is untouched; clears the press and returns focus to the
+  // button, as every header toggle keeps focus on itself.
+  #escape(event) {
+    const pressed = this.#actor.snapshot?.context.pressed;
+    if (event.key !== "Escape" || !pressed) return;
+    event.preventDefault();
+    this.#send("_press", pressed);
+    this.updateComplete.then(() =>
+      this.renderRoot.querySelector(`.controls .pill[data-address="${pressed}"]`)?.focus(),
+    );
   }
 
   // A group's strip: tabs first, then the shown tab's actions, then the fold. The tab
@@ -839,18 +919,13 @@ class DockDesk extends LitElement {
     // a dock that opened, or entered at nothing, starts its slide now, whereas
     // WebKit rebuilds the tree on a reassignment and would draw it at its end.
     for (const d of this.renderRoot.querySelectorAll(".dock")) void d.offsetWidth;
+    // Slotting is manual (shadowRootOptions): every child is reached by a slot named
+    // for its address (4.1) — a stage tab, a docked view, a `control` in the header
+    // (6.4), and a `button` child's hidden stage slot — so all are assigned here.
     for (const slot of this.renderRoot.querySelectorAll("slot[name]")) {
       const el = child(slot.name);
       const current = slot.assignedElements();
       if (el && !(current.length === 1 && current[0] === el)) slot.assign(el);
-    }
-    // Slotting is manual (shadowRootOptions), so the control children (6.4) are
-    // assigned by hand to the one unnamed slot in the stage strip, in page order.
-    const controls = this.renderRoot.querySelector(".controls slot:not([name])");
-    if (controls) {
-      const want = [...this.children].filter((c) => c.hasAttribute("control"));
-      const have = controls.assignedElements();
-      if (want.length !== have.length || want.some((c, i) => have[i] !== c)) controls.assign(...want);
     }
     for (const body of this.renderRoot.querySelectorAll(".body")) {
       const want = this.#dockScroll[body.dataset.side];

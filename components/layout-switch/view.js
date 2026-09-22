@@ -45,23 +45,23 @@ class LayoutSwitch extends LitElement {
     :host {
       display: inline-flex;
       align-items: center;
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
     }
     :host([hidden]) {
       display: none;
     }
-    /* A tight pill hugging one 1em glyph. font-size is set here, not left to the
-       button's UA default (13.3px in Chromium), so the icon reads at --text-body
-       like every other icon in every engine, and the pill is not a big ring around
-       a small mark. */
+    /* One size for every header button (6.4): a 20px glyph in 8px of padding is 36px
+       across, an easy target on a phone, lined up with the gear, the session button
+       and the desk's own strip buttons. font-size is set here, not left to the
+       button's UA default, so the glyph reads that size in every engine. */
     button {
       border: none;
       background: none;
       cursor: pointer;
-      padding: var(--space-xs);
+      padding: var(--space-sm);
       border-radius: var(--radius-full);
       color: var(--color-body);
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
       display: inline-flex;
       align-items: center;
       justify-content: center;

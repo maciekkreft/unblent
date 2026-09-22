@@ -132,13 +132,24 @@ const showsMore = ({ context, event }) => {
 
 // A selection gesture a child follows with `shows-on` (6.4). Showing a tab is daily
 // use, like _activate, so it is not gated on arranging.
-const show = {
-  guard: showsMore,
-  actions: emit(({ context, event }) => {
-    const next = shown(context, event.type);
-    return arranged(next.stage, next.docks);
-  }),
-};
+// Leaving the header-button detour (6.4): a selection gesture is choosing something
+// else, so it returns to the stage — the pressed button clears whether or not the
+// gesture changes the layout.
+const clearPressed = assign({ pressed: null });
+
+const show = [
+  {
+    guard: showsMore,
+    actions: [
+      emit(({ context, event }) => {
+        const next = shown(context, event.type);
+        return arranged(next.stage, next.docks);
+      }),
+      clearPressed,
+    ],
+  },
+  { actions: clearPressed },
+];
 
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
@@ -181,6 +192,10 @@ export const machine = setup({
     // The subject, learned from subject: read then subject.changed, as
     // { kind, id, title, view } or null. The view marks the tab whose name is `view`.
     subject: null,
+    // The address of the child shown from a header button (6.4), or null for the
+    // stage. It is a detour the user leaves, so it rides no fact and is never in
+    // dock.arranged; a reload starts on the stage.
+    pressed: null,
   }),
   // The subject read runs for the machine's whole life (3.5), so the layout-load
   // transitions never cancel it: its reply lands on its own, and no layout reply ever
@@ -230,9 +245,20 @@ export const machine = setup({
         // Leading underscore (7.2): user gestures forwarded by the view, never
         // routed by the bus. Each computes the next layout from context and emits
         // dock.arranged; `dock` decides and announces it.
-        _open: {
-          guard: isStageTab,
-          actions: emit(({ context, event }) => arranged(event.name, context.docks)),
+        // A stage tab click returns to the stage (6.4), so it clears the pressed
+        // header button too, whether or not the click named a real stage tab.
+        _open: [
+          {
+            guard: isStageTab,
+            actions: [emit(({ context, event }) => arranged(event.name, context.docks)), clearPressed],
+          },
+          { actions: clearPressed },
+        ],
+        // A header button (6.4) toggles the child it names onto the stage. Daily use
+        // like _activate, not a layout change, so it is not gated on arranging and
+        // emits nothing: pressed is the desk's own state, never a stored fact.
+        _press: {
+          actions: assign({ pressed: ({ context, event }) => (context.pressed === event.name ? null : event.name) }),
         },
         // From the stage to an edge: the stage moves on to the first free view,
         // which may be none. Only offered while arranging (7.5's settings): the
@@ -298,15 +324,21 @@ export const machine = setup({
     // _open assigns locally. Docking gestures are not offered by the view.
     failed: {
       on: {
-        _open: {
-          guard: isStageTab,
-          actions: assign({ stage: ({ event }) => event.name }),
+        // As in ready (6.4): a stage tab click returns to the stage, clearing any
+        // pressed header button whether or not it named a real stage tab.
+        _open: [
+          { guard: isStageTab, actions: assign({ stage: ({ event }) => event.name, pressed: null }) },
+          { actions: clearPressed },
+        ],
+        _press: {
+          actions: assign({ pressed: ({ context, event }) => (context.pressed === event.name ? null : event.name) }),
         },
         // A child follows a selection gesture (6.4); with no dock fact the desk is a
-        // plain tab switcher, so a followed stage tab is staged locally.
-        "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
-        "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
-        "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
+        // plain tab switcher, so a followed stage tab is staged locally, and the
+        // detour ends.
+        "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },
     },
   },

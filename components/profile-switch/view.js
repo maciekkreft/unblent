@@ -44,16 +44,19 @@ class ProfileSwitch extends LitElement {
     :host {
       display: inline-flex;
       align-items: center;
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
     }
+    /* One size for every header button (6.4): a 20px glyph in 8px of padding is 36px
+       across, so the door lines up with the gear and the session button and is an
+       easy target on a phone. */
     button {
       border: none;
       background: none;
       cursor: pointer;
-      padding: var(--space-xs);
+      padding: var(--space-sm);
       border-radius: var(--radius-full);
       color: var(--color-body);
-      font-size: var(--text-body);
+      font-size: var(--text-subtitle);
       display: inline-flex;
       align-items: center;
       justify-content: center;

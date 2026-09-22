@@ -49,14 +49,17 @@
     <script type="module" src="/static/components/component-list/view.js"></script>
     <script type="module" src="/static/components/trace-list/view.js"></script>
     <script type="module" src="/static/components/layout-switch/view.js"></script>
+    <script type="module" src="/static/components/settings-sheet/view.js"></script>
   </head>
   <body>
-    <page-nav><layout-switch></layout-switch></page-nav>
+    <page-nav></page-nav>
     <dock-desk reorders>
       <token-sheet label="Tokens"></token-sheet>
       <contract-list label="Contracts"></contract-list>
       <component-list label="Components"></component-list>
       <trace-list label="Trace" side="right"></trace-list>
+      <layout-switch control></layout-switch>
+      <settings-sheet label="Settings" button="gear"></settings-sheet>
     </dock-desk>
     <viewport-switch></viewport-switch>
   </body>
