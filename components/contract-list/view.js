@@ -156,6 +156,17 @@ class ContractList extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-body-mid);
     }
+    /* A field the bus keeps out of the trace (7.2): a quiet badge beside its type, so
+       a reviewer sees which fields never reach the trace, the console or another tab. */
+    .secret {
+      margin-left: var(--space-2xs);
+      padding: 0 var(--space-2xs);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+      background: var(--color-canvas);
+      white-space: nowrap;
+    }
     details {
       font-size: var(--text-sm);
       color: var(--color-body);
@@ -280,7 +291,11 @@ class ContractList extends LitElement {
             (name) => html`
               <tr>
                 <td class="field">${name}</td>
-                <td>${typeLabel(properties[name])}</td>
+                <td>
+                  ${typeLabel(properties[name])}${properties[name]?.["x-secret"] === true
+                    ? html`<span class="secret" title="hidden from the trace (7.2)">secret</span>`
+                    : nothing}
+                </td>
                 <td class="req">${required.has(name) ? icon("check") : nothing}</td>
               </tr>
             `,

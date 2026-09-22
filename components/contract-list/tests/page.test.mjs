@@ -66,6 +66,22 @@ for (const engine of ENGINES) {
       const pagesList = await cardText(page, "pages: list");
       assert.match(pagesList, /askers page-nav/);
 
+      // A field a schema marks x-secret (7.2) wears a "secret" badge, and only that
+      // field does, so a reviewer sees which values the bus keeps out of the trace.
+      const edited = await page.evaluate(() => {
+        const root = document.querySelector("contract-list").shadowRoot;
+        for (const card of root.querySelectorAll(".card")) {
+          if (card.querySelector("h3")?.textContent !== "llm.edited") continue;
+          const rows = [...card.querySelectorAll("tbody tr")];
+          const keyRow = rows.find((r) => r.querySelector("td.field")?.textContent.trim() === "key");
+          return { keyBadged: !!keyRow?.querySelector(".secret"), badges: card.querySelectorAll(".secret").length };
+        }
+        return null;
+      });
+      assert.ok(edited, "the llm.edited card is shown");
+      assert.ok(edited.keyBadged, "the secret key field wears the badge");
+      assert.equal(edited.badges, 1, "only the secret field is badged");
+
       // The label is upper-cased by CSS, which innerText reflects.
       const contracts = await cardText(page, "catalog: contracts");
       assert.match(contracts, /payload/i);

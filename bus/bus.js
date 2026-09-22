@@ -104,6 +104,29 @@ function withoutType(event) {
   return fields;
 }
 
+// Section 3.3, 7.2: a copy of a payload for the trace in which the value of every
+// top-level property the schema marks `"x-secret": true` is replaced by a fixed
+// marker. The delivered event or reply is never touched, so the receiver still gets
+// the real value (7.2); only what reaches the taps — and through them the trace, the
+// console and other tabs — is redacted, which is how an API key travels to `llm`
+// without appearing anywhere (3.3). With no schema (an undeclared or unknown message)
+// the value is left as it is, because a secret only ever rides a declared message of
+// a mounted owner. A shallow copy is made lazily, so a payload with no secret field
+// (the common case) is passed through untouched.
+const SECRET = "[secret]";
+function redact(schema, value) {
+  const properties = schema?.properties;
+  if (!properties || !value || typeof value !== "object") return value;
+  let copy = value;
+  for (const [key, sub] of Object.entries(properties)) {
+    if (sub?.["x-secret"] === true && key in value) {
+      if (copy === value) copy = { ...value };
+      copy[key] = SECRET;
+    }
+  }
+  return copy;
+}
+
 // A message whose shape does not match its schema, recorded as refused with a value-free
 // reason: the location and the failing keyword only, never the value, so a wrong number
 // or a secret (7.2) is not carried into the trace or another tab (3.3). The malformed
@@ -181,7 +204,7 @@ function deliverReleased(askerId, entry, cid) {
         ignored: can ? [] : [askerId],
         outcome: can ? "delivered" : "ignored",
         reason: `released after reply ${cid}`,
-        payload: entry.event,
+        payload: redact(registry.get(entry.name), entry.event),
         states: actor ? { [askerId]: JSON.stringify(actor.getSnapshot().value) } : {},
       },
       place,
@@ -221,7 +244,7 @@ function dropHolds(askerId) {
       to: [askerId],
       outcome: "dropped",
       reason: "asker unmounted while held",
-      payload: entry.event,
+      payload: redact(registry.get(entry.name), entry.event),
     });
   holds.delete(askerId);
 }
@@ -291,7 +314,7 @@ function forward(machine, emitter, event) {
         ignored: ignored.map(idOf),
         outcome,
         reason,
-        payload: event,
+        payload: redact(registry.get(name), event),
         states: Object.fromEntries(sent.map((a) => [idOf(a), JSON.stringify(a.getSnapshot().value)])),
       },
       place,
@@ -461,7 +484,7 @@ export function ask(machine, target, name, payload = {}, instance) {
         setTimeout(() => release(from, cid), 0);
         return;
       }
-      record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: value });
+      record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: redact(queryRegistry.get(key)?.reply, value) });
       resolve(value);
       // 4.2: a macrotask always runs after XState's `fromPromise` continuation (one
       // microtask), so the asker's onDone adopts the reply before the held events
@@ -484,7 +507,7 @@ export function ask(machine, target, name, payload = {}, instance) {
         outcome: handled ? "asked" : "ignored",
         reason: handled ? null : `state ${JSON.stringify(answerer.getSnapshot().value)} does not handle it`,
         cid,
-        payload,
+        payload: redact(queryRegistry.get(key)?.payload, payload),
         states: { [target]: JSON.stringify(answerer.getSnapshot().value) },
       },
       place,

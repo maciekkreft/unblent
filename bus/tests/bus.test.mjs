@@ -886,6 +886,122 @@ test("compile ignores unknown keywords (x-secret, contentMediaType, description)
   }
 });
 
+// Section 7.2, 3.3: a field a schema marks `"x-secret": true` (an API key) reaches its
+// receiver but never a tap, so the trace, the console and other tabs do not carry it.
+const SECRET_EVENT = {
+  type: "object",
+  properties: { key: { type: "string", "x-secret": true }, provider: { type: "string" } },
+  required: ["key"],
+  additionalProperties: false,
+};
+const SECRET_Q = {
+  payload: { type: "object", properties: { token: { type: "string", "x-secret": true } }, required: ["token"], additionalProperties: false },
+  reply: { type: "object", properties: { key: { type: "string", "x-secret": true }, provider: { type: "string" } }, required: ["key"], additionalProperties: false },
+};
+
+function secretProducer(id) {
+  return createMachine({
+    id,
+    meta: { kind: "fact", shape: "local-only", emits: ["secret.changed"], owns: "a secret fact" },
+    on: { go: { actions: emit(({ event }) => ({ type: "secret.changed", key: event.key, provider: "anthropic" })) } },
+  });
+}
+
+function secretFact(id, seen) {
+  return createMachine({
+    id,
+    meta: { kind: "fact", shape: "local-only", emits: [], owns: "secret" },
+    on: {
+      "read?": {
+        actions: ({ event }) => {
+          seen.push(event.payload);
+          event.reply({ key: "SENSITIVE-REPLY", provider: "anthropic" });
+        },
+      },
+    },
+  });
+}
+
+test("a secret event field reaches the receiver but the trace hides it (7.2)", () => {
+  const { records, sub } = collect();
+  const received = [];
+  const p = mount(secretProducer("sec-p"), { events: { "secret.changed": SECRET_EVENT } });
+  const c = mount(consumer("sec-c", received, "secret.changed"), {});
+  p.send({ type: "go", key: "SENSITIVE-KEY" });
+  assert.equal(received[0].key, "SENSITIVE-KEY", "the receiver still gets the real value");
+  const rec = records.find((r) => r.kind === "event" && r.name === "secret.changed");
+  assert.equal(rec.payload.key, "[secret]", "the trace record hides the secret");
+  assert.equal(rec.payload.provider, "anthropic", "a non-secret field is untouched");
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-KEY"), "no record carries the value");
+  for (const r of records) for (const k of Object.keys(r)) assert.ok(TRACE_KEYS.has(k), `record key ${k} is in trace.recorded`);
+  sub();
+  unmount(p);
+  unmount(c);
+});
+
+test("a secret query payload and reply reach the fact and asker but the trace hides them (7.2)", async () => {
+  const { records, sub } = collect();
+  const seen = [];
+  const f = mount(secretFact("secr-f", seen), { queries: { read: SECRET_Q } });
+  const a = asker("secr-a", ["secr-f: read"]);
+  const reply = await ask(a, "secr-f", "read", { token: "SENSITIVE-TOKEN" });
+  assert.equal(seen[0].token, "SENSITIVE-TOKEN", "the fact still gets the real payload");
+  assert.equal(reply.key, "SENSITIVE-REPLY", "the asker still gets the real reply");
+  const q = records.find((r) => r.kind === "query" && r.name === "read");
+  const rep = records.find((r) => r.kind === "reply" && r.name === "read");
+  assert.equal(q.payload.token, "[secret]", "the query record hides the secret payload");
+  assert.equal(rep.payload.key, "[secret]", "the reply record hides the secret reply");
+  assert.equal(rep.payload.provider, "anthropic", "a non-secret field is untouched");
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-TOKEN"), "no record carries the payload value");
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-REPLY"), "no record carries the reply value");
+  sub();
+  unmount(f);
+});
+
+test("a secret event held for an asker and released is hidden from the trace too (4.2, 7.2)", async () => {
+  const { records, sub } = collect();
+  // A fact that answers `read` and also emits `secret.changed`, an event a slow asker
+  // declares its answer superseded by, so the event is held until the reply lands (4.2).
+  const secretHoldFact = createMachine({
+    id: "sh-f",
+    meta: { kind: "fact", shape: "local-only", emits: ["secret.changed"], owns: "held secret" },
+    on: {
+      "read?": { actions: ({ event }) => setTimeout(() => event.reply({ ok: true }), 0) },
+      leak: { actions: emit(({ event }) => ({ type: "secret.changed", key: event.key, provider: "anthropic" })) },
+    },
+  });
+  const handler = { "secret.changed": { actions: () => {} } };
+  const slowAsker = setup({ actors: { q: fromPromise(({ input }) => input.ask("sh-f", "read", {})) } }).createMachine({
+    id: "sh-a",
+    meta: { kind: "view", emits: [], attributes: [], asks: ["sh-f: read"] },
+    context: ({ input }) => ({ ask: input.ask }),
+    initial: "loading",
+    states: {
+      loading: {
+        invoke: { src: "q", input: ({ context }) => ({ ask: context.ask }), onDone: "ready", onError: "ready" },
+        on: handler,
+      },
+      ready: { on: handler },
+    },
+  });
+  const f = mount(secretHoldFact, {
+    events: { "secret.changed": SECRET_EVENT },
+    queries: { read: { payload: {}, reply: {}, supersededBy: ["secret.changed"] } },
+  });
+  const a = mount(slowAsker, { input: { ask: (t, n, p) => ask(slowAsker, t, n, p) } });
+  f.send({ type: "leak", key: "SENSITIVE-HELD" }); // emitted while the asker's read is open → held
+  // The reply is deferred, then the release runs a macrotask after it (4.2); poll for it
+  // rather than a fixed wait, so a loaded host does not fail the test on timing alone.
+  const released = (r) => r.kind === "event" && r.name === "secret.changed" && /released/.test(r.reason ?? "");
+  for (let i = 0; i < 40 && !records.some(released); i++) await new Promise((r) => setTimeout(r, 5));
+  const rel = records.find(released);
+  assert.equal(rel.payload.key, "[secret]", "a released held event hides its secret");
+  assert.ok(!JSON.stringify(records).includes("SENSITIVE-HELD"), "no record carries the held value");
+  sub();
+  unmount(f);
+  unmount(a);
+});
+
 test("a schema is compiled once per mount: 2000 events validate well within budget", () => {
   const p = mount(producer("perf-p"), { events: { "thing.happened": STRICT_EVENT } });
   const c = mount(consumer("perf-c", []), {});
