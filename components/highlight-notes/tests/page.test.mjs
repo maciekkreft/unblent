@@ -15,16 +15,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SAMPLE = resolve(HERE, "..", "..", "books", "tests", "fixtures", "sample.epub");
 const PAGE = `${BASE_URL}/workshop/design/subject`;
 
-// The composer (3.6) mounts the chosen member of the highlight-notes role. Seed the choice
-// the way the settings fact stores it (one localStorage key, the workshop profile since the
-// page is under /workshop/), so a reload restores the Vim highlights in the dock slot.
-const VIM = JSON.stringify({
-  nav: [],
-  viewportSwitchHidden: false,
-  layoutSwitchHidden: false,
-  arranging: true,
-  editors: { "highlight-notes": "highlight-notes-vim" },
-});
+// The "Vim keys" preference (12), seeded the way the settings fact stores it (one
+// localStorage key, the workshop profile since the page is under /workshop/).
+const seed = (vimKeys) =>
+  JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
+const VIM = seed(true);
+const PLAIN = seed(false);
 
 function watch(page, problems) {
   page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
@@ -63,7 +59,7 @@ const forgeCookie = () => {
     process.env.UNBLENT_DATA,
     "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server",
   );
-  const userId = `hnvim-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const userId = `hn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
 };
 
@@ -141,40 +137,32 @@ const assignedNotes = (page) =>
   );
 
 // Show the Highlights document: pick the Highlights row in the Notes list, then wait for
-// the container to show the (Vim) document in place of the editor. The row lives in Notes.
+// the container to show the document in place of the editor. The row lives in Notes.
 const showHighlights = async (page) => {
   await until(async () =>
     page.evaluate(() => Boolean(document.querySelector("note-list").shadowRoot.querySelector(".row.highlights"))),
   );
   await page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.highlights").click());
-  await until(async () => (await assignedNotes(page)).includes("highlight-notes-vim"));
+  await until(async () => (await assignedNotes(page)).includes("highlight-notes"));
 };
 
-// The element the composer swapped in, so the swap keeping its place in the Notes pair
-// (12) is proven: the chosen member carries data-role to keep the container's shown state.
-const swapped = (page) =>
-  page.evaluate(() => {
-    const el = document.querySelector("highlight-notes-vim");
-    return el ? { tag: el.localName, role: el.dataset.role ?? null } : null;
-  });
-
-// The Vim highlights document read through the EditorView the .cm-content node carries.
+// The highlights document read through the EditorView the .cm-content node carries.
 const hnDoc = (page) =>
   page.evaluate(
-    () => document.querySelector("highlight-notes-vim").shadowRoot.querySelector(".cm-content")?.cmView?.view?.state?.doc?.toString() ?? "",
+    () => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-content")?.cmView?.view?.state?.doc?.toString() ?? "",
   );
 const hnQuotes = (page) =>
   page.evaluate(() =>
-    [...document.querySelector("highlight-notes-vim").shadowRoot.querySelectorAll(".cm-quote-text")].map((m) => m.textContent),
+    [...document.querySelector("highlight-notes").shadowRoot.querySelectorAll(".cm-quote-text")].map((m) => m.textContent),
   );
 const hnHas = (page, selector) =>
-  page.evaluate((s) => document.querySelector("highlight-notes-vim").shadowRoot.querySelector(s) != null, selector);
+  page.evaluate((s) => document.querySelector("highlight-notes").shadowRoot.querySelector(s) != null, selector);
 
 // Put the caret at the end (an empty comment line) or start (the quote line) of the
-// document, then focus, so a Vim key acts where the test aims it.
+// document, then focus, so a key acts where the test aims it.
 const hnCaret = (page, where) =>
   page.evaluate((where) => {
-    const view = document.querySelector("highlight-notes-vim").shadowRoot.querySelector(".cm-content").cmView.view;
+    const view = document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-content").cmView.view;
     view.focus();
     view.dispatch({ selection: { anchor: where === "end" ? view.state.doc.length : 0 } });
   }, where);
@@ -186,9 +174,9 @@ const ENGINES = [
 
 // WebKit first, then Chromium. One book with one highlight is imported once in `before`
 // (its cost stays out of the per-test budget); each test is a fresh load that auto-reopens
-// the book and shows the highlight in the Vim tab.
+// the book and shows its highlight.
 for (const engine of ENGINES) {
-  describe(`highlight-notes-vim in ${engine.name}`, { timeout: 120000 }, () => {
+  describe(`highlight-notes in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     let context;
     before(async () => {
@@ -209,11 +197,10 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    // The composer mounts the Vim member in the dock slot; a highlight made in the book
-    // appears in it, and Vim normal-mode editing of the comment saves through notes to the
-    // server. The highlight is created here, in one page, so its create and comment never
+    // A highlight made in the book appears in the document, and Vim normal-mode editing
+    // of the comment saves through notes to the server. The highlight is created here, in one page, so its create and comment never
     // hand a note version across page loads (which would race a stale write into a conflict).
-    test(`the composer mounts the Vim highlights and a comment saves in ${engine.name}`, async () => {
+    test(`a highlight appears and a Vim comment saves in ${engine.name}`, async () => {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
@@ -222,14 +209,11 @@ for (const engine of ENGINES) {
       await ready(page);
       await readerHasText(page);
 
-      // Make a highlight in the book, then pick the Highlights row: the composer swapped the
-      // Vim member in, and picking the row shows it in the Notes pair, keeping its place (12).
+      // Make a highlight in the book, then pick the Highlights row.
       await dragOver(page, await dragRect(page));
       await until(async () => (await marks(page)).length > 0);
-      await page.waitForFunction(() => document.querySelector("highlight-notes-vim")?.shadowRoot?.querySelector(".cm-content"));
-      assert.deepEqual(await swapped(page), { tag: "highlight-notes-vim", role: "highlight-notes" }, "the Vim member took the slot");
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
-      assert.ok((await assignedNotes(page)).includes("highlight-notes-vim"), "the pair shows the Vim document, keeping its place");
       await until(async () => (await hnQuotes(page)).length > 0);
 
       // The highlight note must reach the server before its comment is written, so the
@@ -238,7 +222,7 @@ for (const engine of ENGINES) {
       await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)), 8000);
 
       // Focus the editor; Vim boots in normal mode and draws its block cursor (polled, since
-      // the cursor layer renders a beat after the swap on a loaded host).
+      // Vim arrives with the settings reply and the cursor layer renders a beat after).
       await hnCaret(page, "end");
       await until(async () => hnHas(page, ".cm-fat-cursor"));
 
@@ -263,7 +247,7 @@ for (const engine of ENGINES) {
       await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await ready(page);
-      await page.waitForFunction(() => document.querySelector("highlight-notes-vim")?.shadowRoot?.querySelector(".cm-content"));
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);
       const quote = (await hnQuotes(page))[0];
@@ -311,7 +295,7 @@ for (const engine of ENGINES) {
       await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await ready(page);
-      await page.waitForFunction(() => document.querySelector("highlight-notes-vim")?.shadowRoot?.querySelector(".cm-content"));
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);
 
@@ -324,6 +308,43 @@ for (const engine of ENGINES) {
       await page.keyboard.press("u");
       await until(async () => (await hnHas(page, ".cm-bin")) && !(await hnHas(page, ".cm-undo")));
       assert.ok((await hnQuotes(page)).length > 0, "the highlight came back");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // With Vim keys off the same document takes plain keys: no block cursor, and selecting
+    // a whole quote line and pressing Delete removes that highlight through the undo window,
+    // the same rule as `dd` (one rule in both modes); Undo brings it back. A comment saves.
+    test(`without Vim keys a deleted quote line is undoable and a comment saves in ${engine.name}`, async () => {
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), PLAIN);
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ready(page);
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length > 0);
+
+      // The first quote line and its line break, selected, then Delete.
+      await page.evaluate(() => {
+        const view = document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-content").cmView.view;
+        view.focus();
+        view.dispatch({ selection: { anchor: 0, head: view.state.doc.line(2).from } });
+      });
+      assert.equal(await hnHas(page, ".cm-fat-cursor"), false, "no block cursor without Vim keys");
+      await page.keyboard.press("Delete");
+      await until(async () => (await hnHas(page, ".cm-undo")) && (await hnHas(page, ".cm-discarding")));
+      await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-undo").click());
+      await until(async () => (await hnHas(page, ".cm-bin")) && !(await hnHas(page, ".cm-undo")));
+      assert.ok((await hnQuotes(page)).length > 0, "the highlight came back");
+
+      // Plain typing goes straight into the comment, no `i` first.
+      await hnCaret(page, "end");
+      await page.keyboard.type("A plain thought");
+      await until(async () => (await hnDoc(page)).includes("A plain thought"));
+      await drain(page);
+      await until(async () => (await serverNotes(page)).some((n) => (n.body ?? "").includes("A plain thought")), 4000);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });

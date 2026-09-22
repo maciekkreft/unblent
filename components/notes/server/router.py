@@ -106,17 +106,19 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
         # so it comes back as a conflict carrying the tombstone (5), never a revival.
         if row["deleted"]:
             return JSONResponse({"note": _record(row)}, status_code=409)
-        # A write must state the version it was based on (5): a mismatch is a
-        # conflict carrying the server's copy, so a view can show both.
-        if base != row["version"]:
-            return JSONResponse({"note": _record(row)}, status_code=409)
-        # The same text and the same links on the right base is not a change (5,
+        # The same text and the same links as the server holds is not a change (5,
         # idempotent writes): the current record comes back, no new version, no bump of
-        # seq. about absent means the links are unchanged (D2).
+        # seq. This is checked before the base, so a resend of a write already applied
+        # (a page left before the ack arrived, and the next load drains it again) is
+        # harmless rather than a conflict. about absent means the links are unchanged (D2).
         existing_about = json.loads(row["about"])
         effective_about = about if about is not None else existing_about
         if title == row["title"] and body == row["body"] and effective_about == existing_about:
             return _record(row)
+        # A write must state the version it was based on (5): a mismatch is a
+        # conflict carrying the server's copy, so a view can show both.
+        if base != row["version"]:
+            return JSONResponse({"note": _record(row)}, status_code=409)
         version = row["version"] + 1
         connection.execute(
             "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, about = ? WHERE id = ?",

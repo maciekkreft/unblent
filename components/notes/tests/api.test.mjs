@@ -57,6 +57,20 @@ test("a write on a stale base is a 409 carrying the server's copy", async () => 
   assert.equal(note.title, "a2");
 });
 
+test("a resend of a write already applied is idempotent, not a conflict", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  await put(id, { title: "a", body: "b", baseVersion: null }, cookie);
+  const first = await (await put(id, { title: "a2", body: "b2", baseVersion: 1 }, cookie)).json();
+  assert.equal(first.version, 2);
+  // The same write again, on the base it was sent with: the server already holds it.
+  const res = await put(id, { title: "a2", body: "b2", baseVersion: 1 }, cookie);
+  assert.equal(res.status, 200);
+  const again = await res.json();
+  assert.equal(again.version, 2, "no new version");
+  assert.equal(again.title, "a2");
+});
+
 test("the same text on the right base is idempotent: same version, no rewrite", async () => {
   const cookie = cookieFor(freshUser());
   const id = noteId(1);

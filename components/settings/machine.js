@@ -20,6 +20,7 @@ const PRODUCT_DEFAULT = { nav: [], viewportSwitchHidden: true, layoutSwitchHidde
 // is next saved, so this happens once per device and profile.
 const RETIRED = {
   "note-editor": { "note-editor-cm6": true, "note-editor": false },
+  "highlight-notes": { "highlight-notes-vim": true, "highlight-notes": false },
 };
 
 // Sanitise any candidate into the contract shape (7.2): nav a list of

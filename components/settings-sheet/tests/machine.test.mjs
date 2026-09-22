@@ -23,11 +23,17 @@ const PAGES = [
   { path: "/c", title: "C", kind: "app" },
 ];
 
+// The real editors declare no role today; the made-up pair stands in for a future role
+// so the grouping and the choice are still tested.
 const COMPONENTS = [
   { name: "note-editor", role: null },
-  { name: "highlight-notes", role: "highlight-notes" },
-  { name: "highlight-notes-vim", role: "highlight-notes" },
+  { name: "highlight-notes", role: null },
   { name: "notes", role: null },
+];
+const WITH_ROLE = [
+  ...COMPONENTS,
+  { name: "example-a", role: "example-role" },
+  { name: "example-b", role: "example-role" },
 ];
 
 // The account picture as `llm` answers it (7.7): signed in, on the Echo test
@@ -66,7 +72,7 @@ const TOOLS = { tools: { "notes: list": false }, approval: "auto" };
 // Drive the actor with a fake ask (4.2): pages, then settings, then catalog (list), and —
 // only when the account section is shown — llm, the tool contracts and the tool
 // preferences. `account` mirrors the tag attribute.
-const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS } = {}) => {
+const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS } = {}) => {
   const ask = (target, name) =>
     Promise.resolve(
       target === "pages"
@@ -74,7 +80,7 @@ const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, c
         : target === "catalog"
           ? name === "contracts"
             ? contracts
-            : { components: COMPONENTS }
+            : { components }
           : target === "conversations"
             ? tools
             : target === "llm"
@@ -181,19 +187,20 @@ test("_reset emits the defaults", async () => {
 });
 
 test("catalog members are grouped by role", async () => {
-  const { snapshot } = await start();
-  assert.deepEqual(snapshot.context.roles, { "highlight-notes": ["highlight-notes", "highlight-notes-vim"] });
+  assert.deepEqual((await start()).snapshot.context.roles, {}, "no real editor declares a role");
+  const { snapshot } = await start(undefined, "/a", { components: WITH_ROLE });
+  assert.deepEqual(snapshot.context.roles, { "example-role": ["example-a", "example-b"] });
 });
 
 test("_setEditor emits the whole settings with the role's choice set", async () => {
-  const { actor, emitted } = await start();
-  actor.send({ type: "_setEditor", role: "highlight-notes", component: "highlight-notes-vim" });
+  const { actor, emitted } = await start(undefined, "/a", { components: WITH_ROLE });
+  actor.send({ type: "_setEditor", role: "example-role", component: "example-b" });
   assert.equal(emitted.length, 1);
-  assert.deepEqual(emitted[0].editors, { "highlight-notes": "highlight-notes-vim" });
+  assert.deepEqual(emitted[0].editors, { "example-role": "example-b" });
   // A second choice for another role would merge, not replace: start from the last.
-  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "highlight-notes": "highlight-notes-vim" } });
-  actor.send({ type: "_setEditor", role: "highlight-notes", component: "highlight-notes" });
-  assert.deepEqual(emitted[1].editors, { "highlight-notes": "highlight-notes" });
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "example-role": "example-b" } });
+  actor.send({ type: "_setEditor", role: "example-role", component: "example-a" });
+  assert.deepEqual(emitted[1].editors, { "example-role": "example-a" });
 });
 
 test("the profile is adopted from the read and defaults to workshop", async () => {

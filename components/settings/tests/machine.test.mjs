@@ -277,6 +277,15 @@ test("a stored choice of the plain note editor is dropped and switches nothing",
   assert.equal(read(on).vimKeys, true, "a stored vimKeys: true is not switched off");
 });
 
+test("a stored choice of either highlights editor is dropped; only the Vim one turns Vim keys on", () => {
+  const vim = start(JSON.stringify({ nav: [], editors: { "highlight-notes": "highlight-notes-vim" } })).actor;
+  assert.deepEqual(read(vim).editors, {});
+  assert.equal(read(vim).vimKeys, true, "the Vim choice meant Vim");
+  const plain = start(JSON.stringify({ nav: [], editors: { "highlight-notes": "highlight-notes" } })).actor;
+  assert.deepEqual(read(plain).editors, {});
+  assert.equal(read(plain).vimKeys, false);
+});
+
 test("once dropped, the retired choice is gone from what is next saved", () => {
   const { actor, saved } = start(JSON.stringify({ nav: [], editors: { "note-editor": "note-editor-cm6" } }));
   actor.send({ type: "settings.edited", ...read(actor), vimKeys: false });

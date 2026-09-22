@@ -1,13 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
+import { Validator } from "@cfworker/json-schema";
 import { machine, ordered, compose, split, titleOf } from "../machine.js";
 
 // highlight-notes composes the highlights of the book on the stage into one document
 // (Decision 2). The pure functions that shape that document — ordered, compose, split,
 // titleOf — are tested first; then the actor's decisions: building the set from the
 // subject's highlights, following note.changed / note.deleted / subject.changed, saving
-// each comment at a throttle, and removing with the same undo window as note-list.
+// each comment at a throttle, removing with the same undo window as note-list, and
+// following the "Vim keys" preference (12).
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.discarded"].map((n) => [n, schemaOf(n)]));
+// Every emit of every test, checked against its schema by the last test.
+const recorded = [];
 
 const THROTTLE_MS = 200;
 const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -40,8 +51,9 @@ const rowOf = (note) => ({ id: note.id, title: note.title, subtitle: "", updated
 // A target-aware ask: subject: read and notes: read share the name "read", so the reply
 // depends on the target. `notes` maps id → whole note; a missing id is not-found.
 const asking =
-  ({ subject = null, notes = {} } = {}) =>
+  ({ subject = null, notes = {}, settings = {} } = {}) =>
   (target, name, payload) => {
+    if (target === "settings" && name === "read") return Promise.resolve(settings);
     if (target === "subject" && name === "read") return Promise.resolve({ subject });
     if (target === "notes" && name === "list") return Promise.resolve({ notes: Object.values(notes).map(rowOf) });
     if (target === "notes" && name === "read") {
@@ -58,6 +70,7 @@ function view({ ask = asking(), undoMs = 3000 } = {}) {
   const actor = createActor(machine, { input: { ask, undoMs }, clock });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.discarded", (e) => discarded.push(e));
+  for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
   actor.start();
   return { actor, clock, saved, discarded };
 }
@@ -214,4 +227,42 @@ test("discard can be undone, or elapses into note.discarded", async () => {
   actor.send({ type: "_discard", id: H1 });
   clock.increment(3000);
   assert.deepEqual(discarded, [{ type: "note.discarded", id: H1 }]);
+});
+
+test("Vim keys start from settings: read, and are off until it answers", async () => {
+  const { actor } = view({ ask: asking({ settings: { vimKeys: true, profile: "workshop" } }) });
+  assert.equal(actor.getSnapshot().context.vimKeys, false, "off before the reply");
+  await settle();
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+});
+
+test("Vim keys follow settings.changed without touching the highlights", async () => {
+  const notes = { [H1]: noteObj(H1, { body: "c" }) };
+  const { actor } = view({ ask: asking({ subject: { kind: "book", id: BOOK, title: "B" }, notes }) });
+  await settle();
+  actor.send({ type: "_typed", bodies: { [H1]: "typed" } });
+  actor.send({ type: "settings.changed", vimKeys: true });
+  const s = actor.getSnapshot();
+  assert.equal(s.context.vimKeys, true);
+  assert.deepEqual(s.value, { ready: "dirty" }, "the switch never moves the document");
+  assert.equal(frags(actor)[0].body, "typed", "and never touches what was typed");
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
+});
+
+test("an error reply, or a reply without the field, leaves Vim keys off", async () => {
+  for (const settings of [{ error: "no-answerer" }, { profile: "product" }]) {
+    const { actor } = view({ ask: asking({ settings }) });
+    await settle();
+    assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(settings));
+  }
+});
+
+test("every payload matches its schema", () => {
+  assert.ok(recorded.length > 0, "the tests above recorded traffic");
+  for (const { value, schema } of recorded) {
+    const { type, ...rest } = value;
+    const result = new Validator(schema, "2020-12").validate(rest);
+    assert.ok(result.valid, `${JSON.stringify(value).slice(0, 160)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
+  }
 });

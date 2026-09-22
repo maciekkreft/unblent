@@ -5,9 +5,8 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // under it, each highlight one ordinary note whose link to the book carries the place
 // and the quote (Decision 1, 12). It owns only UI state — the fragments it is showing,
 // which are dirty, which are counting down to a discard — and points at `notes`, which
-// owns the facts, and `subject`, the thing on the stage it follows. It has no view.js
-// yet, so it is a planned component (7.3, §9): the machine and its contracts stand for
-// review on the components page before the page in the dock is built (session 5).
+// owns the facts, `subject`, the thing on the stage it follows, and `settings`, whose
+// "Vim keys" preference (12) the view turns on and off in place.
 //
 // It follows the subject the same way note-list does (3.5): it applies its
 // `subject: read` starting picture on its own concern, never batched into the
@@ -151,6 +150,7 @@ export const machine = setup({
     load: fromPromise(({ input }) => input.ask("notes", "list", {})),
     // The bodies and versions of the wanted highlights. note.changed / note.deleted are
     // held for each read until its reply lands.
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     readNotes: fromPromise(async ({ input }) => {
       const replies = await Promise.all(input.ids.map((id) => input.ask("notes", "read", { id })));
       return replies.filter((r) => r && "note" in r).map((r) => r.note);
@@ -182,10 +182,9 @@ export const machine = setup({
   id: "highlight-notes",
   meta: {
     kind: "view",
-    role: "highlight-notes",
     emits: ["note.saved", "note.discarded"],
     attributes: ["height"],
-    asks: ["notes: list", "notes: read", "subject: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -203,18 +202,32 @@ export const machine = setup({
     fragments: [],
     // The ids counting down to a discard, each with its own cancelable timer.
     discarding: new Set(),
+    // The "Vim keys" device preference (12), owned by `settings`: off until it says
+    // otherwise, and off on a page without it (the ask replies no-answerer).
+    vimKeys: false,
   }),
   // The subject read runs for the machine's whole life (3.5) so a rebuild never cancels
   // it: its reply lands on its own and sets the subject, and no notes reply ever writes
   // the subject. Each subject it learns starts a rebuild against the current notes.
-  invoke: {
-    src: "readSubject",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: [assign({ subject: ({ event }) => event.output.subject ?? null }), "reload"] },
-    onError: { actions: "reload" },
-  },
+  // The settings read runs beside it for the same reason: the preference arrives
+  // whatever the document is doing, and a settings.changed that races it is held for us
+  // until the reply lands (settings: read supersededBy).
+  invoke: [
+    {
+      src: "readSubject",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: [assign({ subject: ({ event }) => event.output.subject ?? null }), "reload"] },
+      onError: { actions: "reload" },
+    },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    },
+  ],
   initial: "idle",
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // The stage moved (4.3): a different subject, so a different set of highlights.
     // Held for us until the starting subject: read reply lands, so it is never lost and
     // never applied before the picture it supersedes. Start the set over against it.
