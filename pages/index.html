@@ -45,6 +45,8 @@
     <script type="module" src="/static/components/session/fact.js"></script>
     <script type="module" src="/static/components/books/fact.js"></script>
     <script type="module" src="/static/components/subject/fact.js"></script>
+    <script type="module" src="/static/components/llm/fact.js"></script>
+    <script type="module" src="/static/components/conversations/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
@@ -59,6 +61,9 @@
     <script type="module" src="/static/components/book-shelf/view.js"></script>
     <script type="module" src="/static/components/book-toc/view.js"></script>
     <script type="module" src="/static/components/book-reader/view.js"></script>
+    <script type="module" src="/static/components/conversation-list/view.js"></script>
+    <script type="module" src="/static/components/chat-thread/view.js"></script>
+    <script type="module" src="/static/components/chat-input/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
@@ -75,7 +80,11 @@
         <note-editor follows subject about-new height="fill" shows-on="note.selected"></note-editor>
       </list-then-item>
       <highlight-notes label="Highlights" side="right" height="fill"></highlight-notes>
-      <settings-sheet label="Settings" side="right"></settings-sheet>
+      <list-then-item id="chats" label="Chat" side="right" height="fill" shows-on="conversation.selected">
+        <conversation-list subject label="Chats"></conversation-list>
+        <chat-thread shows-on="conversation.selected" height="fill"><chat-input></chat-input></chat-thread>
+      </list-then-item>
+      <settings-sheet label="Settings" side="right" account></settings-sheet>
       <layout-switch control></layout-switch>
       <profile-switch control></profile-switch>
       <session-switch control></session-switch>

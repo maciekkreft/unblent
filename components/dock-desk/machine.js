@@ -291,6 +291,7 @@ export const machine = setup({
         // A child follows a selection gesture (6.4): bring its tab forward.
         "book.selected": show,
         "note.selected": show,
+        "conversation.selected": show,
       },
     },
     // No dock fact on the page: the desk still works as a plain tab switcher, so
@@ -305,6 +306,7 @@ export const machine = setup({
         // plain tab switcher, so a followed stage tab is staged locally.
         "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
         "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
+        "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage }) },
       },
     },
   },

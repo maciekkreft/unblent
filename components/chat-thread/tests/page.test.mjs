@@ -131,6 +131,32 @@ async function openWithBook(engine, name) {
   return { browser, context, page, problems };
 }
 
+// The testbed app page (session 11): the chat runs in the right dock beside an open book,
+// so a new chat is linked to that book (about, and the book's line in start) and follows
+// the subject. The sample book is imported and set open before the page loads, so
+// `subject` settles on it and `conversation-list subject` scopes to its chats.
+async function openTestbed(engine, name) {
+  const browser = await engine.launch();
+  const userId = `chat-${engine.name}-${name}-${Date.now()}`;
+  const context = await browser.newContext();
+  context.setDefaultTimeout(4000);
+  await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
+  assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
+  const imp = await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE });
+  assert.ok(imp.ok(), "the sample book is imported");
+  assert.ok((await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}/opened`)).ok(), "the sample book is the open one");
+  const page = await context.newPage();
+  const problems = watch(page);
+  await page.goto(`${BASE_URL}/workshop/apps/chat`, { waitUntil: "domcontentloaded" });
+  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+  return { browser, context, page, problems };
+}
+
+// The subject has settled on the open book: dock-desk marks the tab of the view showing
+// the subject (12), so a mark means the book is the subject and chat-input has learned it.
+const bookIsSubject = (page) =>
+  page.evaluate(() => Boolean(document.querySelector("dock-desk").shadowRoot.querySelector(".mark")));
+
 // Set the draft and send it. updateComplete waits for Lit to enable the Send button
 // (it turns on once the draft has text) before the click, as a typing user would.
 const send = (page, text) =>
@@ -407,6 +433,30 @@ for (const engine of ENGINES) {
       await until(async () => await page.evaluate(() => Boolean(document.querySelector("conversation-list")?.shadowRoot?.querySelector(".row"))));
       await until(async () => (await chatTitles(page)).includes("remember me"));
       assert.ok((await chatTitles(page)).includes("remember me"), "the chat is listed from the server after a reload");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // --- the testbed app page beside an open book (session 11) ---------------------------
+
+  test(`a new chat is linked to the open book on the testbed in ${engine.name}`, async () => {
+    const { browser, page, problems } = await openTestbed(engine, "book-link");
+    try {
+      // Wait until the subject has settled on the book, so chat-input links the new chat
+      // to it (7's step A1: a keystroke before the subject is known is held until it is).
+      await until(async () => await bookIsSubject(page));
+      await send(page, "about this book");
+      await until(async () => (await lastAnswer(page)).includes("about this book"));
+      await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
+      // With the book as subject again, conversation-list scopes to the book's chats; the
+      // chat's presence there proves it was linked to the book (about), not left unlinked.
+      await until(async () => await bookIsSubject(page));
+      await until(async () => (await chatTitles(page)).includes("about this book"));
+      assert.ok((await chatTitles(page)).includes("about this book"), "the new chat is listed under the open book after a reload");
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

@@ -367,6 +367,7 @@ const FOLLOWERS = [
   { name: "reader", label: "Reader" },
   { name: "book-toc", label: "Contents", side: "left", showsOn: "book.selected" },
   { name: "note-editor", label: "Editor", showsOn: "note.selected" },
+  { name: "chats", label: "Chat", side: "right", showsOn: "conversation.selected" },
 ];
 
 test("a shows-on view docked on a folded side is shown and unfolded (6.4)", async () => {
@@ -415,6 +416,21 @@ test("in failed, a shows-on gesture stages the followed view (6.4)", async () =>
   const { actor } = await settle(stored({ error: "unavailable" }), { views: FOLLOWERS });
   actor.send({ type: "note.selected", id: "n1" });
   assert.equal(actor.getSnapshot().context.stage, "note-editor");
+});
+
+test("a chat picked shows its tab on its side (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: { right: { open: false, views: ["note-editor", "chats"], active: "note-editor" } } }),
+    { views: FOLLOWERS },
+  );
+  actor.send({ type: "conversation.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV" });
+  assert.deepEqual(emitted, [
+    {
+      type: "dock.arranged",
+      stage: "reader",
+      docks: { right: { open: true, views: ["note-editor", "chats"], active: "chats" } },
+    },
+  ]);
 });
 
 test("in failed, _open switches the stage locally", async () => {
