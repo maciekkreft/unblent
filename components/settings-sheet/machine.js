@@ -47,6 +47,21 @@ const indexOf = (context, path) => rowsOf(context).findIndex((r) => r.path === p
 const edited = (settings) => ({ type: "settings.edited", ...settings });
 // An account gesture (7.7): the changed field only, which `llm` saves and announces.
 const llmEdited = (patch) => ({ type: "llm.edited", ...patch });
+// A tool switch gesture (7.7): the flipped switch only, which `conversations` merges
+// into the account's tool preferences and announces tools.changed.
+const toolsEdited = (key, on) => ({ type: "tools.edited", tools: { [key]: on } });
+
+// The tools the chat may offer the model (7.7): the queries whose owners marked them as
+// tools, from `catalog: contracts`. Each is one switch: its key `"target: name"`, the
+// person's label and the description. Sorted by key so the list is stable, matching the
+// order `conversations` offers them in.
+const toolsFrom = (contracts) => {
+  const queries = (contracts && contracts.queries) || [];
+  return queries
+    .filter((q) => q.tool)
+    .map((q) => ({ key: `${q.target}: ${q.name}`, label: q.tool.label, description: q.tool.description }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+};
 const setHidden = (context, path, hidden) => {
   const rows = rowsOf(context).map((r) => (r.path === path ? { ...r, hidden } : r));
   return edited(withNav(context.settings, rows));
@@ -78,16 +93,18 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     catalog: fromPromise(({ input }) => input.ask("catalog", "list", {})),
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
+    contracts: fromPromise(({ input }) => input.ask("catalog", "contracts", {})),
+    tools: fromPromise(({ input }) => input.ask("conversations", "tools", {})),
   },
 }).createMachine({
   id: "settings-sheet",
   meta: {
     kind: "view",
-    emits: ["settings.edited", "llm.edited"],
+    emits: ["settings.edited", "llm.edited", "tools.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
     attributes: ["account"],
-    asks: ["pages: list", "settings: read", "catalog: list", "llm: read"],
+    asks: ["pages: list", "settings: read", "catalog: list", "llm: read", "catalog: contracts", "conversations: tools"],
   },
   // The active profile (§12), adopted from settings; a page without settings
   // stays in `workshop`, the full sheet, exactly as before profiles existed.
@@ -102,6 +119,11 @@ export const machine = setup({
     roles: {},
     profile: "workshop",
     llm: null,
+    // The tool switches (7.7), shown only in the account section: the list of tools from
+    // `catalog: contracts` and which are on. A tool missing from `tools` is on; a tool set
+    // false is off. `tools.changed` keeps the map current after the starting ask (4.3).
+    toolList: [],
+    tools: {},
   }),
   initial: "loadingPages",
   states: {
@@ -163,8 +185,33 @@ export const machine = setup({
         // section shows "Sign in to set up the chat." (7.7); llm.changed corrects
         // it after (4.3).
         onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "loadingContracts" },
+          { target: "loadingContracts", actions: assign({ llm: ({ event }) => event.output }) },
+        ],
+        onError: { target: "loadingContracts" },
+      },
+    },
+    // The tool switches (7.7): the list of tools from the contracts, then which are on
+    // from the loop. Both are optional — an offline catalog or a signed-out account leaves
+    // the list empty, and the account section simply shows no switches.
+    loadingContracts: {
+      invoke: {
+        src: "contracts",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "loadingTools" },
+          { target: "loadingTools", actions: assign({ toolList: ({ event }) => toolsFrom(event.output) }) },
+        ],
+        onError: { target: "loadingTools" },
+      },
+    },
+    loadingTools: {
+      invoke: {
+        src: "tools",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "ready", actions: assign({ llm: ({ event }) => event.output }) },
+          { target: "ready", actions: assign({ tools: ({ event }) => ({ ...event.output.tools }) }) },
         ],
         onError: { target: "ready" },
       },
@@ -228,6 +275,9 @@ export const machine = setup({
         _setModel: { actions: emit(({ event }) => llmEdited({ model: event.model })) },
         _saveKey: { actions: emit(({ event }) => llmEdited({ key: event.key })) },
         _removeKey: { actions: emit(() => llmEdited({ key: "" })) },
+        // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
+        // it and announces tools.changed, adopted below (4.3). Reversible by flipping back.
+        _toggleTool: { actions: emit(({ event }) => toolsEdited(event.key, event.on)) },
       },
     },
     failed: {},
@@ -255,6 +305,11 @@ export const machine = setup({
           ttl: event.ttl,
         }),
       }),
+    },
+    // The tool preferences, followed after the starting ask (4.3): a flip here or on
+    // another device arrives as the whole map, adopted as the switch states.
+    "tools.changed": {
+      actions: assign({ tools: ({ event }) => ({ ...event.tools }) }),
     },
   },
 });

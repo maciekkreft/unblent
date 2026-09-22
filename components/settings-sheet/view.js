@@ -4,6 +4,7 @@ import { icon } from "icons";
 import { machine, merge } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
+import toolsEdited from "./events/tools.edited.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -23,7 +24,7 @@ class ActorController {
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
       },
-      events: { "settings.edited": edited, "llm.edited": llmEdited },
+      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -78,6 +79,33 @@ class SettingsSheet extends LitElement {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
+    }
+    .tools {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+    }
+    .tools .group {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    label.tool {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-xs);
+      white-space: normal;
+    }
+    label.tool .labels {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+    }
+    label.tool .title {
+      color: var(--color-ink);
+    }
+    label.tool .desc {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
     }
     .field {
       /* Override the base label rule, which centres its content (7.4). */
@@ -287,7 +315,7 @@ class SettingsSheet extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current, roles, profile, account, llm } = snapshot.context;
+    const { pages, settings, current, roles, profile, account, llm, toolList, tools } = snapshot.context;
     const rows = merge(pages, settings.nav);
     // The product profile (§12) shows only the production options: the editor
     // selects and the layout-switch row. The page order and the viewport switch
@@ -377,16 +405,45 @@ class SettingsSheet extends LitElement {
       <h3>This device</h3>
       ${device}
       <h3>Your account</h3>
-      ${this.#account(llm, profile)}
+      ${this.#account(llm, profile, toolList, tools)}
+    `;
+  }
+
+  // The tool switches (7.7): one row per thing the chat may read from the reader's own
+  // library, on unless switched off. Each names what is read in plain words with its
+  // description; flipping one is reversible by flipping it back (Don Norman: forgiveness,
+  // honest signifiers). Shown only signed in and only when the catalog named some tools.
+  #tools(toolList, tools) {
+    if (!toolList.length) return nothing;
+    return html`
+      <div class="tools">
+        <span class="group">What the chat may read</span>
+        ${toolList.map(
+          (tool) => html`
+            <label class="tool">
+              <input
+                type="checkbox"
+                .checked=${tools[tool.key] !== false}
+                @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
+              />
+              <span class="labels">
+                <span class="title">${tool.label}</span>
+                <span class="desc">${tool.description}</span>
+              </span>
+            </label>
+          `,
+        )}
+      </div>
     `;
   }
 
   // The account section (7.7): signed out it invites a sign-in; signed in it offers
-  // the provider, the API key and the model. Effort and cache lifetime come later
-  // (§13). Every gesture emits llm.edited and is reversible by choosing the previous
-  // value; removing the key can only be undone by entering it again, so its button
-  // is plainly labelled (Don Norman: forgiveness, honest signifiers).
-  #account(llm, profile) {
+  // the provider, the API key, the model and the tool switches. Effort and cache
+  // lifetime come later (§13). Every gesture emits llm.edited (or tools.edited) and is
+  // reversible by choosing the previous value; removing the key can only be undone by
+  // entering it again, so its button is plainly labelled (Don Norman: forgiveness,
+  // honest signifiers).
+  #account(llm, profile, toolList, tools) {
     if (!llm || !llm.signedIn) return html`<p class="hint">Sign in to set up the chat.</p>`;
     const current = llm.providers.find((p) => p.id === llm.provider);
     // Echo is a test provider (§12): offered only in the workshop, except that an
@@ -446,6 +503,7 @@ class SettingsSheet extends LitElement {
               </label>
             `
           : html`<p class="hint">Add your API key to choose a model.</p>`}
+        ${this.#tools(toolList, tools)}
       </div>
     `;
   }

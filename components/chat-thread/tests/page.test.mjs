@@ -57,7 +57,7 @@ const forge = (userId) => {
 
 // A signed-in browser on the conversations page, its account on the Echo test provider
 // (set over HTTP, since this page has no Settings). The chat box is then usable.
-async function open(engine, name, undoMs) {
+async function open(engine, name, undoMs, tools) {
   const browser = await engine.launch();
   const userId = `chat-${engine.name}-${name}-${Date.now()}`;
   const context = await browser.newContext();
@@ -65,6 +65,11 @@ async function open(engine, name, undoMs) {
   await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
   const put = await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } });
   assert.ok(put.ok(), "the account is set to Echo");
+  // A tool switched off in Settings (12) is kept per account; setting it over HTTP here is
+  // what the sheet's tools.edited does, so `conversations` boots with it off and never
+  // offers it to the model.
+  if (tools)
+    assert.ok((await context.request.put(`${BASE_URL}/api/conversations/tools`, { data: { tools } })).ok(), "the tool preferences are set");
   // Shorten the delete-undo window (default 3s) so a delete test stays within its budget.
   // conversation-list reads --duration-undo off its host at mount, so the short window must
   // be in the cascade before the element upgrades. An adopted stylesheet is applied at
@@ -348,6 +353,22 @@ for (const engine of ENGINES) {
       // subject is null), not just the typed request that also contains the word.
       await until(async () => (await threadText(page)).includes('"subject":null'));
       assert.match(await threadText(page), /Checking what's open/, "the lookup is named on screen");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a tool switched off is not offered and its call is refused in ${engine.name}`, async () => {
+    // subject: read is switched off for this account (12). Echo still asks for it, but the
+    // loop was never offered it, so llm refuses the call with an error result instead of
+    // running it; the model sees the refusal, and no lookup line is shown for the reader.
+    const { browser, page, problems } = await open(engine, "tool-off", undefined, { "subject: read": false });
+    try {
+      await send(page, "/tool subject: read {}");
+      await until(async () => (await threadText(page)).includes("This tool could not be used"));
+      assert.doesNotMatch(await threadText(page), /Checking what's open/, "an off tool is never named as a lookup");
+      assert.doesNotMatch(await threadText(page), /"subject":null/, "the lookup did not run");
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

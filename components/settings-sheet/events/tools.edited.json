@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A tool switch was flipped in Settings (7.7): the changed switches only (a tool set false is off, a tool missing is on), or the approval mode. `conversations` merges it into the account's tool preferences and announces tools.changed.",
+  "type": "object",
+  "properties": {
+    "tools": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "approval": { "enum": ["manual", "auto"] }
+  },
+  "additionalProperties": false
+}

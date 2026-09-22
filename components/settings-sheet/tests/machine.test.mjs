@@ -11,6 +11,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMAS = {
   "settings.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "settings.edited.json"), "utf8")),
   "llm.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "llm.edited.json"), "utf8")),
+  "tools.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "tools.edited.json"), "utf8")),
 };
 // Every event the tests below emit, with the schema it must match (Testing, shape
 // test); the final test validates them all.
@@ -44,22 +45,45 @@ const LLM_PICTURE = {
   ttl: "1h",
 };
 
-// Drive the actor with a fake ask (4.2): pages, then settings, then catalog, and —
-// only when the account section is shown — llm. `account` mirrors the tag attribute.
-const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE } = {}) => {
-  const ask = (target) =>
+// The tool vocabulary as `catalog: contracts` gives it (7.7): the queries whose owners
+// marked them as tools become switches; a query with no `tool` entry is not a switch. The
+// two below sort to books: read, notes: list.
+const CONTRACTS = {
+  events: [],
+  commands: [],
+  queries: [
+    { target: "notes", name: "list", payload: {}, reply: {}, askers: [], tool: { description: "List the reader's notes.", label: "Reading the notes" } },
+    { target: "books", name: "read", payload: {}, reply: {}, askers: [], tool: { description: "Open a book's details.", label: "Opening a book" } },
+    { target: "subject", name: "read", payload: {}, reply: {}, askers: [] },
+  ],
+};
+
+// The tool preferences as `conversations: tools` gives them (7.7): notes off, the rest on
+// (a tool missing from the map is on).
+const TOOLS = { tools: { "notes: list": false }, approval: "auto" };
+
+// Drive the actor with a fake ask (4.2): pages, then settings, then catalog (list), and —
+// only when the account section is shown — llm, the tool contracts and the tool
+// preferences. `account` mirrors the tag attribute.
+const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS } = {}) => {
+  const ask = (target, name) =>
     Promise.resolve(
       target === "pages"
         ? { pages: PAGES }
         : target === "catalog"
-          ? { components: COMPONENTS }
-          : target === "llm"
-            ? llm
-            : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
+          ? name === "contracts"
+            ? contracts
+            : { components: COMPONENTS }
+          : target === "conversations"
+            ? tools
+            : target === "llm"
+              ? llm
+              : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
     );
   const actor = createActor(machine, { input: { ask, current, account } });
   const emitted = [];
   const emittedLlm = [];
+  const emittedTools = [];
   actor.on("settings.edited", (e) => {
     emitted.push(e);
     recorded.push({ value: e, schema: SCHEMAS["settings.edited"] });
@@ -68,9 +92,13 @@ const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE } 
     emittedLlm.push(e);
     recorded.push({ value: e, schema: SCHEMAS["llm.edited"] });
   });
+  actor.on("tools.edited", (e) => {
+    emittedTools.push(e);
+    recorded.push({ value: e, schema: SCHEMAS["tools.edited"] });
+  });
   return new Promise((resolve) => {
     actor.subscribe((s) => {
-      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, emittedLlm, snapshot: s });
+      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, emittedLlm, emittedTools, snapshot: s });
     });
     actor.start();
   });
@@ -231,6 +259,48 @@ test("llm.changed is adopted after the starting ask (4.3)", async () => {
   const next = { ...LLM_PICTURE, provider: "anthropic", model: "claude-opus-5", models: [{ id: "claude-opus-5", label: "Claude Opus 5" }] };
   actor.send({ type: "llm.changed", ...next });
   assert.deepEqual(actor.getSnapshot().context.llm, next);
+});
+
+test("without the account attribute the tools are never loaded", async () => {
+  const { snapshot } = await start();
+  assert.deepEqual(snapshot.context.toolList, [], "no account section, no tool contracts asked");
+  assert.deepEqual(snapshot.context.tools, {}, "and no tool preferences");
+});
+
+test("with the account attribute the tools are listed and the off ones known (7.7)", async () => {
+  const { snapshot } = await start(undefined, "/a", { account: true });
+  assert.deepEqual(
+    snapshot.context.toolList.map((t) => t.key),
+    ["books: read", "notes: list"],
+    "the tool queries, sorted by key; a query with no tool entry is left out",
+  );
+  assert.deepEqual(snapshot.context.toolList[0], { key: "books: read", label: "Opening a book", description: "Open a book's details." });
+  assert.deepEqual(snapshot.context.tools, { "notes: list": false }, "the preference map says notes is off, the rest on");
+});
+
+test("toggling a tool emits tools.edited with only that switch (7.7)", async () => {
+  const { actor, emittedTools } = await start(undefined, "/a", { account: true });
+  actor.send({ type: "_toggleTool", key: "books: read", on: false });
+  assert.deepEqual(emittedTools[0], { type: "tools.edited", tools: { "books: read": false } });
+  actor.send({ type: "_toggleTool", key: "notes: list", on: true });
+  assert.deepEqual(emittedTools[1], { type: "tools.edited", tools: { "notes: list": true } });
+});
+
+test("tools.changed is adopted after the starting ask (4.3)", async () => {
+  const { actor } = await start(undefined, "/a", { account: true });
+  actor.send({ type: "tools.changed", tools: { "books: read": false, "notes: list": false }, approval: "auto" });
+  assert.deepEqual(actor.getSnapshot().context.tools, { "books: read": false, "notes: list": false });
+});
+
+test("an unavailable catalog or tools reply leaves the switches empty", async () => {
+  const { snapshot } = await start(undefined, "/a", {
+    account: true,
+    contracts: { error: "unavailable" },
+    tools: { error: "no-answerer" },
+  });
+  assert.deepEqual(snapshot.context.toolList, [], "no tools listed when the catalog is unavailable");
+  assert.deepEqual(snapshot.context.tools, {}, "and the preference map stays empty (all on)");
+  assert.ok(snapshot.matches("ready"), "the sheet still reaches ready");
 });
 
 test("every payload matches its schema", () => {
