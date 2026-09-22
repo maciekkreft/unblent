@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine } from "../machine.js";
+import { machine, parseMarkdown } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -144,6 +144,76 @@ test("a tool exchange leaves the answer carrying its labelled lookup", async () 
   assert.ok(withCalls, "the answer that asked for a lookup is kept");
   assert.equal(withCalls.calls[0].label, "Reading a chapter");
   assert.equal(conv(h).turns.at(-1).status, "done");
+});
+
+// The markdown renderer (10). It returns only data — text runs stay text — so the view
+// can draw each run as an escaped node and no model markup becomes HTML.
+const inlineText = (nodes) =>
+  nodes.map((n) => (n.type === "text" ? n.value : n.type === "code" ? n.value : n.inline ? inlineText(n.inline) : "")).join("");
+
+test("a heading becomes a heading block with its level and inline text", () => {
+  const [block] = parseMarkdown("## The Argument");
+  assert.equal(block.type, "heading");
+  assert.equal(block.level, 2);
+  assert.equal(inlineText(block.inline), "The Argument");
+});
+
+test("bold, italic and inline code parse as their own runs", () => {
+  const [para] = parseMarkdown("A **bold** and *italic* word with `code`.");
+  const types = para.inline.map((n) => n.type);
+  assert.deepEqual(new Set(types.filter((t) => t !== "text")), new Set(["strong", "em", "code"]));
+  assert.equal(para.inline.find((n) => n.type === "strong").inline[0].value, "bold");
+  assert.equal(para.inline.find((n) => n.type === "code").value, "code");
+});
+
+test("a bulleted list and a numbered list keep their order flag and items", () => {
+  const [ul] = parseMarkdown("- one\n- two");
+  assert.equal(ul.type, "list");
+  assert.equal(ul.ordered, false);
+  assert.deepEqual(ul.items.map((i) => inlineText(i.blocks[0].inline)), ["one", "two"]);
+  const [ol] = parseMarkdown("1. first\n2. second");
+  assert.equal(ol.ordered, true);
+  assert.equal(ol.items.length, 2);
+});
+
+test("an indented item nests under the item above it", () => {
+  const [list] = parseMarkdown("- top\n  - nested");
+  assert.equal(list.items.length, 1);
+  const child = list.items[0].blocks.find((b) => b.type === "list");
+  assert.ok(child, "the indented item became a nested list");
+  assert.equal(inlineText(child.items[0].blocks[0].inline), "nested");
+});
+
+test("a blockquote holds its own blocks", () => {
+  const [quote] = parseMarkdown("> quoted line");
+  assert.equal(quote.type, "quote");
+  assert.equal(inlineText(quote.blocks[0].inline), "quoted line");
+});
+
+test("a fenced code block keeps its text literally, without inline parsing", () => {
+  const [code] = parseMarkdown("```\nlet x = **not bold**\n```");
+  assert.equal(code.type, "code");
+  assert.equal(code.text, "let x = **not bold**");
+});
+
+test("a link becomes its text alone", () => {
+  const [para] = parseMarkdown("See [the chapter](https://example.com/x) here.");
+  assert.equal(para.inline.some((n) => n.type !== "text" && n.type !== "break"), false, "no non-text run");
+  assert.equal(inlineText(para.inline), "See the chapter here.");
+});
+
+test("a soft line break inside a paragraph becomes a hard break run", () => {
+  const [para] = parseMarkdown("line one\nline two");
+  assert.ok(para.inline.some((n) => n.type === "break"), "the newline is a break run");
+  assert.equal(inlineText(para.inline), "line oneline two");
+});
+
+test("markup the model cannot control stays plain text (no HTML leaks)", () => {
+  // Angle brackets and stray markers are text runs, never element nodes; the view escapes
+  // them (10). A lone or spaced marker is not emphasis.
+  const [para] = parseMarkdown("a <script>alert(1)</script> tag and a * b = c and snake_case");
+  assert.ok(para.inline.every((n) => n.type === "text"), "every run is plain text");
+  assert.equal(inlineText(para.inline), "a <script>alert(1)</script> tag and a * b = c and snake_case");
 });
 
 test("every query payload matches its schema", () => {

@@ -224,6 +224,32 @@ for (const engine of ENGINES) {
     }
   });
 
+  test(`an answer's markdown renders as formatting in ${engine.name}`, async () => {
+    // The stem page sets the markdown attribute (10). Echo repeats the text, so a message
+    // written in markdown comes back as an answer whose # and ** are rendered, not shown.
+    const { browser, page, problems } = await open(engine, "md");
+    try {
+      await send(page, "# A Heading\n\nA **bold** point.");
+      await until(async () =>
+        await page.evaluate(() => Boolean(document.querySelector("chat-thread").shadowRoot.querySelector(".answer.prose h1.md-h"))),
+      );
+      const rendered = await page.evaluate(() => {
+        const root = document.querySelector("chat-thread").shadowRoot;
+        return {
+          heading: root.querySelector(".answer.prose h1.md-h")?.textContent,
+          bold: root.querySelector(".answer.prose strong")?.textContent,
+          answerText: root.querySelector(".answer.prose")?.textContent ?? "",
+        };
+      });
+      assert.equal(rendered.heading, "A Heading", "the # line rendered as a heading");
+      assert.equal(rendered.bold, "bold", "the ** span rendered as bold");
+      assert.ok(!rendered.answerText.includes("#") && !rendered.answerText.includes("**"), "the raw markers are not shown in the answer");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`thinking shows a live line and then an openable record in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "think");
     try {
@@ -380,9 +406,14 @@ for (const engine of ENGINES) {
     try {
       await send(page, `/tool books: chapter {"id":"${BOOK_ID}","chapter":0}`);
       await until(async () => (await threadText(page)).includes("A LINKED HEADING"));
-      const text = await threadText(page);
-      assert.match(text, /# Chapter One/, "the chapter's markup came back as markdown, headings as #");
-      assert.match(text, /Reading a chapter/, "the lookup is named on screen");
+      // The chapter came back from `conversations` as markdown (a `# Chapter One` heading);
+      // with the markdown attribute on the stem page (10) the answer renders it as a real
+      // heading, so the `#` is gone from the text and lives as an <h1> instead.
+      const headings = await page.evaluate(() =>
+        [...document.querySelector("chat-thread").shadowRoot.querySelectorAll(".prose h1.md-h")].map((h) => h.textContent),
+      );
+      assert.ok(headings.some((t) => /Chapter One/.test(t)), "the chapter's # heading rendered as a heading");
+      assert.match(await threadText(page), /Reading a chapter/, "the lookup is named on screen");
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

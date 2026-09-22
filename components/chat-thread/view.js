@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine } from "./machine.js";
+import { machine, parseMarkdown } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -64,6 +64,9 @@ class ChatThread extends LitElement {
   // height its container leaves, so a docked chat fills its dock and scrolls inside.
   static properties = {
     height: { type: String, reflect: true },
+    // When set, an answer's markdown is rendered as formatting (10). Set first on the
+    // chat stem page; it reaches the product page only after the owner approves it (9).
+    markdown: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -102,9 +105,9 @@ class ChatThread extends LitElement {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
-    /* The model's answer: plain text across the width, its line breaks kept. The
-       architecture has no markdown renderer (10, the Rich editor row: no markdown
-       grammar). */
+    /* The model's answer, across the width. Without the markdown attribute it is plain
+       text with its line breaks kept; with it (10) the same text is rendered as
+       formatting by the prose rules below. */
     .turn.assistant {
       align-self: stretch;
       display: flex;
@@ -115,6 +118,72 @@ class ChatThread extends LitElement {
     .answer {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+    /* A rendered answer (10): blocks stacked with breathing room, its own white-space so
+       the source line breaks between blocks do not double up. Type and spacing are tokens
+       only (7.4); every text run is an escaped Lit text node, never model HTML. */
+    .answer.prose {
+      white-space: normal;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      line-height: var(--leading-normal);
+    }
+    .answer.prose .md-p {
+      margin: 0;
+    }
+    .answer.prose .md-h {
+      margin: 0;
+      line-height: var(--leading-tight);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    .answer.prose h1.md-h {
+      font-size: var(--text-heading);
+    }
+    .answer.prose h2.md-h {
+      font-size: var(--text-subtitle);
+    }
+    .answer.prose h3.md-h,
+    .answer.prose h4.md-h,
+    .answer.prose h5.md-h,
+    .answer.prose h6.md-h {
+      font-size: var(--text-body);
+    }
+    .answer.prose .md-list {
+      margin: 0;
+      padding-left: var(--space-lg);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+    }
+    .answer.prose .md-quote {
+      margin: 0;
+      padding-left: var(--space-sm);
+      border-left: var(--border-width) solid var(--color-border-strong);
+      color: var(--color-body-mid);
+    }
+    .answer.prose .md-code {
+      margin: 0;
+      padding: var(--space-sm);
+      background: var(--color-canvas-soft);
+      border-radius: var(--radius-sm);
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }
+    .answer.prose .md-code code {
+      font-family: inherit;
+    }
+    .answer.prose .md-code-inline {
+      padding: 0 var(--space-2xs);
+      background: var(--color-canvas-soft);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+    }
+    .answer.prose strong {
+      font-weight: var(--weight-semibold);
     }
     /* The waiting line before any text: a neutral pulse while the model works, and the
        word "Thinking" only when the model is actually thinking (not while it merely
@@ -268,7 +337,11 @@ class ChatThread extends LitElement {
       <div class="turn assistant">
         ${turn.thinking && !(pending && !hasText) ? this.#thinking(turn) : nothing}
         ${waiting}
-        ${hasText ? html`<div class="answer">${turn.text}</div>` : nothing}
+        ${hasText
+          ? this.markdown
+            ? html`<div class="answer prose">${parseMarkdown(turn.text).map((block) => this.#block(block))}</div>`
+            : html`<div class="answer">${turn.text}</div>`
+          : nothing}
         ${this.#lookups(turn)}
         ${this.#foot(turn)}
       </div>
@@ -282,6 +355,62 @@ class ChatThread extends LitElement {
     const named = (turn.calls ?? []).filter((call) => !call.invalid);
     if (!named.length) return nothing;
     return html`<div class="lookups">${named.map((call) => html`<span>${call.label}</span>`)}</div>`;
+  }
+
+  // One markdown block (10). Every text run interpolates through Lit as an escaped text
+  // node, so nothing the model wrote reaches the page as HTML; only these known tags are
+  // real elements. A heading uses its own level's tag for meaning; the level is bounded to
+  // 1–6 by the parser.
+  #block(block) {
+    switch (block.type) {
+      case "heading":
+        return this.#heading(block);
+      case "list": {
+        const items = block.items.map((item) => html`<li>${item.blocks.map((b) => this.#block(b))}</li>`);
+        return block.ordered ? html`<ol class="md-list">${items}</ol>` : html`<ul class="md-list">${items}</ul>`;
+      }
+      case "quote":
+        return html`<blockquote class="md-quote">${block.blocks.map((b) => this.#block(b))}</blockquote>`;
+      case "code":
+        return html`<pre class="md-code"><code>${block.text}</code></pre>`;
+      default:
+        return html`<p class="md-p">${this.#inline(block.inline)}</p>`;
+    }
+  }
+
+  #heading(block) {
+    const inner = this.#inline(block.inline);
+    switch (block.level) {
+      case 1:
+        return html`<h1 class="md-h">${inner}</h1>`;
+      case 2:
+        return html`<h2 class="md-h">${inner}</h2>`;
+      case 3:
+        return html`<h3 class="md-h">${inner}</h3>`;
+      case 4:
+        return html`<h4 class="md-h">${inner}</h4>`;
+      case 5:
+        return html`<h5 class="md-h">${inner}</h5>`;
+      default:
+        return html`<h6 class="md-h">${inner}</h6>`;
+    }
+  }
+
+  #inline(nodes) {
+    return nodes.map((node) => {
+      switch (node.type) {
+        case "break":
+          return html`<br />`;
+        case "code":
+          return html`<code class="md-code-inline">${node.value}</code>`;
+        case "strong":
+          return html`<strong>${this.#inline(node.inline)}</strong>`;
+        case "em":
+          return html`<em>${this.#inline(node.inline)}</em>`;
+        default:
+          return node.value;
+      }
+    });
   }
 
   #thinking(turn) {
