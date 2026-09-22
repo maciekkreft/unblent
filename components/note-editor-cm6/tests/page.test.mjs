@@ -208,6 +208,49 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    test("the level bar sets and follows the level", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
+      assert.equal(await page.locator("note-editor-cm6").getAttribute("levels"), "", "the page's levels attribute was carried across the swap");
+
+      await page.locator("note-editor-cm6 .cm-content").click();
+      await page.keyboard.press("i");
+      await page.keyboard.type("Alpha");
+      await page.keyboard.press("Escape");
+
+      const pressed = () =>
+        page.evaluate(() =>
+          [...document.querySelector("note-editor-cm6").shadowRoot.querySelectorAll('button.level[aria-pressed="true"]')].map((b) => b.dataset.level),
+        );
+      assert.deepEqual(await pressed(), ["body"], "a new line starts as Body");
+      assert.equal(await page.locator("note-editor-cm6 button.level kbd").count(), 4, "each button shows its Vim key");
+
+      await page.locator('note-editor-cm6 button.level[data-level="heading"]').click();
+      await until(async () => (await lines(page))[0]?.className.includes("cm-level-heading"));
+      assert.deepEqual(await pressed(), ["heading"]);
+
+      // A Vim key flashes its button too; the flash is caught as it starts, since it
+      // is gone within --duration-slide.
+      await page.evaluate(() => {
+        window.flashes = [];
+        document.querySelector("note-editor-cm6").shadowRoot.addEventListener("animationstart", (e) => window.flashes.push(e.target.dataset.level));
+      });
+      await page.keyboard.type("\\1");
+      await until(async () => (await lines(page))[0]?.className.includes("cm-level-title"));
+      assert.deepEqual(await pressed(), ["title"]);
+      await until(() => page.evaluate(() => window.flashes.includes("title")));
+      assert.equal((await lines(page))[0].text, "Alpha", "the click left the text alone");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
     test("levels keep Vim motions exact and both cursors stay visible", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

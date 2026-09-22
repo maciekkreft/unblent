@@ -218,7 +218,7 @@ export const machine = setup({
     // shares this contract exactly.
     role: "note-editor",
     emits: ["note.saved", "note.opened", "note.refused"],
-    attributes: ["height", "follows", "subject", "about-new"],
+    attributes: ["height", "follows", "subject", "about-new", "levels"],
     asks: ["notes: list", "notes: read", "subject: read"],
   },
   context: ({ input }) => ({
@@ -256,6 +256,9 @@ export const machine = setup({
     // The `about-new` attribute (12): show the subject on the stage in the About line
     // while the editor holds a new note.
     aboutNew: Boolean(input.aboutNew),
+    // The `levels` attribute: the footer's level names become buttons that set the
+    // caret line's level, so a level can be set without Vim and on a phone.
+    levels: Boolean(input.levels),
     // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
     pinned: false,
     // Whether a pin restore is in flight, so a successful load starts pinned and a

@@ -215,6 +215,7 @@ class ActorController {
         recallTitles: titleStore.recall,
         rememberTitles: titleStore.remember,
         aboutNew: this.host.aboutNew,
+        levels: this.host.levels,
         flashMs,
       },
       events: { "note.saved": saved, "note.opened": opened, "note.refused": refused },
@@ -251,6 +252,9 @@ class NoteEditorCm6 extends LitElement {
     // line (12): what the note will be linked to at its first save. Reflected so the
     // page's bare `about-new` reads as true and the manifest attribute is visible.
     aboutNew: { type: Boolean, attribute: "about-new", reflect: true },
+    // Whether the footer's level names are buttons that set the caret line's level.
+    // Reflected so the page's bare `levels` reads as true. Off is the hint row alone.
+    levels: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -365,9 +369,47 @@ class NoteEditorCm6 extends LitElement {
     .level {
       white-space: nowrap;
     }
-    .level.cur {
+    .level.cur,
+    button.level[aria-pressed="true"] {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
+    }
+    button.level {
+      appearance: none;
+      font: inherit;
+      margin: 0;
+      padding: 0 var(--space-2xs);
+      /* A faint outline marks each name as a control where no hover can (a phone). */
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--color-mute);
+      cursor: pointer;
+    }
+    button.level:hover:not([aria-pressed="true"]) {
+      color: var(--color-ink);
+    }
+    button.level:focus-visible {
+      outline: var(--focus-ring);
+    }
+    /* Feedback that a level change landed, however it was made (a click or a Vim key). */
+    button.level.flash {
+      animation: level-flash var(--duration-slide) var(--ease);
+    }
+    @keyframes level-flash {
+      from {
+        background: var(--color-accent-subtle);
+      }
+      to {
+        background: transparent;
+      }
+    }
+    /* Without motion the tint holds still for the same time, then goes; the animation
+       still runs so animationend clears the flash. */
+    @media (prefers-reduced-motion: reduce) {
+      button.level.flash {
+        animation-timing-function: step-end;
+      }
     }
     kbd {
       font: inherit;
@@ -383,6 +425,10 @@ class NoteEditorCm6 extends LitElement {
   // The level of the line the caret is on, shown in the status so the levels and
   // their keys are discoverable (Don Norman: a visible signifier for a hidden map).
   #level = "body";
+  // The level a transaction just set, so its button flashes until animationend.
+  #flashed = null;
+  // Whether the level buttons show their Vim keys. Vim is always on in this editor.
+  #vimKeys = true;
 
   #extensions() {
     return [
@@ -404,6 +450,13 @@ class NoteEditorCm6 extends LitElement {
 
   #onUpdate = (update) => {
     const leveled = update.transactions.some((t) => t.effects.some((e) => e.is(setLevel) || e.is(setAllLevels)));
+    for (const t of update.transactions) {
+      for (const e of t.effects) {
+        if (!e.is(setLevel)) continue;
+        this.#flashed = e.value;
+        this.requestUpdate();
+      }
+    }
     if (update.selectionSet || update.docChanged || leveled) this.#syncLevel(update.state);
     if (!update.docChanged && !leveled) return;
     const body = serialize(update.state.doc.toString(), levelsOf(update.state));
@@ -472,22 +525,55 @@ class NoteEditorCm6 extends LitElement {
 
   // The level keys, shown so a hidden Vim map becomes a visible signifier; the
   // caret's own level is marked so the map doubles as feedback about where you are.
-  #levelHint() {
+  // With `levels` the names are buttons, so a level can be set without Vim and on a
+  // phone; the key stays beside the name while Vim is on.
+  #levelBar(levels) {
     const keys = [
       ["\\1", "title", "Title"],
       ["\\2", "heading", "Heading"],
       ["\\3", "subheading", "Subheading"],
       ["\\0", "body", "Body"],
     ];
-    return html`<span class="levels">
+    if (!levels) {
+      return html`<span class="levels">
+        ${keys.map(
+          ([key, level, label]) =>
+            html`<span class=${level === this.#level ? "level cur" : "level"}
+              ><kbd>${key}</kbd> ${label}</span
+            >`,
+        )}
+      </span>`;
+    }
+    return html`<span class="levels" role="group" aria-label="Line level">
       ${keys.map(
         ([key, level, label]) =>
-          html`<span class=${level === this.#level ? "level cur" : "level"}
-            ><kbd>${key}</kbd> ${label}</span
-          >`,
+          html`<button
+            type="button"
+            class=${level === this.#flashed ? "level flash" : "level"}
+            data-level=${level}
+            aria-pressed=${level === this.#level}
+            @mousedown=${(e) => e.preventDefault()}
+            @click=${() => this.#setLevel(level)}
+            @animationend=${this.#unflash}
+          >
+            ${this.#vimKeys ? html`<kbd>${key}</kbd> ` : nothing}${label}
+          </button>`,
       )}
     </span>`;
   }
+
+  // The same effect the Vim key dispatches, so a click re-levels every line the
+  // selection spans; focus goes back to the text so typing continues.
+  #setLevel(level) {
+    if (!this.#view) return;
+    this.#view.dispatch({ effects: setLevel.of(level) });
+    this.#view.focus();
+  }
+
+  #unflash = () => {
+    this.#flashed = null;
+    this.requestUpdate();
+  };
 
   #togglePin() {
     this.#actor.send({ type: "_togglePin" });
@@ -525,7 +611,7 @@ class NoteEditorCm6 extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { subjecting, pinned, flashing, id } = snapshot.context;
+    const { subjecting, pinned, flashing, id, levels } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
@@ -534,7 +620,7 @@ class NoteEditorCm6 extends LitElement {
         <div class="region" role="textbox" aria-label="Note"></div>
         <div class="footer">
           <p class="status">${this.#status(snapshot)}</p>
-          ${this.#levelHint()}
+          ${this.#levelBar(levels)}
         </div>
       </div>
     `;

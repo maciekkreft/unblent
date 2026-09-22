@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
+import { Validator } from "@cfworker/json-schema";
 import { machine, titleOf, parseBody, serialize, aboutTitleOf } from "../machine.js";
 
 // This member's actor is note-editor's, kept identical (7.3), so its decisions are
@@ -8,6 +12,12 @@ import { machine, titleOf, parseBody, serialize, aboutTitleOf } from "../machine
 // drifting. On top of that, cm6 adds the marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
 // the view edits; those pure functions are tested at the end.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "note.refused"].map((n) => [n, schemaOf(n)]));
+// Every emit of every test, checked against its schema by the last test.
+const recorded = [];
+
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
 const THROTTLE_MS = 200;
@@ -38,6 +48,7 @@ function editor({
   recallTitles,
   rememberTitles,
   aboutNew = false,
+  levels = false,
   flashMs = 3000,
 } = {}) {
   const clock = new SimulatedClock();
@@ -45,12 +56,13 @@ function editor({
   const opened = [];
   const refused = [];
   const actor = createActor(machine, {
-    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, aboutNew, flashMs },
+    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, aboutNew, levels, flashMs },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.opened", (e) => opened.push(e.id));
   actor.on("note.refused", (e) => refused.push(e));
+  for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
   actor.start();
   return { actor, clock, saved, opened, refused };
 }
@@ -789,4 +801,18 @@ test("a save carries the stripped title and the markdown body verbatim", async (
   assert.deepEqual(saved, [
     { type: "note.saved", id: ID, title: "Kickoff", body: "# Kickoff\n## Agenda\nnotes", baseVersion: null },
   ]);
+});
+
+test("the levels attribute reaches the context, off by default", () => {
+  assert.equal(editor().actor.getSnapshot().context.levels, false);
+  assert.equal(editor({ levels: true }).actor.getSnapshot().context.levels, true);
+});
+
+test("every payload matches its schema", () => {
+  assert.ok(recorded.length > 0, "the tests above recorded traffic");
+  for (const { value, schema } of recorded) {
+    const { type, ...rest } = value;
+    const result = new Validator(schema, "2020-12").validate(rest);
+    assert.ok(result.valid, `${JSON.stringify(value).slice(0, 160)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
+  }
 });
