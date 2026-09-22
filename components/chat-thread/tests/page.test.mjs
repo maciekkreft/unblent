@@ -57,7 +57,7 @@ const forge = (userId) => {
 
 // A signed-in browser on the conversations page, its account on the Echo test provider
 // (set over HTTP, since this page has no Settings). The chat box is then usable.
-async function open(engine, name) {
+async function open(engine, name, undoMs) {
   const browser = await engine.launch();
   const userId = `chat-${engine.name}-${name}-${Date.now()}`;
   const context = await browser.newContext();
@@ -65,12 +65,53 @@ async function open(engine, name) {
   await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
   const put = await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } });
   assert.ok(put.ok(), "the account is set to Echo");
+  // Shorten the delete-undo window (default 3s) so a delete test stays within its budget.
+  // conversation-list reads --duration-undo off its host at mount, so the short window must
+  // be in the cascade before the element upgrades. An adopted stylesheet is applied at
+  // document start (before <html> exists), unlike a style on documentElement.
+  if (undoMs != null)
+    await context.addInitScript((ms) => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(`:root{--duration-undo:${ms}ms}`);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    }, undoMs);
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
   await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector("textarea"))));
   return { browser, context, page, problems };
 }
+
+// --- conversation-list helpers (session 10): the chats list beside the thread ---------
+// The chat titles the list shows, newest first; the "New chat" draft row has no title and
+// is excluded.
+const chatTitles = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft) .name")].map((n) => n.textContent.trim()),
+  );
+
+// Start a fresh chat (the New chat row on top).
+const newChat = (page) =>
+  page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector(".row.draft").click());
+
+// Switch to the chat whose title matches.
+const pickChat = (page, title) =>
+  page.evaluate((title) => {
+    const rows = [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft)")];
+    rows.find((r) => r.querySelector(".name").textContent.trim() === title)?.click();
+  }, title);
+
+// Delete the chat whose title matches. The trash is revealed on hover, so a DOM click
+// bypasses the actionability check a real pointer hover would satisfy on the desk.
+const deleteChat = (page, title) =>
+  page.evaluate((title) => {
+    const rows = [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft)")];
+    rows.find((r) => r.querySelector(".name").textContent.trim() === title)?.querySelector(".bin").click();
+  }, title);
+
+// Undo a counting-down delete.
+const undoDelete = (page) =>
+  page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector(".row.discarding .undo")?.click());
 
 // The same, with the sample book imported first, so `books: chapter` has a real chapter
 // to return. Imported before the page loads, so the browser's `books` fact pulls it.
@@ -100,6 +141,19 @@ const send = (page, text) =>
     area.dispatchEvent(new Event("input", { bubbles: true }));
     await host.updateComplete;
     host.shadowRoot.querySelector(".send").click();
+  }, text);
+
+// Send with the Enter key rather than the Send button. Enter reaches the machine directly,
+// so it is not swallowed by the button's brief post-change guard (12) — needed when a
+// message is sent right after the button last flipped between Send and Stop.
+const sendEnter = (page, text) =>
+  page.evaluate(async (text) => {
+    const host = document.querySelector("chat-input");
+    const area = host.shadowRoot.querySelector("textarea");
+    area.value = text;
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    await host.updateComplete;
+    area.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   }, text);
 
 const threadText = (page) =>
@@ -282,6 +336,77 @@ for (const engine of ENGINES) {
       const text = await threadText(page);
       assert.match(text, /# Chapter One/, "the chapter's markup came back as markdown, headings as #");
       assert.match(text, /Reading a chapter/, "the lookup is named on screen");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  // --- conversation-list (session 10) -------------------------------------------------
+
+  test(`a second chat is listed and picking a row switches to it in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "list-switch");
+    try {
+      await send(page, "first message");
+      await until(async () => (await lastAnswer(page)).includes("first message"));
+      await newChat(page);
+      // Wait until the thread has switched to the empty new chat before sending, so the
+      // second message opens a second chat rather than racing into the first.
+      await until(async () => await page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelectorAll(".turn").length === 0));
+      await sendEnter(page, "second message");
+      await until(async () => (await lastAnswer(page)).includes("second message"));
+      await until(async () => (await chatTitles(page)).length === 2);
+      assert.deepEqual(await chatTitles(page), ["second message", "first message"], "both chats, newest first");
+      await pickChat(page, "first message");
+      await until(async () => (await lastAnswer(page)).includes("first message"));
+      assert.match(await threadText(page), /first message/, "picking the older row switched the thread to it");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a delete can be undone in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "undo", 250);
+    try {
+      await send(page, "keep me");
+      await until(async () => (await lastAnswer(page)).includes("keep me"));
+      await until(async () => (await chatTitles(page)).includes("keep me"));
+      await deleteChat(page, "keep me");
+      await undoDelete(page);
+      await page.waitForTimeout(400); // past the (cancelled) window, to prove it never fires
+      assert.ok((await chatTitles(page)).includes("keep me"), "the chat is still there after Undo");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a delete left to run removes the chat in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "delete", 250);
+    try {
+      await send(page, "delete me");
+      await until(async () => (await lastAnswer(page)).includes("delete me"));
+      await until(async () => (await chatTitles(page)).includes("delete me"));
+      await deleteChat(page, "delete me");
+      await until(async () => !(await chatTitles(page)).includes("delete me"));
+      assert.ok(!(await chatTitles(page)).includes("delete me"), "the chat is gone once the window ends");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`chats survive a reload in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "reload");
+    try {
+      await send(page, "remember me");
+      await until(async () => (await lastAnswer(page)).includes("remember me"));
+      await until(async () => (await chatTitles(page)).includes("remember me"));
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await until(async () => await page.evaluate(() => Boolean(document.querySelector("conversation-list")?.shadowRoot?.querySelector(".row"))));
+      await until(async () => (await chatTitles(page)).includes("remember me"));
+      assert.ok((await chatTitles(page)).includes("remember me"), "the chat is listed from the server after a reload");
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

@@ -345,6 +345,26 @@ test("the open chat follows the subject (12)", async () => {
   assert.equal(opened.id, CHAT2, "the most recently updated chat about the subject");
 });
 
+test("a stored open chat about the subject is kept when the subject settles after a reload (12)", async () => {
+  // The reader had picked the older chat about book B. On a reload the stored open id is
+  // read first and the subject arrives after, as a change from none to B. The chat the
+  // reader chose must stay open, not be replaced by the newest chat about B.
+  const conversations = [
+    { id: CHAT, title: "older", about: [{ kind: "book", id: "b1" }], updatedAt: 5 },
+    { id: CHAT2, title: "newer", about: [{ kind: "book", id: "b1" }], updatedAt: 10 },
+  ];
+  const h = start({ conversations, stored: CHAT, subject: null });
+  await ready(h);
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT, "the stored chat is open at boot");
+  h.actor.send({ type: "subject.changed", subject: { kind: "book", id: "b1", title: "A Book", view: "book-reader" } });
+  await flush();
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT, "and stays open when the subject settles");
+  assert.ok(
+    !h.emitted.some((e) => e.type === "conversation.opened" && e.id === CHAT2),
+    "the newest chat was never opened over the reader's choice",
+  );
+});
+
 test("a focus reload picks up a chat added on another device", async () => {
   const first = { conversations: [{ id: CHAT, title: "one", about: [], updatedAt: 5 }], tools: { tools: {}, approval: "auto" } };
   const second = { conversations: [{ id: CHAT, title: "one", about: [], updatedAt: 5 }, { id: CHAT2, title: "two", about: [], updatedAt: 9 }], tools: { tools: {}, approval: "auto" } };

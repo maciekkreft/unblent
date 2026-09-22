@@ -632,6 +632,13 @@ const onSubjectChanged = (context, event, enqueue, self) => {
   const sub = event.subject ? { kind: event.subject.kind, id: event.subject.id } : null;
   if (sameSubject(sub, context.lastSubject)) return;
   context.lastSubject = sub;
+  // The chat already open, if it is about the new subject, stays open (12): a reader who
+  // picked an older chat about the book must not have it replaced by the newest one when
+  // the subject settles after a reload (the subject can arrive as a late change from none
+  // to the book). Only when the open chat is not about the new subject does the open chat
+  // become the most recent chat about it, or none.
+  const openHeading = context.headings.find((h) => h.id === context.openId);
+  if (openHeading && aboutMatch(openHeading.about, sub)) return;
   const next = mostRecentAbout(context.headings, sub);
   if (next === context.openId) return;
   setOpen(context, enqueue, next);
