@@ -125,20 +125,22 @@ const serverNotes = (page) =>
   });
 
 // The note the editor is showing (its body is its whole text; a seeded note's body is
-// its title). Empty string when the editor holds no note.
+// its title). Empty string when the editor holds no note. Read from its CodeMirror
+// view, reached through CM6's own handle on its content element.
 const editorBody = (page) =>
-  page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector("textarea")?.value ?? "");
+  page.evaluate(
+    () => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content")?.cmView.rootView.view.state.doc.toString() ?? "",
+  );
 
 // The About line's text (12), "About: <book>" or "" when the line is empty.
 const aboutText = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".about")?.textContent.trim() ?? "");
 
-// Type into the editor's textarea through its input event (the gesture the editor hears).
+// Replace the editor's text as one edit, which the editor hears as the user's typing.
 const typeInto = (page, text) =>
   page.evaluate((text) => {
-    const t = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
-    t.value = text;
-    t.dispatchEvent(new Event("input", { bubbles: true }));
+    const view = document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
   }, text);
 
 // Click the list's "New note" draft row, the gesture that opens a fresh note.

@@ -14,18 +14,24 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 
-// The composer (3.6) mounts the chosen editor for the note-editor role. Seed the
-// choice the way the settings fact stores it (one localStorage key), so a reload
-// restores the same picture (§5, verification step 5).
-const settings = (editor) =>
+// The "Vim keys" preference, seeded the way the settings fact stores it (one
+// localStorage key), so a reload restores the same picture.
+const settings = (vimKeys, editors = {}) =>
   JSON.stringify({
     nav: [],
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
-    editors: { "note-editor": editor },
+    vimKeys,
+    editors,
   });
-const CM6 = settings("note-editor-cm6");
+const VIM = settings(true);
+const NO_VIM = settings(false);
+
+// The editor has mounted and taken the "Vim keys" preference: Vim arrives with the
+// settings reply, which the level bar's keys show.
+const vimReady = (page) =>
+  page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("button.level kbd"));
 
 function watch(page, problems) {
   page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));
@@ -43,7 +49,7 @@ async function until(fn, timeout = 4000) {
   throw new Error("timed out");
 }
 
-// The element the dock has slotted for the note-editor role (12).
+// The element the dock has slotted for the note editor (12).
 const slotted = (page) =>
   page.evaluate(() => {
     const root = document.querySelector("dock-desk").shadowRoot;
@@ -54,7 +60,7 @@ const slotted = (page) =>
 // The document as the user sees it: each CM6 line's text and classes, marker-free.
 const lines = (page) =>
   page.evaluate(() => {
-    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const root = document.querySelector("note-editor").shadowRoot;
     return [...root.querySelectorAll(".cm-line")].map((l) => ({ text: l.textContent, className: l.className }));
   });
 
@@ -62,7 +68,7 @@ const lines = (page) =>
 // the vim fat cursor. Read from the DOM so the test needs no vendor import.
 const caretLine = (page) =>
   page.evaluate(() => {
-    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const root = document.querySelector("note-editor").shadowRoot;
     const fat = root.querySelector(".cm-fat-cursor")?.getBoundingClientRect();
     return [...root.querySelectorAll(".cm-line")].findIndex((l) => {
       const r = l.getBoundingClientRect();
@@ -87,7 +93,7 @@ const restLine = async (page, from) => {
 // The insert caret CM6 draws, against the scroller that clips it.
 const insertCaret = (page) =>
   page.evaluate(() => {
-    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const root = document.querySelector("note-editor").shadowRoot;
     const caret = root.querySelector(".cm-layer.cm-cursorLayer .cm-cursor")?.getBoundingClientRect();
     const scroller = root.querySelector(".cm-scroller").getBoundingClientRect();
     return caret ? { left: caret.left, height: caret.height, scrollerLeft: scroller.left } : null;
@@ -97,7 +103,7 @@ const insertCaret = (page) =>
 // assert deterministically.
 const drawn = (page) =>
   page.evaluate(() => {
-    const root = document.querySelector("note-editor-cm6").shadowRoot;
+    const root = document.querySelector("note-editor").shadowRoot;
     const fat = root.querySelector(".cm-fat-cursor");
     const fatStyle = fat && getComputedStyle(fat);
     return {
@@ -116,7 +122,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
-  describe(`note-editor-cm6 in ${engine.name}`, { timeout: 120000 }, () => {
+  describe(`note-editor in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -131,13 +137,14 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
       await page.goto(`${BASE_URL}/workshop/apps/notes`);
-      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
-      assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" });
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
+      assert.deepEqual(await slotted(page), { tag: "note-editor", role: null });
 
       // Vim boots in normal mode: enter insert, type two lines, return to normal.
-      await page.locator("note-editor-cm6 .cm-content").click();
+      await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
       await page.keyboard.type("Alpha");
       await page.keyboard.press("Enter");
@@ -163,48 +170,37 @@ for (const engine of ENGINES) {
       assert.ok(shown[1].className.includes("cm-level-heading"), "line two became a Heading");
 
       const sizes = await page.evaluate(() => {
-        const root = document.querySelector("note-editor-cm6").shadowRoot;
+        const root = document.querySelector("note-editor").shadowRoot;
         const px = (sel) => parseFloat(getComputedStyle(root.querySelector(sel)).fontSize);
         return { title: px(".cm-level-title"), heading: px(".cm-level-heading") };
       });
       assert.ok(sizes.title > sizes.heading, `Title larger than Heading, saw ${sizes.title} vs ${sizes.heading}`);
 
-      await until(async () => (await page.locator("note-editor-cm6 .status").textContent())?.trim() === "Saved");
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
 
-    test("the composer swaps cm6 in place, carrying a note written in the plain editor", async () => {
+    test("a choice the composer cannot load leaves the page's default", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-
-      // Write and save on the page default (plain note-editor).
+      await page.addInitScript((v) => localStorage.setItem("settings", v), settings(false, { "note-editor": "no-such-editor" }));
       await page.goto(`${BASE_URL}/workshop/apps/notes`);
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
-      assert.deepEqual(await slotted(page), { tag: "note-editor", role: null }, "default is the plain editor");
-      await page.evaluate(() => {
-        const ta = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
-        ta.value = "Carried note\nsecond line";
-        ta.dispatchEvent(new Event("input", { bubbles: true }));
-        ta.dispatchEvent(new Event("blur"));
-      });
-      await until(async () => (await page.locator("note-editor .status").textContent())?.trim() === "Saved");
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      assert.deepEqual(await slotted(page), { tag: "note-editor", role: null }, "the page's own editor stayed");
 
-      // Choose cm6 and reload: the composer mounts it in the same slot.
-      await page.evaluate((v) => localStorage.setItem("settings", v), CM6);
-      await page.reload();
-      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
-      assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" }, "cm6 took the slot");
-
-      await until(async () => (await page.locator("note-editor-cm6 .status").textContent())?.trim() === "Saved");
-      const shown = await lines(page);
-      assert.equal(shown.map((l) => l.text).join("\n"), "Carried note\nsecond line", "the note carried across the swap");
-      // A note the plain editor wrote has no markers, so cm6 shows it all as Body.
-      assert.ok(!shown.some((l) => l.className.includes("cm-level-")), "unmarked lines load as Body");
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.type("Still here");
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      // The one failed request is the missing component the stored choice names; the
+      // browser also logs it as a console error, which names no URL.
+      const missing = "/static/components/no-such-editor/view.js";
+      const others = problems.filter((p) => !p.includes(missing) && !/^console error: Failed to load resource: .*404/.test(p));
+      assert.ok(problems.some((p) => p.includes(missing)), "the composer did try the choice");
+      assert.deepEqual(others, [], `${engine.name} reported: ${others.join("; ")}`);
       await context.close();
     });
 
@@ -214,24 +210,25 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
       await page.goto(`${BASE_URL}/workshop/apps/notes`);
-      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
-      assert.equal(await page.locator("note-editor-cm6").getAttribute("levels"), "", "the page's levels attribute was carried across the swap");
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
+      assert.equal(await page.locator("note-editor").getAttribute("levels"), "", "the page sets levels");
 
-      await page.locator("note-editor-cm6 .cm-content").click();
+      await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
       await page.keyboard.type("Alpha");
       await page.keyboard.press("Escape");
 
       const pressed = () =>
         page.evaluate(() =>
-          [...document.querySelector("note-editor-cm6").shadowRoot.querySelectorAll('button.level[aria-pressed="true"]')].map((b) => b.dataset.level),
+          [...document.querySelector("note-editor").shadowRoot.querySelectorAll('button.level[aria-pressed="true"]')].map((b) => b.dataset.level),
         );
       assert.deepEqual(await pressed(), ["body"], "a new line starts as Body");
-      assert.equal(await page.locator("note-editor-cm6 button.level kbd").count(), 4, "each button shows its Vim key");
+      assert.equal(await page.locator("note-editor button.level kbd").count(), 4, "each button shows its Vim key");
 
-      await page.locator('note-editor-cm6 button.level[data-level="heading"]').click();
+      await page.locator('note-editor button.level[data-level="heading"]').click();
       await until(async () => (await lines(page))[0]?.className.includes("cm-level-heading"));
       assert.deepEqual(await pressed(), ["heading"]);
 
@@ -239,7 +236,7 @@ for (const engine of ENGINES) {
       // is gone within --duration-slide.
       await page.evaluate(() => {
         window.flashes = [];
-        document.querySelector("note-editor-cm6").shadowRoot.addEventListener("animationstart", (e) => window.flashes.push(e.target.dataset.level));
+        document.querySelector("note-editor").shadowRoot.addEventListener("animationstart", (e) => window.flashes.push(e.target.dataset.level));
       });
       await page.keyboard.type("\\1");
       await until(async () => (await lines(page))[0]?.className.includes("cm-level-title"));
@@ -257,11 +254,12 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), CM6);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
       await page.goto(`${BASE_URL}/workshop/apps/notes`);
-      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
 
-      await page.locator("note-editor-cm6 .cm-content").click();
+      await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
       await page.keyboard.type("One\nTwo\nThree\nFour");
       await page.keyboard.press("Escape");
@@ -299,18 +297,48 @@ for (const engine of ENGINES) {
       // it can be clipped; a focused one fills it.
       await page.keyboard.press("Escape");
       await until(async () => (await drawn(page)).fat !== null);
-      await page.evaluate(() => document.querySelector("note-editor-cm6").shadowRoot.querySelector(".cm-content").blur());
+      await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").blur());
       await until(async () => (await drawn(page)).fat?.boxShadow.includes("inset"));
       const blurred = (await drawn(page)).fat;
       assert.equal(blurred.outlineStyle, "none", "no outline on the unfocused fat cursor");
-      await page.locator("note-editor-cm6 .cm-content").click();
+      await page.locator("note-editor .cm-content").click();
       await until(async () => (await drawn(page)).fat?.boxShadow === "none");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
 
-    test("cm6 mounts on the phone", async () => {
+    test("with Vim keys off it types straight in; turned on, the block cursor is back", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.evaluate((v) => localStorage.setItem("settings", v), NO_VIM);
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("button.level"));
+
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.type("iAlpha");
+      await until(async () => (await lines(page))[0]?.text === "iAlpha");
+      assert.equal(await page.locator("note-editor .cm-fat-cursor").count(), 0, "no block cursor");
+      assert.equal(await page.locator("note-editor button.level kbd").count(), 0, "the buttons show names only");
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+
+      await page.evaluate((v) => localStorage.setItem("settings", v), VIM);
+      await page.reload();
+      await vimReady(page);
+      await page.locator("note-editor .cm-content").click();
+      await until(async () => (await page.locator("note-editor .cm-fat-cursor").count()) > 0);
+      // Normal mode: 0 goes to the line's start and x deletes the stray "i".
+      await page.keyboard.type("0x");
+      await until(async () => (await lines(page))[0]?.text === "Alpha");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    test("the editor mounts on the phone", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -319,18 +347,18 @@ for (const engine of ENGINES) {
       await page.addInitScript((v) => {
         localStorage.setItem("viewport", "phone");
         localStorage.setItem("settings", v);
-      }, CM6);
+      }, VIM);
       await page.goto(`${BASE_URL}/workshop/apps/notes`);
-      await page.waitForFunction(() => document.querySelector("note-editor-cm6")?.shadowRoot?.querySelector(".cm-content"));
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-      assert.deepEqual(await slotted(page), { tag: "note-editor-cm6", role: "note-editor" });
+      assert.deepEqual(await slotted(page), { tag: "note-editor", role: null });
       const fits = await page.evaluate(() => {
-        const el = document.querySelector("note-editor-cm6");
+        const el = document.querySelector("note-editor");
         return el.scrollWidth <= el.clientWidth + 1;
       });
-      assert.ok(fits, "cm6 must not overflow sideways on the phone");
+      assert.ok(fits, "the editor must not overflow sideways on the phone");
       mkdirSync(SCREENSHOTS, { recursive: true });
-      await page.screenshot({ path: resolve(SCREENSHOTS, `notes-cm6-phone-${engine.name}.png`) });
+      await page.screenshot({ path: resolve(SCREENSHOTS, `notes-editor-phone-${engine.name}.png`) });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });

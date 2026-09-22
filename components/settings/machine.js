@@ -14,9 +14,18 @@ import { setup, assign, emit } from "xstate";
 const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, editors: {} };
 const PRODUCT_DEFAULT = { nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, vimKeys: false, editors: {} };
 
+// Stored editor choices naming a component that no longer exists, by role and
+// component, with whether that choice meant "I want Vim" (12): such a choice is dropped
+// and, if it meant Vim, turns vimKeys on in its place. Once dropped it is gone from what
+// is next saved, so this happens once per device and profile.
+const RETIRED = {
+  "note-editor": { "note-editor-cm6": true, "note-editor": false },
+};
+
 // Sanitise any candidate into the contract shape (7.2): nav a list of
 // { path: string, hidden: boolean } deduped by path (a page is listed once);
-// editors a role -> component map keeping only string values; booleans coerced
+// editors a role -> component map keeping only string values, less a RETIRED
+// choice; booleans coerced
 // with === true. Then the invariant: a hidden switch means the desk is not
 // arrangeable, so hiding the switch turns arranging off; arranging is on by
 // default and unknown/old fields fall to that.
@@ -34,9 +43,13 @@ const clean = (value) => {
     }
   }
   const editors = {};
+  let wantsVim = false;
   if (v.editors && typeof v.editors === "object") {
     for (const [role, component] of Object.entries(v.editors)) {
-      if (typeof component === "string") editors[role] = component;
+      if (typeof component !== "string") continue;
+      const retired = RETIRED[role]?.[component];
+      if (retired === undefined) editors[role] = component;
+      else wantsVim ||= retired;
     }
   }
   const layoutSwitchHidden = v.layoutSwitchHidden === true;
@@ -45,7 +58,7 @@ const clean = (value) => {
     viewportSwitchHidden: v.viewportSwitchHidden === true,
     layoutSwitchHidden,
     arranging: v.arranging !== false && !layoutSwitchHidden,
-    vimKeys: v.vimKeys === true,
+    vimKeys: v.vimKeys === true || wantsVim,
     editors,
   };
 };

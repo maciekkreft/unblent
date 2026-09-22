@@ -2,8 +2,7 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
 // The Vim member of the role "highlight-notes" (3.6, 7.3): the same document as
 // `highlight-notes`, with Vim normal mode in the view, so the machine is identical and
-// this is a copy (components never import each other, 11.2), as note-editor-cm6's machine
-// is of note-editor's. Everything the Vim keys need — removing through the undo window,
+// this is a copy (components never import each other, 11.2). Everything the Vim keys need — removing through the undo window,
 // editing comments — is already here; the view alone differs.
 //
 // It composes the highlights of the book on the stage into one continuous document
@@ -22,7 +21,7 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
 // One save waits this long after the last keystroke, the whole page's edits at once (a
 // throttle, not a debounce: a keystroke within the window joins the pending save rather
-// than pushing it back, 4.3 third rule). The same shape as note-editor-cm6's editing.
+// than pushing it back, 4.3 third rule). The same shape as note-editor's editing.
 const THROTTLE_MS = 200;
 
 // A run of white space, including line breaks, shown as one space: a quote spanning

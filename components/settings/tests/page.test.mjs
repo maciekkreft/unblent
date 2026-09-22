@@ -99,15 +99,15 @@ async function open(engine, { phone = false } = {}) {
 const clean = (page) => page.evaluate(() => localStorage.clear());
 
 // A role's humanized label, the way settings-sheet writes it above its select
-// ("note-editor" → "Note editor"), so a swap select is found by the role it is for
-// (there is one per role now: note-editor and highlight-notes).
+// ("highlight-notes" → "Highlight notes"), so a swap select is found by the role it is
+// for.
 const roleLabel = (role) => {
   const words = role.replace(/-/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 };
 
 // A role's swap select (Step 5, 3.6), read from the sheet's shadow root by its label.
-const editorSelect = (page, role = "note-editor") =>
+const editorSelect = (page, role = "highlight-notes") =>
   page.evaluate((label) => {
     const wrap = [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll("label.select")].find((l) =>
       l.textContent.trim().startsWith(label),
@@ -115,7 +115,7 @@ const editorSelect = (page, role = "note-editor") =>
     const sel = wrap?.querySelector("select");
     return sel ? { options: [...sel.options].map((o) => o.value), value: sel.value } : null;
   }, roleLabel(role));
-const pickEditor = (page, value, role = "note-editor") =>
+const pickEditor = (page, value, role = "highlight-notes") =>
   page.evaluate(
     ({ value, label }) => {
       const wrap = [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll("label.select")].find((l) =>
@@ -167,20 +167,16 @@ for (const engine of ENGINES) {
       await until(async () => (await stored(page)).viewportSwitchHidden === true);
       await until(async () => switchGone(page));
 
-      // The Note editor select lists the note-editor role's members, defaults to the
-      // plain editor, and its choice is stored under editors (Step 5, 3.6).
+      // A role with more than one member gets a swap select: the highlights role lists
+      // its two members, defaults to the plain one, and its choice is stored under
+      // editors (3.6, 7.3). The note editor has no role, so it has no select.
       await until(async () => (await editorSelect(page)) !== null);
-      const sel = await editorSelect(page);
-      assert.deepEqual(sel.options, ["note-editor", "note-editor-cm6"], "the role's members are listed");
-      assert.equal(sel.value, "note-editor", "the plain editor is the default");
-      await pickEditor(page, "note-editor-cm6");
-      await until(async () => (await stored(page)).editors?.["note-editor"] === "note-editor-cm6");
-
-      // Each role that has more than one member gets its own swap select: the highlights
-      // role lists its two members and defaults to the plain one (3.6, 7.3).
-      const hn = await editorSelect(page, "highlight-notes");
+      const hn = await editorSelect(page);
       assert.deepEqual(hn.options, ["highlight-notes", "highlight-notes-vim"], "the highlights role's members are listed");
       assert.equal(hn.value, "highlight-notes", "the plain highlights view is the default");
+      assert.equal(await editorSelect(page, "note-editor"), null, "no select for the note editor");
+      await pickEditor(page, "highlight-notes-vim");
+      await until(async () => (await stored(page)).editors?.["highlight-notes"] === "highlight-notes-vim");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `settings-${engine.name}.png`), fullPage: true });
@@ -192,12 +188,12 @@ for (const engine of ENGINES) {
       assert.equal((await sheetRows(page)).find((r) => r.path === "/workshop/design/notes").shown, false);
       assert.equal(await navLinks(page).then((l) => l.includes("/workshop/design/notes")), false);
       assert.ok(await switchGone(page), "the viewport switch stays hidden across a reload");
-      await until(async () => (await editorSelect(page))?.value === "note-editor-cm6");
+      await until(async () => (await editorSelect(page))?.value === "highlight-notes-vim");
 
       // Reset restores the defaults everywhere.
       await clickReset(page);
       await until(async () => (await stored(page)).nav.length === 0);
-      await until(async () => (await editorSelect(page))?.value === "note-editor");
+      await until(async () => (await editorSelect(page))?.value === "highlight-notes");
       await until(async () => (await sheetRows(page))[0].path === "/workshop/design/tokens");
       await until(async () => (await navLinks(page)).includes("/workshop/design/notes"));
       await until(async () => !(await switchGone(page)));

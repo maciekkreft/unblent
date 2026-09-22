@@ -70,13 +70,13 @@ test("settings.edited carrying editors is adopted, sanitised, saved and re-emitt
     viewportSwitchHidden: false,
     layoutSwitchHidden: false,
     arranging: true,
-    editors: { "note-editor": "note-editor-cm6", junk: 3 },
+    editors: { "example-role": "example-member", junk: 3 },
   });
   const s = read(actor);
-  assert.deepEqual(s.editors, { "note-editor": "note-editor-cm6" }, "non-string values are dropped");
+  assert.deepEqual(s.editors, { "example-role": "example-member" }, "non-string values are dropped");
   assert.equal(emitted.length, 1);
   assert.equal(saved.workshop.length, 1);
-  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-cm6" });
+  assert.deepEqual(emitted[0].editors, { "example-role": "example-member" });
 });
 
 test("settings.edited dedupes nav by path and applies the invariant", () => {
@@ -182,14 +182,14 @@ test("a workshop page ignores a stored product switch and stays workshop", () =>
 test("switching activates the other copy, persists, and emits it", () => {
   // A product page: product copy has no editor, workshop copy chose one.
   const { actor, saved, emitted } = start(
-    JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "note-editor": "note-editor-cm6" } }),
+    JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "example-role": "example-member" } }),
     { product: true },
   );
   assert.equal(read(actor).profile, "product");
   assert.deepEqual(read(actor).editors, {}, "the product copy has its own editors");
   actor.send({ type: "profile.switched", profile: "workshop" });
   assert.equal(read(actor).profile, "workshop");
-  assert.deepEqual(read(actor).editors, { "note-editor": "note-editor-cm6" }, "the workshop copy comes forward");
+  assert.deepEqual(read(actor).editors, { "example-role": "example-member" }, "the workshop copy comes forward");
   assert.deepEqual(saved.profile, ["workshop"], "the switch is remembered");
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0].profile, "workshop");
@@ -203,9 +203,9 @@ test("an edit in one profile never shows in the other", () => {
     viewportSwitchHidden: true,
     layoutSwitchHidden: true,
     arranging: false,
-    editors: { "note-editor": "note-editor-cm6" },
+    editors: { "example-role": "example-member" },
   });
-  assert.deepEqual(read(actor).editors, { "note-editor": "note-editor-cm6" });
+  assert.deepEqual(read(actor).editors, { "example-role": "example-member" });
   assert.equal(saved.product.length, 1, "the edit lands in the product copy");
   assert.equal(saved.workshop.length, 0, "the workshop copy is untouched");
   actor.send({ type: "profile.switched", profile: "workshop" });
@@ -257,6 +257,32 @@ test("vimKeys turned on in the product never shows in the workshop", () => {
   assert.equal(saved.workshop.length, 0);
   actor.send({ type: "profile.switched", profile: "workshop" });
   assert.equal(read(actor).vimKeys, false, "the workshop copy keeps its own");
+});
+
+test("a stored choice of a retired Vim editor is dropped and turns Vim keys on", () => {
+  const { actor, emitted } = start(
+    JSON.stringify({ nav: [], arranging: true, vimKeys: false, editors: { "note-editor": "note-editor-cm6", "example-role": "example-member" } }),
+  );
+  const s = read(actor);
+  assert.deepEqual(s.editors, { "example-role": "example-member" }, "only the retired choice goes");
+  assert.equal(s.vimKeys, true, "the choice meant Vim");
+  assert.equal(emitted.length, 0, "a load announces nothing");
+});
+
+test("a stored choice of the plain note editor is dropped and switches nothing", () => {
+  const off = start(JSON.stringify({ nav: [], editors: { "note-editor": "note-editor" } })).actor;
+  assert.deepEqual(read(off).editors, {});
+  assert.equal(read(off).vimKeys, false);
+  const on = start(JSON.stringify({ nav: [], vimKeys: true, editors: { "note-editor": "note-editor" } })).actor;
+  assert.equal(read(on).vimKeys, true, "a stored vimKeys: true is not switched off");
+});
+
+test("once dropped, the retired choice is gone from what is next saved", () => {
+  const { actor, saved } = start(JSON.stringify({ nav: [], editors: { "note-editor": "note-editor-cm6" } }));
+  actor.send({ type: "settings.edited", ...read(actor), vimKeys: false });
+  const last = JSON.parse(saved.workshop.at(-1));
+  assert.deepEqual(last.editors, {});
+  assert.equal(last.vimKeys, false, "turning Vim off afterwards sticks");
 });
 
 test("every payload matches its schema", () => {

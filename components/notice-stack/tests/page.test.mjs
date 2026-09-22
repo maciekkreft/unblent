@@ -45,13 +45,13 @@ function watch(page, problems) {
   });
 }
 
-// Type into the editor and commit it: a blur saves at once (4.3), no throttle wait.
+// Replace the editor's text as one edit and commit it: a blur saves at once (4.3), no
+// throttle wait.
 const write = (page, text) =>
   page.evaluate((t) => {
-    const ta = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
-    ta.value = t;
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
-    ta.dispatchEvent(new Event("blur"));
+    const view = document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: t } });
+    view.contentDOM.dispatchEvent(new FocusEvent("blur"));
   }, text);
 
 // Push the tab to the background: the fact drains the outbox at once (5), so a PUT
@@ -119,7 +119,7 @@ for (const engine of ENGINES) {
         };
       });
       await page.goto(`${BASE_URL}/workshop/apps/notes`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       // The sign-in pull settles the fact before the first edit (5).
       await until(() => page.evaluate(() => window.__puts !== undefined));
 
@@ -151,7 +151,8 @@ for (const engine of ENGINES) {
       // notes held theirs on the clash; the kept save lands, the server acks a newer
       // version, and note.changed brings the user's copy back to the editor.
       drain(page);
-      const editorBody = () => page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector("textarea").value);
+      const editorBody = () =>
+        page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
       await until(async () => (await editorBody()).includes("my body"));
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);

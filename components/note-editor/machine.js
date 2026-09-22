@@ -10,24 +10,57 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 // the newest note about the subject, re-follows when the subject changes, and a pin
 // keeps the note in place — a pinned editor refuses note.selected and load with
 // note.refused so the note on screen never changes by surprise. It announces the note
-// it shows with note.opened whenever its id changes (6.4). Everything with a side
+// it shows with note.opened whenever its id changes (6.4). The view (view.js) is a
+// CodeMirror 6 document with three levels (Title/Heading/Subheading) like Notes.app,
+// and Vim when the "Vim keys" preference is on (12). A note is markdown on the wire and
+// marker-free in the view; parseBody/serialize are the one place the two forms meet,
+// and both are pure, so they and titleOf are tested in Node. Everything with a side
 // effect — the queries, minting an id, focusing the input, the pin store — arrives
-// through input, so this stays a pure definition importable in Node.
+// through input, so this stays a pure definition importable in Node; it imports no
+// CodeMirror (that lives in view.js, the browser-only entry).
 
-// Short enough that a view following note.changed stays live while the user types,
-// long enough that it is not a save per keystroke (4.3, third rule): a coalescing
-// throttle, not a debounce. A duration, not a length that places a box, so it is a
-// plain constant rather than a token (7.4).
 const THROTTLE_MS = 200;
 
-// The note is one text and its title is the first line that says anything, as in
-// Notes.app: a convention of this editor, not of the contract, which still carries
-// title and body. body is the whole text, so a reader shows body alone.
+// The wire form of a note is markdown: a line prefixed "# "/"## "/"### " is a
+// Title/Heading/Subheading, an unprefixed line is Body. The CM6 document the user
+// edits is marker-free (view.js), so parseBody/serialize are the one place the two
+// representations meet; both are pure, so they and titleOf are tested in Node.
+const PREFIX = { title: "# ", heading: "## ", subheading: "### ", body: "" };
+
+// The note's title is its first line that says anything, with its level marker off so
+// a list row and note.saved.title never show a "#".
 export function titleOf(body) {
   const line = body.split("\n").find((l) => l.trim() !== "");
-  // A level marker ("# "/"## "/"### ") from a rich member (note-editor-cm6) never
-  // shows in a title, so a note round-trips between the plain and rich editors.
-  return line ? line.replace(/^#{1,3} /, "").trim() : "";
+  return line ? line.trim().replace(/^#{1,3} /, "").trim() : "";
+}
+
+// markdown -> { doc: marker-free text, levels: one level per line }. An empty note
+// starts as a single Body line: no level is imposed on the first line, the user
+// raises one when they want it. Loaded content is governed by its own markers, so a
+// note written without levels loads unchanged (a bare first line stays Body).
+export function parseBody(md) {
+  if (md === "") return { doc: "", levels: ["body"] };
+  const doc = [];
+  const levels = [];
+  for (const line of md.split("\n")) {
+    if (line.startsWith("### ")) { levels.push("subheading"); doc.push(line.slice(4)); }
+    else if (line.startsWith("## ")) { levels.push("heading"); doc.push(line.slice(3)); }
+    else if (line.startsWith("# ")) { levels.push("title"); doc.push(line.slice(2)); }
+    else { levels.push("body"); doc.push(line); }
+  }
+  return { doc: doc.join("\n"), levels };
+}
+
+// (doc, levels) -> markdown, re-adding each line's marker. The inverse of parseBody.
+// Edge (accepted): a Body line whose text itself begins with "# " serializes bare and
+// re-parses as a heading — Markdown's own ATX ambiguity. Escaping is rejected: it
+// would pollute the one plain string that note-list and every reader also read.
+export function serialize(doc, levels) {
+  if (doc === "") return ""; // a blank note is empty, never a lone "# " — so opening one never mints
+  return doc
+    .split("\n")
+    .map((text, i) => (PREFIX[levels[i]] ?? "") + text)
+    .join("\n");
 }
 
 // A note's links (12), always an array: an old cached note, or a read reply from
@@ -126,6 +159,7 @@ export const machine = setup({
     }),
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
     read: fromPromise(({ input }) => input.ask("notes", "read", { id: input.id })),
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
   guards: {
     // The text is what notes already holds (what we last sent, loaded, or adopted),
@@ -163,11 +197,10 @@ export const machine = setup({
       enqueue.assign({ subject, titles, subjectObserved: true });
       if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
     }),
-    // The subject from the start reply is the starting picture (4.3, 3.5), so it yields
-    // to any subject.changed that raced ahead of it while the notes list was still
-    // loading — including one that cleared the stage to null, which the old "subject is
-    // non-null" guard would then overwrite with the read's stale value. Once a change
-    // has been observed (subjectObserved) the reply is the older picture and is dropped.
+    // The subject from the start reply is the starting picture (4.3), so it yields to
+    // any subject.changed that raced ahead of it while the notes list was still loading,
+    // including one that cleared the stage to null. Once a change has been observed
+    // (subjectObserved) the reply is the older picture and is dropped.
     takeStartSubject: enqueueActions(({ context, event, enqueue }) => {
       if (context.subjectObserved) return;
       const subject = event.output.subject;
@@ -189,12 +222,9 @@ export const machine = setup({
   id: "note-editor",
   meta: {
     kind: "view",
-    // The default member of the note-editor role (7.3): interchangeable with
-    // note-editor-cm6, which shares this contract exactly.
-    role: "note-editor",
     emits: ["note.saved", "note.opened", "note.refused"],
-    attributes: ["height", "follows", "subject", "about-new"],
-    asks: ["notes: list", "notes: read", "subject: read"],
+    attributes: ["height", "follows", "subject", "about-new", "levels"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -223,8 +253,8 @@ export const machine = setup({
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
-    // Whether a subject.changed has been observed (3.5): once it has, the start reply's
-    // subject is the older starting picture and must not overwrite the change — even
+    // Whether a subject.changed has been observed: once it has, the start reply's
+    // subject is the older starting picture and must not overwrite the change, even
     // when the change cleared the stage to null. takeStartSubject reads this.
     subjectObserved: false,
     // Titles of subjects this browser has seen, so the About line can name a link (D7,
@@ -235,6 +265,12 @@ export const machine = setup({
     // The `about-new` attribute (12): show the subject on the stage in the About line
     // while the editor holds a new note.
     aboutNew: Boolean(input.aboutNew),
+    // The `levels` attribute: the footer's level names become buttons that set the
+    // caret line's level, so a level can be set without Vim and on a phone.
+    levels: Boolean(input.levels),
+    // The "Vim keys" device preference (12), owned by `settings`: off until it says
+    // otherwise, and off on a page without it (the ask replies no-answerer).
+    vimKeys: false,
     // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
     pinned: false,
     // Whether a pin restore is in flight, so a successful load starts pinned and a
@@ -247,7 +283,16 @@ export const machine = setup({
     startNotes: [],
   }),
   initial: "starting",
+  // Beside the states, so the preference arrives whatever the editor is doing and a
+  // keystroke never waits for it. settings.changed that races it is held for us until
+  // the reply lands (settings: read supersededBy).
+  invoke: {
+    src: "settings",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+  },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A command addressing this instance (4.4). A pinned editor refuses it (D7); the
     // note asked for rides in note.refused. Otherwise it lands like a load always has.
     load: [

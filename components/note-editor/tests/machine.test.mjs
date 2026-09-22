@@ -1,12 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, titleOf, aboutTitleOf } from "../machine.js";
+import { Validator } from "@cfworker/json-schema";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf } from "../machine.js";
 
-// The actor is where decisions live (3.2): it is driven with a fake ask, mint and
-// focus, the shapes view.js builds for real. A SimulatedClock drives the throttle
-// without waiting real time. By default notes answers list with nothing, so the
-// editor starts empty; a test about reopening answers otherwise.
+// The editor's decisions, tested in full. The marker-stripping title and the
+// parseBody/serialize transform between the wire markdown and the marker-free document
+// the view edits are pure functions, tested at the end.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "note.refused"].map((n) => [n, schemaOf(n)]));
+// Every emit of every test, checked against its schema by the last test.
+const recorded = [];
+
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
 const THROTTLE_MS = 200;
@@ -37,6 +46,7 @@ function editor({
   recallTitles,
   rememberTitles,
   aboutNew = false,
+  levels = false,
   flashMs = 3000,
 } = {}) {
   const clock = new SimulatedClock();
@@ -44,12 +54,13 @@ function editor({
   const opened = [];
   const refused = [];
   const actor = createActor(machine, {
-    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, aboutNew, flashMs },
+    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, aboutNew, levels, flashMs },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.opened", (e) => opened.push(e.id));
   actor.on("note.refused", (e) => refused.push(e));
+  for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
   actor.start();
   return { actor, clock, saved, opened, refused };
 }
@@ -69,13 +80,6 @@ async function started(options) {
   return e;
 }
 
-test("the title is the first line that says anything", () => {
-  assert.equal(titleOf("Hello\nworld"), "Hello");
-  assert.equal(titleOf("\n\n  Second try  \nmore"), "Second try");
-  assert.equal(titleOf("   \n \n"), "");
-  assert.equal(titleOf(""), "");
-});
-
 test("typing in an empty editor mints an id and becomes dirty, emitting nothing yet", async () => {
   const { actor, saved } = await started();
   actor.send({ type: "_typed", body: "Hi\nyo" });
@@ -91,12 +95,9 @@ test("keystrokes inside the window are coalesced into one save, titled by its fi
   clock.increment(THROTTLE_MS - 1);
   actor.send({ type: "_typed", body: "ab\nmore" });
   clock.increment(1);
-  // One save at the end of the window the first keystroke opened, carrying the
-  // latest body: the throttle coalesced, it did not debounce (4.3, third rule).
   assert.deepEqual(saved, [{ type: "note.saved", id: ID, title: "ab", body: "ab\nmore", baseVersion: null }]);
   assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
 
-  // A keystroke after the save opens the next window, one more save at its end.
   actor.send({ type: "_typed", body: "ab\nmore\nagain" });
   clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 2);
@@ -125,7 +126,7 @@ test("the echo of our own save bumps baseVersion and leaves a dirty draft untouc
 
 test("a newer change is adopted; an older one and another id are ignored", async () => {
   const { actor } = await started();
-  actor.send({ type: "_typed", body: "mine" }); // dirty, base null
+  actor.send({ type: "_typed", body: "mine" });
   actor.send({ type: "note.changed", id: ID, title: "theirs", body: "theirs\nnewer", version: 5, pending: false, updatedAt: 2 });
   let s = actor.getSnapshot();
   assert.deepEqual(s.value, { editing: "clean" });
@@ -143,7 +144,7 @@ test("on start it reopens the newest note notes lists", async () => {
   const asked = [];
   const { actor } = editor({
     ask: (target, name, payload) => {
-      asked.push([target, name, payload]);
+      if (target !== "settings") asked.push([target, name, payload]);
       if (name === "list") return Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }, { id: ID, title: "O", updatedAt: 10 }] });
       return Promise.resolve({ note: { ...NOTE, id: ID2 } });
     },
@@ -189,7 +190,7 @@ test("load asks notes: read and lands per the reply", async () => {
   const asked = [];
   const withReply = async (reply) => {
     const { actor } = await started({
-      ask: (...args) => (asked.push(args), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
+      ask: (...args) => ((args[0] === "settings" || asked.push(args)), Promise.resolve(args[1] === "list" ? { notes: [] } : reply)),
     });
     actor.send({ type: "load", id: ID });
     return actor;
@@ -236,7 +237,7 @@ test("a pause that ends on the text notes already holds saves nothing", async ()
   clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 1);
   actor.send({ type: "_typed", body: "Tx\nB" });
-  actor.send({ type: "_typed", body: "T\nB" }); // undone within the pause
+  actor.send({ type: "_typed", body: "T\nB" });
   clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 1, "the pause emitted nothing");
   assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
@@ -245,7 +246,6 @@ test("a pause that ends on the text notes already holds saves nothing", async ()
   actor.send({ type: "_blurred" });
   assert.equal(saved.length, 1, "nor the blur");
 
-  // The same after a load: the loaded text is what notes holds.
   const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   loaded.actor.send({ type: "load", id: ID });
   await tick();
@@ -267,7 +267,6 @@ test("note.selected loads the note when the editor follows, and is ignored when 
 });
 
 test("note.opened is emitted on reopening at start, on load, on a followed selection, and on minting", async () => {
-  // On start with notes: reopens ID2 and announces it.
   const start = editor({
     ask: (target, name) =>
       name === "list" ? Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }] }) : Promise.resolve({ note: { ...NOTE, id: ID2 } }),
@@ -276,19 +275,16 @@ test("note.opened is emitted on reopening at start, on load, on a followed selec
   await tick();
   assert.deepEqual(start.opened, [ID2]);
 
-  // On load.
   const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   loaded.actor.send({ type: "load", id: ID });
   await tick();
   assert.deepEqual(loaded.opened, [ID]);
 
-  // On a followed selection.
   const followed = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   followed.actor.send({ type: "note.selected", id: ID2 });
   await tick();
   assert.deepEqual(followed.opened, [ID2]);
 
-  // On minting from a keystroke into an editor holding no note.
   const minted = await started();
   minted.actor.send({ type: "_typed", body: "fresh" });
   assert.deepEqual(minted.opened, [ID]);
@@ -337,7 +333,6 @@ const SUBJECT_B = { kind: "book", id: "bookB", title: "Emma" };
 const SUBJECT_C = { kind: "book", id: "bookC", title: "Foundation" };
 const LINK_A = { kind: "book", id: "bookA" };
 const LINK_B = { kind: "book", id: "bookB" };
-// A stored note the read reply hands back, links included; the id is filled per test.
 const noteAbout = (id, link) => ({ id, title: "n", body: "n\nbody", version: 3, pending: false, updatedAt: 1, about: link ? [link] : [] });
 
 test("with the subject attribute, start opens the newest note about the subject and records its title", async () => {
@@ -378,7 +373,6 @@ test("a new note written while following carries one link to the subject; later 
   clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 1);
   assert.deepEqual(saved[0].about, [LINK_A], "a new note is about what is on the stage");
-  // notes acknowledges it at version 1; a later edit to the now-existing note omits about.
   actor.send({ type: "note.changed", id: ID, title: "fresh", body: "fresh", version: 1, pending: false, updatedAt: 1, about: [LINK_A] });
   actor.send({ type: "_typed", body: "fresh more" });
   clock.increment(THROTTLE_MS);
@@ -415,7 +409,6 @@ test("changing the subject saves a dirty draft, then opens the new subject's new
   assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" });
 
   actor.send({ type: "subject.changed", subject: SUBJECT_B });
-  // The dirty draft was saved at once — an existing note, so no about (D2).
   assert.equal(saved.length, 1);
   assert.equal(saved[0].id, ID);
   assert.equal(saved[0].baseVersion, 3);
@@ -503,7 +496,7 @@ test("a refusal flashes the pin for the flash window, and a repeat restarts it",
   actor.send({ type: "note.selected", id: ID2 });
   assert.equal(actor.getSnapshot().context.flashing, true);
   clock.increment(2999);
-  actor.send({ type: "note.selected", id: ID2 }); // restarts the window
+  actor.send({ type: "note.selected", id: ID2 });
   clock.increment(1);
   assert.equal(actor.getSnapshot().context.flashing, true, "still flashing: the window restarted");
   clock.increment(2999);
@@ -536,7 +529,7 @@ test("unpinning lets the editor follow the next subject change again", async () 
   actor.send({ type: "_togglePin" });
   actor.send({ type: "subject.changed", subject: SUBJECT_B });
   assert.equal(actor.getSnapshot().context.id, ID, "pinned: unchanged while B is on the stage");
-  actor.send({ type: "_togglePin" }); // unpin
+  actor.send({ type: "_togglePin" });
   actor.send({ type: "subject.changed", subject: SUBJECT_C });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID2, "following resumed: opened C's note");
@@ -672,8 +665,6 @@ test("a subject.changed while a remembered pin is loading keeps the pinned note"
   assert.equal(s.context.id, ID, "the pinned note stayed, though the stage moved");
   assert.equal(s.context.subject.id, "bookB", "the new subject was still taken");
 });
-
-// --- The stage survives a reload: the subject race (3.5) ----------------------------
 
 test("reload race: a slow notes reply does not clobber a subject.changed with the read's null", async () => {
   // subject: read replies null (the book is not open yet), the book comes back on its
@@ -813,4 +804,99 @@ test("with the attribute off, no subject is asked and saves carry no links (toda
   actor.send({ type: "_typed", body: "plain" });
   clock.increment(THROTTLE_MS);
   assert.ok(!("about" in saved[0]), "no links ride a save when not following the stage");
+});
+
+// --- The marker-stripping title and the wire<->doc transform ----------------------
+
+test("the title is the first line, with its level marker stripped", () => {
+  assert.equal(titleOf("# Hello\nworld"), "Hello");
+  assert.equal(titleOf("## Section\nbody"), "Section");
+  assert.equal(titleOf("### Small\nbody"), "Small");
+  assert.equal(titleOf("plain\nworld"), "plain");
+  assert.equal(titleOf("\n\n  # Second  \nmore"), "Second");
+  assert.equal(titleOf("#no-space stays"), "#no-space stays"); // a hashtag is not a marker
+  assert.equal(titleOf(""), "");
+});
+
+test("parseBody splits markers into a marker-free doc plus per-line levels", () => {
+  assert.deepEqual(parseBody("# T\n## H\nbody\n### S"), {
+    doc: "T\nH\nbody\nS",
+    levels: ["title", "heading", "body", "subheading"],
+  });
+  assert.deepEqual(parseBody("just text"), { doc: "just text", levels: ["body"] });
+});
+
+test("an empty note starts as a Body first line and serializes back to empty", () => {
+  assert.deepEqual(parseBody(""), { doc: "", levels: ["body"] });
+  assert.equal(serialize("", ["body"]), ""); // opening a blank note never mints a "# "
+});
+
+test("parseBody and serialize round-trip every level", () => {
+  for (const md of ["# T\n## H\n### S\nbody", "plain only", "# a\nb\n\n## c", "line\nline2"]) {
+    const { doc, levels } = parseBody(md);
+    assert.equal(serialize(doc, levels), md, md);
+  }
+});
+
+test("known edge: a Body line whose text begins with a marker re-parses as a heading", () => {
+  assert.equal(serialize("# typed as body", ["body"]), "# typed as body");
+  assert.deepEqual(parseBody("# typed as body"), { doc: "typed as body", levels: ["title"] });
+});
+
+test("a save carries the stripped title and the markdown body verbatim", async () => {
+  const { actor, clock, saved } = editor();
+  await tick();
+  actor.send({ type: "_typed", body: "# Kickoff\n## Agenda\nnotes" });
+  clock.increment(THROTTLE_MS);
+  assert.deepEqual(saved, [
+    { type: "note.saved", id: ID, title: "Kickoff", body: "# Kickoff\n## Agenda\nnotes", baseVersion: null },
+  ]);
+});
+
+test("the levels attribute reaches the context, off by default", () => {
+  assert.equal(editor().actor.getSnapshot().context.levels, false);
+  assert.equal(editor({ levels: true }).actor.getSnapshot().context.levels, true);
+});
+
+// The "Vim keys" preference (12): asked of settings at start, followed after.
+const withSettings = (reply) => (target, name) => {
+  if (target === "settings" && name === "read") return Promise.resolve(reply);
+  if (name === "list") return Promise.resolve({ notes: [] });
+  return Promise.resolve({});
+};
+
+test("Vim keys start from settings: read, and are off until it answers", async () => {
+  const { actor } = editor({ ask: withSettings({ vimKeys: true, profile: "workshop" }) });
+  assert.equal(actor.getSnapshot().context.vimKeys, false, "off before the reply");
+  await settle();
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+});
+
+test("Vim keys follow settings.changed, in any state", async () => {
+  const { actor } = await started({ ask: withSettings({ vimKeys: false }) });
+  actor.send({ type: "settings.changed", vimKeys: true });
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+  actor.send({ type: "_typed", body: "x" });
+  actor.send({ type: "settings.changed", vimKeys: false });
+  const s = actor.getSnapshot();
+  assert.equal(s.context.vimKeys, false);
+  assert.deepEqual(s.value, { editing: "dirty" }, "the switch never moves the editor");
+  assert.equal(s.context.body, "x", "and never touches the draft");
+});
+
+test("an error reply, or a reply without the field, leaves Vim keys off", async () => {
+  for (const reply of [{ error: "no-answerer" }, { profile: "product" }]) {
+    const { actor } = editor({ ask: withSettings(reply) });
+    await settle();
+    assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
+  }
+});
+
+test("every payload matches its schema", () => {
+  assert.ok(recorded.length > 0, "the tests above recorded traffic");
+  for (const { value, schema } of recorded) {
+    const { type, ...rest } = value;
+    const result = new Validator(schema, "2020-12").validate(rest);
+    assert.ok(result.valid, `${JSON.stringify(value).slice(0, 160)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
+  }
 });

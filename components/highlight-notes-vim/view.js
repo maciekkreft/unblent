@@ -35,11 +35,11 @@ const toMs = (text, fallback = 3000) => {
 
 // The view's own transactions carry this so the transaction filter lets them through and
 // the update listener does not echo them back to the machine as typing (as #shown does in
-// note-editor-cm6): only the user's edits become _typed.
+// note-editor): only the user's edits become _typed.
 const fromView = Annotation.define();
 
 // Rebuild the whole index of quote lines from the fragments (a load), the setAllLevels
-// idiom of note-editor-cm6; and set which fragments are counting down to a discard.
+// idiom of note-editor; and set which fragments are counting down to a discard.
 const setQuotes = StateEffect.define();
 const setDiscarding = StateEffect.define();
 
@@ -179,7 +179,7 @@ const quoteFilter = EditorState.transactionFilter.of((tr) => {
   return { effects: setRefused.of(damaged), annotations: Transaction.addToHistory.of(false) };
 });
 
-// The structural theme, keyed to tokens like note-editor-cm6's; line spacing is padding,
+// The structural theme, keyed to tokens like note-editor's; line spacing is padding,
 // never margin. The decoration visuals (the quote highlight, the bin, the drain) live in
 // the component's own styles, which share this shadow root and are checked for tokens.
 const editorTheme = EditorView.theme({
@@ -192,7 +192,7 @@ const editorTheme = EditorView.theme({
   ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
 });
 
-// The Vim block cursor, keyed to tokens, copied from note-editor-cm6 (components never
+// The Vim block cursor, keyed to tokens, copied from note-editor (components never
 // import each other, 11.2). The plugin ships its own Prec.highest theme, so this raises
 // precedence and marks the competing properties !important to win regardless of order.
 // Focused, it fills with the accent; unfocused, it is hollowed with an inset shadow,

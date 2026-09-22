@@ -18,7 +18,7 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
 // One save waits this long after the last keystroke, the whole page's edits at once (a
 // throttle, not a debounce: a keystroke within the window joins the pending save rather
-// than pushing it back, 4.3 third rule). The same shape as note-editor-cm6's editing.
+// than pushing it back, 4.3 third rule). The same shape as note-editor's editing.
 const THROTTLE_MS = 200;
 
 // A run of white space, including line breaks, shown as one space: a quote spanning

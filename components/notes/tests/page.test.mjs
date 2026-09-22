@@ -46,16 +46,25 @@ const clickRow = (page, title) =>
       .find((r) => r.querySelector(".name").textContent.trim() === title)
       ?.click();
   }, title);
-const editorStatus = (page) => page.locator("note-editor .status").textContent();
-const editorBody = (page) => page.locator("note-editor textarea").inputValue();
-// Type a note and commit it: a blur saves at once (4.3), no throttle wait needed.
-const write = (page, text) =>
-  page.evaluate((t) => {
-    const ta = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
-    ta.value = t;
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
-    ta.dispatchEvent(new Event("blur"));
-  }, text);
+// The editor's shown status word (the hidden ones only size its box).
+const editorStatus = (page) => page.locator("note-editor .status > span:first-child").textContent();
+// The editor's text, read from its CodeMirror view, reached through CM6's own handle on
+// its content element. This page has no settings, so the editor has no Vim.
+const editorBody = (page) =>
+  page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
+// Replace the editor's text as one edit, the way a paste over everything would, and
+// optionally blur, which saves at once (4.3), no throttle wait needed.
+const setText = (page, text, { blur = false } = {}) =>
+  page.evaluate(
+    ([t, blur]) => {
+      const view = document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view;
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: t } });
+      if (blur) view.contentDOM.dispatchEvent(new FocusEvent("blur"));
+    },
+    [text, blur],
+  );
+// Type a note and commit it.
+const write = (page, text) => setText(page, text, { blur: true });
 
 // One row's delete-related state, read as the user sees it, addressed by its title.
 const listState = (page, title) =>
@@ -152,20 +161,15 @@ for (const engine of ENGINES) {
 
       await page.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       const ready = (p) =>
-        p.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
+        p.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       await ready(page);
 
       // One text whose first line is the title; a blur saves it at once (4.3), so one
       // note.saved follows, to version 1.
-      await page.evaluate(() => {
-        const textarea = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
-        textarea.value = "A note\nits body";
-        textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        textarea.dispatchEvent(new Event("blur"));
-      });
+      await write(page, "A note\nits body");
 
       await until(() => debug.some((l) => SAVED.test(l)) && debug.some((l) => CHANGED.test(l)));
-      await until(async () => (await page.locator("note-editor .status").textContent())?.trim() === "Saved");
+      await until(async () => (await editorStatus(page))?.trim() === "Saved");
 
       // Persistence: the fact wrote through the store to IndexedDB (5), not just to
       // its in-memory Map. Read the raw database the store opened.
@@ -190,8 +194,8 @@ for (const engine of ENGINES) {
       // start and reopens the newest note from the store.
       await page.reload({ waitUntil: "domcontentloaded" });
       await ready(page);
-      await until(async () => (await page.locator("note-editor .status").textContent())?.trim() === "Saved");
-      assert.equal(await page.locator("note-editor textarea").inputValue(), "A note\nits body");
+      await until(async () => (await editorStatus(page))?.trim() === "Saved");
+      assert.equal(await editorBody(page), "A note\nits body");
 
       // Height (the editor's one attribute): in content mode the body grows with its
       // lines; in neither mode does it grow past the viewport, so the status stays in
@@ -201,22 +205,17 @@ for (const engine of ENGINES) {
           const root = document.querySelector("note-editor").shadowRoot;
           const status = root.querySelector(".status").getBoundingClientRect();
           return {
-            textarea: root.querySelector("textarea").getBoundingClientRect().height,
+            body: root.querySelector(".region").getBoundingClientRect().height,
             statusInView: status.bottom <= innerHeight,
             pageScrolls: document.documentElement.scrollHeight > innerHeight + 1,
           };
         });
-      const type = (text) =>
-        page.evaluate((t) => {
-          const textarea = document.querySelector("note-editor").shadowRoot.querySelector("textarea");
-          textarea.value = t;
-          textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        }, text);
+      const type = (text) => setText(page, text);
       await page.evaluate(() => document.querySelector("note-editor").setAttribute("height", "content"));
       const short = await measure();
       await type(Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n"));
       const grown = await measure();
-      assert.ok(grown.textarea > short.textarea, "content mode grows with the lines");
+      assert.ok(grown.body > short.body, "content mode grows with the lines");
       await type(Array.from({ length: 80 }, (_, i) => `line ${i + 1}`).join("\n"));
       for (const mode of ["content", "fill"]) {
         await page.evaluate((m) => document.querySelector("note-editor").setAttribute("height", m), mode);
@@ -266,7 +265,7 @@ for (const engine of ENGINES) {
       await page.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () =>
-          document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea") &&
+          document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content") &&
           document.querySelector("note-list")?.shadowRoot,
       );
 
@@ -367,9 +366,9 @@ for (const engine of ENGINES) {
       // by char without a blur, over a run longer than the throttle window, is the
       // load-proof discriminator — a wall-clock bound is not, on this small VPS.
       const live = "A live headline";
-      await page.locator("note-editor textarea").fill("");
+      await setText(page, "");
       const before = debug.length;
-      await page.locator("note-editor textarea").focus();
+      await page.locator("note-editor .cm-content").click();
       await page.keyboard.type(live, { delay: 60 });
       // Measured at the last keystroke, before any settling wait: only the throttle
       // has saved by now.
@@ -424,18 +423,19 @@ for (const engine of ENGINES) {
         () => document.querySelector("note-editor")?.shadowRoot?.querySelector(".status"),
       );
       // A group's body is a flex column (fix 2), so height="fill" fills it: the editor
-      // host is as tall as the stage body and its status sits at the body's bottom,
-      // within one --space-md (16px), not stranded under the first line.
+      // host is as tall as the stage body and its footer (the status and the level
+      // buttons) sits at the body's bottom, within one --space-md (16px), not stranded
+      // under the first line.
       const fill = await page.evaluate(() => {
         const desk = document.querySelector("dock-desk");
         const body = desk.shadowRoot.querySelector('.body[data-side="stage"]').getBoundingClientRect();
         const editor = document.querySelector("note-editor");
         const host = editor.getBoundingClientRect();
-        const status = editor.shadowRoot.querySelector(".status").getBoundingClientRect();
-        return { bodyH: body.height, hostH: host.height, gap: body.bottom - status.bottom };
+        const footer = editor.shadowRoot.querySelector(".footer").getBoundingClientRect();
+        return { bodyH: body.height, hostH: host.height, gap: body.bottom - footer.bottom };
       });
       assert.ok(Math.abs(fill.hostH - fill.bodyH) <= 1, `the editor fills the stage body, saw ${fill.hostH} vs ${fill.bodyH}`);
-      assert.ok(fill.gap >= -1 && fill.gap <= 16, `the status sits at the body's bottom, gap ${fill.gap}px`);
+      assert.ok(fill.gap >= -1 && fill.gap <= 16, `the footer sits at the body's bottom, gap ${fill.gap}px`);
 
       // note-list carries no chrome of its own: the frame names it, and creating a
       // note is the first row, not a title, a band, or a button.
@@ -488,7 +488,7 @@ for (const engine of ENGINES) {
       });
 
       await page.goto(`${BASE_URL}/workshop/apps/notes`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea"));
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       // Signing in pulls at once (5): wait for that GET so the fact is signed in.
       await until(() => page.evaluate(() => window.__fetches.some((f) => /\/api\/notes\?since=/.test(f.url))));
 
@@ -552,7 +552,7 @@ for (const engine of ENGINES) {
       await page.goto(`${BASE_URL}/workshop/design/notes`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () =>
-          document.querySelector("note-editor")?.shadowRoot?.querySelector("textarea") &&
+          document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content") &&
           document.querySelector("note-list")?.shadowRoot,
       );
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");

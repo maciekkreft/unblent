@@ -57,7 +57,14 @@ function reconcile(getEditors) {
     for (const [role, chosen] of Object.entries(getEditors() ?? {})) {
       const el = roleElement(role);
       if (!el || el.localName === chosen) continue;
-      await import(`/static/components/${chosen}/view.js`);
+      // A stored choice may name a component that no longer exists; the page's
+      // default is what the page declared (3.6), so it stays and the next role is
+      // still reconciled.
+      try {
+        await import(`/static/components/${chosen}/view.js`);
+      } catch {
+        continue;
+      }
       // The element may have moved or been swapped again while the import was in
       // flight; re-find it before replacing.
       const current = roleElement(role);

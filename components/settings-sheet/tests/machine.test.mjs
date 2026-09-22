@@ -24,8 +24,9 @@ const PAGES = [
 ];
 
 const COMPONENTS = [
-  { name: "note-editor", role: "note-editor" },
-  { name: "note-editor-cm6", role: "note-editor" },
+  { name: "note-editor", role: null },
+  { name: "highlight-notes", role: "highlight-notes" },
+  { name: "highlight-notes-vim", role: "highlight-notes" },
   { name: "notes", role: null },
 ];
 
@@ -181,18 +182,18 @@ test("_reset emits the defaults", async () => {
 
 test("catalog members are grouped by role", async () => {
   const { snapshot } = await start();
-  assert.deepEqual(snapshot.context.roles, { "note-editor": ["note-editor", "note-editor-cm6"] });
+  assert.deepEqual(snapshot.context.roles, { "highlight-notes": ["highlight-notes", "highlight-notes-vim"] });
 });
 
 test("_setEditor emits the whole settings with the role's choice set", async () => {
   const { actor, emitted } = await start();
-  actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor-cm6" });
+  actor.send({ type: "_setEditor", role: "highlight-notes", component: "highlight-notes-vim" });
   assert.equal(emitted.length, 1);
-  assert.deepEqual(emitted[0].editors, { "note-editor": "note-editor-cm6" });
+  assert.deepEqual(emitted[0].editors, { "highlight-notes": "highlight-notes-vim" });
   // A second choice for another role would merge, not replace: start from the last.
-  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "note-editor": "note-editor-cm6" } });
-  actor.send({ type: "_setEditor", role: "note-editor", component: "note-editor" });
-  assert.deepEqual(emitted[1].editors, { "note-editor": "note-editor" });
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: { "highlight-notes": "highlight-notes-vim" } });
+  actor.send({ type: "_setEditor", role: "highlight-notes", component: "highlight-notes" });
+  assert.deepEqual(emitted[1].editors, { "highlight-notes": "highlight-notes" });
 });
 
 test("the profile is adopted from the read and defaults to workshop", async () => {
