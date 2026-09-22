@@ -608,10 +608,11 @@ for (const engine of ENGINES) {
         page.waitForResponse((r) => /\/api\/catalog(\?|$)/.test(r.url()), { timeout: WAIT.timeout }),
       ]);
       await page.goto(`${BASE_URL}/`);
-      // Every view mounted (its shadow root exists) and the dock offers a tab for each.
+      // Every view mounted (its shadow root exists); the reader is on the stage and each
+      // list/item pair is one dock tab, the list and its item inside the container (6.4).
       const NAMES = ["book-reader", "book-shelf", "book-toc", "note-editor", "note-list"];
       await page.waitForFunction((names) => names.every((n) => document.querySelector(n)?.shadowRoot), NAMES, WAIT);
-      const LABELS = ["Reader", "Books", "Contents", "Editor", "Notes"];
+      const LABELS = ["Reader", "Books", "Notes"];
       await page.waitForFunction((labels) => {
         const tabs = new Set([...document.querySelector("dock-desk").shadowRoot.querySelectorAll('[role="tab"]')].map((t) => t.textContent.trim()));
         return labels.every((l) => tabs.has(l));

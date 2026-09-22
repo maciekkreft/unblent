@@ -163,7 +163,7 @@ for (const engine of ENGINES) {
 
   // The product page docks Notes and Editor on the right; the Editor follows
   // note.selected with `shows-on` (6.4), so picking a note brings its tab forward.
-  test(`picking a note shows the Editor tab on / in ${engine.name}`, async () => {
+  test(`picking a note brings the Notes tab forward on / in ${engine.name}`, async () => {
     const browser = await engine.launch();
     try {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
@@ -179,20 +179,31 @@ for (const engine of ENGINES) {
 
       await page.goto(`${BASE_URL}/`);
       await page.locator("dock-desk").waitFor();
-      // The right dock seeds on its first tab, Notes; the Editor is behind it.
+      // The right dock seeds on its first tab, the Notes pair.
       await page.waitForFunction(() => {
         const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
         return t && t.textContent.trim() === "Notes";
       });
 
-      // Pick the next-note row in Notes: note-list emits note.selected, which the
-      // Editor follows (6.4), so the desk brings the Editor tab forward.
+      // Show another right tab, so the Notes pair sits behind it.
+      await page.evaluate(() =>
+        [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]')]
+          .find((t) => t.textContent.trim() === "Highlights")
+          ?.click(),
+      );
+      await page.waitForFunction(() => {
+        const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
+        return t && t.textContent.trim() === "Highlights";
+      });
+
+      // Pick the next-note row in the Notes list: note-list emits note.selected, which
+      // the Notes pair follows with shows-on (6.4), so the desk brings its tab forward.
       await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
       await page.waitForFunction(() => {
         const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
-        return t && t.textContent.trim() === "Editor";
+        return t && t.textContent.trim() === "Notes";
       });
-      assert.equal(await rightActive(page), "Editor", "picking a note brings the Editor tab forward");
+      assert.equal(await rightActive(page), "Notes", "picking a note brings the Notes tab forward");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

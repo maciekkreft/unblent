@@ -348,12 +348,19 @@ for (const engine of ENGINES) {
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await ready(page);
 
-      // The reader is on the stage; the notes views are the desk's children (8).
+      // The reader is on the stage; the two list/item pairs are the desk's children, each
+      // a list-then-item container holding its list and its item (6.4, 8).
       const children = await page.evaluate(() =>
         [...document.querySelector("dock-desk").children].map((c) => c.localName),
       );
-      for (const tag of ["book-reader", "book-shelf", "book-toc", "note-list", "note-editor"]) {
+      for (const tag of ["book-reader", "list-then-item"]) {
         assert.ok(children.includes(tag), `${tag} is a dock-desk child`);
+      }
+      const inside = await page.evaluate(() =>
+        [...document.querySelectorAll("list-then-item")].flatMap((c) => [...c.children].map((k) => k.localName)),
+      );
+      for (const tag of ["book-shelf", "book-toc", "note-list", "note-editor"]) {
+        assert.ok(inside.includes(tag), `${tag} lives inside a list-then-item container`);
       }
 
       // The derived fact is alive: with nothing on the stage it asks dock and books for
@@ -383,6 +390,56 @@ for (const engine of ENGINES) {
       await browser.close();
     }
   });
+
+  // Two instances of one view on one page (4.1): each container is its own tab, and a
+  // tab click stores a layout that names both by their address, distinct because the
+  // page gave distinct ids. This is the page-level check deferred from session 3, so it
+  // runs once, in WebKit.
+  if (engine.name === "webkit") {
+    test("the two containers are separate tabs named by address", async () => {
+      const browser = await engine.launch();
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        const problems = [];
+        const page = await context.newPage();
+        watch(page, problems);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await ready(page);
+
+        const tabLabels = () =>
+          page.evaluate(() =>
+            [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('[role="tab"]')].map((t) =>
+              t.textContent.trim(),
+            ),
+          );
+        await until(async () => {
+          const labels = await tabLabels();
+          return labels.includes("Books") && labels.includes("Notes");
+        });
+
+        // Click the Notes tab: a gesture, so `dock` stores the layout. It carries both
+        // containers by their instance address.
+        await page.evaluate(() =>
+          [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('[role="tab"]')]
+            .find((t) => t.textContent.trim() === "Notes")
+            ?.click(),
+        );
+        await until(async () =>
+          page.evaluate(() =>
+            (localStorage.getItem("dock:" + location.pathname) ?? "").includes("list-then-item#notes"),
+          ),
+        );
+        const layout = await page.evaluate(() => localStorage.getItem("dock:" + location.pathname));
+        assert.ok(layout.includes("list-then-item#books"), "the layout names the books container by address");
+        assert.ok(layout.includes("list-then-item#notes"), "the layout names the notes container by address");
+
+        assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      } finally {
+        await browser.close();
+      }
+    });
+  }
 
   // Signed in, following the stage: the list shows only the notes about the open book,
   // with no switch to all notes (D5, D6). One browser per engine; the launch is the

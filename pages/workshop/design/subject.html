@@ -56,16 +56,21 @@
     <script type="module" src="/static/components/note-list/view.js"></script>
     <script type="module" src="/static/components/note-editor/view.js"></script>
     <script type="module" src="/static/components/highlight-notes/view.js"></script>
+    <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
     <dock-desk marks-subject>
       <book-reader label="Reader" height="fill" highlights></book-reader>
-      <book-shelf label="Books" side="left" renames></book-shelf>
-      <book-toc label="Contents" side="left" shows-on="book.selected"></book-toc>
-      <note-list subject keeps-open label="Notes" side="right"></note-list>
-      <note-editor follows subject about-new label="Editor" side="right" height="fill" shows-on="note.selected"></note-editor>
+      <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
+        <book-shelf label="Books" renames></book-shelf>
+        <book-toc shows-on="book.selected"></book-toc>
+      </list-then-item>
+      <list-then-item id="notes" label="Notes" side="right" height="fill" shows-on="note.selected">
+        <note-list subject keeps-open label="Notes"></note-list>
+        <note-editor shows-on="note.selected" follows subject about-new height="fill"></note-editor>
+      </list-then-item>
       <highlight-notes label="Highlights" side="right" height="fill"></highlight-notes>
       <layout-switch control></layout-switch>
       <session-switch control></session-switch>
