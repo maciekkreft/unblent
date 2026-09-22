@@ -962,3 +962,85 @@ test("an invalid payload on a wildcard tool ask is refused quietly (no console.e
   sub();
   unmount(f);
 });
+
+// Named instances (4.1): a page may hold more than one instance of a view, told
+// apart by an id after `#`. The bus keys the mailbox, the emits and the holds by
+// the address, so two instances of one view do not share them. A view emits and
+// asks with its instance; a fact has one owner (4.3) and cannot be instanced.
+
+// A view that emits, for the emit-from-instance record test.
+function viewProducer(id) {
+  return createMachine({
+    id,
+    meta: { kind: "view", emits: ["thing.happened"], attributes: [] },
+    on: { go: { actions: emit(({ event }) => ({ type: "thing.happened", value: event.value })) } },
+  });
+}
+
+test("two instances of one view each get their own mailbox and are named in the record", () => {
+  const ra = [];
+  const rb = [];
+  const { records, sub } = collect();
+  const a = mount(consumer("c", ra), { instance: "a" });
+  const b = mount(consumer("c", rb), { instance: "b" });
+  const p = mount(producer("cp"), { events: { "thing.happened": SCHEMA } });
+  p.send({ type: "go", value: 5 });
+  assert.deepEqual(ra, [{ type: "thing.happened", value: 5 }]);
+  assert.deepEqual(rb, [{ type: "thing.happened", value: 5 }]);
+  const rec = records.find((r) => r.kind === "event" && r.name === "thing.happened" && r.from === "cp");
+  assert.deepEqual(rec.to.sort(), ["c#a", "c#b"]);
+  sub();
+  unmount(a);
+  unmount(b);
+  unmount(p);
+});
+
+test("the same address twice throws; an instance beside the plain name is allowed", () => {
+  const a = mount(consumer("c", []), { instance: "a" });
+  assert.throws(() => mount(consumer("c", []), { instance: "a" }), /already mounted: c#a/);
+  const plain = mount(consumer("c", []), {});
+  assert.ok(plain);
+  unmount(a);
+  unmount(plain);
+});
+
+test("a fact cannot be instanced; a bad instance string is refused", () => {
+  assert.throws(
+    () => mount(producer("fp"), { events: { "thing.happened": SCHEMA }, instance: "x" }),
+    /a fact has one owner/,
+  );
+  assert.throws(() => mount(consumer("c", []), { instance: "1bad" }), /bad instance "1bad"/);
+  assert.throws(() => mount(consumer("c", []), { instance: "a b" }), /bad instance "a b"/);
+});
+
+test("an emit from an instance records the instance address as `from`", () => {
+  const { records, sub } = collect();
+  const p = mount(viewProducer("vp"), { instance: "x", events: { "thing.happened": SCHEMA } });
+  p.send({ type: "go", value: 1 });
+  const rec = records.find((r) => r.kind === "event" && r.name === "thing.happened");
+  assert.equal(rec.from, "vp#x");
+  sub();
+  unmount(p);
+});
+
+test("a hold is per instance: a superseding event waits for the instance that asked, not its sibling", async () => {
+  const box = {};
+  const recA = [];
+  const recB = [];
+  const f = mount(holdFact("hf-i", box), { events: { "thing.changed": SCHEMA, "other.changed": SCHEMA }, queries: { read: HSCHEMA } });
+  const ma = holdAsker("hi", recA, ["hf-i: read"]);
+  const mb = holdAsker("hi", recB, ["hf-i: read"]);
+  const a = mount(ma, { instance: "a" });
+  const b = mount(mb, { instance: "b" });
+  const pending = ask(ma, "hf-i", "read", {}, "a"); // only #a has an open ask
+  f.send({ type: "bump", value: 1 });
+  assert.equal(recB.length, 1); // #b is not asking: delivered now
+  assert.equal(recA.length, 0); // #a is asking: held until its reply
+  box.replies[0]({ ok: true });
+  await pending;
+  await settle();
+  assert.equal(recA.length, 1); // released after #a's reply
+  unmount(f);
+  unmount(a);
+  unmount(b);
+});

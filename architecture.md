@@ -140,7 +140,7 @@ Everything goes through the bus. There is no other channel.
 
 ### 4.1 How addressing works
 
-Every component instance has an address: its name, and an instance id when a page holds more than one (`notes`, `note-editor#1`, `note-editor#2`). A command or query names its target; the bus places it in that mailbox. An event names no target; the bus places it in every mailbox that subscribed to that event name.
+Every component instance has an address: its name, and, when a page holds more than one instance of a view, an instance id after `#` (`notes`, `note-editor#journal`, `list-then-item#notes`). The page gives the instance id: it is the tag's `id` attribute, so the address names the purpose, is the same string in the page, in the trace and in the stored desk layout, and does not change when a tag is added elsewhere on the page. A view mounts with its id and asks with it, so the bus tells its mailbox, its emits and the events held for its open queries (4.2) from another instance's. A page holding two tags of one view without distinct ids fails the page check (11.2). Only views are instanced: a fact has exactly one owner (4.3), so a fact mounted with an instance is refused. A command or query names its target; the bus places it in that mailbox. An event names no target; the bus places it in every mailbox that subscribed to that event name.
 
 ### 4.2 How queries work
 

@@ -84,6 +84,18 @@ function kindOf(machine) {
   return machine.config.meta?.kind;
 }
 
+// A component's address (4.1): its name, plus `#<instance>` when a page holds more
+// than one instance of a view. The instance is the page's tag `id`. A fact has one
+// owner (4.3), so it cannot be instanced; the id must be a plain word so it reads in
+// an address and a stored layout unambiguously.
+function addressOf(machine, instance) {
+  const id = machine.config.id;
+  if (instance === undefined || instance === null || instance === "") return id;
+  if (!/^[A-Za-z][\w-]*$/.test(instance)) throw new Error(`mount ${id}: bad instance "${instance}"`);
+  if (kindOf(machine) === "fact") throw new Error(`mount ${id}: a fact has one owner, so it cannot be instanced`);
+  return `${id}#${instance}`;
+}
+
 // XState hands an event as `{ type, ...fields }`; the schemas describe the fields and
 // close the object without a `type`, so a copy without `type` is what is validated. The
 // delivered event is never touched.
@@ -219,7 +231,9 @@ function dropHolds(askerId) {
 // point: an undeclared or unknown emit must fail loudly, not pass silently.
 function forward(machine, emitter, event) {
   const name = event.type;
-  const from = machine.config.id;
+  // 4.1: the emitter's address, so an instanced view's emits carry `#<id>` and the
+  // trace, the subscribers and the holds tell one instance from another.
+  const from = idOf(emitter);
   const emits = machine.config.meta?.emits ?? [];
   // A refused emit is recorded before it throws (section 10: refusals are traffic
   // too), so the transcript shows the failure the same way it shows a delivery.
@@ -285,9 +299,13 @@ function forward(machine, emitter, event) {
   }
 }
 
-export function mount(machine, { input, events = {}, queries = {} } = {}) {
+export function mount(machine, { input, events = {}, queries = {}, instance } = {}) {
   const id = machine.config.id;
-  if (mounted.has(id)) throw new Error(`already mounted: ${id}`);
+  // 4.1: the address, not the bare name, is the routing key, so two instances of one
+  // view have separate mailboxes, emits and holds. Schemas below stay keyed by name
+  // and by "<id>: <name>": they belong to the component, not the instance.
+  const address = addressOf(machine, instance);
+  if (mounted.has(address)) throw new Error(`already mounted: ${address}`);
   // A declared emit reaches the bus with its schema, so the registry is complete
   // before the actor can emit anything.
   for (const name of machine.config.meta?.emits ?? []) {
@@ -324,9 +342,11 @@ export function mount(machine, { input, events = {}, queries = {} } = {}) {
     if (name.includes(".") && !name.startsWith("xstate.")) subscribe(name, actor);
   }
   actor.on("*", (event) => forward(machine, actor, event));
+  // Keyed by address before start, so an event emitted during entry finds the
+  // emitter's address through `idOf` (4.1), the same as one emitted afterwards.
+  mounted.set(address, actor);
+  machines.set(address, machine);
   actor.start();
-  mounted.set(id, actor);
-  machines.set(id, machine);
   return actor;
 }
 
@@ -351,10 +371,12 @@ export function unmount(actor) {
 // or a target that does not handle the query. While the ask is open the bus holds
 // the events the query's schema names as superseding its answer, for this asker
 // alone, and releases them after the reply lands (4.2).
-export function ask(machine, target, name, payload = {}) {
+export function ask(machine, target, name, payload = {}, instance) {
   const asks = machine.config.meta?.asks ?? [];
   const key = `${target}: ${name}`;
-  const from = machine.config.id;
+  // 4.1: the asker's address, so a reply and the events held for this ask (4.2) go
+  // to the instance that asked. The target is a fact and never carries an instance.
+  const from = addressOf(machine, instance);
   const fromKind = kindOf(machine);
   const to = [target];
   // The correlation id is a ULID (section 10), so a later trace can order and tell
