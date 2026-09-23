@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -1008,9 +1009,13 @@ BACKUP_UNIT = "unblent-litestream"
 # Litestream logs a sync of every database every 10 seconds, changed or not, so a
 # short window says whether it runs now without depending on the owner's activity.
 BACKUP_WINDOW = "-2min"
+# The sync line is written at the start of a round, before that round uploads, so the
+# latest line reads behind whenever something was saved in the last ten seconds. Only a
+# change older than this many seconds and still not online is a failure.
+BACKUP_GRACE = 30
 _LOG_LEVEL = re.compile(r"\blevel=(\w+)")
 _LOG_MSG = re.compile(r'\bmsg="([^"]*)"')
-_LOG_SYNC = re.compile(r'msg="replica sync".*?\bdb=(\S+).*?\btxid\.replica=(\w+) txid\.db=(\w+)')
+_LOG_SYNC = re.compile(r'\btime=(\S+) .*?msg="replica sync".*?\bdb=(\S+).*?\btxid\.replica=(\w+) txid\.db=(\w+)')
 
 
 def backup_problems(lines: list) -> list:
@@ -1020,15 +1025,20 @@ def backup_problems(lines: list) -> list:
     if errors:
         msg = _LOG_MSG.search(errors[-1])
         problems.append(f"{len(errors)} errors, the latest: {msg.group(1) if msg else errors[-1][:200]}")
-    latest = {}
+    syncs = {}
     for line in lines:
         if m := _LOG_SYNC.search(line):
-            latest[m.group(1)] = (m.group(2), m.group(3))
-    if not latest:
+            when = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+            syncs.setdefault(m.group(2), []).append((when, int(m.group(3), 16), int(m.group(4), 16)))
+    if not syncs:
         problems.append("no database was synced")
-    for db, (online, local) in sorted(latest.items()):
-        if online != local:
-            problems.append(f"{db} is behind online (online {online}, here {local})")
+    for db, rounds in sorted(syncs.items()):
+        newest_when, online, _ = rounds[-1]
+        settled = [r for r in rounds if (newest_when - r[0]).total_seconds() >= BACKUP_GRACE]
+        # Without a round that old (the service just started) there is nothing to judge yet.
+        if settled and online < settled[-1][2]:
+            problems.append(f"{db} has a change older than {BACKUP_GRACE} seconds that is not online "
+                            f"(online {online:x}, needed {settled[-1][2]:x})")
     return problems
 
 

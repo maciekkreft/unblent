@@ -15,8 +15,10 @@ _spec.loader.exec_module(check)
 problems = check.backup_problems
 
 
-def sync(db, online, local):
-    return (f'time=2026-09-23T17:42:47.572Z level=INFO msg="replica sync" system=store db={db} '
+def sync(db, online, local, second=0):
+    """One sync line, `second` seconds after 17:42:00."""
+    stamp = f"2026-09-23T17:{42 + second // 60:02d}:{second % 60:02d}.343Z"
+    return (f'time={stamp} level=INFO msg="replica sync" system=store db={db} '
             f"replica=s3 txid.replica={online} txid.db={local}")
 
 
@@ -36,12 +38,24 @@ class Backup(unittest.TestCase):
     def test_no_sync_at_all_fails(self):
         self.assertEqual(problems([]), ["no database was synced"])
 
-    def test_only_the_latest_sync_of_a_database_counts(self):
-        self.assertEqual(problems([sync("notes.db", "0011", "0012"), sync("notes.db", "0012", "0012")]), [])
-        found = problems([sync("notes.db", "0012", "0012"), sync("notes.db", "0012", "0013")])
+    def test_a_change_seconds_old_is_on_its_way(self):
+        # The line is written before the round uploads, so the latest one may read behind.
+        rounds = [sync("notes.db", "0012", "0012", t) for t in range(0, 50, 10)] + [sync("notes.db", "0012", "0013", 50)]
+        self.assertEqual(problems(rounds), [])
+
+    def test_steady_saving_is_healthy_while_the_online_copy_moves(self):
+        # Five rounds behind in a row, each round uploading what the one before saw.
+        rounds = [sync("notes.db", f"{0x30 + i:04x}", f"{0x31 + i:04x}", i * 10) for i in range(6)]
+        self.assertEqual(problems(rounds), [])
+
+    def test_a_change_older_than_the_grace_not_online_fails(self):
+        rounds = [sync("notes.db", "0012", "0012", 0)] + [sync("notes.db", "0012", "0013", t) for t in range(10, 60, 10)]
+        found = problems(rounds)
         self.assertEqual(len(found), 1)
         self.assertIn("notes.db", found[0])
 
+    def test_too_short_a_log_is_not_judged(self):
+        self.assertEqual(problems([sync("notes.db", "0012", "0013", t) for t in range(0, 30, 10)]), [])
 
 if __name__ == "__main__":
     unittest.main()
