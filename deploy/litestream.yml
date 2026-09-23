@@ -3,9 +3,12 @@
 # runs. Credentials and the R2 endpoint, which carries the account id, come from
 # the unit's EnvironmentFile, never from this file.
 #
-# Restoring is one command, run where the credentials are readable (root):
-#   set -a; . /etc/unblent-litestream/r2.env; set +a
-#   litestream restore -o data/<user>/notes.db s3://unblent-data/<user>/notes.db
+# Restoring is one command, run where the credentials and endpoint are readable
+# (root). It writes a new file, the database as it was at the given UTC time (leave
+# out -timestamp for the latest); inspect it before it replaces anything in data/:
+#   sudo bash -c 'set -a; . /etc/unblent-litestream/r2.env; set +a; litestream restore \
+#     -timestamp 2026-09-23T17:50:00Z -o /tmp/notes.db \
+#     "s3://unblent-data/<user>/notes.db?endpoint=$LITESTREAM_ENDPOINT&region=auto"'
 # The books files (chapters, images, source) are not databases; rclone copies
 # them (deploy/unblent-books-backup.*) and restores them:
 #   rclone copy r2:unblent-data/<user>/books /opt/unblent/data/<user>/books

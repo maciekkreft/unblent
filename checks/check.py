@@ -1002,6 +1002,56 @@ def check_icons() -> None:
         fail("tokens/icons.js", "icon check (7.6)", f'icon "{name}" is used by no view; remove it (7.6)')
 
 
+# --- Backup check (architecture.md 11.2) -----------------------------------------
+
+BACKUP_UNIT = "unblent-litestream"
+# Litestream logs a sync of every database every 10 seconds, changed or not, so a
+# short window says whether it runs now without depending on the owner's activity.
+BACKUP_WINDOW = "-2min"
+_LOG_LEVEL = re.compile(r"\blevel=(\w+)")
+_LOG_MSG = re.compile(r'\bmsg="([^"]*)"')
+_LOG_SYNC = re.compile(r'msg="replica sync".*?\bdb=(\S+).*?\btxid\.replica=(\w+) txid\.db=(\w+)')
+
+
+def backup_problems(lines: list) -> list:
+    """What is wrong with the backup, judged from its recent log lines; [] when healthy."""
+    problems = []
+    errors = [line for line in lines if (m := _LOG_LEVEL.search(line)) and m.group(1) == "ERROR"]
+    if errors:
+        msg = _LOG_MSG.search(errors[-1])
+        problems.append(f"{len(errors)} errors, the latest: {msg.group(1) if msg else errors[-1][:200]}")
+    latest = {}
+    for line in lines:
+        if m := _LOG_SYNC.search(line):
+            latest[m.group(1)] = (m.group(2), m.group(3))
+    if not latest:
+        problems.append("no database was synced")
+    for db, (online, local) in sorted(latest.items()):
+        if online != local:
+            problems.append(f"{db} is behind online (online {online}, here {local})")
+    return problems
+
+
+def check_backup() -> None:
+    # Only the production host runs the backup; elsewhere there is nothing to check.
+    load = subprocess.run(["systemctl", "show", "-p", "LoadState", "--value", BACKUP_UNIT],
+                          capture_output=True, text=True)
+    if load.returncode != 0 or load.stdout.strip() != "loaded":
+        return
+    where = f"deploy/systemd/{BACKUP_UNIT}.service"
+    active = subprocess.run(["systemctl", "is-active", BACKUP_UNIT], capture_output=True, text=True)
+    if active.stdout.strip() != "active":
+        fail(where, "backup check (11.2)", f"the backup is {active.stdout.strip()}: sudo systemctl start {BACKUP_UNIT}")
+    log = subprocess.run(["journalctl", "-u", BACKUP_UNIT, "--since", BACKUP_WINDOW, "--no-pager", "-o", "cat"],
+                         capture_output=True, text=True)
+    if log.returncode != 0:
+        fail(where, "backup check (11.2)", f"cannot read the backup's log: {log.stderr.strip()}")
+    problems = backup_problems(log.stdout.splitlines())
+    if problems:
+        fail(where, "backup check (11.2)",
+             "the backup is failing: " + "; ".join(problems) + f". Read: journalctl -u {BACKUP_UNIT} --since {BACKUP_WINDOW}")
+
+
 # --- Unused tokens (architecture.md 7.4) -----------------------------------------
 
 def report_unused_tokens() -> None:
@@ -1541,6 +1591,7 @@ def main() -> None:
     _timed(timings, "document", check_document_writes)
     _timed(timings, "styles", check_styles)
     _timed(timings, "icons", check_icons)
+    _timed(timings, "backup", check_backup)
     _enforce_budget(timings, STATIC_BUDGET_S, "the fast phase")
     if static_only:
         return
