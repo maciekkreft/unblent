@@ -20,6 +20,31 @@ import { setup, fromPromise, fromCallback, enqueueActions } from "xstate";
 // A chat's title is the first non-empty line of the first message, cut short (12).
 const firstLine = (text) => (text.split("\n").find((l) => l.trim() !== "") || "").trim().slice(0, 60);
 
+// A chat's subtitle is the first line of its latest answer that has text, as plain
+// text, so a list shows two lines like a note's (notes/machine.js subtitleOf) without
+// holding the turns. The answer is markdown: a heading line ("## Summary") says little
+// about the answer, so the first line that is not a heading is used when there is one,
+// and the markers a line starts with and the inline emphasis and code marks are
+// dropped; capped so it stays small in every event.
+const HEADING = /^#{1,6}\s/;
+const subtitleOf = (text) => {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  return (lines.find((l) => !HEADING.test(l)) ?? lines[0] ?? "")
+    .replace(/^(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, "")
+    .replace(/\*\*|__|`/g, "")
+    .trim()
+    .slice(0, 120);
+};
+
+const latestAnswer = (turns) => {
+  for (let i = turns.length - 1; i >= 0; i--) if (turns[i].role === "assistant" && turns[i].text.trim() !== "") return turns[i].text;
+  return "";
+};
+
+// A heading as the server lists it carries the latest answer's text, cut to size
+// (server/router.py); the subtitle is derived here, in one place.
+const fromServer = ({ answer, ...h }) => ({ ...h, subtitle: subtitleOf(answer ?? "") });
+
 // A chat is about a subject when one of its links names that subject (12).
 const aboutMatch = (about, sub) => Boolean(sub) && about.some((a) => a.kind === sub.kind && a.id === sub.id);
 
@@ -65,15 +90,16 @@ const changedPayload = (context, chat) => ({
   turns: chat.turns.map(stripTurn),
   pending: hasUnsent(context, chat.id),
   updatedAt: chat.updatedAt,
+  subtitle: subtitleOf(latestAnswer(chat.turns)),
 });
 
 // The read reply's conversation, shaped like the event minus the `type`.
 const readShape = (context, chat) => {
-  const { type, ...rest } = changedPayload(context, chat);
+  const { type, subtitle, ...rest } = changedPayload(context, chat);
   return rest;
 };
 
-const heading = (chat) => ({ id: chat.id, title: chat.title, about: chat.about, updatedAt: chat.updatedAt });
+const heading = (chat) => ({ id: chat.id, title: chat.title, about: chat.about, updatedAt: chat.updatedAt, subtitle: subtitleOf(latestAnswer(chat.turns)) });
 
 const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0 });
 
@@ -648,7 +674,7 @@ const onSubjectChanged = (context, event, enqueue, self) => {
 const answerList = (context, reply) => {
   if (context.unavailable) return reply({ error: "unavailable" });
   const conversations = context.headings
-    .map((h) => ({ id: h.id, title: h.title, about: h.about, updatedAt: h.updatedAt, pending: hasUnsent(context, h.id) }))
+    .map((h) => ({ id: h.id, title: h.title, about: h.about, updatedAt: h.updatedAt, pending: hasUnsent(context, h.id), subtitle: h.subtitle ?? "" }))
     .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1));
   reply({ conversations });
 };
@@ -707,7 +733,7 @@ const onListed = (context, event) => {
   // still unsent), so a focus reload does not drop it from the list.
   const serverIds = new Set(result.conversations.map((h) => h.id));
   const keptLocal = context.headings.filter((h) => !serverIds.has(h.id) && hasUnsent(context, h.id));
-  context.headings = [...result.conversations, ...keptLocal];
+  context.headings = [...result.conversations.map(fromServer), ...keptLocal];
   if (result.tools) {
     context.tools = result.tools.tools || {};
     context.approval = result.tools.approval || "auto";
@@ -742,7 +768,7 @@ const applyBoot = (context, out, self) => {
   } else if (out.failed) {
     Object.assign(context, base, { userId: out.userId, signedIn: true, unavailable: true, headings: [], openId: context.store.read(), lastSubject: null, tools: {}, approval: "auto" });
   } else {
-    const headings = out.list.conversations || [];
+    const headings = (out.list.conversations || []).map(fromServer);
     const toolsValue = out.list.tools || {};
     const sub = out.subject ? { kind: out.subject.kind, id: out.subject.id } : null;
     const stored = context.store.read();

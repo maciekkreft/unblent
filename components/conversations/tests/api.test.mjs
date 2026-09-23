@@ -120,6 +120,15 @@ test("the list returns headings newest first, with the tool preferences", async 
   assert.deepEqual(list.tools, { tools: {}, approval: "auto" }, "the default tool preferences");
 });
 
+test("the list carries the latest answer that has text", async () => {
+  const cookie = cookieFor(freshUser());
+  await put(U("D1"), chat({ turns: [turn(U("E1"), "user", "q"), turn(U("E2"), "assistant", "\n\nFirst answer", { status: "done" }), turn(U("E3"), "user", "q2"), turn(U("E4"), "assistant", "  ", { status: "failed" })] }), cookie);
+  await put(U("D2"), chat(), cookie);
+  const list = await (await get("", cookie)).json();
+  assert.equal(list.conversations.find((c) => c.id === U("D1")).answer, "First answer", "a blank later answer falls back to the one before");
+  assert.equal(list.conversations.find((c) => c.id === U("D2")).answer, "", "no answer yet is empty");
+});
+
 test("the tool preferences round trip (7.7)", async () => {
   const cookie = cookieFor(freshUser());
   await putTools({ tools: { "notes: list": false }, approval: "auto" }, cookie);

@@ -21,7 +21,8 @@
       }
     ],
     "pending": true,
-    "updatedAt": 1
+    "updatedAt": 1,
+    "subtitle": ""
   },
   {
     "type": "conversation.changed",
@@ -45,7 +46,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": ""
   },
   {
     "type": "conversation.changed",
@@ -69,7 +71,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "/slow this a"
   },
   {
     "type": "conversation.changed",
@@ -93,7 +96,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "/slow this answer arrive"
   },
   {
     "type": "conversation.changed",
@@ -117,7 +121,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "/slow this answer arrives slowly so"
   },
   {
     "type": "conversation.changed",
@@ -141,7 +146,8 @@
       }
     ],
     "pending": true,
-    "updatedAt": 1
+    "updatedAt": 1,
+    "subtitle": "/slow this answer arrives slowly so"
   },
   {
     "type": "conversation.changed",
@@ -165,6 +171,7 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "/slow this answer arrives slowly so"
   }
 ]

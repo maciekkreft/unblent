@@ -390,6 +390,24 @@ test("a tool result rides as its size, not its content (4.3)", async () => {
   assert.equal(reply.conversation.turns[0].results[0].size, 5);
 });
 
+test("a chat's subtitle is its latest answer's first line, as plain text", async () => {
+  const chat = { id: CHAT, title: "t", about: [], start: "s", updatedAt: 5, turns: [
+    { id: USER, role: "user", text: "q" },
+    { id: ANSWER, role: "assistant", text: "\n## Summary\n\n- **Bold** start of `it`\nmore", status: "done" },
+    { id: U("X9"), role: "user", text: "q2" },
+    { id: ANSWER2, role: "assistant", text: "", status: "failed" },
+  ] };
+  const h = start({ conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5, answer: "## Heading only" }, { id: CHAT2, title: "u", about: [], updatedAt: 4, answer: "" }], chatsById: { [CHAT]: chat } });
+  await ready(h);
+  const listed = (await query(h.actor, "list", {}, QUERIES.list.reply)).conversations;
+  assert.deepEqual(listed.map((c) => c.subtitle), ["Heading only", ""], "derived from the server's answer; a heading alone still shows");
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length > 0, "loaded");
+  assert.equal(lastChange(h).subtitle, "Bold start of it", "the heading is skipped; an empty later answer falls back to the one before");
+  assert.equal((await query(h.actor, "list", {}, QUERIES.list.reply)).conversations[0].subtitle, "Bold start of it");
+  assert.equal((await query(h.actor, "read", { id: CHAT }, QUERIES.read.reply)).conversation.subtitle, undefined, "read has no subtitle");
+});
+
 test("list?, open? and tools? answer the boot picture", async () => {
   const h = start({ conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5 }], tools: { tools: { "notes: list": false }, approval: "auto" }, stored: CHAT });
   await ready(h);

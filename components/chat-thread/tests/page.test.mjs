@@ -95,6 +95,11 @@ const chatTitles = (page) =>
     [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft) .name")].map((n) => n.textContent.trim()),
   );
 
+const chatSubtitles = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft) .subtitle")].map((n) => n.textContent.trim()),
+  );
+
 // Start a fresh chat (the New chat row on top).
 const newChat = (page) =>
   page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector(".row.draft").click());
@@ -443,9 +448,14 @@ for (const engine of ENGINES) {
       await until(async () => (await lastAnswer(page)).includes("second message"));
       await until(async () => (await chatTitles(page)).length === 2);
       assert.deepEqual(await chatTitles(page), ["second message", "first message"], "both chats, newest first");
+      // Each row's second line is the start of its answer, like a note row's.
+      await until(async () => (await chatSubtitles(page)).every((s, i) => s.includes(["second message", "first message"][i])));
       await pickChat(page, "first message");
       await until(async () => (await lastAnswer(page)).includes("first message"));
       assert.match(await threadText(page), /first message/, "picking the older row switched the thread to it");
+      // After a reload the second lines come from the server's list.
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await until(async () => (await chatSubtitles(page)).some((s) => s.includes("second message")));
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

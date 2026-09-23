@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Each chat's heading (12): id, title, what it is linked to, when it changed, and whether it still has a finished turn the server has not confirmed. Or an honest error when the server cannot be reached; exactly one of `conversations` or `error` is present.",
+    "description": "Each chat's heading (12): id, title, the first line of its latest answer (subtitle), what it is linked to, when it changed, and whether it still has a finished turn the server has not confirmed. Or an honest error when the server cannot be reached; exactly one of `conversations` or `error` is present.",
     "type": "object",
     "properties": {
       "conversations": {
@@ -31,7 +31,8 @@
               }
             },
             "updatedAt": { "type": "integer" },
-            "pending": { "type": "boolean" }
+            "pending": { "type": "boolean" },
+            "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none." }
           },
           "required": ["id", "title", "about", "updatedAt", "pending"],
           "additionalProperties": false

@@ -114,14 +114,15 @@ class ConversationList extends LitElement {
     .row:focus-visible {
       outline: var(--focus-ring);
     }
-    /* The sliding layer carries the row's content: a title line and the trailing box
-       beside it. The transition animates the settle back after a release; a live drag
-       turns it off so the row tracks the finger, and gives it an opaque ground so the
-       delete layer shows only in the strip the slide vacates, not through the content. */
+    /* The sliding layer carries the row's content, laid out like a note-list row: a title
+       line and a subtitle line in a column, the trailing box beside them. The transition
+       animates the settle back after a release; a live drag turns it off so the row
+       tracks the finger, and gives it an opaque ground so the delete layer shows only in
+       the strip the slide vacates, not through the content. */
     .slide {
       position: relative;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: var(--space-sm);
       padding: var(--space-xs) var(--space-sm);
       transition: transform var(--duration-slide) var(--ease);
@@ -170,6 +171,19 @@ class ConversationList extends LitElement {
       flex: 1;
       min-width: 0;
     }
+    /* The "New chat" row is one line, centred in a chat row's two-line height so the
+       list keeps a constant row height, the same as note-list. The height is the two
+       line-boxes a chat row stacks (title + subtitle), expressed from the type tokens. */
+    .row.draft .slide {
+      align-items: center;
+    }
+    .row.draft .text {
+      display: flex;
+      align-items: center;
+      min-height: calc(
+        var(--text-body) * var(--leading-normal) + var(--text-sm) * var(--leading-tight)
+      );
+    }
     .name {
       display: block;
       color: var(--color-body);
@@ -197,12 +211,24 @@ class ConversationList extends LitElement {
     .name .mark svg {
       display: block;
     }
+    /* The chat's second line: the first line of its latest answer. A chat with none
+       keeps the line (a mute placeholder), so a row is always two lines tall, like a
+       note row, and the list does not jump when the first answer arrives. */
+    .subtitle {
+      display: block;
+      font-size: var(--text-sm);
+      line-height: var(--leading-tight);
+      color: var(--color-mute);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     /* The time and the trash share one cell, so the trash appears in place on hover or
        focus without shifting the row; the cell is as wide as the wider of the two. */
     .trailing {
       flex: none;
       display: grid;
-      align-items: center;
+      align-items: start;
       justify-items: end;
     }
     .time,
@@ -241,7 +267,8 @@ class ConversationList extends LitElement {
     }
     /* A chat counting down to its delete keeps its row so the user sees what is going,
        struck through, its trash swapped for Undo, with a bar draining the window. */
-    .row.discarding .name {
+    .row.discarding .name,
+    .row.discarding .subtitle {
       text-decoration: line-through;
       color: var(--color-mute);
     }
@@ -475,6 +502,7 @@ class ConversationList extends LitElement {
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "New chat" : r.title}</span>
+            <span class="subtitle">${r.subtitle || " "}</span>
           </span>
           <span class="trailing">${trailing}</span>
         </span>

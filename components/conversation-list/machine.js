@@ -25,8 +25,9 @@ const sorted = (chats) => [...chats].sort(order);
 // reads as none.
 const links = (chat) => (Array.isArray(chat.about) ? chat.about : []);
 
-// One row keeps only the fields the list shows, plus the links it scopes by.
-const row = ({ id, title, about, updatedAt }) => ({ id, title, about: links({ about }), updatedAt });
+// One row keeps only the fields the list shows, plus the links it scopes by. subtitle is
+// the latest answer's first line, "" when there is none or the heading predates it.
+const row = ({ id, title, subtitle, about, updatedAt }) => ({ id, title, subtitle: subtitle ?? "", about: links({ about }), updatedAt });
 
 // Fold one changed chat into the rows: replace the row with its id if present, else add
 // it, then re-sort. A conversation.changed carries the whole conversation (4.3, third

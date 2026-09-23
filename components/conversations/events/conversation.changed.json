@@ -85,7 +85,8 @@
       }
     },
     "pending": { "type": "boolean" },
-    "updatedAt": { "type": "integer" }
+    "updatedAt": { "type": "integer" },
+    "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none. A list shows it under the title." }
   },
   "required": ["id", "title", "about", "start", "turns", "pending", "updatedAt"],
   "additionalProperties": false

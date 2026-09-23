@@ -21,7 +21,8 @@
       }
     ],
     "pending": true,
-    "updatedAt": 1
+    "updatedAt": 1,
+    "subtitle": ""
   },
   {
     "type": "conversation.changed",
@@ -45,7 +46,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": ""
   },
   {
     "type": "conversation.changed",
@@ -69,7 +71,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "A plain answ"
   },
   {
     "type": "conversation.changed",
@@ -93,7 +96,8 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "A plain answer."
   },
   {
     "type": "conversation.changed",
@@ -131,7 +135,8 @@
       }
     ],
     "pending": true,
-    "updatedAt": 1
+    "updatedAt": 1,
+    "subtitle": "A plain answer."
   },
   {
     "type": "conversation.changed",
@@ -169,6 +174,7 @@
       }
     ],
     "pending": false,
-    "updatedAt": 900
+    "updatedAt": 900,
+    "subtitle": "A plain answer."
   }
 ]

@@ -45,14 +45,32 @@ def _tools(connection: sqlite3.Connection) -> dict:
 @router.get("")
 def list_conversations(user_id: str = Depends(require_user)):
     # Headings only, newest first (12); the turns are read one chat at a time. pending
-    # is browser-only (it depends on the outbox), so it is not returned here.
+    # is browser-only (it depends on the outbox), so it is not returned here. answer is
+    # the start of the latest answer that has text, cut to size: the browser derives the
+    # row's second line from it, so that rule lives in one place (machine.js subtitleOf).
     with _connect(user_id) as connection:
         rows = connection.execute(
-            "SELECT id, title, about, updated_at FROM conversations ORDER BY updated_at DESC, id DESC"
+            """
+            SELECT c.id, c.title, c.about, c.updated_at,
+                   (SELECT substr(ltrim(json_extract(t.body, '$.text'), char(9, 10, 13, 32)), 1, 400)
+                      FROM turns t
+                     WHERE t.conversation_id = c.id
+                       AND json_extract(t.body, '$.role') = 'assistant'
+                       AND trim(json_extract(t.body, '$.text'), char(9, 10, 13, 32)) <> ''
+                     ORDER BY t.id DESC LIMIT 1) AS answer
+              FROM conversations c
+             ORDER BY c.updated_at DESC, c.id DESC
+            """
         ).fetchall()
         tools = _tools(connection)
     conversations = [
-        {"id": row["id"], "title": row["title"], "about": json.loads(row["about"]), "updatedAt": row["updated_at"]}
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "about": json.loads(row["about"]),
+            "updatedAt": row["updated_at"],
+            "answer": row["answer"] or "",
+        }
         for row in rows
     ]
     return {"conversations": conversations, "tools": tools}

@@ -110,6 +110,15 @@ test("conversation.changed upserts a row and re-sorts", async () => {
   assert.equal(actor.getSnapshot().context.chats.find((c) => c.id === A).title, "A2");
 });
 
+test("a row keeps the subtitle from the list reply and from conversation.changed", async () => {
+  const { actor } = list({ ask: answering({ conversations: [{ id: A, title: "A", subtitle: "First", about: [], updatedAt: 10, pending: false }] }) });
+  await tick();
+  const subtitle = (id) => actor.getSnapshot().context.chats.find((c) => c.id === id).subtitle;
+  assert.equal(subtitle(A), "First");
+  actor.send({ type: "conversation.changed", id: A, title: "A", subtitle: "Second", about: [], start: "", turns: [], pending: false, updatedAt: 20 });
+  assert.equal(subtitle(A), "Second");
+});
+
 test("the open chat is the conversations: open reply, then conversation.opened", async () => {
   const { actor } = list({ ask: answering({ conversations: [{ id: A, title: "A", about: [], updatedAt: 10 }], open: A }) });
   await tick();
