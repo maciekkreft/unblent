@@ -701,7 +701,7 @@ for (const engine of ENGINES) {
       assert.equal(await navHeight(page), 0, "the empty nav bar takes no height in the product");
       assert.deepEqual(
         await stageControls(page),
-        ["layout-switch", "profile-switch", "session-switch"],
+        ["profile-switch", "layout-switch", "session-switch"],
         "the page controls sit in the stage header",
       );
       assert.ok(await switchHidden(page, "viewport-switch"), "the viewport switch is hidden");
