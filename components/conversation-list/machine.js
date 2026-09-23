@@ -5,7 +5,8 @@ import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 // and the rows counting down to a delete — and points at `conversations`, which owns the
 // fact. It asks conversations: list for the starting picture, conversations: open for the
 // open chat, and subject: read for what to scope by, following conversation.changed /
-// conversation.deleted / conversation.opened / subject.changed after (4.3, fourth rule).
+// conversation.deleted / conversation.opened / subject.changed after (4.3, fourth rule),
+// and asks again after session.changed, when the chats become another account's.
 // It never decides which chat is open; it learns that from conversations. The ask and
 // mint arrive through input, so this stays a pure definition importable in Node.
 //
@@ -68,6 +69,17 @@ export const machine = setup({
     // picture at read time — never overwrites a subject.changed that arrived first while
     // the chats list was still loading. subject.changed is held for this ask until its
     // reply lands, so it is applied after the starting picture, in order.
+    // The picture again after who is signed in changed: conversations reloads the chats
+    // for the new account (or clears them), and announces no per-chat news for that, so
+    // the list asks again, as book-shelf re-asks books. Both at once, so neither reply
+    // cancels the other.
+    reload: fromPromise(async ({ input }) => {
+      const [list, open] = await Promise.all([
+        input.ask("conversations", "list", {}),
+        input.ask("conversations", "open", {}),
+      ]);
+      return { list, open };
+    }),
     readSubject: fromPromise(({ input }) =>
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
   },
@@ -145,8 +157,33 @@ export const machine = setup({
     },
     ready: {},
     failed: {},
+    // Waits one turn of the event loop before asking, so session.changed has reached
+    // conversations first, whatever the delivery order: it is then re-reading the
+    // account and answers the asks with the new picture, not the one it is leaving.
+    resyncing: { after: { 0: "reloading" } },
+    reloading: {
+      invoke: {
+        src: "reload",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          {
+            guard: ({ event }) => Array.isArray(event.output.list.conversations),
+            target: "ready",
+            actions: assign({
+              chats: ({ event }) => sorted(event.output.list.conversations.map(row)),
+              open: ({ event }) => event.output.open.id ?? null,
+            }),
+          },
+          { target: "failed" },
+        ],
+        onError: "failed",
+      },
+    },
   },
   on: {
+    // Someone signed in or out (4.3): a first visit loads signed out and learns who it is
+    // a moment later, so the chats the list started with were not this account's.
+    "session.changed": { target: ".resyncing" },
     // The fact's news (4.3, fourth rule), followed in any state so a change that races the
     // starting query is not lost. A change for the draft's id means the draft became a
     // real chat, so a fresh next-chat id is minted above it.

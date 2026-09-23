@@ -57,7 +57,7 @@ const forge = (userId) => {
 
 // A signed-in browser on the conversations page, its account on the Echo test provider
 // (set over HTTP, since this page has no Settings). The chat box is then usable.
-async function open(engine, name, undoMs, tools) {
+async function open(engine, name, undoMs, tools, seed) {
   const browser = await engine.launch();
   const userId = `chat-${engine.name}-${name}-${Date.now()}`;
   const context = await browser.newContext();
@@ -80,6 +80,9 @@ async function open(engine, name, undoMs, tools) {
       sheet.replaceSync(`:root{--duration-undo:${ms}ms}`);
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
     }, undoMs);
+  // Chats already on the server before the first visit: the browser has no cached
+  // session yet, so the page starts signed out and learns who it is a moment later.
+  if (seed) await seed(context);
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
@@ -456,6 +459,25 @@ for (const engine of ENGINES) {
       // After a reload the second lines come from the server's list.
       await page.reload({ waitUntil: "domcontentloaded" });
       await until(async () => (await chatSubtitles(page)).some((s) => s.includes("second message")));
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`a first visit lists the account's chats in ${engine.name}`, async () => {
+    const U = (s) => "01HQ8ZK7M4N5P6Q7R8S9T0V1" + s;
+    const seed = async (context) => {
+      for (const k of ["1", "2"]) {
+        const turns = [{ id: U("D" + k), role: "user", text: "q" }, { id: U("E" + k), role: "assistant", text: "answer " + k, status: "done" }];
+        const put = await context.request.put(`${BASE_URL}/api/conversations/${U("C" + k)}`, { data: { title: "chat " + k, about: [], start: "", turns } });
+        assert.ok(put.ok(), "a chat is on the server");
+      }
+    };
+    const { browser, page, problems } = await open(engine, "first-visit", undefined, undefined, seed);
+    try {
+      await until(async () => (await chatTitles(page)).length === 2);
+      assert.deepEqual(await chatSubtitles(page), ["answer 2", "answer 1"], "each with its answer's first line");
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

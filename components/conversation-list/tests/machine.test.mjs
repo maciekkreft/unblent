@@ -119,6 +119,25 @@ test("a row keeps the subtitle from the list reply and from conversation.changed
   assert.equal(subtitle(A), "Second");
 });
 
+test("session.changed asks again, so a first visit's signed-out picture is replaced", async () => {
+  let reply = { conversations: [], open: null };
+  const { actor, clock } = list({ ask: (...args) => answering(reply)(...args) });
+  await tick();
+  assert.deepEqual(ids(actor), [], "signed out: no chats yet");
+  reply = { conversations: [{ id: A, title: "A", about: [], updatedAt: 10 }, { id: B, title: "B", about: [], updatedAt: 20 }], open: A };
+  actor.send({ type: "session.changed", userId: "u1" });
+  clock.increment(1);
+  await tick();
+  assert.equal(actor.getSnapshot().value, "ready");
+  assert.deepEqual(ids(actor), [B, A], "the account's chats");
+  assert.equal(actor.getSnapshot().context.open, A, "and its open chat");
+  reply = { conversations: [], open: null };
+  actor.send({ type: "session.changed", userId: null });
+  clock.increment(1);
+  await tick();
+  assert.deepEqual(ids(actor), [], "signing out clears them");
+});
+
 test("the open chat is the conversations: open reply, then conversation.opened", async () => {
   const { actor } = list({ ask: answering({ conversations: [{ id: A, title: "A", about: [], updatedAt: 10 }], open: A }) });
   await tick();
