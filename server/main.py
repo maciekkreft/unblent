@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 from starlette.types import Scope
 
@@ -46,6 +47,13 @@ class ComponentStaticFiles(RevalidatingStaticFiles):
 
 
 app = FastAPI()
+
+
+# Section 3.4: a browser that left before its request arrived is dropped quietly;
+# nothing arrived to save and no one waits for the answer.
+@app.exception_handler(ClientDisconnect)
+async def _client_left(request: Request, exc: ClientDisconnect) -> Response:
+    return Response(status_code=499)
 
 
 # Section 3.4: the server discovers routers by walking the components directory;
