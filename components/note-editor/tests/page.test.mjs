@@ -179,6 +179,14 @@ for (const engine of ENGINES) {
       });
       assert.ok(sizes.title > sizes.heading, `Title larger than Heading, saw ${sizes.title} vs ${sizes.heading}`);
 
+      // Enter at the end of the note keeps every empty line it makes, and they are Body.
+      await page.keyboard.type("GA");
+      for (let i = 0; i < 3; i++) await page.keyboard.press("Enter");
+      await page.keyboard.type("Gamma");
+      await page.keyboard.press("Escape");
+      await until(async () => (await lines(page)).map((l) => l.text).join("\n") === "Alpha\nBeta\n\n\nGamma");
+      assert.ok(!(await lines(page)).slice(2).some((l) => l.className.includes("cm-level-")), "new lines are Body");
+
       await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();

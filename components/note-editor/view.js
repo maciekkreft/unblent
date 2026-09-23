@@ -4,7 +4,7 @@ import { ulid } from "ulid";
 import { icon } from "icons";
 import { EditorState, StateField, StateEffect, RangeSetBuilder, Prec, Compartment } from "@codemirror/state";
 import { EditorView, Decoration, keymap, drawSelection } from "@codemirror/view";
-import { history, historyKeymap } from "@codemirror/commands";
+import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim } from "@replit/codemirror-vim";
 import { machine, parseBody, serialize, aboutTitleOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
@@ -450,6 +450,8 @@ class NoteEditor extends LitElement {
       levelTheme,
       history(),
       keymap.of(historyKeymap),
+      // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
+      keymap.of([{ key: "Enter", run: insertNewline }]),
       EditorView.lineWrapping,
       EditorView.updateListener.of(this.#onUpdate),
       EditorView.domEventHandlers({ blur: () => this.#actor.send({ type: "_blurred" }) }),
