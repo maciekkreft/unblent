@@ -13,12 +13,16 @@ function where(file) {
 }
 
 // Node wraps a test's own error in ERR_TEST_FAILURE; the cause is what the test threw.
+// The first of our frames can be a shared helper (a wait), so the test's own frame,
+// the one node runs as TestContext, is printed under it when the two differ.
 function reason(error) {
   const cause = error?.cause ?? error;
   const message = String(cause?.message ?? cause ?? "failed").split("\n").filter((l) => l.trim()).slice(0, 6).join("\n  ");
-  const frame = String(cause?.stack ?? "").split("\n")
-    .find((line) => line.includes(ROOT) && !line.includes("node_modules") && !line.includes("/checks/"));
-  return frame ? `  ${message}\n  ${frame.trim()}` : `  ${message}`;
+  const ours = String(cause?.stack ?? "").split("\n")
+    .filter((line) => line.includes(ROOT) && !line.includes("node_modules") && !line.includes("/checks/"))
+    .map((line) => line.trim());
+  const frames = [...new Set([ours[0], ours.find((line) => line.includes("TestContext."))])].filter(Boolean);
+  return [`  ${message}`, ...frames.map((frame) => `  ${frame}`)].join("\n");
 }
 
 export default async function* progress(source) {

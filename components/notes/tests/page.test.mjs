@@ -1,4 +1,4 @@
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -448,10 +448,11 @@ for (const engine of ENGINES) {
   });
 
   // The deletion gestures share one browser per engine: the launch is the costly part
-  // on a small host, so a fresh page per test keeps each isolated without paying for a
-  // new browser each time. The suite's own timeout must exceed the sum of its tests
-  // (each still bounded at the run's per-test timeout); otherwise the suite itself
-  // times out and fails every test in it.
+  // on a small host. Each test gets its own context, closed when it ends: a shared one
+  // shares IndexedDB and localStorage, so one test's "First" would survive into the
+  // next, and its pages would keep running under the tests after it. The suite's own
+  // timeout must exceed the sum of its tests (each still bounded at the run's per-test
+  // timeout); otherwise the suite itself times out and fails every test in it.
   describe(`deleting a note in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     let context;
@@ -459,9 +460,11 @@ for (const engine of ENGINES) {
     // own room so a slow launch never eats a test's budget.
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
     }, { timeout: 30000 });
+    afterEach(async () => {
+      await context?.close();
+      context = null;
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
@@ -469,6 +472,8 @@ for (const engine of ENGINES) {
     const open = async (opts = {}) => {
       const problems = [];
       const debug = [];
+      context = await browser.newContext();
+      context.setDefaultTimeout(4000);
       const page = await context.newPage();
       watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
