@@ -1,6 +1,7 @@
 // A push runs every test in both engines (11); a line per passing test buries the one that
 // broke. This reporter prints one line per file, and a failure's reason right under its
 // name, so a red run reads from the top. `--verbose` adds the spec reporter back.
+import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,17 +13,36 @@ function where(file) {
   return relative(ROOT, path) || path;
 }
 
+// The code at file:line, so a reader sees what failed without opening the file.
+const sources = new Map();
+function code(file, line) {
+  try {
+    const path = file.startsWith("file:") ? fileURLToPath(file) : file;
+    if (!sources.has(path)) sources.set(path, readFileSync(path, "utf8").split("\n"));
+    const text = sources.get(path)[line - 1]?.trim();
+    return text ? `${line} | ${text.length > 160 ? `${text.slice(0, 157)}...` : text}` : null;
+  } catch {
+    return null;
+  }
+}
+
 // Node wraps a test's own error in ERR_TEST_FAILURE; the cause is what the test threw.
 // The first of our frames can be a shared helper (a wait), so the test's own frame,
-// the one node runs as TestContext, is printed under it when the two differ.
-function reason(error) {
+// the one node runs as TestContext, is printed under it when the two differ, then the
+// test's code at that frame. A test stopped at its time limit has no frame of ours, so
+// its declaration is named instead.
+function reason(error, test) {
   const cause = error?.cause ?? error;
   const message = String(cause?.message ?? cause ?? "failed").split("\n").filter((l) => l.trim()).slice(0, 6).join("\n  ");
   const ours = String(cause?.stack ?? "").split("\n")
     .filter((line) => line.includes(ROOT) && !line.includes("node_modules") && !line.includes("/checks/"))
     .map((line) => line.trim());
   const frames = [...new Set([ours[0], ours.find((line) => line.includes("TestContext."))])].filter(Boolean);
-  return [`  ${message}`, ...frames.map((frame) => `  ${frame}`)].join("\n");
+  const lines = frames.map((frame) => frame.replace(`file://${ROOT}/`, "").replace(`${ROOT}/`, ""));
+  const last = frames.at(-1)?.match(/\(?((?:file:\/\/)?\/[^():]+):(\d+):\d+\)?$/);
+  if (last) lines.push(code(last[1], Number(last[2])));
+  else if (test?.file && test.line) lines.push(`test at ${where(test.file)}:${test.line}`, code(test.file, test.line));
+  return [message, ...lines.filter(Boolean)].map((line) => `  ${line}`).join("\n");
 }
 
 export default async function* progress(source) {
@@ -47,7 +67,7 @@ export default async function* progress(source) {
     const own = data.details?.type !== "suite" || data.details?.error?.failureType !== "subtestsFailed";
     if (event.type === "test:fail" && own) {
       failed = true;
-      yield `FAIL ${where(data.file)} "${data.name}"\n${reason(data.details?.error)}\n`;
+      yield `FAIL ${where(data.file)} "${data.name}"\n${reason(data.details?.error, data)}\n`;
     }
   }
   const line = finish();
