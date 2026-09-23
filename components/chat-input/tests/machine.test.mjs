@@ -122,6 +122,33 @@ test("a message to an existing chat carries no about or start", async () => {
   assert.equal(e.start, undefined);
 });
 
+test("picking a chat with no messages asks the view to focus the box", async () => {
+  const h = start();
+  await ready(h);
+  const before = h.actor.getSnapshot().context.focusRequest;
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  h.actor.send({ type: "conversation.opened", id: CHAT });
+  await until(() => h.actor.getSnapshot().context.focusRequest === before + 1, "focus requested");
+});
+
+test("picking a chat with messages, or a subject change, leaves focus alone", async () => {
+  const conversation = { id: CHAT, title: "t", about: [], start: "s", turns: [{ id: USER, role: "user", text: "earlier" }], pending: false, updatedAt: 1 };
+  const h = start({ conversation });
+  await ready(h);
+  h.actor.send({ type: "conversation.opened", id: CHAT });
+  await until(() => h.actor.getSnapshot().context.conversation != null, "read landed");
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await flush();
+  assert.equal(h.actor.getSnapshot().context.focusRequest, 0, "a chat with messages keeps focus where it is");
+
+  const empty = start();
+  await ready(empty);
+  empty.actor.send({ type: "conversation.opened", id: CHAT });
+  await flush();
+  await flush();
+  assert.equal(empty.actor.getSnapshot().context.focusRequest, 0, "an opened chat nobody picked moves nothing");
+});
+
 test("an empty draft sends nothing", async () => {
   const h = start();
   await ready(h);

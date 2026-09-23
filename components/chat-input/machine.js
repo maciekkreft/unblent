@@ -96,6 +96,13 @@ export const inputState = (llm) => {
 // writes the start only when it first creates the chat (12).
 const isNew = (context) => turns(context.conversation).length === 0;
 
+// Picking a chat with no messages puts the cursor in the box (12). The view focuses when
+// `focusRequest` changes; `focusFor` is the picked chat while its read is in flight.
+const focusIfNew = (context, conversation) => ({
+  focusFor: null,
+  focusRequest: turns(conversation).length === 0 ? context.focusRequest + 1 : context.focusRequest,
+});
+
 const submit = (context, enqueue, text) => {
   const body = text.trim();
   if (!body) return;
@@ -172,6 +179,10 @@ export const machine = setup({
     // Which fields an event set while the start actor was in flight, so onDone leaves
     // those alone.
     touched: {},
+    focusFor: null,
+    focusRequest: 0,
+    // The chat whose read is in flight, so a pick of it waits for the read to land.
+    reading: null,
   }),
   initial: "starting",
   // Beside the states, so the preference arrives whatever the box is doing and a
@@ -191,7 +202,7 @@ export const machine = setup({
     // lands (4.2).
     "conversation.opened": {
       actions: enqueueActions(({ context, event, enqueue, self }) => {
-        enqueue.assign({ openId: event.id, conversation: null, touched: mark(context.touched, "openId", "conversation") });
+        enqueue.assign({ openId: event.id, conversation: null, reading: event.id, touched: mark(context.touched, "openId", "conversation") });
         if (event.id != null) {
           const id = event.id;
           enqueue(() =>
@@ -205,7 +216,20 @@ export const machine = setup({
     },
     _openLoaded: {
       guard: ({ context, event }) => event.id === context.openId,
-      actions: assign({ conversation: ({ event }) => event.conversation, touched: ({ context }) => mark(context.touched, "conversation") }),
+      actions: assign(({ context, event }) => ({
+        conversation: event.conversation,
+        reading: null,
+        touched: mark(context.touched, "conversation"),
+        ...(event.id === context.focusFor ? focusIfNew(context, event.conversation) : {}),
+      })),
+    },
+    // The user picked a chat (12): the gesture, not conversation.opened, so a subject
+    // change or a reload never moves the cursor. A chat already shown is decided now;
+    // another waits for its read.
+    "conversation.selected": {
+      actions: assign(({ context, event }) =>
+        event.id === context.openId && context.reading !== event.id ? focusIfNew(context, context.conversation) : { focusFor: event.id },
+      ),
     },
     "conversation.changed": {
       guard: ({ context, event }) => event.id === context.openId,

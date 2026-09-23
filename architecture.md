@@ -577,6 +577,8 @@ The architecture document describes the rules; the checks are what make them rea
 
 - **Which chat is open follows the subject.** `conversations` owns which chat is open, like `books` owns which book is open, because three views need it and a view cannot ask a view. When the subject changes, the open chat becomes the most recently updated chat about it, or none, and the panel shows an empty new chat. This is per device (5): each device may be looking at a different chat.
 
+- **Starting a new chat puts the cursor in the chat box.** When the user picks a chat with no messages yet, such as the New chat row, `chat-input` takes focus, in Vim's insert mode when "Vim keys" is on, so the user can type at once. It follows the gesture `conversation.selected`, not `conversation.opened`, so a change of subject or a reload never moves the cursor. Picking a chat that has messages leaves focus where it is.
+
 - **The text a chat starts with is filled once.** A chat keeps a `start`: the general instructions the conversation began with, written once, by the view where the user acted, when the chat is created. It never changes afterwards, so the provider's cache holds and the chat stays an honest record of what the model was told. `conversations` does not know what a prompt is; a specific request is what the user types, not part of `start`.
 
 - **Chat settings follow the account.** Provider, model, thinking effort and cache lifetime are owned by `llm` and kept on its server, so they are the same on every device and apply to the next question in any chat; there is no per-chat copy. Today's device preferences (`settings`) stay on the device. Settings shows the two as sections named "This device" and "Your account".

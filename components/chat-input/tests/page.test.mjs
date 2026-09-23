@@ -186,6 +186,23 @@ for (const engine of ENGINES) {
     }
   });
 
+  test(`New chat puts the cursor in the box, in insert mode under Vim, in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "newchat", { vim: true });
+    try {
+      await until(async () => await vimOn(page), 4000);
+      await page.locator("conversation-list li.row", { hasText: "New chat" }).click();
+      await until(
+        async () => await page.evaluate(() => document.querySelector("chat-input").shadowRoot.activeElement?.classList.contains("cm-content")),
+        4000,
+      );
+      await page.keyboard.type("hi");
+      assert.equal(await draftText(page), "hi", "the first keys typed are text");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
   test(`the box keeps its draft across sign-out and sign-in in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "signout");
     try {

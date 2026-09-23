@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, keymap, drawSelection, placeholder } from "@codemirror/view";
 import { history, historyKeymap, insertNewline } from "@codemirror/commands";
-import { vim, getCM } from "@replit/codemirror-vim";
+import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { machine, inputState, pendingTurn, canContinue, retryText } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
@@ -239,6 +239,7 @@ class ChatInput extends LitElement {
   // The Send/Stop button ignores clicks for a moment after it changes role, so a click
   // aimed at Send does not land on the freshly-appeared Stop, and vice versa.
   #pendingWas = false;
+  #focusSeen = 0;
   #guardUntil = 0;
   #guardMs = null;
 
@@ -337,11 +338,26 @@ class ChatInput extends LitElement {
         this.#view.dispatch({ effects: this.#editable.reconfigure(EditorView.editable.of(editableOn)) });
       }
     }
+    if (snapshot && snapshot.context.focusRequest !== this.#focusSeen) {
+      this.#focusSeen = snapshot.context.focusRequest;
+      // Next frame: list-then-item may not have shown the chat yet (12, ordering).
+      requestAnimationFrame(() => this.#focusToType());
+    }
     const pending = Boolean(pendingTurn(snapshot?.context.conversation));
     if (pending !== this.#pendingWas) {
       this.#pendingWas = pending;
       this.#guardUntil = performance.now() + this.#guard();
     }
+  }
+
+  // A new chat was picked (12): the cursor goes to the box, in insert mode under Vim, so
+  // the first key typed is text.
+  #focusToType() {
+    const view = this.#view;
+    if (!view || !this.#editableOn) return;
+    view.focus();
+    const cm = this.#vimOn ? getCM(view) : null;
+    if (cm && cm.state?.vim?.insertMode !== true) Vim.handleKey(cm, "i", "user");
   }
 
   disconnectedCallback() {
