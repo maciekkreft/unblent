@@ -199,17 +199,23 @@ class DockDesk extends LitElement {
     button:focus-visible {
       outline: var(--focus-ring);
     }
+    /* Centred rather than on the baseline, so the subject mark lines up with the
+       middle of the label's letters, not sits above it. */
+    [role="tab"] {
+      display: inline-flex;
+      align-items: center;
+    }
     [role="tab"][aria-selected="true"] {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
     }
     /* The subject mark (12): an indicator sitting before the label inside the tab, the
-       size and colour of the tab text (7.6), with a hair of space after it. Not a
+       size and colour of the tab text (7.6), with a word's space after it. Not a
        control: no box, no pointer, no hit target of its own. */
     .mark {
       display: inline-flex;
       align-items: center;
-      margin-right: var(--space-2xs);
+      margin-right: calc(var(--space-xs) + var(--space-2xs));
       color: var(--color-accent);
     }
     .actions {
