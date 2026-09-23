@@ -262,6 +262,25 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Enter at the end of a comment keeps every empty line it makes.
+    test(`Enter at the end of a comment keeps each empty line in ${engine.name}`, async () => {
+      const { page, problems } = await open({ settings: VIM });
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length > 0);
+
+      await hnCaret(page, "end");
+      await until(async () => hnHas(page, ".cm-fat-cursor"));
+      await page.keyboard.press("A");
+      await page.keyboard.type("One");
+      for (let i = 0; i < 3; i++) await page.keyboard.press("Enter");
+      await page.keyboard.type("Two");
+      await page.keyboard.press("Escape");
+      await until(async () => (await hnDoc(page)).endsWith("One\n\n\nTwo"));
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
     // The quote line is protected: `x` on it is refused and flashes; `dd` on the only
     // comment line empties it to one blank line and keeps the highlight.
     test(`the quote line refuses an edit and dd empties a one-line comment in ${engine.name}`, async () => {

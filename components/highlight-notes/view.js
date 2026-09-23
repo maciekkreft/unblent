@@ -3,7 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { EditorState, StateField, StateEffect, Annotation, Prec, Transaction, Compartment } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
-import { history, historyKeymap, invertedEffects } from "@codemirror/commands";
+import { history, historyKeymap, invertedEffects, insertNewline } from "@codemirror/commands";
 import { vim } from "@replit/codemirror-vim";
 import { machine, ordered, compose, split } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
@@ -500,6 +500,8 @@ class HighlightNotes extends LitElement {
       editorTheme,
       history(),
       keymap.of(historyKeymap),
+      // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
+      keymap.of([{ key: "Enter", run: insertNewline }]),
       EditorView.lineWrapping,
       EditorView.decorations.compute([quoteField, discardField], (state) => this.#dimLines(state)),
       EditorView.decorations.compute([quoteField, discardField, "selection"], (state) => this.#marksAndBins(state)),
@@ -614,7 +616,7 @@ class HighlightNotes extends LitElement {
     }
     if (!update.docChanged || update.transactions.some((t) => t.annotation(fromView))) return;
     const doc = update.state.doc.toString();
-    this.#shown = doc;
+    this.#shown = this.#regionsOf(update.state).map((r) => settled(r.text)).join("\n");
     this.#actor.send({ type: "_typed", bodies: split(doc, this.#quotesOf(update.state)) });
   };
 
@@ -705,11 +707,11 @@ class HighlightNotes extends LitElement {
     if (sameOrder(curOrder, desOrder)) {
       return fragments
         .map((f, i) => ({ region: regions[i], text: compose([f]).doc }))
-        .filter(({ region, text }) => region.text !== text)
+        .filter(({ region, text }) => settled(region.text) !== text)
         .map(({ region, text }) => ({ from: region.from, to: region.to, insert: text }));
     }
     let i = 0;
-    while (i < regions.length && i < fragments.length && regions[i].id === fragments[i].id && regions[i].text === compose([fragments[i]]).doc) i += 1;
+    while (i < regions.length && i < fragments.length && regions[i].id === fragments[i].id && settled(regions[i].text) === compose([fragments[i]]).doc) i += 1;
     const doc = this.#view.state.doc;
     const from = i < regions.length ? regions[i].from : doc.length;
     const tail = fragments.slice(i);
@@ -750,6 +752,14 @@ class HighlightNotes extends LitElement {
     `;
   }
 }
+
+// A region as the facts hold it: split() drops a comment's trailing empty lines, but the
+// screen keeps them while the user types, so a new last line is not wiped by the sync.
+const settled = (text) => {
+  const lines = text.split("\n");
+  while (lines.length > 2 && lines.at(-1) === "") lines.pop();
+  return lines.join("\n");
+};
 
 const sameOrder = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 const sameSet = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
