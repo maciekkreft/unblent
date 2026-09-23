@@ -235,9 +235,14 @@ class BookReader extends LitElement {
         font-weight: var(--weight-semibold);
       }
     }
+    /* Justified like a printed page; hyphenation (by the document's lang) keeps a
+       five-word phone line from stretching its word gaps into rivers. */
     .strip p {
       font-size: var(--text-body);
       margin-block: var(--space-md);
+      text-align: justify;
+      -webkit-hyphens: auto;
+      hyphens: auto;
     }
     .strip a {
       color: var(--color-accent);
