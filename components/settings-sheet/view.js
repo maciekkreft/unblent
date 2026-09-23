@@ -20,6 +20,7 @@ const EFFORT_LABELS = {
 };
 const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
+const TTL_NOTE = "1 hour costs more to start and pays off from the third question within the hour.";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -60,16 +61,21 @@ class ActorController {
 
 class SettingsSheet extends LitElement {
   // `account` (7.7): reflected so the page's bare attribute reads as true and the
-  // manifest is visible. `keyDraft` holds what the user typed in the key box until
-  // they save it, and is cleared after, so the key never lingers in the field.
+  // manifest is visible. `tidy` (section 9) is the one-column look, reflected the same
+  // way. `keyDraft` holds what the user typed in the key box until they save it, and is
+  // cleared after, so the key never lingers in the field. `replacingKey` is true while
+  // the box is open over a key already saved.
   static properties = {
     account: { type: Boolean, reflect: true },
+    tidy: { type: Boolean, reflect: true },
     keyDraft: { state: true },
+    replacingKey: { state: true },
   };
 
   constructor() {
     super();
     this.keyDraft = "";
+    this.replacingKey = false;
   }
 
   static styles = css`
@@ -154,19 +160,8 @@ class SettingsSheet extends LitElement {
     .key input:focus-visible {
       outline: var(--focus-ring);
     }
-    .field select {
-      font: inherit;
-      color: var(--color-body);
-      background: var(--color-canvas-soft);
-      border: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-sm);
-      padding: var(--space-2xs) var(--space-xs);
-      cursor: pointer;
-    }
-    .field select:focus-visible {
-      outline: var(--focus-ring);
-    }
-    button.act {
+    button.act,
+    button.reset {
       font: inherit;
       color: var(--color-body);
       background: var(--color-canvas-soft);
@@ -175,14 +170,16 @@ class SettingsSheet extends LitElement {
       padding: var(--space-2xs) var(--space-md);
       cursor: pointer;
     }
-    button.act:hover:not(:disabled) {
+    button.act:hover:not(:disabled),
+    button.reset:hover {
       background: var(--color-surface-hover);
     }
     button.act:disabled {
       color: var(--color-border);
       cursor: default;
     }
-    button.act:focus-visible {
+    button.act:focus-visible,
+    button.reset:focus-visible {
       outline: var(--focus-ring);
     }
     .hint {
@@ -284,24 +281,77 @@ class SettingsSheet extends LitElement {
     select:focus-visible {
       outline: var(--focus-ring);
     }
-    button.reset {
-      font: inherit;
-      color: var(--color-body);
-      background: var(--color-canvas-soft);
-      border: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-sm);
-      padding: var(--space-2xs) var(--space-md);
-      cursor: pointer;
-    }
-    button.reset:hover {
-      background: var(--color-surface-hover);
-    }
-    button.reset:focus-visible {
-      outline: var(--focus-ring);
-    }
     .failed {
       margin: 0;
       color: var(--color-body);
+    }
+
+    /* The one-column look (section 9): every setting is one row, its name beside its
+       control, so the eye never crosses the stage to pair them (natural mapping). */
+    :host([tidy]) {
+      max-width: var(--width-form);
+    }
+    :host([tidy]) h3 {
+      margin: 0 0 var(--space-md);
+      font-size: var(--text-subtitle);
+      line-height: var(--leading-tight);
+    }
+    :host([tidy]) h3.later {
+      margin-top: var(--space-xl);
+      padding-top: var(--space-lg);
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    :host([tidy]) .switches,
+    :host([tidy]) .account {
+      gap: var(--space-sm);
+      margin-bottom: 0;
+    }
+    :host([tidy]) .field {
+      display: grid;
+      grid-template-columns: 2fr 3fr;
+      align-items: center;
+      column-gap: var(--space-md);
+      row-gap: var(--space-2xs);
+      white-space: normal;
+    }
+    :host([tidy]) .field > span:first-child {
+      color: var(--color-body);
+      font-size: var(--text-body);
+    }
+    :host([tidy]) .field > :not(:first-child) {
+      justify-self: start;
+    }
+    :host([tidy]) .field > .help {
+      grid-column: 2;
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    :host([tidy]) input[type="checkbox"] {
+      margin: 0;
+      accent-color: var(--color-accent);
+    }
+    :host([tidy]) .key {
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    :host([tidy]) .key .saved {
+      color: var(--color-body);
+      margin-right: var(--space-xs);
+    }
+    :host([tidy]) .tools {
+      gap: var(--space-sm);
+      margin-top: var(--space-md);
+    }
+    /* The model's description rides the hover in the workshop only; the dotted line
+       is the signifier that a hint is there. */
+    :host([tidy]) .field > .hinted {
+      text-decoration: underline dotted var(--color-mute);
+      text-underline-offset: var(--space-xs);
+      cursor: help;
+    }
+    :host([tidy]) button.reset {
+      margin-top: var(--space-md);
     }
   `;
 
@@ -328,6 +378,15 @@ class SettingsSheet extends LitElement {
         </select>
       </label>
     `;
+  }
+
+  // One on/off setting. The tidy look puts the name first, in the same row format as
+  // every other setting; the old look keeps the box before its name.
+  #check(name, checked, toggle) {
+    const box = html`<input type="checkbox" .checked=${checked} @change=${toggle} />`;
+    return this.tidy
+      ? html`<label class="field"><span>${name}</span>${box}</label>`
+      : html`<label>${box} ${name}</label>`;
   }
 
   render() {
@@ -393,32 +452,19 @@ class SettingsSheet extends LitElement {
         : nothing}
       <div class="switches">
         ${workshop
-          ? html`
-        <label>
-          <input
-            type="checkbox"
-            .checked=${!settings.viewportSwitchHidden}
-            @change=${() => this.#actor.send({ type: "_toggleViewport" })}
-          />
-          Viewport switch shown
-        </label>
-          `
+          ? this.#check("Viewport switch shown", !settings.viewportSwitchHidden, () =>
+              this.#actor.send({ type: "_toggleViewport" }),
+            )
           : nothing}
-        <label>
-          <input type="checkbox" .checked=${settings.vimKeys} @change=${() => this.#actor.send({ type: "_toggleVim" })} />
-          Vim keys
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            .checked=${!settings.layoutSwitchHidden}
-            @change=${() => this.#actor.send({ type: "_toggleLayout" })}
-          />
-          Layout switch shown
-        </label>
+        ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
+        ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
+          this.#actor.send({ type: "_toggleLayout" }),
+        )}
         ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
       </div>
-      <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>Reset to defaults</button>
+      <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>
+        ${this.tidy && account ? "Reset this device" : "Reset to defaults"}
+      </button>
     `;
     // Without the `account` attribute the sheet is the page-links sheet exactly as
     // before; with it, "This device" and "Your account" stand as two named sections
@@ -427,7 +473,7 @@ class SettingsSheet extends LitElement {
     return html`
       <h3>This device</h3>
       ${device}
-      <h3>Your account</h3>
+      <h3 class="later">Your account</h3>
       ${this.#account(llm, profile, toolList, tools)}
     `;
   }
@@ -436,8 +482,31 @@ class SettingsSheet extends LitElement {
   // library, on unless switched off. Each names what is read in plain words with its
   // description; flipping one is reversible by flipping it back (Don Norman: forgiveness,
   // honest signifiers). Shown only signed in and only when the catalog named some tools.
-  #tools(toolList, tools) {
+  #tools(toolList, tools, profile) {
     if (!toolList.length) return nothing;
+    // The tidy look prints only the label. The description is written for the model,
+    // so the product never shows it; the workshop keeps it on hover to check what the
+    // model is told.
+    if (this.tidy) {
+      const hint = profile !== "product";
+      return html`
+        <div class="tools">
+          <span class="group">What the chat may read</span>
+          ${toolList.map(
+            (tool) => html`
+              <label class="field">
+                <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
+                <input
+                  type="checkbox"
+                  .checked=${tools[tool.key] !== false}
+                  @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
+                />
+              </label>
+            `,
+          )}
+        </div>
+      `;
+    }
     return html`
       <div class="tools">
         <span class="group">What the chat may read</span>
@@ -484,7 +553,9 @@ class SettingsSheet extends LitElement {
             )}
           </select>
         </label>
-        ${current?.needsKey
+        ${current?.needsKey && this.tidy
+          ? this.#key(current)
+          : current?.needsKey
           ? html`
               <div class="field">
                 <span>API key</span>
@@ -525,6 +596,8 @@ class SettingsSheet extends LitElement {
                 </select>
               </label>
             `
+          : this.tidy
+          ? html`<div class="field"><span>Model</span><span class="help">Add your API key to choose a model.</span></div>`
           : html`<p class="hint">Add your API key to choose a model.</p>`}
         <label class="field">
           <span>Thinking effort</span>
@@ -539,9 +612,61 @@ class SettingsSheet extends LitElement {
           <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
             ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
           </select>
+          ${this.tidy ? html`<span class="help">${TTL_NOTE}</span>` : nothing}
         </label>
-        <span class="ttl-note">1 hour costs more to start and pays off from the third question within the hour.</span>
-        ${this.#tools(toolList, tools)}
+        ${this.tidy ? nothing : html`<span class="ttl-note">${TTL_NOTE}</span>`}
+        ${this.#tools(toolList, tools, profile)}
+      </div>
+    `;
+  }
+
+  // The API key in the tidy look. A saved key reads as a plain statement with Replace
+  // and Remove, so nothing on screen looks disabled; the box appears only when a key is
+  // wanted, and Cancel or Escape closes it again without a change (forgiveness).
+  #key(provider) {
+    const cancel = () => {
+      this.keyDraft = "";
+      this.replacingKey = false;
+    };
+    const save = () => {
+      this.#actor.send({ type: "_saveKey", key: this.keyDraft });
+      cancel();
+    };
+    const open = !provider.keySet || this.replacingKey;
+    return html`
+      <div class="field">
+        <span>API key</span>
+        <div class="key">
+          ${open
+            ? html`
+                <input
+                  type="password"
+                  placeholder="Paste your API key"
+                  .value=${this.keyDraft}
+                  @input=${(e) => (this.keyDraft = e.target.value)}
+                  @keydown=${(e) => {
+                    if (e.key === "Enter" && this.keyDraft) save();
+                    if (e.key === "Escape" && provider.keySet) cancel();
+                  }}
+                />
+                <button class="act" ?disabled=${this.keyDraft.length === 0} @click=${save}>Save</button>
+                ${provider.keySet ? html`<button class="act" @click=${cancel}>Cancel</button>` : nothing}
+              `
+            : html`
+                <span class="saved">Key saved</span>
+                <button
+                  class="act"
+                  @click=${async () => {
+                    this.replacingKey = true;
+                    await this.updateComplete;
+                    this.renderRoot.querySelector(".key input")?.focus();
+                  }}
+                >
+                  Replace
+                </button>
+                <button class="act" @click=${() => this.#actor.send({ type: "_removeKey" })}>Remove</button>
+              `}
+        </div>
       </div>
     `;
   }

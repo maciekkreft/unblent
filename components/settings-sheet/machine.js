@@ -103,8 +103,9 @@ export const machine = setup({
     kind: "view",
     emits: ["settings.edited", "llm.edited", "tools.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
-    // "This device"; without it, the page-links sheet exactly as before.
-    attributes: ["account"],
+    // "This device"; without it, the page-links sheet exactly as before. `tidy`
+    // (section 9): the one-column look, set on a page once the owner approved it there.
+    attributes: ["account", "tidy"],
     asks: ["pages: list", "settings: read", "catalog: list", "llm: read", "catalog: contracts", "conversations: tools"],
   },
   // The active profile (§12), adopted from settings; a page without settings

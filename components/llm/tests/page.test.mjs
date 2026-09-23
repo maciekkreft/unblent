@@ -155,4 +155,53 @@ for (const engine of ENGINES) {
       await browser.close();
     }
   });
+  test(`a saved key reads as saved, Replace opens the box and Cancel closes it, in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const userId = `llm-key-${engine.name}-${Date.now()}`;
+    const context = await browser.newContext();
+    context.setDefaultTimeout(4000);
+    await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
+    try {
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE_URL}/workshop/design/llm`, { waitUntil: "domcontentloaded" });
+      await ready(page);
+      const key = () =>
+        page.evaluate(() => {
+          const box = document.querySelector("settings-sheet").shadowRoot.querySelector(".key");
+          return box ? { text: box.textContent.replace(/\s+/g, " ").trim(), input: !!box.querySelector("input") } : null;
+        });
+      const press = (label) =>
+        page.evaluate((label) => {
+          const box = document.querySelector("settings-sheet").shadowRoot.querySelector(".key");
+          [...box.querySelectorAll("button")].find((b) => b.textContent.trim() === label).click();
+        }, label);
+
+      await until(async () => (await key())?.input === true);
+      await page.locator("settings-sheet .key input").fill("sk-ant-not-a-real-key");
+      await press("Save");
+      await until(async () => (await key())?.text.startsWith("Key saved"));
+      assert.equal((await key()).input, false, "a saved key shows no box");
+      await press("Replace");
+      await until(async () => (await key())?.input === true);
+      await press("Cancel");
+      await until(async () => (await key())?.text.startsWith("Key saved"));
+
+      // The model's description is a hover hint in the workshop, never printed.
+      const tools = await page.evaluate(() =>
+        [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".tools .field")].map((f) => ({
+          text: f.textContent.trim(),
+          title: f.querySelector("span").title,
+        })),
+      );
+      assert.ok(tools.length > 0, "the signed-in account lists what the chat may read");
+      for (const t of tools) {
+        assert.ok(t.title.length > t.text.length, `${t.text} carries its description as a hint`);
+        assert.ok(!t.text.includes(t.title), `${t.text} does not print its description`);
+      }
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await browser.close();
+    }
+  });
 }

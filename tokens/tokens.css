@@ -102,6 +102,7 @@
   /* === APP SHELL === */
 
   --border-width: 1px;
+  --width-form: 560px; /* the column a form sits in (settings-sheet) */
   /* A canvas gap, then solid accent: visible on any surface in both themes. */
   --focus-ring: 0 0 0 1px var(--color-canvas), 0 0 0 2px var(--color-accent);
 }
