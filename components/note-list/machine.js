@@ -38,7 +38,7 @@ const isAbout = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id);
 
 // A highlight of the subject: a link to it that carries a place (12). The list hides
-// highlight notes — they belong to the Highlights page, not the note list (Decision 2).
+// highlight notes — they belong to the highlights editor, not the note list (Decision 2).
 const isHighlight = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
 

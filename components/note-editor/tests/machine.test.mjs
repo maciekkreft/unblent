@@ -331,6 +331,7 @@ const SUBJECT_B = { kind: "book", id: "bookB", title: "Emma" };
 const SUBJECT_C = { kind: "book", id: "bookC", title: "Foundation" };
 const LINK_A = { kind: "book", id: "bookA" };
 const LINK_B = { kind: "book", id: "bookB" };
+const PLACE = { chapter: 0, contentVersion: 1, start: { block: 2, offset: 2 }, end: { block: 2, offset: 15 } };
 const noteAbout = (id, link) => ({ id, title: "n", body: "n\nbody", version: 3, pending: false, updatedAt: 1, about: link ? [link] : [] });
 
 test("with the subject attribute, start opens the newest note about the subject and records its title", async () => {
@@ -354,6 +355,51 @@ test("with a subject on the stage but no note about it, start is the empty page"
   const { actor } = editor({ subjecting: true, ask: asking({ list, subject: SUBJECT }) });
   await settle();
   assert.equal(actor.getSnapshot().value, "empty");
+});
+
+test("a note about the subject that arrives on the empty page opens there; others leave it empty", async () => {
+  // The empty page was chosen before the pull landed: notes lists nothing yet.
+  const list = { notes: [] };
+  const { actor, opened } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "empty");
+
+  // An unrelated note and a highlight of the subject arrive: the page stays empty.
+  actor.send({ type: "note.changed", ...noteAbout(ID2, LINK_B) });
+  actor.send({ type: "note.changed", ...noteAbout(ID2, { ...LINK_A, place: PLACE }) });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "empty", "neither is a note about the subject");
+
+  // The pull brings a note about the subject: the editor opens it.
+  list.notes = [noteAbout(ID, LINK_A)];
+  actor.send({ type: "note.changed", ...noteAbout(ID, LINK_A) });
+  await settle();
+  const s = actor.getSnapshot();
+  assert.deepEqual(s.value, { editing: "clean" });
+  assert.equal(s.context.id, ID);
+  assert.equal(opened.at(-1), ID, "the note now shown is announced");
+});
+
+test("a note arriving once the user has typed leaves the new note on screen", async () => {
+  const { actor, clock } = editor({ subjecting: true, mint: () => ID2, ask: asking({ subject: SUBJECT }) });
+  await settle();
+  actor.send({ type: "_typed", body: "mine" });
+  clock.increment(THROTTLE_MS);
+  actor.send({ type: "note.changed", ...noteAbout(ID, LINK_A) });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID2, "the note being written stays");
+});
+
+test("a highlight of the subject is never the note the editor opens", async () => {
+  const list = {
+    notes: [
+      { id: ID2, title: "", updatedAt: 20, about: [{ ...LINK_A, place: PLACE }] },
+      { id: ID, title: "about A", updatedAt: 10, about: [LINK_A] },
+    ],
+  };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID, "the plain note, not the newer highlight");
 });
 
 test("with the attribute on but nothing on the stage, start reopens the newest note overall", async () => {

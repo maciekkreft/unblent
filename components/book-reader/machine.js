@@ -145,7 +145,7 @@ export const union = (ranges) =>
 export const joined = (bodies) => bodies.filter((b) => b.trim() !== "").join("\n\n");
 
 // A highlight's title is its comment's first line that says anything (12), the same rule the
-// Highlights page uses (highlight-notes titleOf), so a merged note's title reads from its
+// highlights editor uses (highlight-notes titleOf), so a merged note's title reads from its
 // joined comment and a list row can still tell a commented highlight from a bare one.
 const titleOf = (body) => {
   const line = body.split("\n").find((l) => l.trim() !== "");
@@ -171,7 +171,7 @@ const links = (note) => (Array.isArray(note.about) ? note.about : []);
 // place (Decision 1). A note without one is not a highlight here.
 const bookPlace = (note, bookId) => links(note).find((l) => l.kind === "book" && l.id === bookId && l.place);
 
-// A highlight has a comment when its title is not empty: the Highlights page sets the
+// A highlight has a comment when its title is not empty: the highlights editor sets the
 // title to the first non-empty line of the comment, so a list row, which carries no
 // body, can still tell (12).
 export const hasComment = (note) => Boolean(note.title);

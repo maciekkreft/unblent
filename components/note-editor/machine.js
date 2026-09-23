@@ -72,13 +72,18 @@ const links = (about) => (Array.isArray(about) ? about : []);
 const isAbout = (note, subject) =>
   subject != null && links(note.about).some((l) => l.kind === subject.kind && l.id === subject.id);
 
-// Which note to open from a list reply (D7): the newest note about the subject (the
-// reply is newest first), or — with no subject on the stage — the newest note overall
-// (today's behaviour). Null when there is none, so the editor lands on the empty page.
+// A highlight of the subject: its link to the subject carries a place (12). It belongs
+// to the highlights editor, never the note editor, as note-list leaves it out of the list.
+const isHighlight = (note, subject) =>
+  subject != null && links(note.about).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
+
+// Which note to open from a list reply (D7): the newest note about the subject that is
+// not a highlight of it (the reply is newest first), or — with no subject on the stage —
+// the newest note overall. Null when there is none, so the editor lands on the empty page.
 const pickId = (notes, subject) => {
   const list = Array.isArray(notes) ? notes : [];
   if (subject == null) return list[0]?.id ?? null;
-  return list.find((n) => isAbout(n, subject))?.id ?? null;
+  return list.find((n) => isAbout(n, subject) && !isHighlight(n, subject))?.id ?? null;
 };
 
 // Two subjects name the same thing when their kind and id match (title aside); both
@@ -454,7 +459,16 @@ export const machine = setup({
     },
     // No note yet: typing starts one.
     empty: {
-      on: { _typed: mintAndType },
+      on: {
+        _typed: mintAndType,
+        // A note about the subject arrived after the choice was made (12): from the
+        // load's pull, or another device. Nothing is typed here yet, so choose again.
+        "note.changed": {
+          guard: ({ context, event }) =>
+            context.subjecting && isAbout(event, context.subject) && !isHighlight(event, context.subject),
+          target: "refollowing",
+        },
+      },
     },
     // A load command, a follow of the list's selection, the start, or a re-follow asked
     // notes for the note; the reply decides where we land. Entering here the id has just

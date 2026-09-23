@@ -114,7 +114,7 @@ const highlightOn = (book) => [{
 }];
 
 // The subject stem in a context of its own (11.2): the user's cookie, empty storage.
-const openPage = async (browser, cookie, { phone = false } = {}) => {
+const openPage = async (browser, cookie, { phone = false, route } = {}) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
@@ -122,6 +122,7 @@ const openPage = async (browser, cookie, { phone = false } = {}) => {
   const problems = [];
   watch(page, problems);
   if (phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+  if (route) await page.route(route.url, route.handler);
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
   await ready(page);
   return { page, problems };
@@ -582,15 +583,31 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // A note that reaches this device after its book is opened opens in the editor (12):
+    // the load's pull is held back until the book is on the stage, so the editor first
+    // chooses the empty page, then the note arrives.
+    test("a note that arrives after its book is opened opens in the editor", async () => {
+      let release;
+      const held = new Promise((r) => (release = r));
+      const { page, problems } = await openPage(browser, await twoBooks(), {
+        route: { url: /\/api\/notes\?since=/, handler: async (r) => { await held; await r.continue(); } },
+      });
+      await until(async () => (await tileIds(page)).length >= 2, 8000);
+      await openTile(page, BOOK_ONE);
+      await until(async () => (await aboutText(page)) === "About: Sample Book");
+      assert.equal(await editorBody(page), "", "no note about the book is known yet: the empty page");
+
+      release();
+      await until(async () => (await editorBody(page)) === "About one", 8000);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
     // The About line names a note's book after a reload (fault the reload race left blank),
     // and names the stage's book on a new note before anything is typed (12).
     // One page kept open throughout, so the book stays staged and the subject stays set.
     test("the About line survives a reload and names a new note", async () => {
       const { page, problems } = await openPage(browser, await twoBooks());
       await until(async () => (await tileIds(page)).length >= 2, 8000);
-      // The notes arrive by the load's pull; a book opened before they land shows an
-      // empty page, so wait for them as the test above does.
-      await until(async () => sameSet(await shownTitles(page), ["About one", "About two"]), 8000);
       const [first, second] = [BOOK_ONE, BOOK_TWO];
 
       // Open a book (one note is about each; both books share the title "Sample Book"):
