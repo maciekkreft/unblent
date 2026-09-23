@@ -1,6 +1,7 @@
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -63,24 +64,31 @@ const forgeCookie = () => {
   return `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
 };
 
-const tileIds = (page) =>
-  page.evaluate(() =>
-    [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile:not(.adding)")].map((t) => t.dataset.id),
-  );
-
-const importBook = async (page) => {
-  const before = await tileIds(page);
-  await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
-  let id = null;
-  await until(async () => {
-    id = (await tileIds(page)).find((x) => !before.includes(x)) ?? null;
-    return Boolean(id);
-  });
-  return id;
+// A user set up straight through the server (5), in milliseconds: the sample book,
+// open, and with `highlight` one highlight on its opening line (the note the reader
+// saves for a drag over "short opening"), its comment empty. Ids are fixed ULIDs; each
+// test is its own user.
+const BOOK_ID = "01K00000000000000000000SMP";
+const HIGHLIGHT_ID = "01K0000000000000000000HGHT";
+const seedUser = async ({ highlight }) => {
+  const cookie = forgeCookie();
+  const put = async (path, type, body) => {
+    const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
+    assert.equal(res.status, 200, `PUT ${path}`);
+  };
+  await put(`/api/books/${BOOK_ID}`, "application/epub+zip", readFileSync(SAMPLE));
+  await put(`/api/books/${BOOK_ID}/opened`, "application/json", "{}");
+  if (highlight) {
+    const about = [{
+      kind: "book",
+      id: BOOK_ID,
+      place: { chapter: 0, contentVersion: 1, start: { block: 2, offset: 2 }, end: { block: 2, offset: 15 } },
+      quote: { exact: "short opening", prefix: "A ", suffix: " chapter, one page long. It link" },
+    }];
+    await put(`/api/notes/${HIGHLIGHT_ID}`, "application/json", JSON.stringify({ title: "", body: "", baseVersion: null, about }));
+  }
+  return cookie;
 };
-
-const openTile = (page, id) =>
-  page.evaluate((id) => document.querySelector("book-shelf").shadowRoot.querySelector(`.tile[data-id="${id}"]`)?.click(), id);
 
 const serverNotes = (page) =>
   page.evaluate(async () => {
@@ -172,41 +180,43 @@ const ENGINES = [
   { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
 ];
 
-// WebKit first, then Chromium. One book with one highlight is imported once in `before`
-// (its cost stays out of the per-test budget); each test is a fresh load that auto-reopens
-// the book and shows its highlight.
+// WebKit first, then Chromium. One browser per engine (the launch is the costly part
+// on a small host); each test is its own user, set up through the server, in a context
+// of its own (11.2), and its page reopens the book the server says is open.
 for (const engine of ENGINES) {
   describe(`highlight-notes in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
-      const page = await context.newPage();
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-      const id = await importBook(page);
-      const openedDone = page.waitForResponse((r) => /\/opened$/.test(r.url()) && r.request().method() === "PUT", { timeout: 8000 });
-      await openTile(page, id);
-      await openedDone.catch(() => {});
-      await page.close();
-    }, { timeout: 60000 });
+    }, { timeout: 30000 });
+    afterEach(async () => {
+      await context?.close();
+      context = null;
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
+
+    const open = async ({ highlight = true, settings }) => {
+      const problems = [];
+      const cookie = await seedUser({ highlight });
+      context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), settings);
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await ready(page);
+      return { page, problems };
+    };
 
     // A highlight made in the book appears in the document, and Vim normal-mode editing
     // of the comment saves through notes to the server. The highlight is created here, in one page, so its create and comment never
     // hand a note version across page loads (which would race a stale write into a conflict).
     test(`a highlight appears and a Vim comment saves in ${engine.name}`, async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await open({ highlight: false, settings: VIM });
       await readerHasText(page);
 
       // Make a highlight in the book, then pick the Highlights row.
@@ -241,19 +251,13 @@ for (const engine of ENGINES) {
     // The quote line is protected: `x` on it is refused and flashes; `dd` on the only
     // comment line empties it to one blank line and keeps the highlight.
     test(`the quote line refuses an edit and dd empties a one-line comment in ${engine.name}`, async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await open({ settings: VIM });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);
       const quote = (await hnQuotes(page))[0];
 
-      // Give the highlight a one-line comment to work on (self-contained: this test does
-      // not lean on any other test's saved comment).
+      // Give the highlight a one-line comment to work on.
       await hnCaret(page, "end");
       await until(async () => hnHas(page, ".cm-fat-cursor"));
       await page.keyboard.press("i");
@@ -275,8 +279,7 @@ for (const engine of ENGINES) {
       await until(async () => (await hnDoc(page)) === `${quote}\n`);
       assert.equal((await hnQuotes(page)).length, 1, "the highlight is still there after its comment was emptied");
 
-      // Sync the emptied comment to the server before closing, so the next test loads with
-      // no unsent write to conflict on (a shared user across the tests in this describe).
+      // The emptied comment reaches the server.
       await drain(page);
       await until(async () => {
         const n = (await serverNotes(page)).find((x) => (x.about ?? []).some((l) => l.place));
@@ -289,12 +292,7 @@ for (const engine of ENGINES) {
     // `dd` on a quote line removes the highlight through the same undo window as the bin,
     // and `u` brings it back.
     test(`dd on a quote line discards with undo in ${engine.name}`, async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await open({ settings: VIM });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);
@@ -316,12 +314,7 @@ for (const engine of ENGINES) {
     // a whole quote line and pressing Delete removes that highlight through the undo window,
     // the same rule as `dd` (one rule in both modes); Undo brings it back. A comment saves.
     test(`without Vim keys a deleted quote line is undoable and a comment saves in ${engine.name}`, async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), PLAIN);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await open({ settings: PLAIN });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);

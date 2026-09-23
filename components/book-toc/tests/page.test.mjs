@@ -1,7 +1,7 @@
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -20,6 +20,17 @@ const SAMPLE = resolve(HERE, "..", "..", "books", "tests", "fixtures", "sample.e
 const GAPS = resolve(HERE, "..", "..", "books", "tests", "fixtures", "gaps.epub");
 
 const WAIT = { timeout: 4000, polling: 100 };
+
+// A book added straight through the server (5); the import takes milliseconds, so
+// each case can be a new user with both books at their start. Ids are fixed ULIDs.
+const importBook = async (cookie, id, file) => {
+  const res = await fetch(`${BASE_URL}/api/books/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/epub+zip", Cookie: `unblent_session=${cookie}` },
+    body: readFileSync(file),
+  });
+  assert.equal(res.status, 200, `importing ${file}`);
+};
 
 const forgeCookie = () => {
   const SECRET = process.env.SESSION_SECRET;
@@ -103,38 +114,31 @@ const ENGINES = [
 ];
 
 for (const engine of ENGINES) {
-  // One browser and one signed-in context per engine; the sample is imported once into
-  // it (the launch and the import are the costly parts on a small host), then each case
-  // opens a fresh page over the warm cache. The book stays at its first chapter, so a
-  // fresh open shows Chapter One as current.
+  // One browser per engine (the launch is the costly part on a small host). Each case
+  // is a new user holding the sample and a second book with unlisted pieces, in a
+  // context of its own (11.2), so every book opens at its start.
   describe(`the contents in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
-      const page = await context.newPage();
-      await page.setViewportSize({ width: 1024, height: 768 });
-      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
-      await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
-      await waitTile(page);
-      // A second book with unlisted pieces, on the same shelf, for the highlight case.
-      await page.locator("book-shelf input[type=file]").setInputFiles(GAPS);
-      await waitTile(page, "Gappy Book");
-      // Warm the reader path so no case pays the cold chapter fetch and pagination.
-      await clickTile(page);
-      await waitReaderReady(page);
-      await page.close();
-    }, { timeout: 40000 });
+    }, { timeout: 30000 });
+    afterEach(async () => {
+      await context?.close();
+      context = null;
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
 
     const open = async (opts = {}) => {
       const problems = [];
+      const cookie = forgeCookie();
+      await importBook(cookie, "01K00000000000000000000SMP", SAMPLE);
+      await importBook(cookie, "01K00000000000000000000GPS", GAPS);
+      context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
       watch(page, problems, opts.ignoreAborts);

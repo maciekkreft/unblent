@@ -1,7 +1,7 @@
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -20,6 +20,18 @@ const BROKEN = resolve(FIXTURES, "broken.epub");
 
 // The trace lines that prove the round trip through the bus (section 10): the shelf
 // announces a gesture, books answers with its own news.
+// A book added straight through the server (5), for a case about the shelf rather
+// than the picker. The id is a fixed ULID; each case is its own user.
+const SAMPLE_ID = "01K00000000000000000000SMP";
+const importBook = async (cookie, id, file) => {
+  const res = await fetch(`${BASE_URL}/api/books/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/epub+zip", Cookie: `unblent_session=${cookie}` },
+    body: readFileSync(file),
+  });
+  assert.equal(res.status, 200, `importing ${file}`);
+};
+
 const REFUSED = /event book\.refused books → .*\bnotice-stack\b.* delivered/;
 const CHANGED = /event book\.changed books → .*\bbook-shelf\b.* delivered/;
 const DISCARDED = /event book\.discarded book-shelf → books delivered/;
@@ -147,16 +159,18 @@ for (const engine of ENGINES) {
   });
 
   // Signed in, the whole library lifecycle shares one browser per engine: the launch
-  // is the costly part on a small host, a fresh page keeps each case isolated.
+  // is the costly part on a small host. Each case is a new user in a context of its
+  // own, so its shelf holds only what it put there (11.2).
   describe(`the shelf imports, opens and deletes books in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
     }, { timeout: 30000 });
+    afterEach(async () => {
+      await context?.close();
+      context = null;
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
@@ -164,6 +178,9 @@ for (const engine of ENGINES) {
     const open = async (opts = {}) => {
       const problems = [];
       const debug = [];
+      context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      await context.addCookies([{ name: "unblent_session", value: opts.cookie ?? forgeCookie(), url: BASE_URL }]);
       const page = await context.newPage();
       watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
@@ -243,7 +260,9 @@ for (const engine of ENGINES) {
     });
 
     test("delete offers undo, then commits when its window ends and stays gone", async () => {
-      const { page, problems, debug } = await open();
+      const cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+      const { page, problems, debug } = await open({ cookie });
       await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
 
       // Undo brings the book straight back, and no book.discarded was ever emitted.

@@ -1,7 +1,7 @@
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -82,37 +82,50 @@ const tileIds = (page) =>
     [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile:not(.adding)")].map((t) => t.dataset.id),
   );
 
-// Import the sample epub and return the id of the tile it adds. The fixture can be
-// imported more than once: each import mints a fresh id, so two tiles share a title
-// but are distinct books.
-const importBook = async (page) => {
-  const before = await tileIds(page);
-  await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
-  let id = null;
-  await until(async () => {
-    id = (await tileIds(page)).find((x) => !before.includes(x)) ?? null;
-    return Boolean(id);
-  });
-  return id;
-};
-
 const openTile = (page, id) =>
   page.evaluate((id) => document.querySelector("book-shelf").shadowRoot.querySelector(`.tile[data-id="${id}"]`)?.click(), id);
 
-// Seed a note straight to the server with its links (the editor does not yet link a new
-// note to the subject — that is slice 5), so the list has notes to filter after a reload.
-const seedNote = (page, { id, title, about }) =>
-  page.evaluate(
-    async ({ id, title, about }) => {
-      const res = await fetch(`/api/notes/${id}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title, body: title, baseVersion: null, about }),
-      });
-      if (!res.ok) throw new Error(`seed ${res.status}`);
-    },
-    { id, title, about },
-  );
+// A user set up straight through the server (5), in milliseconds: the sample book
+// imported under each of `books` (two ids make two books sharing a title), `open` the
+// book the next load reopens, and `notes` with their links. Each test is its own user,
+// so it reads only what it set up. Ids are fixed ULIDs.
+const BOOK_ONE = "01K00000000000000000000BK1";
+const BOOK_TWO = "01K00000000000000000000BK2";
+const HIGHLIGHT = "01K0000000000000000000HGHT";
+const seedUser = async ({ books = [], open = null, notes = [] } = {}) => {
+  const cookie = forgeCookie();
+  const put = async (path, type, body) => {
+    const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
+    assert.equal(res.status, 200, `PUT ${path}`);
+  };
+  for (const id of books) await put(`/api/books/${id}`, "application/epub+zip", readFileSync(SAMPLE));
+  if (open) await put(`/api/books/${open}/opened`, "application/json", "{}");
+  for (const { id, title = "", body = title, about } of notes) {
+    await put(`/api/notes/${id}`, "application/json", JSON.stringify({ title, body, baseVersion: null, about }));
+  }
+  return cookie;
+};
+// The note the reader saves for a drag over "short opening" on the sample's first page.
+const highlightOn = (book) => [{
+  kind: "book",
+  id: book,
+  place: { chapter: 0, contentVersion: 1, start: { block: 2, offset: 2 }, end: { block: 2, offset: 15 } },
+  quote: { exact: "short opening", prefix: "A ", suffix: " chapter, one page long. It link" },
+}];
+
+// The subject stem in a context of its own (11.2): the user's cookie, empty storage.
+const openPage = async (browser, cookie, { phone = false } = {}) => {
+  const context = await browser.newContext();
+  context.setDefaultTimeout(4000);
+  await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+  const page = await context.newPage();
+  const problems = [];
+  watch(page, problems);
+  if (phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+  await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+  await ready(page);
+  return { page, problems };
+};
 
 // The notes the server actually holds for this signed-in user, read from the page so
 // the request carries the session cookie. Proves a write reached the server, links and
@@ -483,34 +496,30 @@ for (const engine of ENGINES) {
   // costly part on a small host.
   describe(`the notes follow the stage in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
-    let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
     }, { timeout: 30000 });
+    afterEach(async () => {
+      await Promise.all(browser.contexts().map((c) => c.close()));
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Two books from the one fixture (distinct ids, same title), and a note about each.
+    const twoBooks = () =>
+      seedUser({
+        books: [BOOK_ONE, BOOK_TWO],
+        notes: [
+          { id: NOTE_ONE, title: "About one", about: [{ kind: "book", id: BOOK_ONE }] },
+          { id: NOTE_TWO, title: "About two", about: [{ kind: "book", id: BOOK_TWO }] },
+        ],
+      });
+
     test("the list shows the subject's notes, following the stage, with no switch", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-
-      // Two books from the one fixture (distinct ids, same title), and a note about each,
-      // seeded to the server so a reload brings them into the list.
-      const one = await importBook(page);
-      const two = await importBook(page);
-      await seedNote(page, { id: NOTE_ONE, title: "About one", about: [{ kind: "book", id: one }] });
-      await seedNote(page, { id: NOTE_TWO, title: "About two", about: [{ kind: "book", id: two }] });
-
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await ready(page);
-      await until(async () => (await tileIds(page)).length >= 2);
+      const { page, problems } = await openPage(browser, await twoBooks());
+      const [one, two] = [BOOK_ONE, BOOK_TWO];
+      await until(async () => (await tileIds(page)).length >= 2, 8000);
       // No book open yet: both notes show (no subject to scope to). The list waits on the
       // reload's pull to bring the seeded notes, which is the one slow step here.
       await until(async () => sameSet(await shownTitles(page), ["About one", "About two"]), 8000);
@@ -575,20 +584,17 @@ for (const engine of ENGINES) {
 
     // The About line names a note's book after a reload (fault the reload race left blank),
     // and names the stage's book on a new note before anything is typed (12).
-    // One page kept open throughout, so the book stays staged and the subject stays set;
-    // reuses the two books and notes the first test seeded, on the same context.
+    // One page kept open throughout, so the book stays staged and the subject stays set.
     test("the About line survives a reload and names a new note", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, await twoBooks());
       await until(async () => (await tileIds(page)).length >= 2, 8000);
-      const [first, second] = await tileIds(page);
+      // The notes arrive by the load's pull; a book opened before they land shows an
+      // empty page, so wait for them as the test above does.
+      await until(async () => sameSet(await shownTitles(page), ["About one", "About two"]), 8000);
+      const [first, second] = [BOOK_ONE, BOOK_TWO];
 
-      // Open a book (the first test seeded one note about each; both books share the
-      // title "Sample Book"): the editor names it above the note about it. Capture that
-      // note's body, since the two books' order is the shelf's, not this test's.
+      // Open a book (one note is about each; both books share the title "Sample Book"):
+      // the editor names it above the note about it.
       await openTile(page, second);
       await until(async () => (await editorBody(page)) !== "", 8000);
       const pinnedBody = await editorBody(page);
@@ -651,45 +657,33 @@ for (const engine of ENGINES) {
   // browser per engine; the book and its notes are seeded in before, so the test is a
   // fresh load and an assertion, well inside the budget.
   describe(`the stage survives a reload in ${engine.name}`, { timeout: 120000 }, () => {
-    let browser;
-    let context;
     const NOTE_BOOK = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
     const NOTE_NONE = "01ARZ3NDEKTSV4RRFFQ69G5FD4";
+    let browser;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
-      // Import a book, open it so `books` remembers it and reopens it on the next load,
-      // and seed one note about the book and one about nothing — both to the server, so a
-      // fresh load's pull brings them.
-      const page = await context.newPage();
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-      const id = await importBook(page);
-      const openedDone = page.waitForResponse(
-        (r) => /\/opened$/.test(r.url()) && r.request().method() === "PUT",
-        { timeout: 8000 },
-      );
-      await openTile(page, id);
-      await openedDone.catch(() => {});
-      await seedNote(page, { id: NOTE_BOOK, title: "About the book", about: [{ kind: "book", id }] });
-      await seedNote(page, { id: NOTE_NONE, title: "About nothing", about: [] });
-      await page.close();
-    }, { timeout: 60000 });
+    }, { timeout: 30000 });
+    afterEach(async () => {
+      await Promise.all(browser.contexts().map((c) => c.close()));
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
 
     test("the auto-reopened book scopes the list to its notes, not every note", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
+      // The book is open on the server, with one note about it and one about nothing.
+      const cookie = await seedUser({
+        books: [BOOK_ONE],
+        open: BOOK_ONE,
+        notes: [
+          { id: NOTE_BOOK, title: "About the book", about: [{ kind: "book", id: BOOK_ONE }] },
+          { id: NOTE_NONE, title: "About nothing", about: [] },
+        ],
+      });
       // A fresh load, nothing opened by hand: the book comes back on its own, so the
       // subject resolves to it and the list shows only its note. Before the fix, the late
       // notes reply re-applied the read's stale null and "About nothing" showed too.
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, cookie);
       await until(async () => sameSet(await shownTitles(page), ["About the book"]), 8000);
       // Let a clobber (the bug) flip the list back to every note before asserting it held.
       await page.waitForTimeout(400);
@@ -706,26 +700,18 @@ for (const engine of ENGINES) {
   // note reaches the server and a reload brings it back. One browser per engine.
   describe(`the reader highlights in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
-    let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
     }, { timeout: 30000 });
+    afterEach(async () => {
+      await Promise.all(browser.contexts().map((c) => c.close()));
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
 
     test("a drag makes a highlight that holds the page count, stays off the list, and survives a reload", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-
-      const id = await importBook(page);
-      await openTile(page, id);
+      const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
       await readerHasText(page);
 
       // Before the drag: where we are, and what the list shows (no book note yet).
@@ -760,14 +746,7 @@ for (const engine of ENGINES) {
     // undo window (Removed · Undo, the mark dimmed), Undo brings it back, and a second
     // Remove that elapses takes the highlight for good — gone here and after a reload.
     test("the bubble removes a highlight with undo, and it stays gone after a reload", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-
-      const id = await importBook(page);
-      await openTile(page, id);
+      const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
       await readerHasText(page);
 
       // Make a highlight, and let its note reach the server before any removal, so the
@@ -818,39 +797,26 @@ for (const engine of ENGINES) {
   // browser per engine; the book import in `before` keeps the test itself inside budget.
   describe(`the highlights tab in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
-    let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
-      // Import a book and open it once, persisted to the server, so the test itself is a
-      // fresh load that auto-reopens it — the import cost stays out of the test's budget.
-      const page = await context.newPage();
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-      const id = await importBook(page);
-      const openedDone = page.waitForResponse(
-        (r) => /\/opened$/.test(r.url()) && r.request().method() === "PUT",
-        { timeout: 8000 },
-      );
-      await openTile(page, id);
-      await openedDone.catch(() => {});
-      await page.close();
-    }, { timeout: 60000 });
+    }, { timeout: 30000 });
+    afterEach(async () => {
+      await Promise.all(browser.contexts().map((c) => c.close()));
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
+    // The sample, open, for a test that makes its own highlight; and the same with one
+    // highlight already on it, commented, for the tests about the highlight itself.
+    const bookOnly = () => seedUser({ books: [BOOK_ONE], open: BOOK_ONE });
+    const withHighlight = () =>
+      seedUser({ books: [BOOK_ONE], open: BOOK_ONE, notes: [{ id: HIGHLIGHT, body: "A thought about this", about: highlightOn(BOOK_ONE) }] });
 
     // A highlight made in the book appears in the tab and takes a comment that reaches the
-    // server (so the next test, a fresh load, finds it). Split from the checks below so
-    // each test — this one carries the drag and the save round-trip — stays inside budget.
+    // server. Split from the checks below so each test — this one carries the drag and
+    // the save round-trip — stays inside budget.
     test("a highlight made in the book appears in the tab and takes a comment", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, await bookOnly());
       await readerHasText(page);
 
       // Drag over a run of text, then open the tab: the highlight is one document, its
@@ -882,7 +848,7 @@ for (const engine of ENGINES) {
         6000,
       );
 
-      // The comment reaches the server, so the next test's fresh load brings it back.
+      // The comment reaches the server.
       await drain(page);
       await until(async () => (await serverNotes(page)).some((n) => (n.body ?? "").includes("A thought about this")), 8000);
 
@@ -890,15 +856,10 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
-    // A fresh load brings the highlight and comment the test above saved (a reload keeps
-    // both); the quote line stays fixed against edits, and the bin removes with the same
-    // undo window as note-list.
+    // A fresh load brings a saved highlight and its comment; the quote line stays fixed
+    // against edits, and the bin removes with the same undo window as note-list.
     test("a reload keeps the highlight, the quote line is fixed, and the bin removes with undo", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, await withHighlight());
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0 && (await hnDoc(page)).includes("A thought about this"), 8000);
 
@@ -924,11 +885,7 @@ for (const engine of ENGINES) {
     // Notes Back bar, the book stays the subject (the Reader tab keeps the mark), the
     // highlight is never a plain note, and Back returns to the list with the row selected.
     test("the Highlights row opens the document in the Notes pair and keeps the book the subject", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, await withHighlight());
 
       // The Highlights row stands in the list showing one highlight, not yet selected; the
       // book is the subject (the Reader tab is marked) and no plain note is listed for it.
@@ -964,11 +921,7 @@ for (const engine of ENGINES) {
     // the book remains the subject (the Reader tab keeps its mark) and the highlight is never
     // listed as a plain note, whether the pair is docked or staged.
     test("the highlights document holds the Notes pair when it is staged, the mark on Reader", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, await withHighlight());
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0, 8000);
 
@@ -989,11 +942,7 @@ for (const engine of ENGINES) {
     // as open; then picking Highlights must move the selection, not add a second one. This is
     // the New-note-first order, where the draft row is the open one when Highlights is picked.
     test("opening New note then Highlights leaves only the Highlights row selected", async () => {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
+      const { page, problems } = await openPage(browser, await withHighlight());
       await until(async () => (await highlightsRow(page)) != null, 8000);
 
       // Open a new note, then return to the list: the New note row reads as the open one.
@@ -1019,12 +968,7 @@ for (const engine of ENGINES) {
     // row opens the document and Back returns to the list there too (Decision, phone flow).
     if (engine.name === "webkit") {
       test("the Highlights row opens and closes on the phone preview", async () => {
-        const problems = [];
-        const page = await context.newPage();
-        watch(page, problems);
-        await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await ready(page);
+        const { page, problems } = await openPage(browser, await withHighlight(), { phone: true });
         await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
 
         await showHighlights(page);

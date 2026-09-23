@@ -1,7 +1,7 @@
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -25,6 +25,18 @@ const forgeCookie = () => {
   assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server");
   const userId = `book-reader-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
+};
+
+// A book added straight through the server (5): the import itself takes milliseconds,
+// so a suite's shared books cost nothing in the browser. The id is a fixed ULID.
+const SAMPLE_ID = "01K00000000000000000000SMP";
+const importBook = async (cookie, id, file) => {
+  const res = await fetch(`${BASE_URL}/api/books/${id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/epub+zip", Cookie: `unblent_session=${cookie}` },
+    body: readFileSync(file),
+  });
+  assert.equal(res.status, 200, `importing ${file}`);
 };
 
 function watch(page, problems, ignore = false) {
@@ -56,6 +68,9 @@ const waitChapterPage = (page, chap, n) => page.waitForFunction(({ c, n }) => { 
 const waitPagesAtLeast = (page, chap, min) => page.waitForFunction(({ c, min }) => { const r = document.querySelector("book-reader")?.shadowRoot; if (r?.querySelector(".footer .chap")?.textContent.trim() !== c) return false; const m = (r?.querySelector(".footer .pageno")?.textContent.trim() ?? "").match(/of (\d+)/); return m && Number(m[1]) >= min; }, { c: chap, min }, WAIT);
 const waitTile = (page) => page.waitForFunction(() => [...(document.querySelector("book-shelf")?.shadowRoot?.querySelectorAll(".tile:not(.adding)") ?? [])].some((t) => t.querySelector(".title")?.textContent.trim() === "Sample Book"), undefined, { timeout: 8000, polling: 100 });
 const rstate = (page) => page.evaluate(foot);
+// The strip slides to a turned page; a gesture measured mid-slide lands off the text.
+const waitStill = (page) =>
+  page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot?.getAnimations().every((a) => a.playState !== "running"), undefined, WAIT);
 // A brief pause after a chapter loads, so its deferred re-measure has finished before
 // the next turn — the reader cancels that measure on a turn, and this keeps the test
 // clear of the narrow window where the two would race.
@@ -75,51 +90,41 @@ const ENGINES = [
 ];
 
 for (const engine of ENGINES) {
-  // One browser and one signed-in context per engine (the launch is the costly part on
-  // a small host, and a warm HTTP cache keeps each page load quick): the sample is
-  // imported once into that context, and each case opens it on a fresh page.
+  // One browser and one user per engine (the launch is the costly part on a small
+  // host); the sample is imported once on the server for that user, and each case
+  // opens it in a context of its own, so no case starts from another's storage (11.2).
   describe(`the reader in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
+    let cookie;
     let context;
     before(async () => {
       browser = await engine.launch();
-      context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
-      const page = await context.newPage();
-      await page.setViewportSize({ width: 1024, height: 768 });
-      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
-      await page.locator("book-shelf input[type=file]").setInputFiles(SAMPLE);
-      await waitTile(page);
-      // Warm the reader path — the chapter fetches (cached immutably) and the
-      // pagination — so no case pays a cold page's cost against the per-test budget.
-      await clickTile(page);
-      await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot?.querySelector(".footer .chap")?.textContent.trim());
-      await focusReader(page);
-      await page.keyboard.press("ArrowRight");
-      await waitPagesAtLeast(page, "Chapter Two", 3);
-      await page.close();
-    }, { timeout: 40000 });
+      cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+    }, { timeout: 30000 });
+    afterEach(async () => {
+      await context?.close();
+      context = null;
+    });
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
 
-    // A fresh page reads the imported book from the browser cache (no re-import); open
-    // it from the shelf and rewind to the first page. Home jumps to the top of a
-    // chapter and ArrowLeft steps to the previous one, so three pairs reach Chapter One
-    // from anywhere in this three-chapter book without paging through it.
+    // Open the book from the shelf and rewind to the first page (openAndRewind). Home
+    // jumps to the top of a chapter and ArrowLeft steps to the previous one, so three
+    // pairs reach Chapter One from anywhere in this three-chapter book without paging
+    // through it.
     const open = async (opts = {}) => {
       const problems = [];
       const debug = [];
+      context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
       watch(page, problems, opts.ignoreAborts);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
-      // The engine's pages share one context (its localStorage too), so a phone case's
-      // stored viewport would otherwise ride into the next test's desk page. Set it
-      // deterministically each time — phone, or cleared — so order cannot leak.
-      await page.addInitScript((v) => (v ? localStorage.setItem("viewport", v) : localStorage.removeItem("viewport")), opts.phone ? "phone" : "");
+      if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
@@ -544,6 +549,7 @@ for (const engine of ENGINES) {
     test("a mouse drag selects text and does not turn", async () => {
       const { page, problems } = await openAndRewind();
       try {
+        await waitStill(page);
         const before = await rstate(page);
         // Drag across a real line of text in the first block, so the gesture both
         // selects and is long enough (>= SWIPE) to have turned before this change.
