@@ -455,7 +455,7 @@ test("_pickHighlights emits highlights.selected with the subject and marks the r
   assert.equal(highlightsOpen(actor), true, "the Highlights row reads as the open one");
 });
 
-test("_pick and note.opened clear the Highlights row's open mark", async () => {
+test("_pick and note.opened clear the Highlights row's open mark; the empty page does not", async () => {
   const picked = list({ following: true, ask: withHighlight() });
   await tick();
   picked.actor.send({ type: "_pickHighlights" });
@@ -467,6 +467,14 @@ test("_pick and note.opened clear the Highlights row's open mark", async () => {
   opened.actor.send({ type: "_pickHighlights" });
   opened.actor.send({ type: "note.opened", id: A });
   assert.equal(highlightsOpen(opened.actor), false, "the editor announcing a note clears it");
+
+  const empty = list({ following: true, ask: withHighlight() });
+  await tick();
+  empty.actor.send({ type: "note.opened", id: A });
+  empty.actor.send({ type: "_pickHighlights" });
+  empty.actor.send({ type: "note.opened", id: null });
+  assert.equal(highlightsOpen(empty.actor), true, "the empty page is not a note opened (12)");
+  assert.equal(empty.actor.getSnapshot().context.open, null, "and no row reads as the open note");
 });
 
 test("_pickHighlights with no highlights emits nothing and does not mark the row", async () => {

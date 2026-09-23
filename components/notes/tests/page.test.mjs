@@ -23,8 +23,8 @@ const SAVED = /event note\.saved note-editor → notes delivered/;
 const CHANGED = /event note\.changed notes → .*\bnote-editor\b.* delivered/;
 // The list ↔ editor round trip (6.4): the editor announces the note it shows, the
 // list announces the note the user picked.
-const OPENED = /event note\.opened note-editor → note-list delivered/;
-const SELECTED = /event note\.selected note-list → note-editor delivered/;
+const OPENED = /event note\.opened note-editor → (?:[\w-]+, )*note-list(?:, [\w-]+)* delivered/;
+const SELECTED = /event note\.selected note-list → (?:[\w-]+, )*note-editor(?:, [\w-]+)* delivered/;
 // A note deleted: the list announces the gesture on elapse, and notes announces the
 // note gone (to the list, and to the editor when it was showing it).
 const DISCARDED = /event note\.discarded note-list → notes delivered/;

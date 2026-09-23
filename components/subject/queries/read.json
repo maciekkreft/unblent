@@ -33,7 +33,7 @@
   },
   "supersededBy": ["subject.changed"],
   "tool": {
-    "description": "Tells what the reader currently has open — a book, and its title — or that nothing is open. What they have open can change during the chat, so call this to know what \"this\" book or chapter refers to right now. Takes no arguments.",
+    "description": "Tells which book the reader currently has open, and its title, or that no book is open. It covers books only: the note the reader has open, or the Highlights, has its own lookup, reading the open note. What they have open can change during the chat, so call this to know what \"this\" book or chapter refers to right now. Takes no arguments.",
     "label": "Checking what's open"
   }
 }

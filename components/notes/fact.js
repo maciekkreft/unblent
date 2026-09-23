@@ -6,6 +6,7 @@ import deleted from "./events/note.deleted.json" with { type: "json" };
 import conflicted from "./events/note.conflicted.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
+import open from "./queries/open.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store,
 // the clock, and the passkey-gated sync `api` — and mounts it, so machine.js stays
@@ -54,7 +55,7 @@ const api = {
 const actor = mount(machine, {
   input: { store, now: () => Date.now(), api, ask: (target, name, payload) => ask(machine, target, name, payload) },
   events: { "note.changed": changed, "note.deleted": deleted, "note.conflicted": conflicted },
-  queries: { list, read },
+  queries: { list, read, open },
 });
 
 // On mount the machine already reconciles; a tab regaining focus reconciles again,

@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The editor is now showing this note: its id changed, so a list can highlight that row (6.4).",
+  "description": "The editor is now showing this note: its id changed, so a list can highlight that row (6.4) and notes knows which note is open (12). null when the editor shows the empty page.",
   "type": "object",
   "properties": {
-    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+    "id": { "type": ["string", "null"], "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
   },
   "required": ["id"],
   "additionalProperties": false

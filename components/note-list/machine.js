@@ -42,7 +42,7 @@ const isAbout = (note, subject) =>
 const isHighlight = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
 
-// The Highlights row (Decision 1, 5, 6): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
+// The Highlights row (Decision 1, 5, 6), the Highlights note to the user (13): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
 // unless at least one note is a highlight of it. Its count and latest time come from the
 // notes the list already holds (no new query), so it is pure like `shown` and `apart`.
 export const highlights = ({ notes, following, subject }) => {
@@ -228,9 +228,11 @@ export const machine = setup({
     // Highlights row is no longer the picked one (Decision 7). The draft is untouched —
     // the next-note row stands whatever else is open, and its id is only a name, so
     // opening it again lands the editor in blank all the same.
-    "note.opened": {
-      actions: assign({ open: ({ event }) => event.id, highlightsOpen: false }),
-    },
+    // The empty page is not a note opened, so the Highlights row keeps its mark (12).
+    "note.opened": [
+      { guard: ({ event }) => event.id === null, actions: assign({ open: null }) },
+      { actions: assign({ open: ({ event }) => event.id, highlightsOpen: false }) },
+    ],
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.

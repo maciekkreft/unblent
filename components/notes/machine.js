@@ -49,6 +49,32 @@ function replyRead(context, id, reply) {
   reply(visible(stored) ? { note: { ...stored, about: stored.about ?? [], pending: context.outbox.has(id) } } : { error: "not-found" });
 }
 
+// The link a highlight of `about` carries: the one naming it with a place (12).
+const placeOf = (record, about) =>
+  (record.about ?? []).find((l) => l.kind === about.kind && l.id === about.id && l.place)?.place;
+
+const fullNote = (context, record) => ({ ...record, about: record.about ?? [], pending: context.outbox.has(record.id) });
+
+// The open note (12, "Which note is open"): the Highlights of the subject while they are
+// in front of the Notes pair, which the user sees as one note (13), each highlight in
+// reading order; otherwise the note the editor holds. A new note nothing was written in
+// has no record yet, so it is answered as nothing open.
+function replyOpen(context, reply) {
+  const { front, subject, editorId } = context.open;
+  if (front === "highlights" && subject) {
+    const notes = [...context.notes.values()]
+      .filter((r) => visible(r) && placeOf(r, subject))
+      .sort((a, b) => {
+        const pa = placeOf(a, subject), pb = placeOf(b, subject);
+        return pa.chapter - pb.chapter || pa.start.block - pb.start.block || pa.start.offset - pb.start.offset;
+      })
+      .map((r) => fullNote(context, r));
+    return reply({ highlights: { about: subject, notes } });
+  }
+  const stored = front === "note" && editorId ? context.notes.get(editorId) : null;
+  reply({ note: visible(stored) ? fullNote(context, stored) : null });
+}
+
 // The user's gesture (4.3, fifth rule). Anonymous: local minting, announced with
 // pending false (there is no server to wait for). Signed in: the held version is
 // kept, the change is cached and queued in the outbox (coalesced by id, keeping the
@@ -139,6 +165,7 @@ function applyDiscard(context, event, enqueue) {
 function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.reply);
   else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
+  else if (message.type === "open?") replyOpen(context, message.reply);
   else if (message.type === "note.saved") applySave(context, message, enqueue);
   else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
 }
@@ -228,12 +255,32 @@ export const machine = setup({
     userId: null,
     cursor: 0,
     queued: [],
+    // Which note is open (12): what is in front of the Notes pair, the editor's note, and
+    // the subject whose Highlights those are. Memory only, on this device.
+    open: { front: "note", editorId: null, subject: null },
     // The "owed" flags for a trigger that arrives mid-sync: resync means drain
     // again, pull whether that next sync must also pull.
     resync: false,
     pull: false,
   }),
   initial: "loading",
+  // The gestures and news that say which note is open (12), followed in every state so
+  // one that lands while the store loads is not lost; only the answer waits for it.
+  on: {
+    "note.opened": { actions: assign({ open: ({ context, event }) => ({ ...context.open, editorId: event.id }) }) },
+    "note.selected": { actions: assign({ open: ({ context }) => ({ ...context.open, front: "note" }) }) },
+    "highlights.selected": {
+      actions: assign({ open: ({ context, event }) => ({ ...context.open, front: "highlights", subject: event.about }) }),
+    },
+    "subject.changed": {
+      actions: assign({
+        open: ({ context, event }) => ({
+          ...context.open,
+          subject: event.subject ? { kind: event.subject.kind, id: event.subject.id } : null,
+        }),
+      }),
+    },
+  },
   states: {
     loading: {
       invoke: {
@@ -254,6 +301,7 @@ export const machine = setup({
             for (const message of context.queued) {
               if (message.type === "list?") message.reply({ notes: [] });
               else if (message.type === "read?") message.reply({ error: "not-found" });
+              else if (message.type === "open?") message.reply({ note: null });
             }
             enqueue.assign({ queued: [] });
           }),
@@ -262,6 +310,7 @@ export const machine = setup({
       on: {
         "list?": { actions: queue },
         "read?": { actions: queue },
+        "open?": { actions: queue },
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
       },
@@ -294,6 +343,7 @@ export const machine = setup({
       on: {
         "list?": { actions: queue },
         "read?": { actions: queue },
+        "open?": { actions: queue },
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
       },
@@ -303,6 +353,7 @@ export const machine = setup({
       on: {
         "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
+        "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
         "note.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "note.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         // The fact's own news about who is signed in (4.3, fourth rule). A different
@@ -395,6 +446,7 @@ export const machine = setup({
       on: {
         "list?": { actions: ({ event }) => event.reply({ notes: [] }) },
         "read?": { actions: ({ event }) => event.reply({ error: "not-found" }) },
+        "open?": { actions: ({ event }) => event.reply({ note: null }) },
       },
     },
   },

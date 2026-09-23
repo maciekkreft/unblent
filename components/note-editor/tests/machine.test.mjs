@@ -264,7 +264,7 @@ test("note.selected loads the note when the editor follows, and is ignored when 
   assert.equal(plain.actor.getSnapshot().can({ type: "note.selected", id: ID }), false, "unfollowing editor ignores it");
 });
 
-test("note.opened is emitted on reopening at start, on load, on a followed selection, and on minting", async () => {
+test("note.opened is emitted on reopening at start, on load, on a followed selection, on minting, and as null on the empty page", async () => {
   const start = editor({
     ask: (target, name) =>
       name === "list" ? Promise.resolve({ notes: [{ id: ID2, title: "N", updatedAt: 20 }] }) : Promise.resolve({ note: { ...NOTE, id: ID2 } }),
@@ -276,16 +276,20 @@ test("note.opened is emitted on reopening at start, on load, on a followed selec
   const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   loaded.actor.send({ type: "load", id: ID });
   await tick();
-  assert.deepEqual(loaded.opened, [ID]);
+  assert.deepEqual(loaded.opened, [null, ID]);
 
   const followed = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   followed.actor.send({ type: "note.selected", id: ID2 });
   await tick();
-  assert.deepEqual(followed.opened, [ID2]);
+  assert.deepEqual(followed.opened, [null, ID2]);
 
   const minted = await started();
   minted.actor.send({ type: "_typed", body: "fresh" });
-  assert.deepEqual(minted.opened, [ID]);
+  assert.deepEqual(minted.opened, [null, ID]);
+
+  // The open note deleted: the empty page is announced, so it is not taken for open (12).
+  loaded.actor.send({ type: "note.deleted", id: ID });
+  assert.deepEqual(loaded.opened, [null, ID, null]);
 });
 
 test("typing in blank saves under the loaded id with a null base", async () => {

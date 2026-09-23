@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
+import { Validator } from "@cfworker/json-schema";
 import { machine } from "../machine.js";
 
 // The idle window the network waits for (notes/machine.js); a SimulatedClock drives
@@ -691,4 +693,89 @@ test("a discard queued while the store is loading is applied once ready", async 
   await ready(actor);
   assert.deepEqual(deleted, [{ type: "note.deleted", id: ID }]);
   assert.equal(store.notes.get(ID).deleted, true);
+});
+
+// --- Which note is open (12) ------------------------------------------------------
+
+const OPEN_REPLY = JSON.parse(readFileSync(new URL("../queries/open.json", import.meta.url), "utf8")).reply;
+const BOOK = { kind: "book", id: "bk1" };
+const highlightOf = (chapter, block, offset) => ({
+  ...BOOK,
+  place: { chapter, contentVersion: 1, start: { block, offset }, end: { block, offset: offset + 5 } },
+  quote: { exact: "quoted", prefix: "", suffix: "" },
+});
+const H1 = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+const H2 = "01ARZ3NDEKTSV4RRFFQ69G5FB2";
+
+async function askOpen(actor) {
+  const reply = await askQuery(actor, "open");
+  const result = new Validator(OPEN_REPLY, "2020-12").validate(reply);
+  assert.ok(result.valid, `open? reply against its schema: ${JSON.stringify(result.errors?.[0])}`);
+  return reply;
+}
+
+async function library() {
+  const { actor } = start(fakeStore());
+  await ready(actor);
+  const save = (id, body, about) => actor.send({ type: "note.saved", id, title: body, body, baseVersion: null, about });
+  save(ID, "Applications", [BOOK]);
+  save(H2, "second comment", [highlightOf(2, 1, 0)]);
+  save(H1, "first comment", [highlightOf(1, 7, 3)]);
+  await flush();
+  return actor;
+}
+
+test("open? answers the note the editor holds, and nothing on the empty page", async () => {
+  const actor = await library();
+  assert.deepEqual(await askOpen(actor), { note: null }, "nothing announced yet");
+  actor.send({ type: "note.opened", id: ID });
+  assert.equal((await askOpen(actor)).note.body, "Applications");
+  actor.send({ type: "note.opened", id: null });
+  assert.deepEqual(await askOpen(actor), { note: null });
+  actor.send({ type: "note.opened", id: ID2 });
+  assert.deepEqual(await askOpen(actor), { note: null }, "a new note with nothing written");
+});
+
+test("open? answers the Highlights while they are in front, in reading order, until a note is picked", async () => {
+  const actor = await library();
+  actor.send({ type: "note.opened", id: ID });
+  actor.send({ type: "highlights.selected", about: BOOK });
+  const { highlights } = await askOpen(actor);
+  assert.deepEqual(highlights.about, BOOK);
+  assert.deepEqual(highlights.notes.map((n) => n.id), [H1, H2]);
+
+  // The editor may change underneath (a re-follow); the Highlights stay in front.
+  actor.send({ type: "note.opened", id: null });
+  assert.ok("highlights" in (await askOpen(actor)));
+
+  // A pick brings the editor back, even one a pinned editor refuses or one naming the
+  // note it already holds, which announce nothing new.
+  actor.send({ type: "note.opened", id: ID });
+  actor.send({ type: "highlights.selected", about: BOOK });
+  actor.send({ type: "note.selected", id: ID });
+  assert.equal((await askOpen(actor)).note.id, ID);
+});
+
+test("open? follows the subject for the Highlights, and answers nothing when there is none", async () => {
+  const actor = await library();
+  actor.send({ type: "highlights.selected", about: BOOK });
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "bk2", title: "Two", view: "book-reader" } });
+  assert.deepEqual((await askOpen(actor)).highlights, { about: { kind: "book", id: "bk2" }, notes: [] });
+  actor.send({ type: "subject.changed", subject: null });
+  assert.deepEqual(await askOpen(actor), { note: null });
+});
+
+test("open? waits for the store, and a deleted open note is not answered", async () => {
+  let resolveAll;
+  const store = fakeStore();
+  store.all = () => new Promise((r) => (resolveAll = () => r([{ id: ID, title: "T", body: "B", version: 1, updatedAt: 5 }])));
+  const { actor } = start(store);
+  actor.send({ type: "note.opened", id: ID });
+  const early = askOpen(actor);
+  resolveAll();
+  await ready(actor);
+  assert.equal((await early).note.id, ID);
+  actor.send({ type: "note.discarded", id: ID });
+  await flush();
+  assert.deepEqual(await askOpen(actor), { note: null });
 });

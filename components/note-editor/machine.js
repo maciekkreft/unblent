@@ -457,8 +457,10 @@ export const machine = setup({
         { target: "empty" },
       ],
     },
-    // No note yet: typing starts one.
+    // No note yet: typing starts one. Announced, so the note last shown is not taken
+    // for the open one (12, "Which note is open").
     empty: {
+      entry: emit({ type: "note.opened", id: null }),
       on: {
         _typed: mintAndType,
         // A note about the subject arrived after the choice was made (12): from the

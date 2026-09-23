@@ -2,11 +2,13 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
 // The view component that composes the highlights of the book on the stage into one
 // continuous document (8, kind 4; Decision 2): a quote line per highlight, the comment
-// under it, each highlight one ordinary note whose link to the book carries the place
-// and the quote (Decision 1, 12). It owns only UI state — the fragments it is showing,
-// which are dirty, which are counting down to a discard — and points at `notes`, which
-// owns the facts, `subject`, the thing on the stage it follows, and `settings`, whose
-// "Vim keys" preference (12) the view turns on and off in place.
+// under it, each highlight one ordinary note record whose link to the book carries the
+// place and the quote (Decision 1, 12). To the user the document is one note, the
+// Highlights (13), however many records it is made of. It owns only UI state — the
+// fragments it is showing, which are dirty, which are counting down to a discard — and
+// points at `notes`, which owns the facts, `subject`, the thing on the stage it
+// follows, and `settings`, whose "Vim keys" preference (12) the view turns on and off
+// in place.
 //
 // It follows the subject the same way note-list does (3.5): it applies its
 // `subject: read` starting picture on its own concern, never batched into the

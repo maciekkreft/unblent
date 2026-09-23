@@ -1,0 +1,193 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "open takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The open note (12, \"Which note is open\"): the note in the editor in full, null when none is open or it is new and nothing is written in it yet; or, while the Highlights are in front, the Highlights of the subject, which the user sees as one note (13), each highlight a note record in reading order.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "note": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "title": { "type": "string" },
+                  "body": { "type": "string" },
+                  "version": { "type": "integer", "minimum": 1 },
+                  "pending": { "type": "boolean" },
+                  "updatedAt": { "type": "integer" },
+                  "about": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string", "minLength": 1 },
+                        "id": { "type": "string", "minLength": 1 },
+                        "place": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "chapter": { "type": "integer", "minimum": 0 },
+                                "contentVersion": { "type": "integer", "minimum": 0 },
+                                "start": {
+                                  "type": "object",
+                                  "properties": {
+                                    "block": { "type": "integer", "minimum": 0 },
+                                    "offset": { "type": "integer", "minimum": 0 }
+                                  },
+                                  "required": ["block", "offset"],
+                                  "additionalProperties": false
+                                },
+                                "end": {
+                                  "type": "object",
+                                  "properties": {
+                                    "block": { "type": "integer", "minimum": 0 },
+                                    "offset": { "type": "integer", "minimum": 0 }
+                                  },
+                                  "required": ["block", "offset"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["chapter", "contentVersion", "start", "end"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "quote": {
+                          "type": "object",
+                          "properties": {
+                            "exact": { "type": "string" },
+                            "prefix": { "type": "string" },
+                            "suffix": { "type": "string" }
+                          },
+                          "required": ["exact", "prefix", "suffix"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["kind", "id"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["id", "title", "body", "version", "pending", "updatedAt"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": ["note"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "highlights": {
+            "type": "object",
+            "properties": {
+              "about": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "minLength": 1 },
+                  "id": { "type": "string", "minLength": 1 }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              },
+              "notes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "title": { "type": "string" },
+                    "body": { "type": "string" },
+                    "version": { "type": "integer", "minimum": 1 },
+                    "pending": { "type": "boolean" },
+                    "updatedAt": { "type": "integer" },
+                    "about": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": { "type": "string", "minLength": 1 },
+                          "id": { "type": "string", "minLength": 1 },
+                          "place": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "chapter": { "type": "integer", "minimum": 0 },
+                                  "contentVersion": { "type": "integer", "minimum": 0 },
+                                  "start": {
+                                    "type": "object",
+                                    "properties": {
+                                      "block": { "type": "integer", "minimum": 0 },
+                                      "offset": { "type": "integer", "minimum": 0 }
+                                    },
+                                    "required": ["block", "offset"],
+                                    "additionalProperties": false
+                                  },
+                                  "end": {
+                                    "type": "object",
+                                    "properties": {
+                                      "block": { "type": "integer", "minimum": 0 },
+                                      "offset": { "type": "integer", "minimum": 0 }
+                                    },
+                                    "required": ["block", "offset"],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "required": ["chapter", "contentVersion", "start", "end"],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "quote": {
+                            "type": "object",
+                            "properties": {
+                              "exact": { "type": "string" },
+                              "prefix": { "type": "string" },
+                              "suffix": { "type": "string" }
+                            },
+                            "required": ["exact", "prefix", "suffix"],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": ["kind", "id"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["id", "title", "body", "version", "pending", "updatedAt"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["about", "notes"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["highlights"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["note.changed", "note.deleted"],
+  "tool": { "description": "Returns the note the reader has open right now, in full. The reader sees all of a book's highlights as one note named Highlights, so when that is open this returns every highlight of the book in reading order: each one's body is the reader's comment, and the quote on its link to the book is the passage. Returns a null note when nothing is open. Call this when the reader says \"this note\" or \"the note I have open\". Takes no arguments.", "label": "Reading the open note" }
+}

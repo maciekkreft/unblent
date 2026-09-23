@@ -84,7 +84,7 @@
   },
   "supersededBy": ["note.changed", "note.deleted"],
   "tool": {
-    "description": "Lists every note and highlight the reader has written — title, a preview line, and what each is about. Their notes and highlights show what caught their attention, so they are worth reading when relevant. Gives the ids that reading a note needs. Takes no arguments.",
+    "description": "Lists every note and highlight the reader has written — title, a preview line, and what each is about. Their notes and highlights show what caught their attention, so they are worth reading when relevant. Each highlight is listed on its own here, but the reader sees all of a book's highlights as one note named Highlights. Gives the ids that reading a note needs. Takes no arguments.",
     "label": "Listing the notes"
   }
 }
