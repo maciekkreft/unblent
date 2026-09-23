@@ -118,7 +118,9 @@ for (const engine of ENGINES) {
           return real(url, init);
         };
       });
-      await page.goto(`${BASE_URL}/workshop/apps/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row.draft"));
+      await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       // The sign-in pull settles the fact before the first edit (5).
       await until(() => page.evaluate(() => window.__puts !== undefined));

@@ -45,8 +45,6 @@ function editor({
   remember,
   recallTitles,
   rememberTitles,
-  aboutNew = false,
-  levels = false,
   flashMs = 3000,
 } = {}) {
   const clock = new SimulatedClock();
@@ -54,7 +52,7 @@ function editor({
   const opened = [];
   const refused = [];
   const actor = createActor(machine, {
-    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, aboutNew, levels, flashMs },
+    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, flashMs },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
@@ -722,7 +720,7 @@ test("titles are recalled at start, so the About line names a link the session n
   // The open note is about A; the stage holds B. Only A's title, recalled from storage,
   // lets the About line name it.
   const snapshot = {
-    context: { about: [LINK_A], titles: { "book:bookA": "Dune" }, aboutNew: false, subjecting: true, subject: SUBJECT_B, baseVersion: 3 },
+    context: { about: [LINK_A], titles: { "book:bookA": "Dune" }, subjecting: true, subject: SUBJECT_B, baseVersion: 3 },
     matches: () => false,
   };
   assert.equal(aboutTitleOf(snapshot), "Dune");
@@ -775,20 +773,18 @@ test("with subjecting, a keystroke before start fails still saves, with an empty
   assert.deepEqual(saved[0].about, [], "no subject was known, so no link");
 });
 
-test("aboutTitleOf names the stage subject on a new note only with about-new and no links", () => {
+test("aboutTitleOf names the stage subject on a new note only with no links", () => {
   const fresh = (level, extra = {}) => ({
     context: { about: [], titles: {}, subjecting: true, subject: SUBJECT, baseVersion: null, ...extra },
     matches: (v) => v === level,
   });
-  // A new note, about-new on: the stage's subject.
-  assert.equal(aboutTitleOf({ ...fresh("empty"), context: { ...fresh("empty").context, aboutNew: true } }), "Dune");
-  assert.equal(aboutTitleOf({ ...fresh("editing"), context: { ...fresh("editing").context, aboutNew: true } }), "Dune", "a dirty draft with no version yet still counts as new");
-  // about-new off: nothing, the old behaviour.
-  assert.equal(aboutTitleOf({ ...fresh("empty"), context: { ...fresh("empty").context, aboutNew: false } }), null);
+  // A new note: the stage's subject.
+  assert.equal(aboutTitleOf(fresh("empty")), "Dune");
+  assert.equal(aboutTitleOf(fresh("editing")), "Dune", "a dirty draft with no version yet still counts as new");
   // No subject on the stage: nothing to name.
-  assert.equal(aboutTitleOf({ context: { about: [], titles: {}, aboutNew: true, subjecting: true, subject: null, baseVersion: null }, matches: (v) => v === "empty" }), null);
+  assert.equal(aboutTitleOf({ context: { about: [], titles: {}, subjecting: true, subject: null, baseVersion: null }, matches: (v) => v === "empty" }), null);
   // While a note may still arrive (loading/starting), the line stays quiet.
-  assert.equal(aboutTitleOf({ context: { about: [], titles: {}, aboutNew: true, subjecting: true, subject: SUBJECT, baseVersion: null }, matches: () => false }), null);
+  assert.equal(aboutTitleOf({ context: { about: [], titles: {}, subjecting: true, subject: SUBJECT, baseVersion: null }, matches: () => false }), null);
 });
 
 test("with the attribute off, no subject is asked and saves carry no links (today's behaviour)", async () => {
@@ -851,11 +847,6 @@ test("a save carries the stripped title and the markdown body verbatim", async (
   assert.deepEqual(saved, [
     { type: "note.saved", id: ID, title: "Kickoff", body: "# Kickoff\n## Agenda\nnotes", baseVersion: null },
   ]);
-});
-
-test("the levels attribute reaches the context, off by default", () => {
-  assert.equal(editor().actor.getSnapshot().context.levels, false);
-  assert.equal(editor({ levels: true }).actor.getSnapshot().context.levels, true);
 });
 
 // The "Vim keys" preference (12): asked of settings at start, followed after.

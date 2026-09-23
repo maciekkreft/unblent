@@ -11,8 +11,8 @@ const VIEWS = [
 
 // The actor is where decisions live (3.2): it is driven with a fake ask, the shape
 // the bus's `ask` returns (4.2).
-function settle(ask, { views = VIEWS, narrow, marking } = {}) {
-  const actor = createActor(machine, { input: { ask, views, narrow, marking } });
+function settle(ask, { views = VIEWS, narrow } = {}) {
+  const actor = createActor(machine, { input: { ask, views, narrow } });
   const emitted = [];
   actor.on("dock.arranged", (e) => emitted.push(e));
   return new Promise((resolve) => {
@@ -440,8 +440,8 @@ test("in failed, _open switches the stage locally", async () => {
   assert.deepEqual(emitted, []);
 });
 
-// The subject mark (12): with `marks-subject`, the desk asks `subject: read` and
-// follows `subject.changed`, so it knows which tab to mark. Off, it asks nothing.
+// The subject mark (12): the desk asks `subject: read` and
+// follows `subject.changed`, so it knows which tab to mark.
 const SUBJECT = { kind: "book", id: "b1", title: "Dune", view: "book-reader" };
 const withSubject =
   (subject) =>
@@ -452,20 +452,8 @@ const withSubject =
     return Promise.resolve({ stage: "book-reader", docks: {} });
   };
 
-test("without marks-subject the desk asks no subject and marks nothing", async () => {
-  // The ask would answer a subject, but the flag is off, so it is never asked.
-  const asked = [];
-  const ask = (target, name, payload) => {
-    asked.push(`${target}:${name}`);
-    return withSubject(SUBJECT)(target, name, payload);
-  };
-  const { snapshot } = await settle(ask);
-  assert.equal(snapshot.context.subject, null);
-  assert.ok(!asked.includes("subject:read"));
-});
-
-test("with marks-subject the context follows subject: read then subject.changed", async () => {
-  const { actor } = await settle(withSubject(SUBJECT), { marking: true });
+test("the context follows subject: read then subject.changed", async () => {
+  const { actor } = await settle(withSubject(SUBJECT));
   // Give the lifelong subject read a tick to land.
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT);
@@ -473,8 +461,8 @@ test("with marks-subject the context follows subject: read then subject.changed"
   assert.equal(actor.getSnapshot().context.subject, null);
 });
 
-test("with marks-subject and no subject answerer the context stays null", async () => {
-  const { actor } = await settle(withSubject(null), { marking: true });
+test("with no subject answerer the context stays null", async () => {
+  const { actor } = await settle(withSubject(null));
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(actor.getSnapshot().context.subject, null);
 });

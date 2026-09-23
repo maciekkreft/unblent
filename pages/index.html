@@ -69,15 +69,15 @@
   </head>
   <body>
     <page-nav></page-nav>
-    <dock-desk reorders marks-subject>
+    <dock-desk>
       <book-reader label="Reader" height="fill" highlights></book-reader>
       <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
         <book-shelf label="Books" renames></book-shelf>
         <book-toc shows-on="book.selected"></book-toc>
       </list-then-item>
       <list-then-item id="notes" label="Notes" side="right" height="fill" shows-on="note.selected">
-        <note-list subject keeps-open highlights label="Notes"></note-list>
-        <note-editor follows subject about-new levels height="fill" shows-on="note.selected"></note-editor>
+        <note-list subject label="Notes"></note-list>
+        <note-editor follows subject height="fill" shows-on="note.selected"></note-editor>
         <highlight-notes shows-on="highlights.selected" height="fill"></highlight-notes>
       </list-then-item>
       <list-then-item id="chats" label="Chat" side="right" height="fill" shows-on="conversation.selected">

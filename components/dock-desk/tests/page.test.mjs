@@ -96,7 +96,7 @@ const clickAction = (page, label) =>
 for (const engine of ENGINES) {
   // The dock stem seeds Trace on the right with arranging on (no settings fact, so
   // the desk stays arrangeable). Docking a stage tab beside it gives two tabs, and
-  // the reorder arrows (6.4, `reorders` on the stem page) move the shown one; the
+  // the reorder arrows (6.4) move the shown one; the
   // order survives a reload because `dock` stores it.
   test(`reorder arrows move a docked tab and the order persists in ${engine.name}`, async () => {
     const browser = await engine.launch();

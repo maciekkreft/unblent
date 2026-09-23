@@ -49,13 +49,16 @@ async function until(fn, timeout = 4000) {
   throw new Error("timed out");
 }
 
-// The element the dock has slotted for the note editor (12).
+// The element filling the note-editor role: the page's own tag, or a member the
+// composer swapped in, which carries data-role (3.6).
 const slotted = (page) =>
   page.evaluate(() => {
-    const root = document.querySelector("dock-desk").shadowRoot;
-    const el = root.querySelector('slot[name="note-editor"]')?.assignedElements?.()[0];
+    const el = document.querySelector('note-editor, [data-role="note-editor"]');
     return el ? { tag: el.localName, role: el.dataset.role ?? null } : null;
   });
+
+// The notes stem page is the smallest page holding the editor with the list beside it.
+const STEM = "/workshop/design/notes";
 
 // The document as the user sees it: each CM6 line's text and classes, marker-free.
 const lines = (page) =>
@@ -138,7 +141,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.goto(`${BASE_URL}${STEM}`);
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       await vimReady(page);
       assert.deepEqual(await slotted(page), { tag: "note-editor", role: null });
@@ -187,8 +190,12 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), settings(false, { "note-editor": "no-such-editor" }));
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      // The notes stem page loads no composer, so this runs on the product, whose
+      // editor shows once a note is picked from the Notes list.
+      await page.addInitScript((v) => localStorage.setItem("settings:product", v), settings(false, { "note-editor": "no-such-editor" }));
+      await page.goto(`${BASE_URL}/`);
+      await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row.draft"));
+      await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       assert.deepEqual(await slotted(page), { tag: "note-editor", role: null }, "the page's own editor stayed");
 
@@ -211,10 +218,9 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.goto(`${BASE_URL}${STEM}`);
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       await vimReady(page);
-      assert.equal(await page.locator("note-editor").getAttribute("levels"), "", "the page sets levels");
 
       await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
@@ -255,7 +261,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.goto(`${BASE_URL}${STEM}`);
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       await vimReady(page);
 
@@ -314,7 +320,7 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.goto(`${BASE_URL}${STEM}`);
       await page.evaluate((v) => localStorage.setItem("settings", v), NO_VIM);
       await page.reload();
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("button.level"));
@@ -348,7 +354,7 @@ for (const engine of ENGINES) {
         localStorage.setItem("viewport", "phone");
         localStorage.setItem("settings", v);
       }, VIM);
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
+      await page.goto(`${BASE_URL}${STEM}`);
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
       assert.deepEqual(await slotted(page), { tag: "note-editor", role: null });

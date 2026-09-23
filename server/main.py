@@ -1,5 +1,5 @@
 """FastAPI entry point (architecture.md 11.1). Named ``server`` rather than
-``app`` so it never clashes with ``pages/apps/`` or an app component."""
+``app`` so it never clashes with an app page or an app component."""
 
 import importlib.util
 import sys

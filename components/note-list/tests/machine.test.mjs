@@ -24,12 +24,12 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, keepsOpen = false, showsHighlights = false } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false } = {}) {
   const selected = [];
   const discarded = [];
   const highlighted = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following, keepsOpen, showsHighlights }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.on("highlights.selected", (e) => highlighted.push(e.about));
@@ -305,7 +305,7 @@ test("subject.changed switches which notes are shown", async () => {
   assert.deepEqual(shownIds(actor), [B, A], "no subject on the stage shows every note");
 });
 
-// --- keeps-open: the open note always has a row (12) --------------------------------
+// --- the open note always has a row (12) --------------------------------
 
 // bk1 is on the stage; A is about bk1, B is about bk2. The editor has B open.
 const twoBooks = () =>
@@ -317,30 +317,23 @@ const twoBooks = () =>
     subject: { kind: "book", id: "bk1", title: "One" },
   });
 
-test("keeps-open: the open note not about the subject leads apart, the shown set unchanged", async () => {
-  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+test("the open note not about the subject leads apart, the shown set unchanged", async () => {
+  const { actor } = list({ following: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: B });
   assert.equal(apartId(actor), B, "the open note is kept apart");
   assert.deepEqual(shownIds(actor), [A], "the shown set is still only the subject's notes");
 });
 
-test("keeps-open: the open note about the subject is not apart", async () => {
-  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+test("the open note about the subject is not apart", async () => {
+  const { actor } = list({ following: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: A });
   assert.equal(apartId(actor), null, "an open note already in the shown set is not doubled");
 });
 
-test("with keeps-open off, nothing is apart", async () => {
-  const { actor } = list({ following: true, keepsOpen: false, ask: twoBooks() });
-  await tick();
-  actor.send({ type: "note.opened", id: B });
-  assert.equal(apartId(actor), null);
-});
-
-test("keeps-open: subject.changed to the open note's subject folds it back into the list", async () => {
-  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+test("subject.changed to the open note's subject folds it back into the list", async () => {
+  const { actor } = list({ following: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: B });
   assert.equal(apartId(actor), B);
@@ -349,8 +342,8 @@ test("keeps-open: subject.changed to the open note's subject folds it back into 
   assert.deepEqual(shownIds(actor), [B], "so it is in the shown set");
 });
 
-test("keeps-open: deleting the open note leaves nothing apart", async () => {
-  const { actor } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+test("deleting the open note leaves nothing apart", async () => {
+  const { actor } = list({ following: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: B });
   assert.equal(apartId(actor), B);
@@ -385,14 +378,14 @@ test("a highlight of the subject is kept but never shown in the list", async () 
 });
 
 test("a highlight note open in the editor is not kept apart either", async () => {
-  const { actor } = list({ following: true, keepsOpen: true, ask: withHighlight() });
+  const { actor } = list({ following: true, ask: withHighlight() });
   await tick();
   actor.send({ type: "note.opened", id: C });
   assert.equal(apartId(actor), null, "a highlight is hidden even when it is the open note");
 });
 
-test("keeps-open: the apart row can be picked like any row", async () => {
-  const { actor, selected } = list({ following: true, keepsOpen: true, ask: twoBooks() });
+test("the apart row can be picked like any row", async () => {
+  const { actor, selected } = list({ following: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: B });
   actor.send({ type: "_pick", id: B });
@@ -415,23 +408,18 @@ const DHIGH = {
 };
 
 test("highlights() counts the subject's highlights with the latest time", async () => {
-  const { actor } = list({ following: true, showsHighlights: true, ask: withHighlight() });
+  const { actor } = list({ following: true, ask: withHighlight() });
   await tick();
   assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "one highlight (note C), its time");
 });
 
-test("highlights() is null without the attribute, when not following, or with no subject", async () => {
-  const off = list({ following: true, showsHighlights: false, ask: withHighlight() });
-  await tick();
-  assert.equal(hl(off.actor), null, "the attribute is off");
-
-  const notFollowing = list({ following: false, showsHighlights: true, ask: withHighlight() });
+test("highlights() is null when not following, or with no subject", async () => {
+  const notFollowing = list({ following: false, ask: withHighlight() });
   await tick();
   assert.equal(hl(notFollowing.actor), null, "not following the stage");
 
   const noSubject = list({
     following: true,
-    showsHighlights: true,
     ask: answering({ notes: [], subject: null }),
   });
   await tick();
@@ -439,7 +427,7 @@ test("highlights() is null without the attribute, when not following, or with no
 });
 
 test("a highlight of another subject is not counted", async () => {
-  const { actor } = list({ following: true, showsHighlights: true, ask: withHighlight() });
+  const { actor } = list({ following: true, ask: withHighlight() });
   await tick();
   assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 });
   // bk2 has only the plain note B (no place), so nothing is a highlight of it.
@@ -448,7 +436,7 @@ test("a highlight of another subject is not counted", async () => {
 });
 
 test("note.changed raises the count and note.deleted lowers it, to null at zero", async () => {
-  const { actor } = list({ following: true, showsHighlights: true, ask: withHighlight() });
+  const { actor } = list({ following: true, ask: withHighlight() });
   await tick();
   assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 });
   actor.send(DHIGH);
@@ -460,7 +448,7 @@ test("note.changed raises the count and note.deleted lowers it, to null at zero"
 });
 
 test("_pickHighlights emits highlights.selected with the subject and marks the row open", async () => {
-  const { actor, highlighted } = list({ following: true, showsHighlights: true, ask: withHighlight() });
+  const { actor, highlighted } = list({ following: true, ask: withHighlight() });
   await tick();
   actor.send({ type: "_pickHighlights" });
   assert.deepEqual(highlighted, [{ kind: "book", id: "bk1" }], "the gesture carries the subject");
@@ -468,13 +456,13 @@ test("_pickHighlights emits highlights.selected with the subject and marks the r
 });
 
 test("_pick and note.opened clear the Highlights row's open mark", async () => {
-  const picked = list({ following: true, showsHighlights: true, ask: withHighlight() });
+  const picked = list({ following: true, ask: withHighlight() });
   await tick();
   picked.actor.send({ type: "_pickHighlights" });
   picked.actor.send({ type: "_pick", id: A });
   assert.equal(highlightsOpen(picked.actor), false, "picking a note clears it");
 
-  const opened = list({ following: true, showsHighlights: true, ask: withHighlight() });
+  const opened = list({ following: true, ask: withHighlight() });
   await tick();
   opened.actor.send({ type: "_pickHighlights" });
   opened.actor.send({ type: "note.opened", id: A });
@@ -484,7 +472,6 @@ test("_pick and note.opened clear the Highlights row's open mark", async () => {
 test("_pickHighlights with no highlights emits nothing and does not mark the row", async () => {
   const { actor, highlighted } = list({
     following: true,
-    showsHighlights: true,
     ask: answering({ notes: [{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }], subject: { kind: "book", id: "bk1", title: "One" } }),
   });
   await tick();

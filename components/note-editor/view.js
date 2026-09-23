@@ -219,8 +219,6 @@ class ActorController {
         remember: pinStore.remember,
         recallTitles: titleStore.recall,
         rememberTitles: titleStore.remember,
-        aboutNew: this.host.aboutNew,
-        levels: this.host.levels,
         flashMs,
       },
       events: { "note.saved": saved, "note.opened": opened, "note.refused": refused },
@@ -253,13 +251,6 @@ class NoteEditor extends LitElement {
     // page's bare `subject` reads as true and the manifest attribute is visible. Off is
     // exactly today's behaviour.
     subject: { type: Boolean, reflect: true },
-    // Whether an editor holding a new note names the subject on the stage in the About
-    // line (12): what the note will be linked to at its first save. Reflected so the
-    // page's bare `about-new` reads as true and the manifest attribute is visible.
-    aboutNew: { type: Boolean, attribute: "about-new", reflect: true },
-    // Whether the footer's level names are buttons that set the caret line's level.
-    // Reflected so the page's bare `levels` reads as true. Off is the hint row alone.
-    levels: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -384,7 +375,6 @@ class NoteEditor extends LitElement {
     .level {
       white-space: nowrap;
     }
-    .level.cur,
     button.level[aria-pressed="true"] {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
@@ -545,29 +535,16 @@ class NoteEditor extends LitElement {
     return "";
   }
 
-  // The level keys, shown so a hidden Vim map becomes a visible signifier; the
-  // caret's own level is marked so the map doubles as feedback about where you are.
-  // With `levels` the names are buttons, so a level can be set without Vim and on a
-  // phone; the key stays beside the name while Vim is on. Without `levels` the row
-  // names only Vim keys, so with Vim off there is nothing true to show.
-  #levelBar(levels, vimKeys) {
+  // The level names are buttons, so a level can be set without Vim and on a phone; the
+  // caret's own level is marked so the row doubles as feedback about where you are.
+  // The Vim key stays beside the name while Vim is on, so a hidden map is visible.
+  #levelBar(vimKeys) {
     const keys = [
       ["\\1", "title", "Title"],
       ["\\2", "heading", "Heading"],
       ["\\3", "subheading", "Subheading"],
       ["\\0", "body", "Body"],
     ];
-    if (!levels) {
-      if (!vimKeys) return nothing;
-      return html`<span class="levels">
-        ${keys.map(
-          ([key, level, label]) =>
-            html`<span class=${level === this.#level ? "level cur" : "level"}
-              ><kbd>${key}</kbd> ${label}</span
-            >`,
-        )}
-      </span>`;
-    }
     return html`<span class="levels" role="group" aria-label="Line level">
       ${keys.map(
         ([key, level, label]) =>
@@ -604,7 +581,7 @@ class NoteEditor extends LitElement {
   }
 
   // The About line (12): computed by the machine's pure aboutTitleOf, so the rule — a
-  // saved note's link, or the stage's subject on a new note when about-new is on — is
+  // saved note's link, or the stage's subject on a new note — is
   // tested in Node and the view only renders the result.
   #aboutTitle(snapshot) {
     return aboutTitleOf(snapshot);
@@ -635,7 +612,7 @@ class NoteEditor extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { subjecting, pinned, flashing, id, levels, vimKeys } = snapshot.context;
+    const { subjecting, pinned, flashing, id, vimKeys } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
@@ -647,7 +624,7 @@ class NoteEditor extends LitElement {
             <span>${this.#status(snapshot)}</span><span class="sizer" aria-hidden="true">New note</span
             ><span class="sizer" aria-hidden="true">Unsaved</span>
           </p>
-          ${this.#levelBar(levels, vimKeys)}
+          ${this.#levelBar(vimKeys)}
         </div>
       </div>
     `;

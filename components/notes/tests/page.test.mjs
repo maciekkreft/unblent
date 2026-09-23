@@ -382,84 +382,6 @@ for (const engine of ENGINES) {
     }
   });
 
-  test(`the notes app composes the list and editor in a dock-desk in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    const context = await browser.newContext();
-    context.setDefaultTimeout(4000);
-    try {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      await page.goto(`${BASE_URL}/workshop/apps/notes`);
-      await page.waitForFunction(() => document.querySelector("dock-desk")?.shadowRoot?.querySelector(".stage"));
-
-      // The three views are the desk's children (8): the page composes, dock-desk
-      // lays out.
-      const children = await page.evaluate(() =>
-        [...document.querySelector("dock-desk").children].map((c) => c.localName),
-      );
-      assert.ok(
-        ["note-editor", "note-list"].every((n) => children.includes(n)),
-        "editor and list are dock-desk children",
-      );
-
-      // Editor is the stage tab; Notes seeds onto the left dock (the page's side="left",
-      // §6.4), the default a fresh desk shows before any user arrangement.
-      const tabs = await page.evaluate(() =>
-        [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.stage [role="tab"]')].map((b) =>
-          b.textContent.trim(),
-        ),
-      );
-      assert.deepEqual(tabs, ["Editor"]);
-      const notesDock = await page.evaluate(() => {
-        const root = document.querySelector("dock-desk").shadowRoot;
-        const aside = root.querySelector('slot[name="note-list"]')?.closest("aside.dock");
-        return aside ? [...aside.classList].find((c) => ["left", "right", "bottom"].includes(c)) : null;
-      });
-      assert.equal(notesDock, "left", "Notes seeds onto the left dock");
-
-      // The editor is the shown stage tab; its status line proves it has rendered.
-      await page.waitForFunction(
-        () => document.querySelector("note-editor")?.shadowRoot?.querySelector(".status"),
-      );
-      // A group's body is a flex column (fix 2), so height="fill" fills it: the editor
-      // host is as tall as the stage body and its footer (the status and the level
-      // buttons) sits at the body's bottom, within one --space-md (16px), not stranded
-      // under the first line.
-      const fill = await page.evaluate(() => {
-        const desk = document.querySelector("dock-desk");
-        const body = desk.shadowRoot.querySelector('.body[data-side="stage"]').getBoundingClientRect();
-        const editor = document.querySelector("note-editor");
-        const host = editor.getBoundingClientRect();
-        const footer = editor.shadowRoot.querySelector(".footer").getBoundingClientRect();
-        return { bodyH: body.height, hostH: host.height, gap: body.bottom - footer.bottom };
-      });
-      assert.ok(Math.abs(fill.hostH - fill.bodyH) <= 1, `the editor fills the stage body, saw ${fill.hostH} vs ${fill.bodyH}`);
-      assert.ok(fill.gap >= -1 && fill.gap <= 16, `the footer sits at the body's bottom, gap ${fill.gap}px`);
-
-      // note-list carries no chrome of its own: the frame names it, and creating a
-      // note is the first row, not a title, a band, or a button.
-      const listChrome = await page.evaluate(() => {
-        const root = document.querySelector("note-list").shadowRoot;
-        return {
-          hasTitle: Boolean(root.querySelector(".title")),
-          hasHead: Boolean(root.querySelector(".head")),
-          // Row actions (the trash) are row content; the list has no chrome of its own.
-          chromeButtons: [...root.querySelectorAll("button")].filter((b) => !b.closest(".row")).length,
-          firstRow: root.querySelector(".row .name")?.textContent.trim() ?? null,
-        };
-      });
-      assert.equal(listChrome.hasTitle, false, "the list carries no title of its own");
-      assert.equal(listChrome.hasHead, false, "the list carries no head band");
-      assert.equal(listChrome.chromeButtons, 0, "the list has no chrome buttons of its own");
-      assert.equal(listChrome.firstRow, "New note", "the first row is the next note");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    } finally {
-      await browser.close();
-    }
-  });
-
   test(`a hidden tab drains the outbox at once when signed in, in ${engine.name}`, async () => {
     const browser = await engine.launch();
     // Sign in without a passkey ceremony: forge the session cookie the server would
@@ -487,7 +409,9 @@ for (const engine of ENGINES) {
         };
       });
 
-      await page.goto(`${BASE_URL}/workshop/apps/notes`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row.draft"));
+      await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
       // Signing in pulls at once (5): wait for that GET so the fact is signed in.
       await until(() => page.evaluate(() => window.__fetches.some((f) => /\/api\/notes\?since=/.test(f.url))));

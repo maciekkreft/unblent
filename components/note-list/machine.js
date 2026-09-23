@@ -42,12 +42,11 @@ const isAbout = (note, subject) =>
 const isHighlight = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
 
-// The Highlights row (Decision 1, 5, 6): while following, with the attribute on and a
-// subject on the stage, one fixed row standing for every highlight of the subject — null
+// The Highlights row (Decision 1, 5, 6): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
 // unless at least one note is a highlight of it. Its count and latest time come from the
 // notes the list already holds (no new query), so it is pure like `shown` and `apart`.
-export const highlights = ({ notes, following, showsHighlights, subject }) => {
-  if (!showsHighlights || !following || subject == null) return null;
+export const highlights = ({ notes, following, subject }) => {
+  if (!following || subject == null) return null;
   const hs = notes.filter((n) => isHighlight(n, subject));
   return hs.length ? { count: hs.length, updatedAt: Math.max(...hs.map((n) => n.updatedAt)) } : null;
 };
@@ -64,12 +63,11 @@ export const shown = ({ notes, following, subject }) =>
 
 // The note the editor has open, when it is not among the shown notes (12): a pinned
 // note after the stage moved, or one still open after unpinning. Only while following a
-// subject and only with the keeps-open attribute; otherwise the open note is always in
-// the shown set, so there is nothing apart. Its row is the same row as any other; the
+// subject; otherwise the open note is always in the shown set, so there is nothing apart. Its row is the same row as any other; the
 // view sets it apart. Computed from context, so no handler decides it: note.opened,
 // subject.changed, note.changed and note.deleted keep the inputs current.
-export const apart = ({ notes, following, keepsOpen, subject, open }) => {
-  if (!keepsOpen || !following || subject == null || open == null) return null;
+export const apart = ({ notes, following, subject, open }) => {
+  if (!following || subject == null || open == null) return null;
   const note = notes.find((n) => n.id === open);
   return note && !isAbout(note, subject) && !isHighlight(note, subject) ? note : null;
 };
@@ -104,9 +102,9 @@ export const machine = setup({
     emits: ["note.selected", "note.discarded", "highlights.selected"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
     // no filtering, every note shown. On, the list shows only the notes about the
-    // subject on the stage; there is no switch to all notes. The highlights attribute
-    // (Decision 4) adds the Highlights row; without it the list behaves as today.
-    attributes: ["subject", "keeps-open", "highlights"],
+    // subject on the stage, with the Highlights row above them while the subject has
+    // a highlight; there is no switch to all notes.
+    attributes: ["subject"],
     asks: ["notes: list", "subject: read"],
   },
   context: ({ input }) => ({
@@ -115,14 +113,6 @@ export const machine = setup({
     // Whether the page set the `subject` attribute (D5); it arrives through input so
     // the machine stays importable in Node.
     following: Boolean(input.following),
-    // The `keeps-open` attribute (12): keep a row for the note the editor has open even
-    // when it is not about the subject, so the highlighted row is never missing. Off by
-    // default; arrives through input so the machine stays importable in Node.
-    keepsOpen: Boolean(input.keepsOpen),
-    // The `highlights` attribute (Decision 4): show the Highlights row while the subject
-    // has at least one highlight. Off by default; arrives through input so the machine
-    // stays importable in Node.
-    showsHighlights: Boolean(input.showsHighlights),
     // Whether the Highlights row is the picked one (Decision 7). UI state: set when it is
     // picked, cleared when a note row is picked or the editor announces a note. Not kept
     // across a reload; the small mismatch after one is accepted (the list is not visible

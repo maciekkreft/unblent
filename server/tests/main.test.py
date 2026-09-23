@@ -39,7 +39,6 @@ class ServerEntry(unittest.TestCase):
     def test_app_page_serves_and_guards(self):
         # Section 11.1: /workshop/apps/<name> serves pages/workshop/apps/<name>.html,
         # 404 otherwise, with the same parent guard as /workshop/design/<name>.
-        self.assertEqual(_request("/workshop/apps/notes").status, 200)
         self.assertEqual(_request("/workshop/apps/does-not-exist").status, 404)
         self.assertEqual(_request("/workshop/apps/foo%2F..%2Fbar").status, 404)
 

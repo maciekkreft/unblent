@@ -161,17 +161,16 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // The subject starting picture, asked as its own concern (3.5) so its reply never
     // overwrites a subject.changed that arrived first while the layout was still
-    // loading. Off with no `marks-subject` attribute: no ask, no mark. subject.changed
-    // is held for this ask until its reply lands (subject: read supersededBy).
-    readSubject: fromPromise(({ input }) =>
-      input.marking ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
+    // loading. subject.changed is held for this ask until its reply lands (subject:
+    // read supersededBy).
+    readSubject: fromPromise(({ input }) => input.ask("subject", "read", {})),
   },
 }).createMachine({
   id: "dock-desk",
   meta: {
     kind: "view",
     emits: ["dock.arranged"],
-    attributes: ["reorders", "marks-subject"],
+    attributes: [],
     asks: ["dock: read", "settings: read", "subject: read"],
   },
   // dock-desk keys children by name here and in the view; when two views share a
@@ -185,10 +184,6 @@ export const machine = setup({
     stage: null,
     docks: {},
     arranging: true,
-    // Whether the page set `marks-subject` (12): mark the tab of the view that shows
-    // the subject. Off by default; arrives through input so the machine stays
-    // importable in Node.
-    marking: Boolean(input.marking),
     // The subject, learned from subject: read then subject.changed, as
     // { kind, id, title, view } or null. The view marks the tab whose name is `view`.
     subject: null,
@@ -204,7 +199,7 @@ export const machine = setup({
   // it null and shows no mark, exactly as a page without `settings` stays arrangeable.
   invoke: {
     src: "readSubject",
-    input: ({ context }) => ({ ask: context.ask, marking: context.marking }),
+    input: ({ context }) => ({ ask: context.ask }),
     onDone: { actions: assign({ subject: ({ event }) => event.output.subject ?? null }) },
     onError: { actions: [] },
   },

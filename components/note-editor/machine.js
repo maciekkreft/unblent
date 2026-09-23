@@ -95,15 +95,15 @@ const withTitle = (titles, subject) => {
 };
 
 // What the About line names (12): the open note's first link, by a title this browser
-// has seen; else, with `about-new`, the subject on the stage while the editor holds a
-// new note, because that is what the note is linked to at its first save. Never while
+// has seen; else, while following the subject, the subject on the stage while the
+// editor holds a new note, because that is what the note is linked to at its first save. Never while
 // a note may still arrive (starting, loading), so a pinned note's line does not show
 // the stage's book first. Pure, so it is tested in Node and the view only renders it.
 export function aboutTitleOf(snapshot) {
-  const { about, titles, aboutNew, subjecting, subject, baseVersion } = snapshot.context;
+  const { about, titles, subjecting, subject, baseVersion } = snapshot.context;
   const link = about?.[0];
   if (link) return titles?.[`${link.kind}:${link.id}`] ?? null;
-  if (!aboutNew || !subjecting || baseVersion !== null) return null;
+  if (!subjecting || baseVersion !== null) return null;
   const fresh = ["empty", "blank", "refollowing", "editing"].some((state) => snapshot.matches(state));
   return fresh ? subject?.title ?? null : null;
 }
@@ -223,7 +223,7 @@ export const machine = setup({
   meta: {
     kind: "view",
     emits: ["note.saved", "note.opened", "note.refused"],
-    attributes: ["height", "follows", "subject", "about-new", "levels"],
+    attributes: ["height", "follows", "subject"],
     asks: ["notes: list", "notes: read", "subject: read", "settings: read"],
   },
   context: ({ input }) => ({
@@ -262,12 +262,6 @@ export const machine = setup({
     // rememberTitles, like the pin.
     rememberTitles: input.rememberTitles,
     titles: (input.subjecting ? input.recallTitles?.() : null) ?? {},
-    // The `about-new` attribute (12): show the subject on the stage in the About line
-    // while the editor holds a new note.
-    aboutNew: Boolean(input.aboutNew),
-    // The `levels` attribute: the footer's level names become buttons that set the
-    // caret line's level, so a level can be set without Vim and on a phone.
-    levels: Boolean(input.levels),
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
     // otherwise, and off on a page without it (the ask replies no-answerer).
     vimKeys: false,
@@ -297,7 +291,7 @@ export const machine = setup({
     // note asked for rides in note.refused. Otherwise it lands like a load always has.
     load: [
       // Pinned but told to load the note already on screen: nothing changes, and it is
-      // not refused (12) — the list keeps a clickable row for a pinned note (keeps-open).
+      // not refused (12) — the list keeps a clickable row for a pinned note.
       { guard: ({ context, event }) => context.pinned && event.id === context.id },
       { guard: ({ context }) => context.pinned, actions: "refuse" },
       {

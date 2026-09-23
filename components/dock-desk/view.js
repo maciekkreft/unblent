@@ -68,9 +68,6 @@ class ActorController {
         // width is the honest signal (the phone frame narrows the body), read when
         // the seed is chosen, and compared to the same breakpoint as the CSS.
         narrow: () => this.host.getBoundingClientRect().width < NARROW_REM * ROOT_EM(),
-        // The `marks-subject` attribute (12): read from the host's light DOM, so the
-        // machine learns it through input and stays importable in Node.
-        marking: this.host.hasAttribute("marks-subject"),
       },
       events: { "dock.arranged": arranged },
     });
@@ -103,15 +100,6 @@ class DockDesk extends LitElement {
   // mounted, whether it is shown or behind another tab. No attribute is written on
   // any child, so the desk never touches another component.
   static shadowRootOptions = { ...LitElement.shadowRootOptions, slotAssignment: "manual" };
-
-  // The attributes the tag understands. `reorders`: a dock's tabs can be reordered
-  // while arranging (6.4). `marks-subject` (12): mark the tab of the view that shows
-  // the subject. Both reflected so a page's bare attribute reads as true and the
-  // manifest is visible; both off leave the strip as it was.
-  static properties = {
-    reorders: { type: Boolean, reflect: true },
-    marksSubject: { type: Boolean, reflect: true, attribute: "marks-subject" },
-  };
 
   static styles = css`
     /* base.css makes the body a flex column exactly one viewport tall (7.4), so a
@@ -657,9 +645,9 @@ class DockDesk extends LitElement {
     // DOM, like `views`.
     const extras = [...this.children].filter((c) => c.hasAttribute("control") || c.hasAttribute("button"));
     const buttons = extras.filter((c) => c.hasAttribute("button"));
-    // The tab to mark (12): only with the attribute, and only a subject that names a
-    // view. The address may carry an instance suffix (4.1); a tab is keyed by base name.
-    this.#marked = this.marksSubject ? (subject?.view ?? null) : null;
+    // The tab to mark (12): only a subject that names a view. The address may carry an
+    // instance suffix (4.1); a tab is keyed by base name.
+    this.#marked = subject?.view ?? null;
     this.#markedTitle = subject?.title ?? "";
     const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
     const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
@@ -810,12 +798,12 @@ class DockDesk extends LitElement {
     `;
   }
 
-  // Move the shown tab one place along its own side (6.4), behind the `reorders`
-  // attribute and only on a side that holds more than one tab, so the stage and a
+  // Move the shown tab one place along its own side (6.4), only on a side that holds
+  // more than one tab, so the stage and a
   // lone tab show nothing. An arrow at its end is disabled; when a click reaches an
   // end its own button goes dead, so focus moves to the surviving arrow (updated).
   #reorder(group, name, label, views) {
-    if (!this.reorders || group === "stage" || !views || views.length < 2) return nothing;
+    if (group === "stage" || !views || views.length < 2) return nothing;
     const at = views.indexOf(name);
     return html`
       ${this.#action(

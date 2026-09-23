@@ -536,7 +536,7 @@ for (const engine of ENGINES) {
       assert.equal(await editorBody(page), "About two", "the pinned note did not follow the stage");
 
       // The pinned note is not about book one, so the list keeps it apart at the top,
-      // highlighted as the open row, while book one's note shows below it (12, keeps-open).
+      // highlighted as the open row, while book one's note shows below it (12).
       await until(async () => (await apartRow(page))?.title === "About two");
       assert.equal((await apartRow(page)).selected, "true", "the apart row reads as the open one");
 
@@ -574,7 +574,7 @@ for (const engine of ENGINES) {
     });
 
     // The About line names a note's book after a reload (fault the reload race left blank),
-    // and names the stage's book on a new note before anything is typed (12, about-new).
+    // and names the stage's book on a new note before anything is typed (12).
     // One page kept open throughout, so the book stays staged and the subject stays set;
     // reuses the two books and notes the first test seeded, on the same context.
     test("the About line survives a reload and names a new note", async () => {
@@ -618,7 +618,7 @@ for (const engine of ENGINES) {
       assert.ok(await pinPressed(page), "the pinned note came back pinned");
       assert.equal(await aboutText(page), "About: Sample Book", "its book is named though it was never on this page's stage");
 
-      // Unpin, open a fresh note: with about-new the line names the book on the stage at
+      // Unpin, open a fresh note: the line names the book on the stage at
       // once, and it does not change once the note is saved (its own link names the same).
       await clickPin(page);
       await until(async () => !(await pinPressed(page)));

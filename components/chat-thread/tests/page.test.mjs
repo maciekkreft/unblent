@@ -136,11 +136,11 @@ async function openWithBook(engine, name) {
   return { browser, context, page, problems };
 }
 
-// The testbed app page (session 11): the chat runs in the right dock beside an open book,
+// The product page: the chat runs in the right dock beside an open book,
 // so a new chat is linked to that book (about, and the book's line in start) and follows
 // the subject. The sample book is imported and set open before the page loads, so
 // `subject` settles on it and `conversation-list subject` scopes to its chats.
-async function openTestbed(engine, name) {
+async function openProduct(engine, name) {
   const browser = await engine.launch();
   const userId = `chat-${engine.name}-${name}-${Date.now()}`;
   const context = await browser.newContext();
@@ -152,7 +152,7 @@ async function openTestbed(engine, name) {
   assert.ok((await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}/opened`)).ok(), "the sample book is the open one");
   const page = await context.newPage();
   const problems = watch(page);
-  await page.goto(`${BASE_URL}/workshop/apps/chat`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
   await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
   return { browser, context, page, problems };
 }
@@ -499,10 +499,10 @@ for (const engine of ENGINES) {
     }
   });
 
-  // --- the testbed app page beside an open book (session 11) ---------------------------
+  // --- the product page beside an open book ---------------------------
 
-  test(`a new chat is linked to the open book on the testbed in ${engine.name}`, async () => {
-    const { browser, page, problems } = await openTestbed(engine, "book-link");
+  test(`a new chat is linked to the open book on the product in ${engine.name}`, async () => {
+    const { browser, page, problems } = await openProduct(engine, "book-link");
     try {
       // Wait until the subject has settled on the book, so chat-input links the new chat
       // to it (7's step A1: a keystroke before the subject is known is held until it is).

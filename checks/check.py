@@ -1064,7 +1064,9 @@ def _throwaway_server(port: int):
         "RP_ID": "localhost", "MAX_USERS": "1", "UNBLENT_DATA": data_dir,
     }
     server = subprocess.Popen(
-        [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port)],
+        # Warnings only: the access log would drown the per-file progress; an error still prints.
+        [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port),
+         "--log-level", "warning"],
         cwd=ROOT, env=server_env,
     )
     try:
@@ -1260,18 +1262,22 @@ def _test_lock():
         yield
 
 
-def _node_test(files: list, env=None, extra=(), capture=False) -> subprocess.Popen:
-    """One `node --test` process over files, its per-test durations written beside it."""
+VERBOSE = False
+
+
+def _node_test(files: list, env=None, extra=()) -> subprocess.Popen:
+    """One `node --test` process over files, its per-test durations written beside it.
+    It prints one line per file (checks/progress.mjs), or every test with `--verbose`."""
     fd, durations = tempfile.mkstemp(prefix="unblent-durations-", suffix=".jsonl")
     os.close(fd)
+    reporters = (["--test-reporter=spec", "--test-reporter-destination=stdout"] if VERBOSE else
+                 ["--test-reporter=./checks/progress.mjs", "--test-reporter-destination=stderr"])
     proc = subprocess.Popen(
         ["node", "--import", "./checks/register.mjs", *extra,
          "--test", "--experimental-test-isolation=none", f"--test-timeout={TEST_TIMEOUT_MS}",
-         "--test-reporter=spec", "--test-reporter-destination=stdout",
+         *reporters,
          "--test-reporter=./checks/durations.mjs", f"--test-reporter-destination={durations}",
          *files], cwd=ROOT, env=env,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.STDOUT if capture else None, text=True,
     )
     proc.durations = durations
     return proc
@@ -1370,9 +1376,7 @@ def run_tests(affected=None, webkit_only=False) -> None:
     # browser, so a checks-only change stays cheap. Only an infra change reaches them.
     checks_tests = [] if scoped else sorted(glob.glob("checks/tests/*.test.py", root_dir=ROOT))
     for test in checks_tests:
-        result = subprocess.run([sys.executable, test], cwd=ROOT)
-        if result.returncode != 0:
-            fail(test, "checks tests", "check unit test reported failures")
+        _run_python_test(test, "checks tests", "check unit test reported failures")
 
     # server/tests is the entry's own; only an infra change (a full run) reaches it.
     server_tests = [] if scoped else sorted(glob.glob("server/tests/*.test.py", root_dir=ROOT))
@@ -1389,9 +1393,7 @@ def run_tests(affected=None, webkit_only=False) -> None:
         env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}", "UNBLENT_DATA": data_dir}
 
         for test in server_tests:
-            result = subprocess.run([sys.executable, test], cwd=ROOT, env=env)
-            if result.returncode != 0:
-                fail(test, "server tests", "server-entry HTTP test reported failures")
+            _run_python_test(test, "server tests", "server-entry HTTP test reported failures", env)
 
         # The loader lets a machine test import its actor (bare `xstate`); it is inert
         # for the browser tests, whose only bare import is Playwright by path.
@@ -1407,14 +1409,28 @@ def run_tests(affected=None, webkit_only=False) -> None:
             _run_browser(browser, env, webkit_only)
 
 
+def _run_python_test(test: str, rule: str, detail: str, env=None) -> None:
+    """One unittest file, quiet like the node tests: one line when it passes, its whole
+    output when it fails."""
+    started = time.perf_counter()
+    result = subprocess.run([sys.executable, test] + (["-v"] if VERBOSE else []),
+                            cwd=ROOT, env=env, capture_output=not VERBOSE, text=True)
+    if result.returncode != 0:
+        if not VERBOSE:
+            sys.stderr.write(result.stdout + result.stderr)
+        fail(test, rule, detail)
+    if not VERBOSE:
+        print(f"ok   {test:<52} {time.perf_counter() - started:5.1f}s", file=sys.stderr, flush=True)
+
+
 def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
     # CHECK_BROWSER_WORKERS parallel node processes over the one server (10, 11).
     # Default 1 (serial): on this two-core host a second concurrent browser starves
     # the first of CPU and pushes the heaviest tests (dock, notes save, layout
     # switch) past the per-test five-second budget (11), so parallelism trades a
     # ~1.4x speed-up for flakes and is opt-in. Raise it where cores are plentiful.
-    # Each worker's output is captured and printed only if it fails, so interleaved
-    # streams stay legible and attribution is per worker. `--test-isolation=none`
+    # With more than one worker the per-file lines of the workers interleave, but each
+    # line names its file, so attribution survives. `--test-isolation=none`
     # runs a worker's files in one process; a process per file would cost ten
     # seconds of start-ups alone.
     workers = min(int(os.environ.get("CHECK_BROWSER_WORKERS", "1")), len(files)) or 1
@@ -1427,14 +1443,13 @@ def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
         # worker, and any test that leaves a context open fails and has it closed at once,
         # so a timed-out test cannot leak pages into the next and exhaust the host.
         extra = ["--import", "./checks/browsers.mjs"] + ([SKIP_CHROMIUM] if webkit_only else [])
-        procs.append(_node_test(chunk, env, extra, capture=True))
+        procs.append(_node_test(chunk, env, extra))
     failed = None
     for proc in procs:
-        out, _ = proc.communicate()
+        proc.wait()
         rows = _read_durations(proc)
         if proc.returncode != 0:
             failed = (failed or []) + rows
-            sys.stderr.write(out)
     if failed is not None:
         fail("components/*/tests", "browser tests", _failure_detail(failed))
 
@@ -1487,6 +1502,9 @@ USAGE = """The one check command (architecture.md 11).
                         the throwaway server the tests use (temporary data
                         directory, port 8090 unless given), until Ctrl-C; for
                         an experiment with a forged session cookie
+
+  Tests print one line per file, and a failure's reason under its name.
+  --verbose prints every test instead; use it with --only <component>.
 """
 
 
@@ -1498,6 +1516,8 @@ def main() -> None:
     if "--server" in argv:
         serve(_server_port(argv))
         return
+    global VERBOSE
+    VERBOSE = "--verbose" in argv
     static_only = "--static" in argv
     changed = "--changed" in argv
     only = _only_value(argv)

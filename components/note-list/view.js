@@ -41,11 +41,6 @@ class ActorController {
         // the notes about it. Parsed by the time hostConnected runs. Off is exactly
         // today's behaviour.
         following: this.host.subject,
-        // The `keeps-open` attribute (12): keep a row for the note the editor has open
-        // even when it is not about the subject.
-        keepsOpen: this.host.keepsOpen,
-        // The `highlights` attribute (Decision 4): show the Highlights row.
-        showsHighlights: this.host.highlights,
       },
       events: {
         "note.selected": selected,
@@ -97,8 +92,6 @@ class NoteList extends LitElement {
   // manifest attribute is visible. Off is exactly today's behaviour.
   static properties = {
     subject: { type: Boolean, reflect: true },
-    keepsOpen: { type: Boolean, attribute: "keeps-open", reflect: true },
-    highlights: { type: Boolean, reflect: true },
   };
 
   static styles = css`

@@ -14,11 +14,14 @@ The architecture is the spec. If a request conflicts with it, name the section a
   (static + WebKit tests reachable from your change) must pass before reporting
   done, and the bare full run (both engines, all tests) is the pre-push gate the
   `.githooks/pre-push` hook runs. One test phase runs at a time per host (a lock);
-  a test past half its 5s budget is named in a warning.
+  a test past half its 5s budget is named in a warning. A test run prints one line
+  per file and a failure's reason under its name. Add `--verbose` together with
+  `--only <component>` to see every test.
 - Ask before changing `tokens/tokens.css`, `tokens/icons.js`, an event, the document facts list (7.5), or `architecture.md`, and before saving or changing a memory. Propose, then wait.
 - Comments say why, or cite an architecture section. Never what the code does, never history.
 - UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step) (one exception: `profile-switch`, architecture §12).
-- Verify UI in WebKit, then Chromium, on the desk and in the phone preview (`data-viewport="phone"`, set through `viewport-switch` or localStorage key `viewport`), before reporting done.
+- Build a change to what the user sees straight into the product page. Do not add a page attribute to turn it on or off.
+- Verify UI in WebKit on the desk and in the phone preview (`data-viewport="phone"`, set through `viewport-switch` or localStorage key `viewport`), before reporting done; the push runs both engines.
 - Commits: 2-3 words, no attribution trailers, same-session fixes amend.
 - Talk to the user as the product owner: simple language and business terms, no technical jargon. Say what the user will see and what it costs; keep component names, contracts and code detail for plan files, proposals that need them, and the code itself.
 - Write `architecture.md`, `CLAUDE.md` and plan files in plain English: say literally what a thing does and how to use it. No slogans and no figures of speech.
