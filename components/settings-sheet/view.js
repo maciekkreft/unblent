@@ -61,13 +61,11 @@ class ActorController {
 
 class SettingsSheet extends LitElement {
   // `account` (7.7): reflected so the page's bare attribute reads as true and the
-  // manifest is visible. `tidy` (section 9) is the one-column look, reflected the same
-  // way. `keyDraft` holds what the user typed in the key box until they save it, and is
-  // cleared after, so the key never lingers in the field. `replacingKey` is true while
+  // manifest is visible. `keyDraft` holds what the user typed in the key box until
+  // they save it, and is cleared after, so the key never lingers in the field. `replacingKey` is true while
   // the box is open over a key already saved.
   static properties = {
     account: { type: Boolean, reflect: true },
-    tidy: { type: Boolean, reflect: true },
     keyDraft: { state: true },
     replacingKey: { state: true },
   };
@@ -79,9 +77,12 @@ class SettingsSheet extends LitElement {
   }
 
   static styles = css`
+    /* One column, every setting one row with its name beside its control, so the eye
+       never crosses the stage to pair them (natural mapping). */
     :host {
       display: block;
       padding: var(--space-md);
+      max-width: var(--width-form);
     }
     h2 {
       margin: 0 0 var(--space-sm);
@@ -91,11 +92,18 @@ class SettingsSheet extends LitElement {
     }
     /* A section heading over each group when the account section is shown (7.7). */
     h3 {
-      margin: 0 0 var(--space-sm);
-      font-size: var(--text-body);
+      margin: 0 0 var(--space-md);
+      font-size: var(--text-subtitle);
       font-weight: var(--weight-semibold);
+      line-height: var(--leading-tight);
       color: var(--color-ink);
     }
+    h3.later {
+      margin-top: var(--space-xl);
+      padding-top: var(--space-lg);
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    .switches,
     .account {
       display: flex;
       flex-direction: column;
@@ -104,48 +112,49 @@ class SettingsSheet extends LitElement {
     .tools {
       display: flex;
       flex-direction: column;
-      gap: var(--space-xs);
+      gap: var(--space-sm);
+      margin-top: var(--space-md);
     }
     .tools .group {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
-    label.tool {
-      display: flex;
-      align-items: flex-start;
-      gap: var(--space-xs);
+    .field {
+      display: grid;
+      grid-template-columns: 2fr 3fr;
+      align-items: center;
+      column-gap: var(--space-md);
+      row-gap: var(--space-2xs);
       white-space: normal;
     }
-    label.tool .labels {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-2xs);
+    .field > :not(:first-child) {
+      justify-self: start;
     }
-    label.tool .title {
-      color: var(--color-ink);
-    }
-    label.tool .desc {
+    .field > .help {
+      grid-column: 2;
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
-    .field {
-      /* Override the base label rule, which centres its content (7.4). */
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: var(--space-2xs);
+    /* The model's description rides the hover in the workshop only; the dotted line
+       is the signifier that a hint is there. */
+    .field > .hinted {
+      text-decoration: underline dotted var(--color-mute);
+      text-underline-offset: var(--space-xs);
+      cursor: help;
     }
-    .field > span {
-      color: var(--color-body-mid);
-      font-size: var(--text-sm);
-    }
-    .ttl-note {
-      color: var(--color-body-mid);
-      font-size: var(--text-sm);
+    input[type="checkbox"] {
+      margin: 0;
+      accent-color: var(--color-accent);
     }
     .key {
       display: flex;
-      gap: var(--space-2xs);
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    .key .saved {
+      color: var(--color-body);
+      margin-right: var(--space-xs);
     }
     .key input {
       flex: 1;
@@ -181,6 +190,9 @@ class SettingsSheet extends LitElement {
     button.act:focus-visible,
     button.reset:focus-visible {
       outline: var(--focus-ring);
+    }
+    button.reset {
+      margin-top: var(--space-md);
     }
     .hint {
       margin: 0;
@@ -259,12 +271,6 @@ class SettingsSheet extends LitElement {
     .shown {
       font-size: var(--text-sm);
     }
-    .switches {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-xs);
-      margin-bottom: var(--space-lg);
-    }
     label.select {
       justify-content: space-between;
       white-space: normal;
@@ -284,74 +290,6 @@ class SettingsSheet extends LitElement {
     .failed {
       margin: 0;
       color: var(--color-body);
-    }
-
-    /* The one-column look (section 9): every setting is one row, its name beside its
-       control, so the eye never crosses the stage to pair them (natural mapping). */
-    :host([tidy]) {
-      max-width: var(--width-form);
-    }
-    :host([tidy]) h3 {
-      margin: 0 0 var(--space-md);
-      font-size: var(--text-subtitle);
-      line-height: var(--leading-tight);
-    }
-    :host([tidy]) h3.later {
-      margin-top: var(--space-xl);
-      padding-top: var(--space-lg);
-      border-top: var(--border-width) solid var(--color-border);
-    }
-    :host([tidy]) .switches,
-    :host([tidy]) .account {
-      gap: var(--space-sm);
-      margin-bottom: 0;
-    }
-    :host([tidy]) .field {
-      display: grid;
-      grid-template-columns: 2fr 3fr;
-      align-items: center;
-      column-gap: var(--space-md);
-      row-gap: var(--space-2xs);
-      white-space: normal;
-    }
-    :host([tidy]) .field > span:first-child {
-      color: var(--color-body);
-      font-size: var(--text-body);
-    }
-    :host([tidy]) .field > :not(:first-child) {
-      justify-self: start;
-    }
-    :host([tidy]) .field > .help {
-      grid-column: 2;
-      color: var(--color-body-mid);
-      font-size: var(--text-sm);
-    }
-    :host([tidy]) input[type="checkbox"] {
-      margin: 0;
-      accent-color: var(--color-accent);
-    }
-    :host([tidy]) .key {
-      flex-wrap: wrap;
-      align-items: center;
-      gap: var(--space-xs);
-    }
-    :host([tidy]) .key .saved {
-      color: var(--color-body);
-      margin-right: var(--space-xs);
-    }
-    :host([tidy]) .tools {
-      gap: var(--space-sm);
-      margin-top: var(--space-md);
-    }
-    /* The model's description rides the hover in the workshop only; the dotted line
-       is the signifier that a hint is there. */
-    :host([tidy]) .field > .hinted {
-      text-decoration: underline dotted var(--color-mute);
-      text-underline-offset: var(--space-xs);
-      cursor: help;
-    }
-    :host([tidy]) button.reset {
-      margin-top: var(--space-md);
     }
   `;
 
@@ -380,13 +318,11 @@ class SettingsSheet extends LitElement {
     `;
   }
 
-  // One on/off setting. The tidy look puts the name first, in the same row format as
-  // every other setting; the old look keeps the box before its name.
+  // One on/off setting, in the same row format as every other setting.
   #check(name, checked, toggle) {
-    const box = html`<input type="checkbox" .checked=${checked} @change=${toggle} />`;
-    return this.tidy
-      ? html`<label class="field"><span>${name}</span>${box}</label>`
-      : html`<label>${box} ${name}</label>`;
+    return html`<label class="field"
+      ><span>${name}</span><input type="checkbox" .checked=${checked} @change=${toggle}
+    /></label>`;
   }
 
   render() {
@@ -463,7 +399,7 @@ class SettingsSheet extends LitElement {
         ${Object.entries(roles).map(([role, members]) => this.#roleSelect(role, members, settings))}
       </div>
       <button class="reset" @click=${() => this.#actor.send({ type: "_reset" })}>
-        ${this.tidy && account ? "Reset this device" : "Reset to defaults"}
+        ${account ? "Reset this device" : "Reset to defaults"}
       </button>
     `;
     // Without the `account` attribute the sheet is the page-links sheet exactly as
@@ -479,49 +415,26 @@ class SettingsSheet extends LitElement {
   }
 
   // The tool switches (7.7): one row per thing the chat may read from the reader's own
-  // library, on unless switched off. Each names what is read in plain words with its
-  // description; flipping one is reversible by flipping it back (Don Norman: forgiveness,
+  // library, on unless switched off. Each names what is read in plain words; flipping one is reversible by flipping it back (Don Norman: forgiveness,
   // honest signifiers). Shown only signed in and only when the catalog named some tools.
   #tools(toolList, tools, profile) {
     if (!toolList.length) return nothing;
-    // The tidy look prints only the label. The description is written for the model,
-    // so the product never shows it; the workshop keeps it on hover to check what the
-    // model is told.
-    if (this.tidy) {
-      const hint = profile !== "product";
-      return html`
-        <div class="tools">
-          <span class="group">What the chat may read</span>
-          ${toolList.map(
-            (tool) => html`
-              <label class="field">
-                <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
-                <input
-                  type="checkbox"
-                  .checked=${tools[tool.key] !== false}
-                  @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
-                />
-              </label>
-            `,
-          )}
-        </div>
-      `;
-    }
+    // Only the label is printed. The description is written for the model, so the
+    // product never shows it; the workshop keeps it on hover to check what the model is
+    // told.
+    const hint = profile !== "product";
     return html`
       <div class="tools">
         <span class="group">What the chat may read</span>
         ${toolList.map(
           (tool) => html`
-            <label class="tool">
+            <label class="field">
+              <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
               <input
                 type="checkbox"
                 .checked=${tools[tool.key] !== false}
                 @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
               />
-              <span class="labels">
-                <span class="title">${tool.label}</span>
-                <span class="desc">${tool.description}</span>
-              </span>
             </label>
           `,
         )}
@@ -553,38 +466,7 @@ class SettingsSheet extends LitElement {
             )}
           </select>
         </label>
-        ${current?.needsKey && this.tidy
-          ? this.#key(current)
-          : current?.needsKey
-          ? html`
-              <div class="field">
-                <span>API key</span>
-                <div class="key">
-                  <input
-                    type="password"
-                    placeholder=${current.keySet ? "Key set" : "No key yet"}
-                    .value=${this.keyDraft}
-                    @input=${(e) => (this.keyDraft = e.target.value)}
-                  />
-                  <button
-                    class="act"
-                    ?disabled=${this.keyDraft.length === 0}
-                    @click=${() => {
-                      this.#actor.send({ type: "_saveKey", key: this.keyDraft });
-                      this.keyDraft = "";
-                    }}
-                  >
-                    Save
-                  </button>
-                  ${current.keySet
-                    ? html`<button class="act" @click=${() => this.#actor.send({ type: "_removeKey" })}>
-                        Remove key
-                      </button>`
-                    : nothing}
-                </div>
-              </div>
-            `
-          : nothing}
+        ${current?.needsKey ? this.#key(current) : nothing}
         ${llm.models.length
           ? html`
               <label class="field">
@@ -596,9 +478,7 @@ class SettingsSheet extends LitElement {
                 </select>
               </label>
             `
-          : this.tidy
-          ? html`<div class="field"><span>Model</span><span class="help">Add your API key to choose a model.</span></div>`
-          : html`<p class="hint">Add your API key to choose a model.</p>`}
+          : html`<div class="field"><span>Model</span><span class="help">Add your API key to choose a model.</span></div>`}
         <label class="field">
           <span>Thinking effort</span>
           <select @change=${(e) => this.#actor.send({ type: "_setEffort", effort: e.target.value })}>
@@ -612,15 +492,14 @@ class SettingsSheet extends LitElement {
           <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
             ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
           </select>
-          ${this.tidy ? html`<span class="help">${TTL_NOTE}</span>` : nothing}
+          <span class="help">${TTL_NOTE}</span>
         </label>
-        ${this.tidy ? nothing : html`<span class="ttl-note">${TTL_NOTE}</span>`}
         ${this.#tools(toolList, tools, profile)}
       </div>
     `;
   }
 
-  // The API key in the tidy look. A saved key reads as a plain statement with Replace
+  // The API key. A saved key reads as a plain statement with Replace
   // and Remove, so nothing on screen looks disabled; the box appears only when a key is
   // wanted, and Cancel or Escape closes it again without a change (forgiveness).
   #key(provider) {
