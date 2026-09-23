@@ -70,7 +70,7 @@ const forgeCookie = () => {
 // test is its own user.
 const BOOK_ID = "01K00000000000000000000SMP";
 const HIGHLIGHT_ID = "01K0000000000000000000HGHT";
-const seedUser = async ({ highlight }) => {
+const seedUser = async ({ highlight, earlier = 0 }) => {
   const cookie = forgeCookie();
   const put = async (path, type, body) => {
     const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
@@ -86,6 +86,20 @@ const seedUser = async ({ highlight }) => {
       quote: { exact: "short opening", prefix: "A ", suffix: " chapter, one page long. It link" },
     }];
     await put(`/api/notes/${HIGHLIGHT_ID}`, "application/json", JSON.stringify({ title: "", body: "", baseVersion: null, about }));
+  }
+  // `earlier` highlights, one letter each of the chapter's heading, each with a three-line
+  // comment, so the document is taller than its panel and a highlight made later in the
+  // text lands below the fold.
+  const heading = "Chapter One";
+  for (let i = 0; i < earlier; i += 1) {
+    const about = [{
+      kind: "book",
+      id: BOOK_ID,
+      place: { chapter: 0, contentVersion: 1, start: { block: 0, offset: i }, end: { block: 0, offset: i + 1 } },
+      quote: { exact: heading[i], prefix: heading.slice(0, i), suffix: heading.slice(i + 1) },
+    }];
+    const id = `01K00000000000000000000E${String(i).padStart(2, "0")}`;
+    await put(`/api/notes/${id}`, "application/json", JSON.stringify({ title: "", body: `Earlier ${i}\nsecond\nthird`, baseVersion: null, about }));
   }
   return cookie;
 };
@@ -198,9 +212,9 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    const open = async ({ highlight = true, settings }) => {
+    const open = async ({ highlight = true, earlier, settings }) => {
       const problems = [];
-      const cookie = await seedUser({ highlight });
+      const cookie = await seedUser({ highlight, earlier });
       context = await browser.newContext();
       context.setDefaultTimeout(4000);
       await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
@@ -338,6 +352,28 @@ for (const engine of ENGINES) {
       await until(async () => (await hnDoc(page)).includes("A plain thought"));
       await drain(page);
       await until(async () => (await serverNotes(page)).some((n) => (n.body ?? "").includes("A plain thought")), 4000);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // A highlight made below the fold of a long Highlights document is scrolled into view
+    // with the comment line under it, where the user writes next.
+    test(`a new highlight below the fold is scrolled into view in ${engine.name}`, async () => {
+      const { page, problems } = await open({ highlight: false, earlier: 10, settings: PLAIN });
+      await readerHasText(page);
+      await showHighlights(page);
+      await until(async () => (await hnDoc(page)).includes("Earlier 9"));
+
+      await dragOver(page, await dragRect(page));
+      const shown = () =>
+        page.evaluate(() => {
+          const root = document.querySelector("highlight-notes").shadowRoot;
+          const box = root.querySelector(".cm-scroller").getBoundingClientRect();
+          const quote = [...root.querySelectorAll(".cm-quote")].find((l) => l.textContent.trim().length > 1);
+          const comment = quote?.nextElementSibling?.getBoundingClientRect();
+          return Boolean(comment && quote.getBoundingClientRect().top >= box.top && comment.bottom <= box.bottom);
+        });
+      await until(shown);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });

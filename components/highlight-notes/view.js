@@ -470,6 +470,11 @@ class HighlightNotes extends LitElement {
   // update knows which fragments were added (to scroll to) and whether the dimming changed.
   #order = [];
   #discShown = new Set();
+  // A highlight that arrived while the document was hidden (a folded dock, the list in
+  // front), scrolled to once the document has a height again: a hidden scroller cannot scroll.
+  #pendingScroll = null;
+  // A frame later, so CodeMirror has measured the lines it could not while hidden.
+  #resize = new ResizeObserver(() => requestAnimationFrame(() => this.#scrollPending()));
   // How long the refusal flash lasts (the --duration-slide token, read in firstUpdated),
   // and the timer that clears it, cancelled on the next refusal and on disconnect.
   #flashMs = 300;
@@ -632,6 +637,7 @@ class HighlightNotes extends LitElement {
       root: this.renderRoot,
       state: EditorState.create({ doc: "", extensions: this.#extensions() }),
     });
+    this.#resize.observe(this.#view.scrollDOM);
     this.#sync();
   }
 
@@ -659,10 +665,7 @@ class HighlightNotes extends LitElement {
       effects.push(setQuotes.of(quotes.map((q) => ({ id: q.id, line: q.line, quote: lines[q.line] }))));
       // A newly appeared highlight is brought into view without taking the caret.
       const cameIn = desOrder.find((id) => !this.#order.includes(id));
-      if (cameIn && this.#shown !== "") {
-        const q = quotes.find((x) => x.id === cameIn);
-        effects.push(EditorView.scrollIntoView(lineStart(target, q.line)));
-      }
+      if (cameIn && this.#shown !== "") this.#pendingScroll = cameIn;
     }
     if (discChanged) effects.push(setDiscarding.of(new Set(discarding)));
 
@@ -672,6 +675,20 @@ class HighlightNotes extends LitElement {
     this.#shown = target;
     this.#order = desOrder;
     this.#discShown = new Set(discarding);
+    this.#scrollPending();
+  }
+
+  // Centred, because "nearest" leaves a line added below the fold on the bottom edge,
+  // measured before its height is known, with the comment line under it hidden.
+  #scrollPending() {
+    if (!this.#pendingScroll || !this.#view || this.#view.scrollDOM.clientHeight === 0) return;
+    const q = this.#quotesOf(this.#view.state).find((x) => x.id === this.#pendingScroll);
+    this.#pendingScroll = null;
+    if (!q) return;
+    // Its first comment line (0-based q.line + 1), where the user writes, so both show.
+    const { doc } = this.#view.state;
+    const at = doc.line(Math.min(q.line + 2, doc.lines)).from;
+    this.#view.dispatch({ effects: EditorView.scrollIntoView(at, { y: "center" }) });
   }
 
   // The change that turns the current document into the target, as narrow as possible: an
@@ -712,6 +729,7 @@ class HighlightNotes extends LitElement {
 
   disconnectedCallback() {
     clearTimeout(this.#clearTimer);
+    this.#resize.disconnect();
     this.#view?.destroy();
     this.#view = null;
     super.disconnectedCallback();
@@ -732,14 +750,6 @@ class HighlightNotes extends LitElement {
     `;
   }
 }
-
-// The character offset a 0-based line starts at, in a plain string (for scrollIntoView
-// against the document just dispatched).
-const lineStart = (text, line) => {
-  let at = 0;
-  for (let n = 0; n < line; n += 1) at = text.indexOf("\n", at) + 1;
-  return at;
-};
 
 const sameOrder = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 const sameSet = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
