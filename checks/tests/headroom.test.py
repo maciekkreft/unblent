@@ -46,5 +46,17 @@ class Headroom(unittest.TestCase):
         self.assertEqual(warnings([]), [])
 
 
+class Failed(unittest.TestCase):
+    def test_only_failed_tests_are_named_with_their_file(self):
+        rows = [
+            {"name": "passes", "file": str(ROOT / "components/a/tests/page.test.mjs"), "failed": False},
+            {"name": "breaks", "file": str(ROOT / "components/b/tests/page.test.mjs"), "failed": True},
+        ]
+        self.assertEqual(check.failed_tests(rows), ['components/b/tests/page.test.mjs: "breaks"'])
+
+    def test_detail_falls_back_when_no_test_is_named(self):
+        self.assertEqual(check._failure_detail([]), "node --test reported failures")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1100,22 +1100,40 @@ def serve(port: int) -> None:
 # --- Change-scoped selection (architecture.md 11) --------------------------------
 # The full run is the definition of done, but while iterating the edit loop and the
 # Stop hook may narrow it to the tests reachable from what changed: the changed
-# components, their one-hop bus partners, and the components sharing a page with
-# them. Any infrastructure change still runs everything. `affected` is None for the
-# full run, or the set of component names to test.
+# components' own tests, those of their one-hop bus partners, and every test that
+# opens a changed page or a page holding a changed component. Any infrastructure
+# change still runs everything. `affected` is None for the full run, or the set of
+# test files to run.
 
 _INFRA_DIRS = {"bus", "store", "checks", "vendor", "tokens", "server"}
 _INFRA_FILES = {".env", "requirements.txt"}
 _TAG = re.compile(r"<([a-z][\w]*-[\w-]*)[\s>]")
+_ENTRY = re.compile(r"/static/components/([\w-]+)/(?:view|fact)\.js")
+# Section 11: a test opens the product by naming `/` right after its base URL.
+_OPENS_PRODUCT = re.compile(r"\}/[`'\"]")
 
 
-def _page_compositions() -> list:
-    """Section 8: each page's composed view tags. The same regex the page check
-    reads, so the two cannot disagree about what a page holds."""
-    pages = []
+def _page_address(path: str) -> str:
+    """The URL a page is served at (11.1): pages/index.html is `/`, the rest drop
+    `pages` and `.html`."""
+    rel = Path(path).relative_to("pages").with_suffix("")
+    return "/" if str(rel) == "index" else f"/{rel.as_posix()}"
+
+
+def _page_holdings() -> dict:
+    """Section 8: each page's address and the components it holds, by tag or by the
+    browser entry it loads (a fact has no tag)."""
+    pages = {}
     for path in sorted(glob.glob("pages/**/*.html", root_dir=ROOT, recursive=True)):
-        pages.append(frozenset(_TAG.findall((ROOT / path).read_text())))
+        text = (ROOT / path).read_text()
+        pages[_page_address(path)] = set(_TAG.findall(text)) | set(_ENTRY.findall(text))
     return pages
+
+
+def _opens(src: str, address: str) -> bool:
+    if address == "/":
+        return bool(_OPENS_PRODUCT.search(src))
+    return re.search(re.escape(address) + r"(?![\w-])", src) is not None
 
 
 def _interaction_graph(manifests: dict) -> dict:
@@ -1145,12 +1163,13 @@ def _interaction_graph(manifests: dict) -> dict:
     return adj
 
 
-def affected_components(changed_paths: list, manifests: dict):
-    """The components whose tests a change can break, or None to run everything.
-    None on any infrastructure, structural, or unclassifiable change (7.3, 11)."""
+def affected_tests(changed_paths: list, manifests: dict, tests: list):
+    """The test files, out of `tests`, that a change can break, or None to run
+    everything. None on any infrastructure, structural, or unclassifiable change
+    (7.3, 11)."""
     known = {Path(p).parent.name for p in manifests}
     seeds = set()
-    page_seeds = None
+    addresses = set()
     for cp in changed_paths:
         cp = cp.replace("\\", "/").strip()
         if not cp:
@@ -1166,28 +1185,33 @@ def affected_components(changed_paths: list, manifests: dict):
                 return None
             seeds.add(parts[1])
         elif top == "pages" and cp.endswith(".html"):
-            if page_seeds is None:
-                page_seeds = _page_compositions()
-            page = frozenset(_TAG.findall((ROOT / cp).read_text())) if (ROOT / cp).is_file() else frozenset()
-            seeds |= page
+            addresses.add(_page_address(cp))
         else:
             return None
-    if not seeds:
+    if not seeds and not addresses:
         return None
     graph = _interaction_graph(manifests)
-    result = set(seeds)
+    owners = set(seeds)
     for a in seeds:
-        result |= graph.get(a, set())
-    for tags in (page_seeds if page_seeds is not None else _page_compositions()):
-        if tags & seeds:
-            result |= tags
+        owners |= graph.get(a, set())
+    for address, held in _page_holdings().items():
+        if held & seeds:
+            addresses.add(address)
+    result = set()
+    for f in tests:
+        if Path(f).parts[1] in owners:
+            result.add(f)
+        elif addresses:
+            src = (ROOT / f).read_text()
+            if any(_opens(src, a) for a in addresses):
+                result.add(f)
     return result
 
 
 def _changed_paths_from_git() -> list:
     """Repo-root-relative paths git sees changed against HEAD: staged, unstaged and
     untracked. A rename's new name is what changed; its old name reads as a deletion,
-    which affected_components turns into a full run."""
+    which affected_tests turns into a full run."""
     paths = set()
     status = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT,
                             capture_output=True, text=True).stdout
@@ -1268,34 +1292,57 @@ def headroom_warnings(rows: list) -> list:
     return lines
 
 
-def _warn_headroom(proc: subprocess.Popen) -> None:
+def failed_tests(rows: list) -> list:
+    """One line per failed test, so a red run ends by naming what broke instead of
+    leaving it somewhere in the log. Pure over the rows, like headroom_warnings."""
+    lines = []
+    for row in rows:
+        if row.get("failed"):
+            try:
+                where = Path(row["file"]).relative_to(ROOT)
+            except (KeyError, ValueError):
+                where = row.get("file") or "?"
+            lines.append(f"{where}: \"{row.get('name', '?')}\"")
+    return lines
+
+
+def _read_durations(proc: subprocess.Popen) -> list:
     path = Path(proc.durations)
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     path.unlink(missing_ok=True)
     for line in headroom_warnings(rows):
         print(line, file=sys.stderr)
+    return rows
 
 
-def _run_node(files: list, env=None) -> bool:
+def _failure_detail(rows: list) -> str:
+    names = failed_tests(rows)
+    if not names:
+        return "node --test reported failures"
+    return f"{len(names)} failed:\n    " + "\n    ".join(names)
+
+
+def _run_node(files: list, env=None) -> list | None:
+    """None when every test passed, else the duration rows naming what failed."""
     proc = _node_test(files, env)
     proc.wait()
-    _warn_headroom(proc)
-    return proc.returncode == 0
+    rows = _read_durations(proc)
+    return None if proc.returncode == 0 else rows
 
 
 def run_tests(affected=None, webkit_only=False) -> None:
-    # affected is None for the full run (the definition of done); a set of component
-    # names narrows to the tests reachable from a change (11). A narrowed run never
+    # affected is None for the full run (the definition of done); a set of test
+    # files narrows to the tests reachable from a change (11). A narrowed run never
     # touches infrastructure tests, since any infra change runs everything.
     scoped = affected is not None
 
     # Component tests split three ways, read once each so a rename cannot mis-sort:
     # a browser test drives Playwright (`.launch(`), an api test hits the live server
     # (UNBLENT_URL) without a browser, the rest are pure-Node actor tests. A scoped
-    # run keeps only the affected components (11).
+    # run keeps only the affected test files (11).
     comp_tests = sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT))
     if scoped:
-        comp_tests = [f for f in comp_tests if Path(f).parts[1] in affected]
+        comp_tests = [f for f in comp_tests if f in affected]
     browser, api, pure = [], [], []
     for f in comp_tests:
         src = (ROOT / f).read_text()
@@ -1315,8 +1362,9 @@ def run_tests(affected=None, webkit_only=False) -> None:
                   sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
                   sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT))) + pure
     if node_tests:
-        if not _run_node(node_tests):
-            fail("pure-node tests", "node tests", "node --test reported failures")
+        failed = _run_node(node_tests)
+        if failed is not None:
+            fail("pure-node tests", "node tests", _failure_detail(failed))
 
     # checks/tests is the check's own unit tests (11.1): pure stdlib, no server and no
     # browser, so a checks-only change stays cheap. Only an infra change reaches them.
@@ -1348,8 +1396,9 @@ def run_tests(affected=None, webkit_only=False) -> None:
         # The loader lets a machine test import its actor (bare `xstate`); it is inert
         # for the browser tests, whose only bare import is Playwright by path.
         if api:
-            if not _run_node(api, env):
-                fail("components/*/tests api", "api tests", "node --test reported failures")
+            failed = _run_node(api, env)
+            if failed is not None:
+                fail("components/*/tests api", "api tests", _failure_detail(failed))
 
         if browser:
             if "PLAYWRIGHT_MODULE" not in env:
@@ -1379,15 +1428,15 @@ def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
         # so a timed-out test cannot leak pages into the next and exhaust the host.
         extra = ["--import", "./checks/browsers.mjs"] + ([SKIP_CHROMIUM] if webkit_only else [])
         procs.append(_node_test(chunk, env, extra, capture=True))
-    failed = False
+    failed = None
     for proc in procs:
         out, _ = proc.communicate()
-        _warn_headroom(proc)
+        rows = _read_durations(proc)
         if proc.returncode != 0:
-            failed = True
+            failed = (failed or []) + rows
             sys.stderr.write(out)
-    if failed:
-        fail("components/*/tests", "browser tests", "node --test reported failures")
+    if failed is not None:
+        fail("components/*/tests", "browser tests", _failure_detail(failed))
 
 
 
@@ -1486,10 +1535,12 @@ def main() -> None:
             paths += _changed_paths_from_git()
         if only:
             paths += _resolve_only(only, manifests)
-        affected = affected_components(paths, manifests)
+        affected = affected_tests(paths, manifests,
+                                  sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)))
     with _test_lock():
         _timed(timings, "tests", run_tests, affected, bool(changed or only))
-    scope = "all" if affected is None else (", ".join(sorted(affected)) or "none")
+    scope = "all" if affected is None else (
+        ", ".join(sorted(f"{Path(f).parts[1]}/{Path(f).name.removesuffix('.test.mjs')}" for f in affected)) or "none")
     scope += "; webkit" if changed or only else "; webkit, chromium"
     print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s [tests: {scope}]")
 
