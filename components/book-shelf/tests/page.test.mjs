@@ -282,9 +282,9 @@ for (const engine of ENGINES) {
       // tombstoned and its files purged (the reader/image routes would 404 after).
       await shortUndo(page);
       await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
-      // The tombstone drains to the server on its own debounce (5). Wait for that ack
-      // before reloading, so no write is left in flight to be torn down (that would
-      // surface as a fault), and so the reload's pull sees the tombstone on the server.
+      // Wait for the tombstone's ack before reloading, so no write is left in flight to be
+      // torn down (that would surface as a fault), and so the reload's pull sees the
+      // tombstone on the server.
       const deletedOk = page.waitForResponse(
         (res) => /\/api\/books\/[^/]+\/deleted$/.test(res.url()) && res.ok(),
         { timeout: 4000 },
@@ -292,7 +292,12 @@ for (const engine of ENGINES) {
       await clickBin(page, "Sample Book");
       await until(() => debug.some((l) => DISCARDED.test(l)) && debug.some((l) => DELETED.test(l)));
       await until(async () => !(await tiles(page)).some((t) => t.title === "Sample Book"));
+      // A tab regaining focus drains at once (5), so the tombstone need not wait out its
+      // debounce window. It then pulls; that pull must land too, or the reload cancels it.
+      const pulled = page.waitForResponse((res) => /\/api\/books\?since=/.test(res.url()), { timeout: 4000 });
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
       await deletedOk;
+      await pulled;
 
       // A reload pulls the tombstone: the book does not come back (5).
       await page.reload({ waitUntil: "domcontentloaded" });

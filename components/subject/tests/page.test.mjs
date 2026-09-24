@@ -645,6 +645,7 @@ for (const engine of ENGINES) {
       await openTile(page, first);
       await until(async () => !sameSet(await shownTitles(page), listBefore));
       assert.equal(await editorBody(page), pinnedBody, "the pinned editor kept its note while the stage moved");
+      await drain(page);
       await openedDone.catch(() => {});
 
       // Reload: the pinned note comes back, still pinned, and its About line still names
@@ -666,6 +667,7 @@ for (const engine of ENGINES) {
       await until(async () => (await editorBody(page)) === "A new note about the open book");
       assert.equal(await aboutText(page), "About: Sample Book", "the line is unchanged once the note is saved");
       await until(async () => (await shownTitles(page)).includes("A new note about the open book"), 8000);
+      await drain(page);
 
       // The new note's book link must reach the server, not only the local cache (the
       // fault: api.put dropped about, so a signed-in user's links never left the
@@ -761,7 +763,8 @@ for (const engine of ENGINES) {
       assert.ok(sameSet(await shownTitles(page), listBefore), "the note list shows no new row");
 
       // The highlight note reaches the server, so a reload is deterministic.
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)), 8000);
+      await drain(page);
+      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)));
 
       // Reload: the book reopens and its highlight is painted again.
       await page.reload({ waitUntil: "domcontentloaded" });
