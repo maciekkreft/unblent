@@ -99,13 +99,24 @@ const parseInline = (text) => {
 };
 
 // One list, ordered or not, from `start`; nested items (indented further) recurse and hang
-// under the item above them. Returns the list block and the line after it.
+// under the item above them. Blank lines between items keep one list, because models
+// often space their points apart and each would otherwise be numbered 1. A numbered
+// list keeps the number it starts at. Returns the list block and the line after it.
 const parseList = (lines, start) => {
   const baseIndent = listItem(lines[start])[1].length;
   const ordered = !UL_ITEM.test(lines[start]);
+  const first = ordered ? Number(/\d+/.exec(lines[start])[0]) : 1;
   const items = [];
   let i = start;
   while (i < lines.length) {
+    if (lines[i].trim() === "") {
+      let j = i;
+      while (j < lines.length && lines[j].trim() === "") j += 1;
+      const after = j < lines.length && listItem(lines[j]);
+      if (!after || after[1].length < baseIndent) break;
+      i = j;
+      continue;
+    }
     const m = listItem(lines[i]);
     if (!m) break;
     const indent = m[1].length;
@@ -120,7 +131,9 @@ const parseList = (lines, start) => {
     items.push({ blocks: [{ type: "paragraph", inline: parseInline(m[2]) }] });
     i += 1;
   }
-  return { list: { type: "list", ordered, items }, next: i };
+  // Trailing blank lines stay outside the list, for the block after it.
+  while (i > start && lines[i - 1].trim() === "") i -= 1;
+  return { list: { type: "list", ordered, start: first, items }, next: i };
 };
 
 const parseBlocks = (lines) => {

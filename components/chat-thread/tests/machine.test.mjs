@@ -176,6 +176,18 @@ test("a bulleted list and a numbered list keep their order flag and items", () =
   assert.equal(ol.items.length, 2);
 });
 
+test("numbered points spaced apart by blank lines stay one list", () => {
+  const blocks = parseMarkdown("Intro:\n\n1. first\n\n2. second\n\n3. third\n\nAfter.");
+  assert.deepEqual(blocks.map((b) => b.type), ["paragraph", "list", "paragraph"]);
+  assert.equal(blocks[1].items.length, 3);
+  assert.equal(blocks[1].start, 1);
+});
+
+test("a numbered list keeps the number it starts at", () => {
+  const [list] = parseMarkdown("3. third\n4. fourth");
+  assert.equal(list.start, 3);
+});
+
 test("an indented item nests under the item above it", () => {
   const [list] = parseMarkdown("- top\n  - nested");
   assert.equal(list.items.length, 1);

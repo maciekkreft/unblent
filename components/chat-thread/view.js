@@ -367,7 +367,7 @@ class ChatThread extends LitElement {
         return this.#heading(block);
       case "list": {
         const items = block.items.map((item) => html`<li>${item.blocks.map((b) => this.#block(b))}</li>`);
-        return block.ordered ? html`<ol class="md-list">${items}</ol>` : html`<ul class="md-list">${items}</ul>`;
+        return block.ordered ? html`<ol class="md-list" start=${block.start}>${items}</ol>` : html`<ul class="md-list">${items}</ul>`;
       }
       case "quote":
         return html`<blockquote class="md-quote">${block.blocks.map((b) => this.#block(b))}</blockquote>`;
