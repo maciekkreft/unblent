@@ -1,6 +1,5 @@
-import { test } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -11,9 +10,9 @@ import { dirname, resolve } from "node:path";
 const SAMPLE = readFileSync(new URL("../../books/tests/fixtures/sample.epub", import.meta.url));
 const BOOK_ID = "01HQ8ZK7M4N5P6Q7R8S9T0V1W6";
 
-const PLAYWRIGHT_MODULE = process.env.PLAYWRIGHT_MODULE;
-assert.ok(PLAYWRIGHT_MODULE, "PLAYWRIGHT_MODULE must be set (checks/check.py reads it from .env)");
-const { webkit, chromium } = await import(PLAYWRIGHT_MODULE);
+// The kit (10): the helpers every browser suite shares, reached by the path the check sets.
+assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
+const { ENGINES, until, watch, forge, signedIn, shortUndo } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -21,48 +20,17 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 
-const ENGINES = [
-  { name: "webkit", launch: () => webkit.launch() },
-  { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
-];
+const inputReady = (page) =>
+  until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
 
-function watch(page) {
-  const problems = [];
-  page.on("console", (msg) => {
-    if (msg.type() === "error") problems.push(`console error: ${msg.text()}`);
-  });
-  page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
-  page.on("requestfailed", (req) => problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`));
-  page.on("response", (res) => {
-    if (res.status() >= 400) problems.push(`HTTP ${res.status()}: ${res.url()}`);
-  });
-  return problems;
-}
-
-async function until(fn, timeout = 4000) {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    if (await fn()) return;
-    await new Promise((r) => setTimeout(r, 40));
-  }
-  throw new Error("timed out");
-}
-
-const forge = (userId) => {
-  const secret = process.env.SESSION_SECRET;
-  assert.ok(secret, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
-  assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory; never forge a cookie against the running server");
-  return `${userId}.${crypto.createHmac("sha256", secret).update(userId).digest("hex")}`;
-};
-
-// A signed-in browser on the conversations page, its account on the Echo test provider
-// (set over HTTP, since this page has no Settings). The chat box is then usable.
-async function open(engine, name, undoMs, tools, seed) {
-  const browser = await engine.launch();
-  const userId = `chat-${engine.name}-${name}-${Date.now()}`;
+// A signed-in context on the conversations page, its account on the Echo test provider
+// (set over HTTP, since this page has no Settings). The chat box is then usable. One
+// browser serves the suite; each test owns its context (11.2).
+async function open(browser, engineName, name, undoMs, tools, seed) {
+  const userId = `chat-${engineName}-${name}-${Date.now()}`;
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
-  await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
+  await signedIn(context, forge(userId));
   const put = await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } });
   assert.ok(put.ok(), "the account is set to Echo");
   // A tool switched off in Settings (12) is kept per account; setting it over HTTP here is
@@ -70,24 +38,16 @@ async function open(engine, name, undoMs, tools, seed) {
   // offers it to the model.
   if (tools)
     assert.ok((await context.request.put(`${BASE_URL}/api/conversations/tools`, { data: { tools } })).ok(), "the tool preferences are set");
-  // Shorten the delete-undo window (default 3s) so a delete test stays within its budget.
-  // conversation-list reads --duration-undo off its host at mount, so the short window must
-  // be in the cascade before the element upgrades. An adopted stylesheet is applied at
-  // document start (before <html> exists), unlike a style on documentElement.
-  if (undoMs != null)
-    await context.addInitScript((ms) => {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync(`:root{--duration-undo:${ms}ms}`);
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    }, undoMs);
+  // A short delete-undo window (default 3s), so a delete test stays within its budget.
+  if (undoMs != null) await shortUndo(context, undoMs);
   // Chats already on the server before the first visit: the browser has no cached
   // session yet, so the page starts signed out and learns who it is a moment later.
   if (seed) await seed(context);
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
-  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
-  return { browser, context, page, problems };
+  await inputReady(page);
+  return { context, page, problems };
 }
 
 // --- conversation-list helpers (session 10): the chats list beside the thread ---------
@@ -128,12 +88,11 @@ const undoDelete = (page) =>
 
 // The same, with the sample book imported first, so `books: chapter` has a real chapter
 // to return. Imported before the page loads, so the browser's `books` fact pulls it.
-async function openWithBook(engine, name) {
-  const browser = await engine.launch();
-  const userId = `chat-${engine.name}-${name}-${Date.now()}`;
+async function openWithBook(browser, engineName, name) {
+  const userId = `chat-${engineName}-${name}-${Date.now()}`;
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
-  await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
+  await signedIn(context, forge(userId));
   assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
   const put = await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE });
   assert.ok(put.ok(), "the sample book is imported");
@@ -147,21 +106,20 @@ async function openWithBook(engine, name) {
     if (msg.text().includes("event book.changed books")) bookKnown = true;
   });
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
-  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
+  await inputReady(page);
   await until(async () => bookKnown);
-  return { browser, context, page, problems };
+  return { context, page, problems };
 }
 
 // The product page: the chat runs in the right dock beside an open book,
 // so a new chat is linked to that book (about, and the book's line in start) and follows
 // the subject. The sample book is imported and set open before the page loads, so
 // `subject` settles on it and `conversation-list subject` scopes to its chats.
-async function openProduct(engine, name) {
-  const browser = await engine.launch();
-  const userId = `chat-${engine.name}-${name}-${Date.now()}`;
+async function openProduct(browser, engineName, name) {
+  const userId = `chat-${engineName}-${name}-${Date.now()}`;
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
-  await context.addCookies([{ name: "unblent_session", value: forge(userId), url: BASE_URL }]);
+  await signedIn(context, forge(userId));
   assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
   const imp = await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE });
   assert.ok(imp.ok(), "the sample book is imported");
@@ -169,8 +127,8 @@ async function openProduct(engine, name) {
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-  await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
-  return { browser, context, page, problems };
+  await inputReady(page);
+  return { context, page, problems };
 }
 
 // The subject has settled on the open book: dock-desk marks the tab of the view showing
@@ -221,8 +179,8 @@ const lastAnswer = (page) =>
 // Stopping an answer and reloading mid-answer both cancel the in-flight streaming
 // request on purpose (5: an answer still arriving when the page goes away is not kept);
 // the browser records that cancellation as a failed request, which the reader never
-// sees. These two tests drop that expected noise but
-// keep every real error (a console error, an HTTP 4xx/5xx).
+// sees. Those tests drop that expected noise but keep every real error (a console
+// error, an HTTP 4xx/5xx).
 const ABORT_NOISE = /Load request cancelled|access control checks|NS_BINDING_ABORTED|aborted|cancelled/i;
 const realProblems = (problems) => problems.filter((p) => !ABORT_NOISE.test(p));
 
@@ -233,333 +191,314 @@ const action = (page, label) =>
     label,
   );
 
+// WebKit first, then Chromium (10). A lookup fed back to the model and a delete whose
+// window runs out are decisions of the machines, tested in Node (9): conversations'
+// tool round, conversation-list's countdown. Here is what only a browser shows.
 for (const engine of ENGINES) {
-  test(`a message is answered word by word in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "answer");
-    try {
-      await send(page, "hello there");
-      await until(async () => (await lastAnswer(page)).includes("hello there")); // Echo repeats the text
-      assert.match(await threadText(page), /hello there/);
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
+  describe(`chat-thread in ${engine.name}`, { timeout: 120000 }, () => {
+    let browser;
+    before(async () => {
+      browser = await engine.launch();
+    }, { timeout: 30000 });
+    after(async () => {
+      await browser?.close();
+    }, { timeout: 15000 });
 
-  test(`an answer's markdown renders as formatting in ${engine.name}`, async () => {
-    // The stem page sets the markdown attribute (10). Echo repeats the text, so a message
-    // written in markdown comes back as an answer whose # and ** are rendered, not shown.
-    const { browser, page, problems } = await open(engine, "md");
-    try {
-      await send(page, "# A Heading\n\nA **bold** point.");
-      // The answer streams block by block: the heading (first block) renders before the
-      // bold span (second block). Wait until both are present, so the read below is not
-      // taken between the two while the ** is still an unclosed run of text.
-      await until(async () =>
-        await page.evaluate(() => {
-          const root = document.querySelector("chat-thread").shadowRoot;
-          return Boolean(root.querySelector(".answer.prose h1.md-h") && root.querySelector(".answer.prose strong"));
-        }),
-      );
-      const rendered = await page.evaluate(() => {
-        const root = document.querySelector("chat-thread").shadowRoot;
-        return {
-          heading: root.querySelector(".answer.prose h1.md-h")?.textContent,
-          bold: root.querySelector(".answer.prose strong")?.textContent,
-          answerText: root.querySelector(".answer.prose")?.textContent ?? "",
-        };
-      });
-      assert.equal(rendered.heading, "A Heading", "the # line rendered as a heading");
-      assert.equal(rendered.bold, "bold", "the ** span rendered as bold");
-      assert.ok(!rendered.answerText.includes("#") && !rendered.answerText.includes("**"), "the raw markers are not shown in the answer");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`thinking shows a live line and then an openable record in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "think");
-    try {
-      // The live "Thinking…" line shows only while the model thinks (a short window),
-      // so an observer catches it rather than a poll that could miss it.
-      await page.evaluate(() => {
-        window.__sawThinking = false;
-        const root = document.querySelector("chat-thread").shadowRoot;
-        const note = () => {
-          const w = root.querySelector(".working");
-          if (w && w.textContent.includes("Thinking")) window.__sawThinking = true;
-        };
-        new MutationObserver(note).observe(root, { subtree: true, childList: true, characterData: true });
-        note();
-      });
-      await send(page, "/think please");
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-thread").shadowRoot.querySelector("details.thinking"))));
-      const record = await page.evaluate(() => {
-        const d = document.querySelector("chat-thread").shadowRoot.querySelector("details.thinking");
-        d.querySelector("summary").click(); // opens it (closed by default)
-        return d.querySelector(".text").textContent;
-      });
-      assert.ok(record && record.length > 0, "the thinking record opens to show the thinking text");
-      assert.ok(await page.evaluate(() => window.__sawThinking), "the live Thinking… line showed while the model thought");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a slow answer can be stopped in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "stop");
-    try {
-      // A long answer, so it is still arriving when Escape stops it.
-      await send(page, "/slow " + "the answer keeps arriving slowly here. ".repeat(3));
-      await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
-      // Escape stops the answer (12), and is not subject to the button's change guard.
-      await page.locator("chat-input .cm-content").click();
-      await page.keyboard.press("Escape");
-      await until(async () => (await threadText(page)).includes("Stopped."));
-      assert.deepEqual(realProblems(problems), [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`Enter while an answer arrives keeps the typed text in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "keepdraft");
-    try {
-      // A long answer, so it is still arriving. The box stays editable (12): a question
-      // typed and sent with Enter now must survive, not be cleared by a doomed send.
-      await send(page, "/slow " + "a long answer that keeps arriving here. ".repeat(3));
-      await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
-      await setDraft(page, "a thought to send next");
-      await page.locator("chat-input .cm-content").click();
-      await page.keyboard.press("Enter");
-      const value = await draftText(page);
-      assert.equal(value, "a thought to send next", "the text stays in the box while an answer arrives");
-      assert.deepEqual(realProblems(problems), [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a failed answer offers Try again in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "fail");
-    try {
-      await send(page, "/fail");
-      await until(async () => await action(page, "Try again"));
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a finished chat survives a reload in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "reload");
-    try {
-      await send(page, "keep me");
-      await until(async () => (await lastAnswer(page)).includes("keep me"));
-      await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
-      await until(async () => (await threadText(page)).includes("keep me"));
-      mkdirSync(SCREENSHOTS, { recursive: true });
-      await page.screenshot({ path: resolve(SCREENSHOTS, `conversations-${engine.name}.png`), fullPage: true });
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a reload mid-answer ends at the question with Continue in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "continue");
-    try {
-      // A long answer, reloaded while it is still arriving: the question is saved but the
-      // in-progress answer is not (5: an arriving answer is not kept when the page goes away).
-      await send(page, "/slow " + "a long answer that is still arriving. ".repeat(3));
-      // Arriving, and the question is on the server (not "Not saved yet"), so a reload
-      // finds the chat ending at the question.
-      await until(async () => {
-        const t = await threadText(page);
-        return (await lastAnswer(page)).length > 0 && !t.includes("Not saved yet");
-      });
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
-      await until(async () => await action(page, "Continue")); // the chat ends at the question
-      assert.equal(await lastAnswer(page), "", "the in-progress answer was not kept");
-      assert.deepEqual(realProblems(problems), [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a lookup runs and its result is fed back in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "tool-subject");
-    try {
-      // Echo asks for the subject lookup, conversations runs it, and Echo repeats the
-      // result so what the model would read is on screen. Nothing is open here, so the
-      // reader's context is "nothing open" (the conversations page shows no book).
-      await send(page, "/tool subject: read {}");
-      // Wait for the lookup's result to be echoed back (nothing is open here, so the
-      // subject is null), not just the typed request that also contains the word.
-      await until(async () => (await threadText(page)).includes('"subject":null'));
-      assert.match(await threadText(page), /Checking what's open/, "the lookup is named on screen");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a tool switched off is not offered and its call is refused in ${engine.name}`, async () => {
-    // subject: read is switched off for this account (12). Echo still asks for it, but the
-    // loop was never offered it, so llm refuses the call with an error result instead of
-    // running it; the model sees the refusal, and no lookup line is shown for the reader.
-    const { browser, page, problems } = await open(engine, "tool-off", undefined, { "subject: read": false });
-    try {
-      await send(page, "/tool subject: read {}");
-      await until(async () => (await threadText(page)).includes("This tool could not be used"));
-      assert.doesNotMatch(await threadText(page), /Checking what's open/, "an off tool is never named as a lookup");
-      assert.doesNotMatch(await threadText(page), /"subject":null/, "the lookup did not run");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a chapter is read and comes back as markdown in ${engine.name}`, async () => {
-    const { browser, page, problems } = await openWithBook(engine, "tool-chapter");
-    try {
-      await send(page, `/tool books: chapter {"id":"${BOOK_ID}","chapter":0}`);
-      await until(async () => (await threadText(page)).includes("A LINKED HEADING"));
-      // The chapter came back from `conversations` as markdown (a `# Chapter One` heading);
-      // with the markdown attribute on the stem page (10) the answer renders it as a real
-      // heading, so the `#` is gone from the text and lives as an <h1> instead.
-      const headings = await page.evaluate(() =>
-        [...document.querySelector("chat-thread").shadowRoot.querySelectorAll(".prose h1.md-h")].map((h) => h.textContent),
-      );
-      assert.ok(headings.some((t) => /Chapter One/.test(t)), "the chapter's # heading rendered as a heading");
-      assert.match(await threadText(page), /Reading a chapter/, "the lookup is named on screen");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  // --- conversation-list (session 10) -------------------------------------------------
-
-  test(`a second chat is listed and picking a row switches to it in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "list-switch");
-    try {
-      await send(page, "first message");
-      await until(async () => (await lastAnswer(page)).includes("first message"));
-      await newChat(page);
-      // Wait until the thread has switched to the empty new chat before sending, so the
-      // second message opens a second chat rather than racing into the first.
-      await until(async () => await page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelectorAll(".turn").length === 0));
-      await sendEnter(page, "second message");
-      await until(async () => (await lastAnswer(page)).includes("second message"));
-      await until(async () => (await chatTitles(page)).length === 2);
-      assert.deepEqual(await chatTitles(page), ["second message", "first message"], "both chats, newest first");
-      // Each row's second line is the start of its answer, like a note row's.
-      await until(async () => (await chatSubtitles(page)).every((s, i) => s.includes(["second message", "first message"][i])));
-      await pickChat(page, "first message");
-      await until(async () => (await lastAnswer(page)).includes("first message"));
-      assert.match(await threadText(page), /first message/, "picking the older row switched the thread to it");
-      // After a reload the second lines come from the server's list.
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => (await chatSubtitles(page)).some((s) => s.includes("second message")));
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
-
-  test(`a first visit lists the account's chats in ${engine.name}`, async () => {
-    const U = (s) => "01HQ8ZK7M4N5P6Q7R8S9T0V1" + s;
-    const seed = async (context) => {
-      for (const k of ["1", "2"]) {
-        const turns = [{ id: U("D" + k), role: "user", text: "q" }, { id: U("E" + k), role: "assistant", text: "answer " + k, status: "done" }];
-        const put = await context.request.put(`${BASE_URL}/api/conversations/${U("C" + k)}`, { data: { title: "chat " + k, about: [], start: "", turns } });
-        assert.ok(put.ok(), "a chat is on the server");
+    test("a message is answered word by word", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "answer");
+      try {
+        await send(page, "hello there");
+        await until(async () => (await lastAnswer(page)).includes("hello there")); // Echo repeats the text
+        assert.match(await threadText(page), /hello there/);
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
       }
-    };
-    const { browser, page, problems } = await open(engine, "first-visit", undefined, undefined, seed);
-    try {
-      await until(async () => (await chatTitles(page)).length === 2);
-      assert.deepEqual(await chatSubtitles(page), ["answer 2", "answer 1"], "each with its answer's first line");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
+    });
 
-  test(`a delete can be undone in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "undo", 250);
-    try {
-      await send(page, "keep me");
-      await until(async () => (await lastAnswer(page)).includes("keep me"));
-      await until(async () => (await chatTitles(page)).includes("keep me"));
-      await deleteChat(page, "keep me");
-      await undoDelete(page);
-      await page.waitForTimeout(400); // past the (cancelled) window, to prove it never fires
-      assert.ok((await chatTitles(page)).includes("keep me"), "the chat is still there after Undo");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
+    test("an answer's markdown renders as formatting", async () => {
+      // The stem page sets the markdown attribute (10). Echo repeats the text, so a message
+      // written in markdown comes back as an answer whose # and ** are rendered, not shown.
+      const { context, page, problems } = await open(browser, engine.name, "md");
+      try {
+        await send(page, "# A Heading\n\nA **bold** point.");
+        // The answer streams block by block: the heading (first block) renders before the
+        // bold span (second block). Wait until both are present, so the read below is not
+        // taken between the two while the ** is still an unclosed run of text.
+        await until(async () =>
+          await page.evaluate(() => {
+            const root = document.querySelector("chat-thread").shadowRoot;
+            return Boolean(root.querySelector(".answer.prose h1.md-h") && root.querySelector(".answer.prose strong"));
+          }),
+        );
+        const rendered = await page.evaluate(() => {
+          const root = document.querySelector("chat-thread").shadowRoot;
+          return {
+            heading: root.querySelector(".answer.prose h1.md-h")?.textContent,
+            bold: root.querySelector(".answer.prose strong")?.textContent,
+            answerText: root.querySelector(".answer.prose")?.textContent ?? "",
+          };
+        });
+        assert.equal(rendered.heading, "A Heading", "the # line rendered as a heading");
+        assert.equal(rendered.bold, "bold", "the ** span rendered as bold");
+        assert.ok(!rendered.answerText.includes("#") && !rendered.answerText.includes("**"), "the raw markers are not shown in the answer");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
 
-  test(`a delete left to run removes the chat in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "delete", 250);
-    try {
-      await send(page, "delete me");
-      await until(async () => (await lastAnswer(page)).includes("delete me"));
-      await until(async () => (await chatTitles(page)).includes("delete me"));
-      await deleteChat(page, "delete me");
-      await until(async () => !(await chatTitles(page)).includes("delete me"));
-      assert.ok(!(await chatTitles(page)).includes("delete me"), "the chat is gone once the window ends");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
+    test("thinking shows a live line and then an openable record", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "think");
+      try {
+        // The live "Thinking…" line shows only while the model thinks (a short window),
+        // so an observer catches it rather than a poll that could miss it.
+        await page.evaluate(() => {
+          window.__sawThinking = false;
+          const root = document.querySelector("chat-thread").shadowRoot;
+          const note = () => {
+            const w = root.querySelector(".working");
+            if (w && w.textContent.includes("Thinking")) window.__sawThinking = true;
+          };
+          new MutationObserver(note).observe(root, { subtree: true, childList: true, characterData: true });
+          note();
+        });
+        await send(page, "/think please");
+        await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-thread").shadowRoot.querySelector("details.thinking"))));
+        const record = await page.evaluate(() => {
+          const d = document.querySelector("chat-thread").shadowRoot.querySelector("details.thinking");
+          d.querySelector("summary").click(); // opens it (closed by default)
+          return d.querySelector(".text").textContent;
+        });
+        assert.ok(record && record.length > 0, "the thinking record opens to show the thinking text");
+        assert.ok(await page.evaluate(() => window.__sawThinking), "the live Thinking… line showed while the model thought");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
 
-  test(`chats survive a reload in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine, "reload");
-    try {
-      await send(page, "remember me");
-      await until(async () => (await lastAnswer(page)).includes("remember me"));
-      await until(async () => (await chatTitles(page)).includes("remember me"));
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("conversation-list")?.shadowRoot?.querySelector(".row"))));
-      await until(async () => (await chatTitles(page)).includes("remember me"));
-      assert.ok((await chatTitles(page)).includes("remember me"), "the chat is listed from the server after a reload");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
-  });
+    test("a slow answer can be stopped", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "stop");
+      try {
+        // A long answer, so it is still arriving when Escape stops it.
+        await send(page, "/slow " + "the answer keeps arriving slowly here. ".repeat(3));
+        await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
+        // Escape stops the answer (12), and is not subject to the button's change guard.
+        await page.locator("chat-input .cm-content").click();
+        await page.keyboard.press("Escape");
+        await until(async () => (await threadText(page)).includes("Stopped."));
+        assert.deepEqual(realProblems(problems), [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
 
-  // --- the product page beside an open book ---------------------------
+    test("a failed answer offers Try again", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "fail");
+      try {
+        await send(page, "/fail");
+        await until(async () => await action(page, "Try again"));
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
 
-  test(`a new chat is linked to the open book on the product in ${engine.name}`, async () => {
-    const { browser, page, problems } = await openProduct(engine, "book-link");
-    try {
-      // Wait until the subject has settled on the book, so chat-input links the new chat
-      // to it (7's step A1: a keystroke before the subject is known is held until it is).
-      await until(async () => await bookIsSubject(page));
-      await send(page, "about this book");
-      await until(async () => (await lastAnswer(page)).includes("about this book"));
-      await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
-      // With the book as subject again, conversation-list scopes to the book's chats; the
-      // chat's presence there proves it was linked to the book (about), not left unlinked.
-      await until(async () => await bookIsSubject(page));
-      await until(async () => (await chatTitles(page)).includes("about this book"));
-      assert.ok((await chatTitles(page)).includes("about this book"), "the new chat is listed under the open book after a reload");
-      assert.deepEqual(problems, [], problems.join("; "));
-    } finally {
-      await browser.close();
-    }
+    test("Enter while an answer arrives keeps the typed text", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "keepdraft");
+      try {
+        // A long answer, so it is still arriving. The box stays editable (12): a question
+        // typed and sent with Enter now must survive, not be cleared by a doomed send.
+        await send(page, "/slow " + "a long answer that keeps arriving here. ".repeat(3));
+        await until(async () => (await lastAnswer(page)).length > 0); // an answer is arriving
+        await setDraft(page, "a thought to send next");
+        await page.locator("chat-input .cm-content").click();
+        await page.keyboard.press("Enter");
+        const value = await draftText(page);
+        assert.equal(value, "a thought to send next", "the text stays in the box while an answer arrives");
+        assert.deepEqual(realProblems(problems), [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("a finished chat survives a reload", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "reload");
+      try {
+        await send(page, "keep me");
+        await until(async () => (await lastAnswer(page)).includes("keep me"));
+        await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await inputReady(page);
+        await until(async () => (await threadText(page)).includes("keep me"));
+        mkdirSync(SCREENSHOTS, { recursive: true });
+        await page.screenshot({ path: resolve(SCREENSHOTS, `conversations-${engine.name}.png`), fullPage: true });
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("a reload mid-answer ends at the question with Continue", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "continue");
+      try {
+        // A long answer, reloaded while it is still arriving: the question is saved but the
+        // in-progress answer is not (5: an arriving answer is not kept when the page goes away).
+        await send(page, "/slow " + "a long answer that is still arriving. ".repeat(3));
+        // Arriving, and the question is on the server (not "Not saved yet"), so a reload
+        // finds the chat ending at the question.
+        await until(async () => {
+          const t = await threadText(page);
+          return (await lastAnswer(page)).length > 0 && !t.includes("Not saved yet");
+        });
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await inputReady(page);
+        await until(async () => await action(page, "Continue")); // the chat ends at the question
+        assert.equal(await lastAnswer(page), "", "the in-progress answer was not kept");
+        assert.deepEqual(realProblems(problems), [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("a tool switched off is not offered and its call is refused", async () => {
+      // subject: read is switched off for this account (12). Echo still asks for it, but the
+      // loop was never offered it, so llm refuses the call with an error result instead of
+      // running it; the model sees the refusal, and no lookup line is shown for the reader.
+      const { context, page, problems } = await open(browser, engine.name, "tool-off", undefined, { "subject: read": false });
+      try {
+        await send(page, "/tool subject: read {}");
+        await until(async () => (await threadText(page)).includes("This tool could not be used"));
+        assert.doesNotMatch(await threadText(page), /Checking what's open/, "an off tool is never named as a lookup");
+        assert.doesNotMatch(await threadText(page), /"subject":null/, "the lookup did not run");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("a chapter is read and comes back as markdown", async () => {
+      const { context, page, problems } = await openWithBook(browser, engine.name, "tool-chapter");
+      try {
+        await send(page, `/tool books: chapter {"id":"${BOOK_ID}","chapter":0}`);
+        await until(async () => (await threadText(page)).includes("A LINKED HEADING"));
+        // The chapter came back from `conversations` as markdown (a `# Chapter One` heading);
+        // with the markdown attribute on the stem page (10) the answer renders it as a real
+        // heading, so the `#` is gone from the text and lives as an <h1> instead.
+        const headings = await page.evaluate(() =>
+          [...document.querySelector("chat-thread").shadowRoot.querySelectorAll(".prose h1.md-h")].map((h) => h.textContent),
+        );
+        assert.ok(headings.some((t) => /Chapter One/.test(t)), "the chapter's # heading rendered as a heading");
+        assert.match(await threadText(page), /Reading a chapter/, "the lookup is named on screen");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    // --- conversation-list (session 10) -------------------------------------------------
+
+    test("a second chat is listed and picking a row switches to it", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "list-switch");
+      try {
+        await send(page, "first message");
+        await until(async () => (await lastAnswer(page)).includes("first message"));
+        await newChat(page);
+        // Wait until the thread has switched to the empty new chat before sending, so the
+        // second message opens a second chat rather than racing into the first.
+        await until(async () => await page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelectorAll(".turn").length === 0));
+        await sendEnter(page, "second message");
+        await until(async () => (await lastAnswer(page)).includes("second message"));
+        await until(async () => (await chatTitles(page)).length === 2);
+        assert.deepEqual(await chatTitles(page), ["second message", "first message"], "both chats, newest first");
+        // Each row's second line is the start of its answer, like a note row's.
+        await until(async () => (await chatSubtitles(page)).every((s, i) => s.includes(["second message", "first message"][i])));
+        await pickChat(page, "first message");
+        await until(async () => (await lastAnswer(page)).includes("first message"));
+        assert.match(await threadText(page), /first message/, "picking the older row switched the thread to it");
+        // After a reload the second lines come from the server's list.
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await chatSubtitles(page)).some((s) => s.includes("second message")));
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("a first visit lists the account's chats", async () => {
+      const U = (s) => "01HQ8ZK7M4N5P6Q7R8S9T0V1" + s;
+      const seed = async (context) => {
+        for (const k of ["1", "2"]) {
+          const turns = [{ id: U("D" + k), role: "user", text: "q" }, { id: U("E" + k), role: "assistant", text: "answer " + k, status: "done" }];
+          const put = await context.request.put(`${BASE_URL}/api/conversations/${U("C" + k)}`, { data: { title: "chat " + k, about: [], start: "", turns } });
+          assert.ok(put.ok(), "a chat is on the server");
+        }
+      };
+      const { context, page, problems } = await open(browser, engine.name, "first-visit", undefined, undefined, seed);
+      try {
+        await until(async () => (await chatTitles(page)).length === 2);
+        assert.deepEqual(await chatSubtitles(page), ["answer 2", "answer 1"], "each with its answer's first line");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("a delete can be undone", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "undo", 250);
+      try {
+        await send(page, "keep me");
+        await until(async () => (await lastAnswer(page)).includes("keep me"));
+        await until(async () => (await chatTitles(page)).includes("keep me"));
+        await deleteChat(page, "keep me");
+        await undoDelete(page);
+        await page.waitForTimeout(400); // past the (cancelled) window, to prove it never fires
+        assert.ok((await chatTitles(page)).includes("keep me"), "the chat is still there after Undo");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("chats survive a reload", async () => {
+      const { context, page, problems } = await open(browser, engine.name, "reload");
+      try {
+        await send(page, "remember me");
+        await until(async () => (await lastAnswer(page)).includes("remember me"));
+        await until(async () => (await chatTitles(page)).includes("remember me"));
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => await page.evaluate(() => Boolean(document.querySelector("conversation-list")?.shadowRoot?.querySelector(".row"))));
+        await until(async () => (await chatTitles(page)).includes("remember me"));
+        assert.ok((await chatTitles(page)).includes("remember me"), "the chat is listed from the server after a reload");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    // --- the product page beside an open book ---------------------------
+
+    test("a new chat is linked to the open book on the product", async () => {
+      const { context, page, problems } = await openProduct(browser, engine.name, "book-link");
+      try {
+        // Wait until the subject has settled on the book, so chat-input links the new chat
+        // to it (7's step A1: a keystroke before the subject is known is held until it is).
+        await until(async () => await bookIsSubject(page));
+        await send(page, "about this book");
+        await until(async () => (await lastAnswer(page)).includes("about this book"));
+        await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await inputReady(page);
+        // With the book as subject again, conversation-list scopes to the book's chats; the
+        // chat's presence there proves it was linked to the book (about), not left unlinked.
+        await until(async () => await bookIsSubject(page));
+        await until(async () => (await chatTitles(page)).includes("about this book"));
+        assert.ok((await chatTitles(page)).includes("about this book"), "the new chat is listed under the open book after a reload");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
   });
 }
