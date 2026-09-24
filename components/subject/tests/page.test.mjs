@@ -30,7 +30,12 @@ function watch(page, problems) {
   page.on("console", (msg) => {
     if (msg.type() === "error") problems.push(`console error: ${msg.text()}`);
   });
-  page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+  page.on("pageerror", (err) => {
+    // WebKit sometimes also reports that same reload abort as a page error naming
+    // "access control checks"; a real access failure still fails its request, below.
+    if (/due to access control checks/.test(err.message)) return;
+    problems.push(`page error: ${err.message}`);
+  });
   page.on("requestfailed", (req) => {
     // A reload aborts whatever pull was in flight (WebKit: "Load request cancelled",
     // Chromium: "net::ERR_ABORTED"); that abort is navigation, not a fault, the way the
