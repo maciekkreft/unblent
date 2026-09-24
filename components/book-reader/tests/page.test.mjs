@@ -144,19 +144,10 @@ for (const engine of ENGINES) {
       return ctx;
     };
 
-    test("opens a selected book at its first page", async () => {
-      const { page, problems } = await openAndRewind();
-      try {
-        assert.deepEqual(await rstate(page), { chap: "Chapter One", page: 1, pages: 1 }, "shows the first chapter's one page");
-        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
-      } finally {
-        await page.close();
-      }
-    });
-
-    test("paginates a long chapter, turns a page, and announces the place", async () => {
+    test("opens a selected book at its first page, paginates a long chapter, turns a page, and announces the place", async () => {
       const { page, problems, debug } = await openAndRewind();
       try {
+        assert.deepEqual(await rstate(page), { chap: "Chapter One", page: 1, pages: 1 }, "shows the first chapter's one page");
         // Next past the one-page first chapter crosses into the second, which slides in
         // like any turn (Norman): watch every frame across the turn for the leaving strip
         // and a moving one (the slide is on the translate property, both strips at once).
