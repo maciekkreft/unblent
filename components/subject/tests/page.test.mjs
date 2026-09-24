@@ -119,10 +119,19 @@ const highlightOn = (book) => [{
 }];
 
 // The subject stem in a context of its own (11.2): the user's cookie, empty storage.
-const openPage = async (browser, cookie, { phone = false, route } = {}) => {
+const openPage = async (browser, cookie, { phone = false, route, undoMs } = {}) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+  // A short undo window, so a removal test need not wait out the real one. book-reader
+  // reads --duration-undo off its host at mount, so it must be in the cascade before
+  // the element upgrades; an adopted stylesheet is applied at document start.
+  if (undoMs != null)
+    await context.addInitScript((ms) => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(`:root{--duration-undo:${ms}ms}`);
+      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    }, undoMs);
   const page = await context.newPage();
   const problems = [];
   watch(page, problems);
@@ -767,38 +776,47 @@ for (const engine of ENGINES) {
     // The bubble (session 3): a click on a mark opens Copy · Remove; Remove starts the
     // undo window (Removed · Undo, the mark dimmed), Undo brings it back, and a second
     // Remove that elapses takes the highlight for good — gone here and after a reload.
-    test("the bubble removes a highlight with undo, and it stays gone after a reload", async () => {
+    test("the bubble's Undo brings a removed highlight back", async () => {
       const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
       await readerHasText(page);
-
-      // Make a highlight, and let its note reach the server before any removal, so the
-      // tombstone (below) is what a fresh load pulls — the reload stays deterministic.
       await dragOver(page, await dragRect(page));
       await until(async () => (await marks(page)).length > 0);
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)), 8000);
 
       // Click the mark: its bubble opens reading Copy · Remove.
       await clickFirstMark(page);
       await until(async () => /Copy/.test(await bubbleText(page) ?? "") && /Remove/.test(await bubbleText(page) ?? ""));
 
-      // Remove: the bubble reads Removed · Undo and the mark dims; Undo brings it back.
+      // Remove: the bubble reads Removed · Undo and the mark dims; Undo brings it back
+      // inside the real window, which this test never waits out.
       await clickBubble(page, ".act.remove");
       await until(async () => /Removed/.test(await bubbleText(page) ?? "") && (await markRemoving(page)));
       await clickBubble(page, ".act.undo");
       await until(async () => /Copy/.test(await bubbleText(page) ?? "") && !(await markRemoving(page)));
       assert.ok((await marks(page)).length > 0, "the highlight is back after undo");
 
-      // Remove again and let the window elapse (--duration-undo, 3s): the mark goes and
-      // the note becomes a tombstone that reaches the server.
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    test("a removed highlight stays gone after a reload", async () => {
+      const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }), { undoMs: 10 });
+      await readerHasText(page);
+
+      // Make a highlight, and let its note reach the server before the removal, so the
+      // tombstone (below) is what a fresh load pulls — the reload stays deterministic.
+      await dragOver(page, await dragRect(page));
+      await until(async () => (await marks(page)).length > 0);
+      await drain(page);
+      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)));
+
+      // Remove; the short window elapses at once: the mark goes and the note becomes a
+      // tombstone that reaches the server.
       await clickFirstMark(page);
       await until(async () => /Remove/.test(await bubbleText(page) ?? ""));
       await clickBubble(page, ".act.remove");
-      await until(async () => (await marks(page)).length === 0, 8000);
+      await until(async () => (await marks(page)).length === 0);
       await drain(page);
-      await until(
-        async () => (await serverNotes(page)).some((n) => n.deleted && (n.about ?? []).some((l) => l.place)),
-        8000,
-      );
+      await until(async () => (await serverNotes(page)).some((n) => n.deleted && (n.about ?? []).some((l) => l.place)));
 
       // A reload keeps it gone: the tombstone is pulled, and no mark is painted.
       await page.reload({ waitUntil: "domcontentloaded" });
