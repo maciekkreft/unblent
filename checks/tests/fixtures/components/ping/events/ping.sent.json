@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The ping fixture announced a number.",
+  "type": "object",
+  "properties": {
+    "n": { "type": "integer" }
+  },
+  "required": ["n"]
+}

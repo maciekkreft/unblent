@@ -646,6 +646,27 @@ def _strip_comments(src: str) -> str:
     return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", src))
 
 
+def kit_mentions(src: str, names: list) -> list:
+    """The component names, and static component paths, a kit source names as whole
+    words outside comments (11.2): a helper about one component belongs in that
+    component's tests, so deleting the component deletes the helper with it."""
+    text = _strip_comments(src)
+    found = [n for n in sorted(names) if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", text)]
+    if "/static/components/" in text:
+        found.append("/static/components/")
+    return found
+
+
+def check_kit(manifests: dict) -> None:
+    path = ROOT / "checks" / "kit.mjs"
+    if not path.exists():
+        return
+    names = [Path(m).parent.name for m in manifests]
+    for name in kit_mentions(path.read_text(), names):
+        fail("checks/kit.mjs", "kit check (11.2)",
+             f"the kit names {name!r}; a helper about one component lives in that component's tests")
+
+
 def check_imports() -> None:
     for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
         file = ROOT / path
@@ -1498,6 +1519,9 @@ def run_tests(affected=None, webkit_only=False, pages=()) -> None:
     # touches infrastructure tests, since any infra change runs everything. `pages`
     # names the addresses the page smoke test loads; empty, it loads every page.
     scoped = affected is not None
+    # Every test process, pure or browser, reaches the kit the way it reaches Playwright:
+    # through a path in the environment, never an import across components (10).
+    os.environ["UNBLENT_KIT"] = str(ROOT / "checks" / "kit.mjs")
 
     # Component tests split three ways, read once each so a rename cannot mis-sort:
     # a browser test drives Playwright (`.launch(`), an api test hits the live server
@@ -1509,6 +1533,7 @@ def run_tests(affected=None, webkit_only=False, pages=()) -> None:
     browser, api, pure = [], [], []
     for f in comp_tests:
         src = (ROOT / f).read_text()
+        # A kit user keeps a literal `engine.launch()` in its source for this sort.
         if ".launch(" in src:
             browser.append(f)
         elif "UNBLENT_URL" in src:
@@ -1698,6 +1723,7 @@ def main() -> None:
     _timed(timings, "supersession check", check_supersession, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "imports", check_imports)
+    _timed(timings, "kit", check_kit, manifests)
     _timed(timings, "composer imports", check_composer_imports)
     _timed(timings, "composer", check_composer)
     _timed(timings, "python imports", check_python_imports)
