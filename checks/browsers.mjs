@@ -2,8 +2,21 @@
 // closes before it ends, and no two tests share a context. Loaded by check.py for the
 // browser phase only, so every test in the one process is under it.
 import { beforeEach, afterEach, after } from "node:test";
+import { createTally, TALLY } from "./loads.mjs";
 
 const { webkit, chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+
+// Launches and page loads are timed here, where every browser and page passes, and read
+// by checks/durations.mjs through the global (11: where the browser phase's time goes).
+const tally = createTally();
+globalThis[TALLY] = tally;
+function instrument(page) {
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame())
+      tally.navigated(page, request.url(), performance.now());
+  });
+  page.on("load", () => tally.loaded(page, page.url(), performance.now()));
+}
 
 const open = new Set();
 // The contexts the running test opened; null while no test runs (a before hook, the
@@ -19,13 +32,18 @@ function opened(context) {
   }
   contexts.add(context);
   context.on("close", () => contexts?.delete(context));
+  // A page made with newPage is already in the context; later ones and popups arrive.
+  context.pages().forEach(instrument);
+  context.on("page", instrument);
   return context;
 }
 for (const type of [webkit, chromium]) {
   // The same singleton the tests import, so a launch cannot go unrecorded.
   const launch = type.launch.bind(type);
   type.launch = async (...args) => {
+    const started = performance.now();
     const browser = await launch(...args);
+    tally.launched(type.name(), performance.now() - started);
     open.add(browser);
     browser.on("disconnected", () => open.delete(browser));
     const newContext = browser.newContext.bind(browser);
@@ -46,9 +64,12 @@ let before;
 beforeEach(() => {
   before = new Set(open);
   contexts = new Set();
+  tally.begin();
 });
 
 afterEach(async (t) => {
+  // Before the reporter sees the test's pass or fail, so the row can carry its loads.
+  tally.end(t.name);
   const leaked = [...open].filter((browser) => !before.has(browser));
   // A context goes with its browser; one left open on a browser that stays is the leak.
   const left = [...contexts].filter((context) => context.browser()?.isConnected() && !leaked.includes(context.browser()));

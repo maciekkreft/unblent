@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -1343,17 +1344,20 @@ def _node_test(files: list, env=None, extra=()) -> subprocess.Popen:
     return proc
 
 
+def _where(row: dict) -> str:
+    try:
+        return str(Path(row["file"]).relative_to(ROOT))
+    except (KeyError, ValueError):
+        return row.get("file") or "?"
+
+
 def headroom_warnings(rows: list) -> list:
     """The warning line for every test past half its budget (11), worst first. Pure over
     the duration rows so checks/tests can exercise it without a node run."""
     lines = []
     for row in sorted(rows, key=lambda r: -(r.get("ms") or 0)):
         if (row.get("ms") or 0) > HEADROOM_MS:
-            try:
-                where = Path(row["file"]).relative_to(ROOT)
-            except (KeyError, ValueError):
-                where = row.get("file") or "?"
-            lines.append(f"warning: {where}: \"{row['name']}\" took {row['ms'] / 1000:.1f}s, over half "
+            lines.append(f"warning: {_where(row)}: \"{row['name']}\" took {row['ms'] / 1000:.1f}s, over half "
                          f"its {TEST_TIMEOUT_MS / 1000:.0f}s budget (11): no headroom on a loaded host")
     return lines
 
@@ -1364,11 +1368,28 @@ def failed_tests(rows: list) -> list:
     lines = []
     for row in rows:
         if row.get("failed"):
-            try:
-                where = Path(row["file"]).relative_to(ROOT)
-            except (KeyError, ValueError):
-                where = row.get("file") or "?"
-            lines.append(f"{where}: \"{row.get('name', '?')}\"")
+            lines.append(f"{_where(row)}: \"{row.get('name', '?')}\"")
+    return lines
+
+
+def browser_summary(rows: list, wall_s: float) -> list:
+    """Where the browser phase's time went (11): one line splitting launches, page loads
+    and the rest, then the slowest loads by name. The rows are a run's duration rows,
+    each test's `loads` tallied by checks/browsers.mjs and the launches in the one
+    `summary` row per node process. Pure, like headroom_warnings."""
+    tests = [row for row in rows if "summary" not in row]
+    summaries = [row["summary"] for row in rows if "summary" in row]
+    launches = sum(s.get("launches") or 0 for s in summaries)
+    launch_s = sum(s.get("launch_ms") or 0 for s in summaries) / 1000
+    loads = [(load.get("ms") or 0, load.get("url") or "?", row)
+             for row in tests for load in (row.get("loads") or [])]
+    load_s = sum(ms for ms, _, _ in loads) / 1000
+    rest_s = max(wall_s - launch_s - load_s, 0)
+    lines = [f"browser: {len(tests)} tests {wall_s:.1f}s — launches {launches} ({launch_s:.1f}s), "
+             f"page loads {len(loads)} ({load_s:.1f}s), the rest {rest_s:.1f}s"]
+    for ms, url, row in sorted(loads, key=lambda load: -load[0])[:5]:
+        address = urllib.parse.urlsplit(url).path or url
+        lines.append(f"  slowest load {ms / 1000:.1f}s {address}  {_where(row)} \"{row.get('name', '?')}\"")
     return lines
 
 
@@ -1426,7 +1447,8 @@ def run_tests(affected=None, webkit_only=False) -> None:
     # bus's own timers.
     node_tests = ([] if scoped else
                   sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
-                  sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT))) + pure
+                  sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT)) +
+                  sorted(glob.glob("checks/tests/*.test.mjs", root_dir=ROOT))) + pure
     if node_tests:
         failed = _run_node(node_tests)
         if failed is not None:
@@ -1496,6 +1518,7 @@ def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
     workers = min(int(os.environ.get("CHECK_BROWSER_WORKERS", "1")), len(files)) or 1
     chunks = [files[i::workers] for i in range(workers)]
     procs = []
+    started = time.perf_counter()
     for chunk in chunks:
         if not chunk:
             continue
@@ -1505,11 +1528,16 @@ def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
         extra = ["--import", "./checks/browsers.mjs"] + ([SKIP_CHROMIUM] if webkit_only else [])
         procs.append(_node_test(chunk, env, extra))
     failed = None
+    seen = []
     for proc in procs:
         proc.wait()
         rows = _read_durations(proc)
+        seen += rows
         if proc.returncode != 0:
             failed = (failed or []) + rows
+    # Pass or fail, so a red run's time is understood too (11).
+    for line in browser_summary(seen, time.perf_counter() - started):
+        print(line, file=sys.stderr)
     if failed is not None:
         fail("components/*/tests", "browser tests", _failure_detail(failed))
 
