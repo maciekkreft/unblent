@@ -139,8 +139,16 @@ async function openWithBook(engine, name) {
   assert.ok(put.ok(), "the sample book is imported");
   const page = await context.newPage();
   const problems = watch(page);
+  // `books` learns of the imported book from its first pull after load; a chapter asked
+  // before that is not-found. No view on this page shows books, so wait for the trace's
+  // console line (10) announcing the book.
+  let bookKnown = false;
+  page.on("console", (msg) => {
+    if (msg.text().includes("event book.changed books")) bookKnown = true;
+  });
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
   await until(async () => await page.evaluate(() => Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector('.cm-content[contenteditable="true"]'))));
+  await until(async () => bookKnown);
   return { browser, context, page, problems };
 }
 
