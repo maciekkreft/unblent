@@ -10,13 +10,16 @@ The architecture is the spec. If a request conflicts with it, name the section a
   then wait, the same as for a conflict.
 - Smallest scope first: one component or one piece of infrastructure per task.
   Decisions and contracts are agreed before any code (section 9, step 2).
-- Run `python3 checks/check.py --help` for what to run when; `check.py --changed`
-  (static + WebKit tests reachable from your change) must pass before reporting
-  done, and the bare full run (both engines, all tests) is the pre-push gate the
+- Run `python3 checks/check.py --help` for what to run when. `check.py --changed`
+  must pass before reporting done: every static rule, then in WebKit the changed
+  components' own tests, one smoke test per page that holds them, and the
+  partners' tests only when a contract file or the manifest's contract changed.
+  The bare full run (both engines, all tests) is the pre-push gate the
   `.githooks/pre-push` hook runs. One test phase runs at a time per host (a lock);
   a test past half its 5s budget is named in a warning. A test run prints one line
-  per file and a failure's reason under its name. Add `--verbose` together with
-  `--only <component>` to see every test.
+  per file, a failure's reason under its name, and at the end of the browser phase
+  where its time went (launches, page loads, the rest). Add `--verbose` together
+  with `--only <component>` to see every test.
 - Ask before changing `tokens/tokens.css`, `tokens/icons.js`, an event, the document facts list (7.5), or `architecture.md`, and before saving or changing a memory. Propose, then wait.
 - Comments say why, or cite an architecture section. Never what the code does, never history.
 - UI/UX must satisfy Don Norman's principles (The Design of Everyday Things): one conceptual model, visible signifiers, natural mapping, immediate feedback, constraints, discoverability, and forgiveness (every action reversible in one step) (one exception: `profile-switch`, architecture §12).
