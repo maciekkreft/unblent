@@ -589,57 +589,6 @@ for (const engine of ENGINES) {
   });
 }
 
-// The product page (/): the reader stage with the shelf and contents on the left, the
-// editor, notes and settings on the right — every book view beside every note view,
-// one path through the box. One load per engine: it composes, and nothing errors. The
-// page starts in the product profile, where the nav shows no links; seeding the stored
-// switch to workshop is not needed — composition is the same in either profile.
-for (const engine of ENGINES) {
-  test(`the product page composes the reader views in ${engine.name}`, async () => {
-    const problems = [];
-    const browser = await engine.launch();
-    try {
-      const context = await browser.newContext();
-      context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
-      const page = await context.newPage();
-      await page.setViewportSize({ width: 1024, height: 768 });
-      watch(page, problems);
-      // The cold GETs must land before the reload below, or the reload aborts them
-      // and the watch reports a cancelled request; waiters are armed before goto fires
-      // them. catalog's two fetches are among them: the product page mounts catalog,
-      // and conversations and settings-sheet ask its contracts, so /api/catalog/contracts
-      // is fetched on every load and must land before the reload too.
-      const synced = Promise.all([
-        page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
-        page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
-        page.waitForResponse((r) => /\/api\/catalog(\?|$)/.test(r.url()), { timeout: WAIT.timeout }),
-        page.waitForResponse((r) => /\/api\/catalog\/contracts(\?|$)/.test(r.url()), { timeout: WAIT.timeout }),
-      ]);
-      await page.goto(`${BASE_URL}/`);
-      // Every view mounted (its shadow root exists); the reader is on the stage and each
-      // list/item pair is one dock tab, the list and its item inside the container (6.4).
-      const NAMES = ["book-reader", "book-shelf", "book-toc", "note-editor", "note-list"];
-      await page.waitForFunction((names) => names.every((n) => document.querySelector(n)?.shadowRoot), NAMES, WAIT);
-      const LABELS = ["Reader", "Books", "Notes"];
-      await page.waitForFunction((labels) => {
-        const tabs = new Set([...document.querySelector("dock-desk").shadowRoot.querySelectorAll('[role="tab"]')].map((t) => t.textContent.trim()));
-        return labels.every((l) => tabs.has(l));
-      }, LABELS, WAIT);
-      mkdirSync(SCREENSHOTS, { recursive: true });
-      await synced;
-      await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.reload();
-      await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-      await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot);
-      await page.screenshot({ path: resolve(SCREENSHOTS, `reader-app-phone-${engine.name}.png`) });
-      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
-    } finally {
-      await browser.close();
-    }
-  });
-}
-
 // The product page's own behaviour (§12): the hidden door and what each profile shows.
 // profile-switch (step 5) carries only a machine test, so its browser behaviour lives
 // here, on the page where it is placed. WebKit first, then Chromium.

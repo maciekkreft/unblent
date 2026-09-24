@@ -1226,13 +1226,16 @@ def _interaction_graph(manifests: dict) -> dict:
     return adj
 
 
-def affected_tests(changed_paths: list, manifests: dict, tests: list):
-    """The test files, out of `tests`, that a change can break, or None to run
-    everything. None on any infrastructure, structural, or unclassifiable change
-    (7.3, 11)."""
+SMOKE_TEST = "components/pages/tests/smoke.test.mjs"
+_CONTRACT_DIRS = {"events", "queries", "commands"}
+
+
+def classify_changes(changed_paths: list, manifests: dict):
+    """The changed components and the edited page addresses, or None when everything
+    must run: an infrastructure, structural, or unclassifiable change (7.3, 11)."""
     known = {Path(p).parent.name for p in manifests}
     seeds = set()
-    addresses = set()
+    pages = set()
     for cp in changed_paths:
         cp = cp.replace("\\", "/").strip()
         if not cp:
@@ -1248,27 +1251,99 @@ def affected_tests(changed_paths: list, manifests: dict, tests: list):
                 return None
             seeds.add(parts[1])
         elif top == "pages" and cp.endswith(".html"):
-            addresses.add(_page_address(cp))
+            pages.add(_page_address(cp))
         else:
             return None
-    if not seeds and not addresses:
+    if not seeds and not pages:
         return None
+    return seeds, pages
+
+
+def contract_files_changed(changed_paths: list) -> set:
+    """The components whose events/, queries/ or commands/ gained, lost or changed a
+    file: a contract change whatever the manifest says (11). The git listing holds
+    untracked files too, so an added schema counts."""
+    found = set()
+    for cp in changed_paths:
+        parts = Path(cp.replace("\\", "/").strip()).parts
+        if len(parts) >= 4 and parts[0] == "components" and parts[2] in _CONTRACT_DIRS:
+            found.add(parts[1])
+    return found
+
+
+def contract_of(manifest: dict) -> tuple:
+    """What a component says on the bus (7.3): the part of its manifest a partner can
+    depend on. Consumes counts, unlike in check_roles, because a partner's emit that
+    the component stops handling is what breaks the partner's test."""
+    meta = manifest.get("meta") or {}
+    return (tuple(sorted(set(meta.get("emits") or []))),
+            tuple(sorted(set(meta.get("asks") or []))),
+            tuple(sorted(set(manifest.get("consumes") or []))),
+            tuple(sorted(set(manifest.get("accepts") or []))),
+            tuple(sorted(set(manifest.get("answers") or []))))
+
+
+def contracts_changed(seeds: set, manifests: dict, head_manifests: dict) -> set:
+    """The seeds whose contract differs from HEAD's. A seed HEAD has no manifest for is
+    new, or unreadable there: its partners have never run against it, so it counts."""
+    by_name = {Path(p).parent.name: m for p, m in manifests.items()}
+    return {s for s in seeds
+            if s not in head_manifests or contract_of(by_name.get(s) or {}) != contract_of(head_manifests[s])}
+
+
+def _head_manifests(seeds: set) -> dict:
+    """HEAD's manifest of each seed HEAD has, by component name. The seeds' directories
+    are extracted whole from HEAD so a machine's relative imports resolve, and read by
+    the same reader as the working tree's; the loader resolves bare names against
+    ROOT. Paid in the test phase, once. Anything unreadable is left out, which counts
+    as a contract change: the safe direction."""
+    present = [s for s in sorted(seeds)
+               if subprocess.run(["git", "cat-file", "-e", f"HEAD:components/{s}/machine.js"],
+                                 cwd=ROOT, capture_output=True).returncode == 0]
+    if not present:
+        return {}
+    with tempfile.TemporaryDirectory(prefix="unblent-head-") as tmp:
+        archive = subprocess.run(["git", "archive", "HEAD", *(f"components/{s}" for s in present)],
+                                 cwd=ROOT, capture_output=True)
+        if archive.returncode != 0:
+            return {}
+        subprocess.run(["tar", "-x", "-C", tmp], input=archive.stdout, capture_output=True)
+        machines = [f"{tmp}/components/{s}/machine.js" for s in present]
+        result = subprocess.run(["node", "--import", "./checks/register.mjs", "checks/manifests.mjs", *machines],
+                                cwd=ROOT, capture_output=True, text=True)
+        if result.returncode != 0:
+            return {}
+        return {Path(p).parent.name: m for p, m in json.loads(result.stdout).items() if "error" not in m}
+
+
+def affected_tests(changed_paths: list, manifests: dict, tests: list, contract_changed=frozenset()):
+    """The test files, out of `tests`, that a change can break, with the addresses of
+    the pages whose smoke test covers the change's place on them; or None to run
+    everything (11). A changed component reaches its own tests and the smoke test of
+    every page holding it; its one-hop partners' tests only when it is in
+    `contract_changed`. An edited page reaches its smoke test and every test that
+    names its address."""
+    classified = classify_changes(changed_paths, manifests)
+    if classified is None:
+        return None
+    seeds, edited_pages = classified
     graph = _interaction_graph(manifests)
     owners = set(seeds)
-    for a in seeds:
-        owners |= graph.get(a, set())
+    for s in seeds & set(contract_changed):
+        owners |= graph.get(s, set())
+    addresses = set(edited_pages)
     for address, held in _page_holdings().items():
         if held & seeds:
             addresses.add(address)
     result = set()
     for f in tests:
-        if Path(f).parts[1] in owners:
+        if Path(f).parts[1] in owners or (f == SMOKE_TEST and addresses):
             result.add(f)
-        elif addresses:
+        elif edited_pages:
             src = (ROOT / f).read_text()
-            if any(_opens(src, a) for a in addresses):
+            if any(_opens(src, a) for a in edited_pages):
                 result.add(f)
-    return result
+    return result, addresses
 
 
 def _changed_paths_from_git() -> list:
@@ -1417,10 +1492,11 @@ def _run_node(files: list, env=None) -> list | None:
     return None if proc.returncode == 0 else rows
 
 
-def run_tests(affected=None, webkit_only=False) -> None:
+def run_tests(affected=None, webkit_only=False, pages=()) -> None:
     # affected is None for the full run (the definition of done); a set of test
     # files narrows to the tests reachable from a change (11). A narrowed run never
-    # touches infrastructure tests, since any infra change runs everything.
+    # touches infrastructure tests, since any infra change runs everything. `pages`
+    # names the addresses the page smoke test loads; empty, it loads every page.
     scoped = affected is not None
 
     # Component tests split three ways, read once each so a rename cannot mis-sort:
@@ -1473,6 +1549,8 @@ def run_tests(affected=None, webkit_only=False) -> None:
         # to run without it, so a suite pointed by hand at the dev server never writes
         # into the real data/ (architecture.md section 10, Tests row).
         env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}", "UNBLENT_DATA": data_dir}
+        if pages:
+            env["UNBLENT_PAGES"] = ",".join(sorted(pages))
 
         for test in server_tests:
             _run_python_test(test, "server tests", "server-entry HTTP test reported failures", env)
@@ -1638,18 +1716,30 @@ def main() -> None:
     # --changed / --only are the task-end gate: the tests reachable from what changed, in
     # WebKit (11).
     affected = None
+    pages = set()
     if changed or only:
         paths = []
         if changed:
             paths += _changed_paths_from_git()
         if only:
             paths += _resolve_only(only, manifests)
-        affected = affected_tests(paths, manifests,
-                                  sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)))
+        # Partners join only for a component whose contract changed (11): a schema file
+        # added, changed or removed, or a manifest that differs from HEAD's.
+        contract = set()
+        classified = classify_changes(paths, manifests)
+        if classified is not None:
+            seeds, _ = classified
+            contract = contract_files_changed(paths) | contracts_changed(seeds, manifests, _head_manifests(seeds))
+        picked = affected_tests(paths, manifests,
+                                sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)), contract)
+        if picked is not None:
+            affected, pages = picked
     with _test_lock():
-        _timed(timings, "tests", run_tests, affected, bool(changed or only))
+        _timed(timings, "tests", run_tests, affected, bool(changed or only), pages)
     scope = "all" if affected is None else (
         ", ".join(sorted(f"{Path(f).parts[1]}/{Path(f).name.removesuffix('.test.mjs')}" for f in affected)) or "none")
+    if pages:
+        scope += "; pages: " + ", ".join(sorted(pages))
     scope += "; webkit" if changed or only else "; webkit, chromium"
     print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s [tests: {scope}]")
 

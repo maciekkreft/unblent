@@ -23,8 +23,6 @@ const NOTE_TWO = "01ARZ3NDEKTSV4RRFFQ69G5FB2";
 
 // The console lines trace prints (section 10) show subject is wired, not just
 // rendered: on start it asks dock and books for the starting picture (D3, 4.3).
-const ASKS_DOCK = /query read subject → dock/;
-const ASKS_BOOKS = /query open subject → books/;
 
 function watch(page, problems) {
   page.on("console", (msg) => {
@@ -396,66 +394,7 @@ const ENGINES = [
   { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
 ];
 
-// WebKit first, then Chromium. This one test grows through slices 4-7 as the followers
-// gain behaviour; for now it proves the subject stem composes and its fact is wired.
 for (const engine of ENGINES) {
-  test(`the subject stem composes the reader and the notes views in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    const context = await browser.newContext();
-    context.setDefaultTimeout(4000);
-    try {
-      const problems = [];
-      const debug = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
-
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(page);
-
-      // The reader is on the stage; the two list/item pairs are the desk's children, each
-      // a list-then-item container holding its list and its item (6.4, 8).
-      const children = await page.evaluate(() =>
-        [...document.querySelector("dock-desk").children].map((c) => c.localName),
-      );
-      for (const tag of ["book-reader", "list-then-item"]) {
-        assert.ok(children.includes(tag), `${tag} is a dock-desk child`);
-      }
-      const inside = await page.evaluate(() =>
-        [...document.querySelectorAll("list-then-item")].flatMap((c) => [...c.children].map((k) => k.localName)),
-      );
-      for (const tag of ["book-shelf", "book-toc", "note-list", "note-editor"]) {
-        assert.ok(inside.includes(tag), `${tag} lives inside a list-then-item container`);
-      }
-
-      // The derived fact is alive: with nothing on the stage it asks dock and books for
-      // the starting picture and, finding no open book, announces no subject.
-      await until(() => debug.some((l) => ASKS_DOCK.test(l)) && debug.some((l) => ASKS_BOOKS.test(l)));
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-
-      // Phone preview: a fresh page of the same context that chose the phone preview
-      // before load, so the desk is laid out inside the narrowed body without overflow.
-      const phone = await context.newPage();
-      watch(phone, problems);
-      await phone.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await phone.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await ready(phone);
-      await phone.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-      const fits = await phone.evaluate(() => {
-        const desk = document.querySelector("dock-desk");
-        return desk.scrollWidth <= desk.clientWidth + 1;
-      });
-      assert.ok(fits, "the desk must not overflow sideways on the phone");
-      mkdirSync(SCREENSHOTS, { recursive: true });
-      await phone.screenshot({ path: resolve(SCREENSHOTS, `subject-phone-${engine.name}.png`) });
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    } finally {
-      await browser.close();
-    }
-  });
-
   // Two instances of one view on one page (4.1): each container is its own tab, and a
   // tab click stores a layout that names both by their address, distinct because the
   // page gave distinct ids. This is the page-level check deferred from session 3, so it
