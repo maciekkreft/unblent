@@ -15,9 +15,9 @@ _spec.loader.exec_module(check)
 problems = check.backup_problems
 
 
-def sync(db, online, local, second=0):
-    """One sync line, `second` seconds after 17:42:00."""
-    stamp = f"2026-09-23T17:{42 + second // 60:02d}:{second % 60:02d}.343Z"
+def sync(db, online, local, second=0, ms=343):
+    """One sync line, `second` seconds and `ms` milliseconds after 17:42:00."""
+    stamp = f"2026-09-23T17:{42 + second // 60:02d}:{second % 60:02d}.{ms:03d}Z"
     return (f'time={stamp} level=INFO msg="replica sync" system=store db={db} '
             f"replica=s3 txid.replica={online} txid.db={local}")
 
@@ -56,6 +56,19 @@ class Backup(unittest.TestCase):
 
     def test_too_short_a_log_is_not_judged(self):
         self.assertEqual(problems([sync("notes.db", "0012", "0013", t) for t in range(0, 30, 10)]), [])
+    def test_two_accounts_files_of_one_name_are_judged_apart(self):
+        # Same name, different beat: one account far ahead of the other is not a lag.
+        rounds = [line for t in range(0, 60, 10)
+                  for line in (sync("notes.db", "0156", "0156", t, 464), sync("notes.db", "0002", "0002", t, 553))]
+        self.assertEqual(problems(rounds), [])
+
+    def test_one_of_two_same_named_files_stuck_fails(self):
+        rounds = [line for t in range(0, 60, 10)
+                  for line in (sync("notes.db", "0156", "0156", t, 464), sync("notes.db", "0002", "0003", t, 614))]
+        found = problems(rounds)
+        self.assertEqual(len(found), 1)
+        self.assertIn("notes.db", found[0])
+
 
 if __name__ == "__main__":
     unittest.main()

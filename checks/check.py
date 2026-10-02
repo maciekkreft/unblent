@@ -1035,6 +1035,9 @@ BACKUP_WINDOW = "-2min"
 # latest line reads behind whenever something was saved in the last ten seconds. Only a
 # change older than this many seconds and still not online is a failure.
 BACKUP_GRACE = 30
+# deploy/litestream.yml's sync-interval, and how far a file's beat may wander from it.
+BACKUP_BEAT = 10
+BACKUP_BEAT_SLACK = 0.02
 _LOG_LEVEL = re.compile(r"\blevel=(\w+)")
 _LOG_MSG = re.compile(r'\bmsg="([^"]*)"')
 _LOG_SYNC = re.compile(r'\btime=(\S+) .*?msg="replica sync".*?\bdb=(\S+).*?\btxid\.replica=(\w+) txid\.db=(\w+)')
@@ -1047,14 +1050,26 @@ def backup_problems(lines: list) -> list:
     if errors:
         msg = _LOG_MSG.search(errors[-1])
         problems.append(f"{len(errors)} errors, the latest: {msg.group(1) if msg else errors[-1][:200]}")
-    syncs = {}
+    # The log names a file without its folder, and every account has its own notes.db.
+    # Each file keeps its own 10-second beat from when it was opened, so its lines land at
+    # the same fraction of the interval: that tells same-named files apart.
+    syncs = []
     for line in lines:
-        if m := _LOG_SYNC.search(line):
-            when = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
-            syncs.setdefault(m.group(2), []).append((when, int(m.group(3), 16), int(m.group(4), 16)))
+        if not (m := _LOG_SYNC.search(line)):
+            continue
+        when = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+        line_round = (when, int(m.group(3), 16), int(m.group(4), 16))
+        for db, rounds in syncs:
+            apart = (when - rounds[-1][0]).total_seconds()
+            if db == m.group(2) and apart > BACKUP_BEAT / 2 \
+                    and abs((apart + BACKUP_BEAT / 2) % BACKUP_BEAT - BACKUP_BEAT / 2) <= BACKUP_BEAT_SLACK:
+                rounds.append(line_round)
+                break
+        else:
+            syncs.append((m.group(2), [line_round]))
     if not syncs:
         problems.append("no database was synced")
-    for db, rounds in sorted(syncs.items()):
+    for db, rounds in sorted(syncs, key=lambda s: s[0]):
         newest_when, online, _ = rounds[-1]
         settled = [r for r in rounds if (newest_when - r[0]).total_seconds() >= BACKUP_GRACE]
         # Without a round that old (the service just started) there is nothing to judge yet.
