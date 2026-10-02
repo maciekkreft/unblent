@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user pasted, commented, removed a comment or cleared: the whole review. An empty text with no comments means there is no text under review.",
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "The pasted markdown, line breaks as \\n."
+    },
+    "comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "One comment: an instruction about the fragment of the text from start to end.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Character offset in text where the fragment starts."
+          },
+          "end": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Character offset in text just after the fragment."
+          },
+          "quote": {
+            "type": "string",
+            "description": "The fragment itself: text from start to end."
+          },
+          "text": {
+            "type": "string",
+            "description": "The comment the user wrote on it."
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "end",
+          "quote",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "description": "The comments, in reading order; fragments never overlap."
+    }
+  },
+  "required": [
+    "text",
+    "comments"
+  ],
+  "additionalProperties": false
+}

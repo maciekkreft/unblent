@@ -13,9 +13,10 @@ const workshop = openStore("settings");
 const product = openStore("settings", "product");
 const profile = openStore("settings", "profile");
 
-// The profile a non-workshop page starts in is product; a page under /workshop/ is
-// always workshop (§12), read from the URL like dock reads location.pathname.
-const onProduct = !location.pathname.startsWith("/workshop/");
+// An app page (/ or under /workshop/apps/) starts in product; a design page, under
+// /workshop/design/, is always workshop (§12), read from the URL like dock reads
+// location.pathname.
+const onProduct = !location.pathname.startsWith("/workshop/design/");
 
 mount(machine, {
   input: {
