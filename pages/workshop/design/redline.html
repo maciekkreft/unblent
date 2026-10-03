@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="kind" content="app" />
-    <title>Review</title>
+    <meta name="kind" content="stem" />
+    <title>Redline</title>
     <link rel="stylesheet" href="/static/tokens/tokens.css" />
     <link rel="stylesheet" href="/static/tokens/base.css" />
     <script type="importmap">
@@ -39,20 +39,14 @@
     <script type="module" src="/static/components/pages/fact.js"></script>
     <script type="module" src="/static/components/viewport/fact.js"></script>
     <script type="module" src="/static/components/settings/fact.js"></script>
-    <script type="module" src="/static/components/dock/fact.js"></script>
-    <script type="module" src="/static/components/review/fact.js"></script>
+    <script type="module" src="/static/components/redline/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
-    <script type="module" src="/static/components/dock-desk/view.js"></script>
-    <script type="module" src="/static/components/review-editor/view.js"></script>
-    <script type="module" src="/static/components/profile-switch/view.js"></script>
+    <script type="module" src="/static/components/redline-editor/view.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
-    <dock-desk>
-      <review-editor label="Review" height="fill"></review-editor>
-      <profile-switch control></profile-switch>
-    </dock-desk>
+    <redline-editor height="fill"></redline-editor>
     <viewport-switch></viewport-switch>
   </body>
 </html>

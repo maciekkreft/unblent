@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The review changed: the whole review, or null when the text was cleared.",
+  "description": "The redline changed: the whole redline, or null when the text was cleared.",
   "type": "object",
   "properties": {
-    "review": {
+    "redline": {
       "type": [
         "object",
         "null"
@@ -63,7 +63,7 @@
     }
   },
   "required": [
-    "review"
+    "redline"
   ],
   "additionalProperties": false
 }

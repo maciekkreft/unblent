@@ -2,9 +2,9 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 
 // The view component where a pasted markdown text is read and commented (8, the Review
 // app): it owns only UI state — the comment being written, the undo windows — and
-// points at `review`, which owns the text and the comments. It asks review: read for
-// the starting picture and follows review.changed after (4.3); every gesture that
-// changes the review is emitted as the whole review in review.saved (4.3, fifth rule).
+// points at `redline`, which owns the text and the comments. It asks redline: read for
+// the starting picture and follows redline.changed after (4.3); every gesture that
+// changes the redline is emitted as the whole redline in redline.saved (4.3, fifth rule).
 // The ask and mint arrive through input, so this stays a pure definition importable in
 // Node.
 
@@ -275,7 +275,7 @@ const parseBlocks = (lines) => {
   return blocks;
 };
 
-// The source is the review's text, whose line breaks are already "\n" (normaliseText at
+// The source is the redline's text, whose line breaks are already "\n" (normaliseText at
 // paste), so offsets into it are offsets into what is stored and copied.
 export const parseMarkdown = (source) => parseBlocks(toLines(String(source)));
 
@@ -326,8 +326,8 @@ export const toCriticMarkup = (text, comments) =>
 
 // The comments to paint: the saved ones, with the one being written in its place (it
 // may not be saved yet, or be newer than what was saved), in reading order.
-export const marks = ({ review, draft }) => {
-  const saved = review?.comments ?? [];
+export const marks = ({ redline, draft }) => {
+  const saved = redline?.comments ?? [];
   const all = draft ? [...saved.filter((c) => c.id !== draft.id), draft] : saved;
   return [...all].sort((a, b) => a.start - b.start);
 };
@@ -335,62 +335,62 @@ export const marks = ({ review, draft }) => {
 // --- Decisions ------------------------------------------------------------------------------
 
 const comment = (draft) => ({ id: draft.id, start: draft.start, end: draft.end, quote: draft.quote, text: draft.text });
-const withComment = (review, draft) => ({
-  text: review.text,
-  comments: [...review.comments.filter((c) => c.id !== draft.id), comment(draft)].sort((a, b) => a.start - b.start),
+const withComment = (redline, draft) => ({
+  text: redline.text,
+  comments: [...redline.comments.filter((c) => c.id !== draft.id), comment(draft)].sort((a, b) => a.start - b.start),
 });
-const withoutComment = (review, id) => ({ text: review.text, comments: review.comments.filter((c) => c.id !== id) });
+const withoutComment = (redline, id) => ({ text: redline.text, comments: redline.comments.filter((c) => c.id !== id) });
 
 // What closing the open comment saves, or null when nothing changes: an empty comment is
 // no comment, so one that was saved is removed and a new one is dropped.
-const closing = ({ review, draft }) => {
-  if (!review || !draft) return null;
-  const saved = review.comments.find((c) => c.id === draft.id);
-  if (draft.text.trim() === "") return saved ? withoutComment(review, draft.id) : null;
+const closing = ({ redline, draft }) => {
+  if (!redline || !draft) return null;
+  const saved = redline.comments.find((c) => c.id === draft.id);
+  if (draft.text.trim() === "") return saved ? withoutComment(redline, draft.id) : null;
   if (saved && saved.text === draft.text) return null;
-  return withComment(review, draft);
+  return withComment(redline, draft);
 };
 
 // The ranges a new comment may not overlap: every saved comment but the open one, and the
 // open one while it holds any text.
-const occupied = ({ review, draft }) => [
-  ...(review?.comments ?? []).filter((c) => c.id !== draft?.id),
+const occupied = ({ redline, draft }) => [
+  ...(redline?.comments ?? []).filter((c) => c.id !== draft?.id),
   ...(draft && draft.text.trim() !== "" ? [draft] : []),
 ];
 
-const saved = (review) => ({ type: "review.saved", text: review.text, comments: review.comments });
+const saved = (redline) => ({ type: "redline.saved", text: redline.text, comments: redline.comments });
 
 // Close the open comment (saving what it holds) and, for a selection, open a new one.
 const closeDraft = enqueueActions(({ context, enqueue }) => {
   const next = closing(context);
   if (next) {
-    enqueue.assign({ review: next });
+    enqueue.assign({ redline: next });
     enqueue.emit(saved(next));
   }
   enqueue.assign({ draft: null });
 });
 const openSelection = assign({
   draft: ({ context, event }) => {
-    const range = trimRange(context.review.text, event.start, event.end);
-    return { id: context.mint(), ...range, quote: context.review.text.slice(range.start, range.end), text: event.text ?? "" };
+    const range = trimRange(context.redline.text, event.start, event.end);
+    return { id: context.mint(), ...range, quote: context.redline.text.slice(range.start, range.end), text: event.text ?? "" };
   },
 });
 const openComment = assign({
-  draft: ({ context, event }) => ({ ...context.review.comments.find((c) => c.id === event.id) }),
+  draft: ({ context, event }) => ({ ...context.redline.comments.find((c) => c.id === event.id) }),
 });
 const canSelect = ({ context, event }) => {
-  if (!context.review) return false;
-  const range = trimRange(context.review.text, event.start, event.end);
+  if (!context.redline) return false;
+  const range = trimRange(context.redline.text, event.start, event.end);
   return range != null && !overlaps(occupied(context), range.start, range.end);
 };
 const isComment = ({ context, event }) =>
-  Boolean(context.review?.comments.some((c) => c.id === event.id)) && !context.discarding.has(event.id);
+  Boolean(context.redline?.comments.some((c) => c.id === event.id)) && !context.discarding.has(event.id);
 const isDiscarding = ({ context, event }) => context.discarding.has(event.id);
 const typed = assign({ draft: ({ context, event }) => ({ ...context.draft, text: event.text }) });
 const save = enqueueActions(({ context, enqueue }) => {
   const next = closing(context);
   if (next) {
-    enqueue.assign({ review: next });
+    enqueue.assign({ redline: next });
     enqueue.emit(saved(next));
   }
 });
@@ -407,21 +407,21 @@ const undo = enqueueActions(({ event, enqueue }) => {
 
 export const machine = setup({
   actors: {
-    read: fromPromise(({ input }) => input.ask("review", "read", {})),
+    read: fromPromise(({ input }) => input.ask("redline", "read", {})),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
     undo: ({ context }) => context.undoMs,
   },
 }).createMachine({
-  id: "review-editor",
-  meta: { kind: "view", emits: ["review.saved"], attributes: [], asks: ["review: read"] },
+  id: "redline-editor",
+  meta: { kind: "view", emits: ["redline.saved"], attributes: [], asks: ["redline: read"] },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
     undoMs: input.undoMs,
     throttleMs: input.throttleMs ?? 200,
-    review: null,
+    redline: null,
     draft: null,
     discarding: new Set(),
   }),
@@ -429,16 +429,16 @@ export const machine = setup({
   on: {
     // The fact's news (4.3): another tab's change, or the echo of our own save. The
     // comment being written stays as typed; it is painted over what was saved.
-    "review.changed": { actions: assign({ review: ({ event }) => event.review }) },
+    "redline.changed": { actions: assign({ redline: ({ event }) => event.redline }) },
   },
   states: {
-    // The starting picture (4.3); review.changed is held for us until it lands (4.2).
+    // The starting picture (4.3); redline.changed is held for us until it lands (4.2).
     loading: {
       invoke: {
         src: "read",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
-          { guard: ({ event }) => event.output?.review != null, target: "reviewing", actions: assign({ review: ({ event }) => event.output.review }) },
+          { guard: ({ event }) => event.output?.redline != null, target: "marking", actions: assign({ redline: ({ event }) => event.output.redline }) },
           { target: "empty" },
         ],
         onError: "empty",
@@ -448,17 +448,17 @@ export const machine = setup({
     empty: {
       initial: "idle",
       on: {
-        "review.changed": [
-          { guard: ({ event }) => event.review != null, target: "reviewing", actions: assign({ review: ({ event }) => event.review }) },
-          { actions: assign({ review: null }) },
+        "redline.changed": [
+          { guard: ({ event }) => event.redline != null, target: "marking", actions: assign({ redline: ({ event }) => event.redline }) },
+          { actions: assign({ redline: null }) },
         ],
         _pasted: {
           guard: ({ event }) => normaliseText(event.text).trim() !== "",
-          target: "reviewing",
+          target: "marking",
           actions: enqueueActions(({ event, enqueue }) => {
-            const review = { text: normaliseText(event.text), comments: [] };
-            enqueue.assign({ review });
-            enqueue.emit(saved(review));
+            const redline = { text: normaliseText(event.text), comments: [] };
+            enqueue.assign({ redline });
+            enqueue.emit(saved(redline));
           }),
         },
       },
@@ -469,19 +469,19 @@ export const machine = setup({
         refused: { after: { undo: "idle" }, on: { _pasteRefused: { target: "refused", reenter: true } } },
       },
     },
-    reviewing: {
+    marking: {
       initial: "idle",
       on: {
         // Another tab cleared the text.
-        "review.changed": [
-          { guard: ({ event }) => event.review == null, target: "empty", actions: assign({ review: null, draft: null }) },
-          { actions: assign({ review: ({ event }) => event.review }) },
+        "redline.changed": [
+          { guard: ({ event }) => event.redline == null, target: "empty", actions: assign({ redline: null, draft: null }) },
+          { actions: assign({ redline: ({ event }) => event.redline }) },
         ],
         // A comment's ×: the popover closes and the mark dims for the undo window; only
         // its end removes the comment. A comment never saved is simply dropped.
         _remove: [
           {
-            guard: ({ context, event }) => context.review.comments.some((c) => c.id === event.id) && !context.discarding.has(event.id),
+            guard: ({ context, event }) => context.redline.comments.some((c) => c.id === event.id) && !context.discarding.has(event.id),
             target: ".idle",
             actions: enqueueActions(({ event, enqueue }) => {
               enqueue.assign({ draft: null });
@@ -496,9 +496,9 @@ export const machine = setup({
           guard: isDiscarding,
           actions: enqueueActions(({ context, event, enqueue }) => {
             enqueue.assign({ discarding: without(context.discarding, event.id) });
-            if (!context.review.comments.some((c) => c.id === event.id)) return;
-            const next = withoutComment(context.review, event.id);
-            enqueue.assign({ review: next });
+            if (!context.redline.comments.some((c) => c.id === event.id)) return;
+            const next = withoutComment(context.redline, event.id);
+            enqueue.assign({ redline: next });
             enqueue.emit(saved(next));
           }),
         },
@@ -551,27 +551,27 @@ export const machine = setup({
     // The page shows empty with an undo; a paste in the meantime replaces the text.
     clearing: {
       on: {
-        _undoClear: "reviewing",
+        _undoClear: "marking",
         _pasted: {
           guard: ({ event }) => normaliseText(event.text).trim() !== "",
-          target: "reviewing",
+          target: "marking",
           actions: enqueueActions(({ event, enqueue }) => {
-            const review = { text: normaliseText(event.text), comments: [] };
-            enqueue.assign({ review });
-            enqueue.emit(saved(review));
+            const redline = { text: normaliseText(event.text), comments: [] };
+            enqueue.assign({ redline });
+            enqueue.emit(saved(redline));
           }),
         },
-        "review.changed": [
-          { guard: ({ event }) => event.review == null, target: "empty", actions: assign({ review: null }) },
-          { actions: assign({ review: ({ event }) => event.review }) },
+        "redline.changed": [
+          { guard: ({ event }) => event.redline == null, target: "empty", actions: assign({ redline: null }) },
+          { actions: assign({ redline: ({ event }) => event.redline }) },
         ],
       },
       after: {
         undo: {
           target: "empty",
           actions: enqueueActions(({ enqueue }) => {
-            enqueue.assign({ review: null });
-            enqueue.emit({ type: "review.saved", text: "", comments: [] });
+            enqueue.assign({ redline: null });
+            enqueue.emit({ type: "redline.saved", text: "", comments: [] });
           }),
         },
       },

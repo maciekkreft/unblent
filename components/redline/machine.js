@@ -1,14 +1,14 @@
 import { setup, assign, emit } from "xstate";
 
 // A local-only fact component (3.1): headless owner of the text under review and the
-// comments on it. review-editor, where the user acts, emits the whole review as
-// review.saved (4.3, fifth rule); this fact keeps it, saves it and announces it as
-// review.changed, and answers review: read for the starting picture. The store
+// comments on it. redline-editor, where the user acts, emits the whole redline as
+// redline.saved (4.3, fifth rule); this fact keeps it, saves it and announces it as
+// redline.changed, and answers redline: read for the starting picture. The store
 // arrives through `input`, so the machine is a pure definition importable in Node.
 
 // Sanitise a candidate into the contract shape: the text as a string, and the
 // comments that fit inside it, in reading order, none overlapping an earlier one. An
-// empty text is no review at all (null), whatever comments came with it.
+// empty text is no redline at all (null), whatever comments came with it.
 export const normalise = (value) => {
   const text = typeof value?.text === "string" ? value.text : "";
   if (text === "") return null;
@@ -45,27 +45,27 @@ export const parse = (stored) => {
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export const machine = setup({}).createMachine({
-  id: "review",
+  id: "redline",
   meta: {
     kind: "fact",
     shape: "local-only",
-    emits: ["review.changed"],
+    emits: ["redline.changed"],
     owns: "the text under review and the comments on it",
   },
-  context: ({ input }) => ({ review: parse(input.stored), save: input.save }),
+  context: ({ input }) => ({ redline: parse(input.stored), save: input.save }),
   on: {
-    // The gesture from review-editor (4.3): the whole review, never merged. Guarded so
+    // The gesture from redline-editor (4.3): the whole redline, never merged. Guarded so
     // a repeat saves and announces nothing.
-    "review.saved": {
-      guard: ({ context, event }) => !same(normalise(event), context.review),
+    "redline.saved": {
+      guard: ({ context, event }) => !same(normalise(event), context.redline),
       actions: [
-        assign({ review: ({ event }) => normalise(event) }),
-        ({ context }) => context.save(context.review ? JSON.stringify(context.review) : ""),
-        emit(({ context }) => ({ type: "review.changed", review: context.review })),
+        assign({ redline: ({ event }) => normalise(event) }),
+        ({ context }) => context.save(context.redline ? JSON.stringify(context.redline) : ""),
+        emit(({ context }) => ({ type: "redline.changed", redline: context.redline })),
       ],
     },
     "read?": {
-      actions: ({ context, event }) => event.reply({ review: context.review }),
+      actions: ({ context, event }) => event.reply({ redline: context.redline }),
     },
   },
 });

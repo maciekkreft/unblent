@@ -9,7 +9,7 @@ import { machine, normalise } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (...path) => JSON.parse(readFileSync(resolve(HERE, "..", ...path), "utf8"));
-const CHANGED = json("events", "review.changed.json");
+const CHANGED = json("events", "redline.changed.json");
 const READ = json("queries", "read.json").reply;
 // Every emit and reply the tests below produce, checked against its schema last.
 const recorded = [];
@@ -23,7 +23,7 @@ const start = (stored = null) => {
   const saved = [];
   const actor = createActor(machine, { input: { stored, save: (v) => saved.push(v) } });
   const emitted = [];
-  actor.on("review.changed", (e) => {
+  actor.on("redline.changed", (e) => {
     emitted.push(e);
     recorded.push({ value: e, schema: CHANGED });
   });
@@ -38,34 +38,34 @@ const read = (actor) => {
   return reply;
 };
 
-test("nothing stored, or garbage, reads as no review", () => {
-  assert.deepEqual(read(start().actor), { review: null });
-  assert.deepEqual(read(start("not json").actor), { review: null });
+test("nothing stored, or garbage, reads as no redline", () => {
+  assert.deepEqual(read(start().actor), { redline: null });
+  assert.deepEqual(read(start("not json").actor), { redline: null });
 });
 
 test("a save is stored and announced once; a repeat does nothing", () => {
   const { actor, saved, emitted } = start();
-  const review = { text: TEXT, comments: [{ id: A, start: 9, end: 15, quote: "A book", text: "Say an app" }] };
-  actor.send({ type: "review.saved", ...review });
-  actor.send({ type: "review.saved", ...review });
+  const redline = { text: TEXT, comments: [{ id: A, start: 9, end: 15, quote: "A book", text: "Say an app" }] };
+  actor.send({ type: "redline.saved", ...redline });
+  actor.send({ type: "redline.saved", ...redline });
   assert.equal(emitted.length, 1);
-  assert.deepEqual(emitted[0].review, review);
-  assert.deepEqual(JSON.parse(saved.at(-1)), review);
-  assert.deepEqual(read(actor), { review });
+  assert.deepEqual(emitted[0].redline, redline);
+  assert.deepEqual(JSON.parse(saved.at(-1)), redline);
+  assert.deepEqual(read(actor), { redline });
   // What was stored is what a reload reads.
-  assert.deepEqual(read(start(saved.at(-1)).actor), { review });
+  assert.deepEqual(read(start(saved.at(-1)).actor), { redline });
 });
 
-test("an empty text clears the review to null", () => {
+test("an empty text clears the redline to null", () => {
   const { actor, saved, emitted } = start(JSON.stringify({ text: TEXT, comments: [] }));
-  actor.send({ type: "review.saved", text: "", comments: [] });
-  assert.deepEqual(emitted.at(-1), { type: "review.changed", review: null });
+  actor.send({ type: "redline.saved", text: "", comments: [] });
+  assert.deepEqual(emitted.at(-1), { type: "redline.changed", redline: null });
   assert.equal(saved.at(-1), "");
-  assert.deepEqual(read(actor), { review: null });
+  assert.deepEqual(read(actor), { redline: null });
 });
 
 test("comments outside the text or overlapping an earlier one are dropped, the rest sorted", () => {
-  const review = normalise({
+  const redline = normalise({
     text: TEXT,
     comments: [
       { id: B, start: 20, end: 24, quote: "x", text: "later" },
@@ -74,7 +74,7 @@ test("comments outside the text or overlapping an earlier one are dropped, the r
       { id: "D", start: 5, end: 5, quote: "", text: "empty" },
     ],
   });
-  assert.deepEqual(review.comments, [{ id: A, start: 9, end: 22, quote: TEXT.slice(9, 22), text: "first" }]);
+  assert.deepEqual(redline.comments, [{ id: A, start: 9, end: 22, quote: TEXT.slice(9, 22), text: "first" }]);
 });
 
 test("every payload matches its schema", () => {

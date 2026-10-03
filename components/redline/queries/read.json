@@ -11,7 +11,7 @@
     "description": "The text under review and its comments, or null when there is none.",
     "type": "object",
     "properties": {
-      "review": {
+      "redline": {
         "type": [
           "object",
           "null"
@@ -71,11 +71,11 @@
       }
     },
     "required": [
-      "review"
+      "redline"
     ],
     "additionalProperties": false
   },
   "supersededBy": [
-    "review.changed"
+    "redline.changed"
   ]
 }

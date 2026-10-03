@@ -50,15 +50,15 @@ async function open(browser, { phone = false } = {}) {
   );
   const page = await context.newPage();
   const problems = watch(page);
-  await page.goto(`${BASE_URL}/workshop/design/review`, { waitUntil: "domcontentloaded" });
-  await until(() => page.evaluate(() => Boolean(document.querySelector("review-editor")?.shadowRoot?.querySelector(".page"))));
+  await page.goto(`${BASE_URL}/workshop/design/redline`, { waitUntil: "domcontentloaded" });
+  await until(() => page.evaluate(() => Boolean(document.querySelector("redline-editor")?.shadowRoot?.querySelector(".page"))));
   return { context, page, problems };
 }
 
-const inEditor = (page, fn, arg) => page.evaluate(([fn, arg]) => new Function("root", "arg", `return (${fn})(root, arg)`)(document.querySelector("review-editor").shadowRoot, arg), [fn.toString(), arg]);
+const inEditor = (page, fn, arg) => page.evaluate(([fn, arg]) => new Function("root", "arg", `return (${fn})(root, arg)`)(document.querySelector("redline-editor").shadowRoot, arg), [fn.toString(), arg]);
 
 const pasteFixture = async (page) => {
-  await page.locator("review-editor button", { hasText: "Paste" }).click();
+  await page.locator("redline-editor button", { hasText: "Paste" }).click();
   await until(() => inEditor(page, (root) => Boolean(root.querySelector("article h1"))));
 };
 
@@ -98,7 +98,7 @@ const comment = async (page, phrase, text) => {
 };
 
 for (const engine of ENGINES) {
-  describe(`review-editor in ${engine.name}`, { timeout: 120000 }, () => {
+  describe(`redline-editor in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -147,14 +147,14 @@ for (const engine of ENGINES) {
         assert.equal(await marked(page), PHRASE, "the fragment is marked the moment the box opens");
         assert.ok(await inEditor(page, (root) => root.activeElement?.localName === "textarea"), "the box takes the keys");
         await page.keyboard.type("needs work");
-        await until(() => page.evaluate(() => (localStorage.getItem("review") ?? "").includes("needs work")));
+        await until(() => page.evaluate(() => (localStorage.getItem("redline") ?? "").includes("needs work")));
 
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await marked(page)) === PHRASE);
-        await page.locator("review-editor mark").first().click();
+        await page.locator("redline-editor mark").first().click();
         await until(async () => (await popoverText(page)) === "needs work");
 
-        await page.locator("review-editor button.remove").click();
+        await page.locator("redline-editor button.remove").click();
         await until(() => inEditor(page, (root) => Boolean(root.querySelector("mark.removing")) && root.querySelector(".bar").textContent.includes("Comment removed")));
         await until(async () => (await marked(page)) === "");
         assert.ok(await inEditor(page, (root) => root.querySelector(".count").textContent === "0 comments"));
@@ -170,7 +170,7 @@ for (const engine of ENGINES) {
         await pasteFixture(page);
         await comment(page, PHRASE, "Say an app too.");
         await comment(page, "The bus", "Name the module.");
-        await page.locator("review-editor button.copy").click();
+        await page.locator("redline-editor button.copy").click();
         await until(() => inEditor(page, (root) => root.querySelector("button.copy").textContent.trim() === "Copied"));
         const copied = await page.evaluate(() => window.__copied);
         assert.equal(
@@ -186,7 +186,7 @@ for (const engine of ENGINES) {
     test("in the phone preview the marks show and a touch opens no comment", async () => {
       const { context, page, problems } = await open(browser, { phone: true });
       try {
-        await page.evaluate((text) => localStorage.setItem("review", text), JSON.stringify({ text: TEXT, comments: [{ id: "01ARZ3NDEKTSV4RRFFQ69G5FA0", start: 12, end: 29, quote: PHRASE, text: "x" }] }));
+        await page.evaluate((text) => localStorage.setItem("redline", text), JSON.stringify({ text: TEXT, comments: [{ id: "01ARZ3NDEKTSV4RRFFQ69G5FA0", start: 12, end: 29, quote: PHRASE, text: "x" }] }));
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await marked(page)) === PHRASE);
         assert.equal(await page.evaluate(() => document.documentElement.dataset.viewport), "phone");
@@ -213,12 +213,12 @@ for (const engine of ENGINES) {
       const { context, page, problems } = await open(browser);
       try {
         await pasteFixture(page);
-        await page.locator("review-editor button", { hasText: "New text" }).click();
+        await page.locator("redline-editor button", { hasText: "New text" }).click();
         await until(() => inEditor(page, (root) => Boolean(root.querySelector(".drop")) && root.textContent.includes("Text cleared")));
-        await page.locator("review-editor button.undo").click();
+        await page.locator("redline-editor button.undo").click();
         await until(() => inEditor(page, (root) => Boolean(root.querySelector("article h1"))));
-        await page.locator("review-editor button", { hasText: "New text" }).click();
-        await until(() => page.evaluate(() => !localStorage.getItem("review")));
+        await page.locator("redline-editor button", { hasText: "New text" }).click();
+        await until(() => page.evaluate(() => !localStorage.getItem("redline")));
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(() => inEditor(page, (root) => Boolean(root.querySelector(".drop"))));
         assert.deepEqual(problems, []);

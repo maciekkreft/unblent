@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user pasted, commented, removed a comment or cleared: the whole review. An empty text with no comments means there is no text under review.",
+  "description": "The user pasted, commented, removed a comment or cleared: the whole redline. An empty text with no comments means there is no text under review.",
   "type": "object",
   "properties": {
     "text": {

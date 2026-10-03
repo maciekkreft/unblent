@@ -109,7 +109,7 @@ for (const engine of ENGINES) {
       assert.deepEqual(
         rows.map((r) => r.path),
         ["/workshop/design/tokens", "/workshop/design/contracts", "/workshop/design/components", "/workshop/design/books", "/workshop/design/conversations", "/workshop/design/dock",
-         "/workshop/design/list-then-item", "/workshop/design/llm", "/workshop/design/notes", "/workshop/design/review", "/workshop/design/session", "/workshop/design/settings", "/workshop/design/subject", "/workshop/design/trace", "/workshop/design/work-desk", "/", "/workshop/apps/review"],
+         "/workshop/design/list-then-item", "/workshop/design/llm", "/workshop/design/notes", "/workshop/design/redline", "/workshop/design/session", "/workshop/design/settings", "/workshop/design/subject", "/workshop/design/trace", "/workshop/design/work-desk", "/", "/workshop/apps/redline"],
       );
       assert.equal(rows.find((r) => r.path === "/workshop/design/settings").shown, null, "the current page has no hide control");
       const startNav = await navLinks(page);

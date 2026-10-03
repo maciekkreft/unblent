@@ -8,7 +8,7 @@ import { Validator } from "@cfworker/json-schema";
 import { machine, parseMarkdown, pieces, trimRange, overlaps, toCriticMarkup, marks, normaliseText } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SAVED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "review.saved.json"), "utf8"));
+const SAVED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "redline.saved.json"), "utf8"));
 // The document this app was made to review, read as data: whatever it says, every run
 // the parser makes of it must be an exact piece of it.
 const ARCHITECTURE = readFileSync(resolve(HERE, "..", "..", "..", "architecture.md"), "utf8");
@@ -127,9 +127,9 @@ test("the copy is the text with each comment in CriticMarkup, nothing else chang
 });
 
 test("the comment being written is painted in its place among the saved ones", () => {
-  const review = { text: "x", comments: [{ id: "a", start: 0, end: 2, text: "old" }, { id: "c", start: 9, end: 10, text: "" }] };
-  assert.deepEqual(marks({ review, draft: { id: "b", start: 4, end: 6, text: "" } }).map((m) => m.id), ["a", "b", "c"]);
-  assert.equal(marks({ review, draft: { id: "a", start: 0, end: 2, text: "new" } })[0].text, "new");
+  const redline = { text: "x", comments: [{ id: "a", start: 0, end: 2, text: "old" }, { id: "c", start: 9, end: 10, text: "" }] };
+  assert.deepEqual(marks({ redline, draft: { id: "b", start: 4, end: 6, text: "" } }).map((m) => m.id), ["a", "b", "c"]);
+  assert.equal(marks({ redline, draft: { id: "a", start: 0, end: 2, text: "new" } })[0].text, "new");
 });
 
 // --- The machine ------------------------------------------------------------------------
@@ -140,15 +140,15 @@ const TEXT = "# Title\n\nA book was a path through the box.";
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const recorded = [];
 
-async function editor(review = null) {
+async function editor(redline = null) {
   const clock = new SimulatedClock();
   let n = 0;
   const actor = createActor(machine, {
-    input: { ask: () => Promise.resolve({ review }), mint: () => IDS[n++], undoMs: UNDO_MS },
+    input: { ask: () => Promise.resolve({ redline }), mint: () => IDS[n++], undoMs: UNDO_MS },
     clock,
   });
   const emitted = [];
-  actor.on("review.saved", (e) => {
+  actor.on("redline.saved", (e) => {
     emitted.push(e);
     recorded.push(e);
   });
@@ -165,14 +165,14 @@ test("nothing under review: a paste saves the text and shows it", async () => {
   actor.send({ type: "_pasted", text: "   \n" });
   assert.equal(emitted.length, 0, "an empty paste is no text");
   actor.send({ type: "_pasted", text: "# T\r\nbody" });
-  assert.ok(state().matches("reviewing"));
-  assert.deepEqual(emitted.at(-1), { type: "review.saved", text: "# T\nbody", comments: [] });
+  assert.ok(state().matches("marking"));
+  assert.deepEqual(emitted.at(-1), { type: "redline.saved", text: "# T\nbody", comments: [] });
 });
 
 test("a selection opens a comment; typing saves it at a throttle, one save per window", async () => {
   const { actor, emitted, clock, state, ctx } = await editor({ text: TEXT, comments: [] });
   actor.send({ type: "_selected", start: at("book").start - 1, end: at("book").end + 1 });
-  assert.ok(state().matches({ reviewing: "commenting" }));
+  assert.ok(state().matches({ marking: "commenting" }));
   assert.deepEqual([ctx().draft.start, ctx().draft.end, ctx().draft.quote], [at("book").start, at("book").end, "book"]);
   actor.send({ type: "_typed", text: "s" });
   actor.send({ type: "_typed", text: "sa" });
@@ -184,7 +184,7 @@ test("a selection opens a comment; typing saves it at a throttle, one save per w
   assert.equal(emitted[0].comments[0].quote, "book");
   actor.send({ type: "_closed" });
   assert.equal(emitted.length, 1, "closing what was saved saves nothing more");
-  assert.ok(state().matches({ reviewing: "idle" }));
+  assert.ok(state().matches({ marking: "idle" }));
 });
 
 test("the first key typed over a selection opens the comment with that key in it", async () => {
@@ -198,9 +198,9 @@ test("a whitespace-only selection, or one over a comment, opens nothing", async 
   const comments = [{ id: IDS[2], ...at("book"), quote: "book", text: "x" }];
   const { actor, state } = await editor({ text: TEXT, comments });
   actor.send({ type: "_selected", start: 7, end: 9 });
-  assert.ok(state().matches({ reviewing: "idle" }));
+  assert.ok(state().matches({ marking: "idle" }));
   actor.send({ type: "_selected", start: at("A book").start, end: at("was").end });
-  assert.ok(state().matches({ reviewing: "idle" }), "crosses the comment on book");
+  assert.ok(state().matches({ marking: "idle" }), "crosses the comment on book");
 });
 
 test("closing an empty comment leaves no comment, and removes one emptied", async () => {
@@ -230,7 +230,7 @@ test("removing a comment waits out the undo window; undo keeps it", async () => 
   const { actor, emitted, clock, ctx, state } = await editor({ text: TEXT, comments });
   actor.send({ type: "_opened", id: IDS[2] });
   actor.send({ type: "_remove", id: IDS[2] });
-  assert.ok(state().matches({ reviewing: "idle" }), "the popover closes");
+  assert.ok(state().matches({ marking: "idle" }), "the popover closes");
   assert.ok(ctx().discarding.has(IDS[2]));
   actor.send({ type: "_opened", id: IDS[2] });
   assert.equal(ctx().discarding.size, 0, "a click on the dimmed mark is the undo");
@@ -246,22 +246,22 @@ test("New text empties the page, and clears the text only when the undo window e
   actor.send({ type: "_clear" });
   assert.ok(state().matches("clearing"));
   actor.send({ type: "_undoClear" });
-  assert.ok(state().matches("reviewing"));
+  assert.ok(state().matches("marking"));
   clock.increment(UNDO_MS);
   assert.equal(emitted.length, 0);
   actor.send({ type: "_clear" });
   clock.increment(UNDO_MS);
   assert.ok(state().matches("empty"));
-  assert.deepEqual(emitted.at(-1), { type: "review.saved", text: "", comments: [] });
+  assert.deepEqual(emitted.at(-1), { type: "redline.saved", text: "", comments: [] });
 });
 
 test("another tab's change is followed, and a clear there empties the page", async () => {
   const { actor, state, ctx } = await editor();
-  actor.send({ type: "review.changed", review: { text: TEXT, comments: [] } });
-  assert.ok(state().matches("reviewing"));
-  actor.send({ type: "review.changed", review: null });
+  actor.send({ type: "redline.changed", redline: { text: TEXT, comments: [] } });
+  assert.ok(state().matches("marking"));
+  actor.send({ type: "redline.changed", redline: null });
   assert.ok(state().matches("empty"));
-  assert.equal(ctx().review, null);
+  assert.equal(ctx().redline, null);
 });
 
 test("a refused paste is said for a moment", async () => {
@@ -272,7 +272,7 @@ test("a refused paste is said for a moment", async () => {
   assert.ok(state().matches({ empty: "idle" }));
 });
 
-test("every review.saved matches its schema", () => {
+test("every redline.saved matches its schema", () => {
   assert.ok(recorded.length > 0);
   for (const { type, ...rest } of recorded) {
     const result = new Validator(SAVED, "2020-12").validate(rest);

@@ -3,7 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
 import { machine, parseMarkdown, pieces, marks, toCriticMarkup } from "./machine.js";
-import saved from "./events/review.saved.json" with { type: "json" };
+import saved from "./events/redline.saved.json" with { type: "json" };
 
 // The gap between a fragment's last line and the comment box under it, in px; the
 // popover is placed in JS, so the value is not a style (7.4 covers styles).
@@ -30,7 +30,7 @@ class ActorController {
     const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, undoMs },
-      events: { "review.saved": saved },
+      events: { "redline.saved": saved },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -49,7 +49,7 @@ class ActorController {
   }
 }
 
-class ReviewEditor extends LitElement {
+class RedlineEditor extends LitElement {
   static styles = css`
     :host {
       display: flex;
@@ -213,7 +213,7 @@ class ReviewEditor extends LitElement {
       border-radius: var(--radius-md);
       box-shadow: var(--shadow-card);
     }
-    /* Commenting is for a mouse (the Review app is a desk tool); a phone reads. */
+    /* Commenting is for a mouse (the Redline app is a desk tool); a phone reads. */
     @media (pointer: coarse) {
       .popover {
         display: none;
@@ -353,7 +353,7 @@ class ReviewEditor extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
-    if (snapshot.matches("reviewing")) return this.#reviewing(snapshot);
+    if (snapshot.matches("marking")) return this.#marking(snapshot);
     return this.#empty(snapshot);
   }
 
@@ -408,18 +408,18 @@ class ReviewEditor extends LitElement {
 
   // --- The text under review ----------------------------------------------------------
 
-  #reviewing(snapshot) {
+  #marking(snapshot) {
     const { context } = snapshot;
     // Parsed once per text, not per keystroke in the comment box.
-    if (context.review.text !== this.#source) {
-      this.#source = context.review.text;
+    if (context.redline.text !== this.#source) {
+      this.#source = context.redline.text;
       this.#blocks = parseMarkdown(this.#source);
     }
     this.#marks = marks(context);
     this.#context = context;
-    const count = context.review.comments.length;
+    const count = context.redline.comments.length;
     const removing = [...context.discarding].at(-1);
-    const draft = snapshot.matches({ reviewing: "commenting" }) ? context.draft : null;
+    const draft = snapshot.matches({ marking: "commenting" }) ? context.draft : null;
     return html`
       <div class="bar">
         <button class="quiet" @click=${() => this.#actor.send({ type: "_clear" })}>New text</button>
@@ -449,7 +449,7 @@ class ReviewEditor extends LitElement {
   #context = null;
 
   #popover(draft, context) {
-    const saved = context.review.comments.some((c) => c.id === draft.id);
+    const saved = context.redline.comments.some((c) => c.id === draft.id);
     return html`
       <div class="popover" @mousedown=${(e) => e.target.localName !== "textarea" && e.preventDefault()}>
         <textarea
@@ -647,7 +647,7 @@ class ReviewEditor extends LitElement {
   }
 
   #copy() {
-    const { review } = this.#context;
+    const { redline } = this.#context;
     const flash = (label) => {
       this.#copied = label;
       this.requestUpdate();
@@ -657,7 +657,7 @@ class ReviewEditor extends LitElement {
         this.requestUpdate();
       }, COPIED_MS);
     };
-    const write = navigator.clipboard?.writeText?.(toCriticMarkup(review.text, marks(this.#context)));
+    const write = navigator.clipboard?.writeText?.(toCriticMarkup(redline.text, marks(this.#context)));
     if (!write) {
       flash("Could not copy");
       return;
@@ -684,7 +684,7 @@ class ReviewEditor extends LitElement {
       this.#focused = "drop";
       return;
     }
-    const draft = snapshot?.matches({ reviewing: "commenting" }) ? snapshot.context.draft : null;
+    const draft = snapshot?.matches({ marking: "commenting" }) ? snapshot.context.draft : null;
     if (!draft) {
       if (this.#focused !== null && this.#focused !== "drop") this.#focused = null;
       if (this.#focused === "drop") {
@@ -732,4 +732,4 @@ class ReviewEditor extends LitElement {
   }
 }
 
-customElements.define("review-editor", ReviewEditor);
+customElements.define("redline-editor", RedlineEditor);
