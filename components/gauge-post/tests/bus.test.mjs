@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-// The kit (10): gauge-post with its two partners, gauge and llm, real machines on the
-// real bus. llm's server is faked through its inputs, so nothing reaches Jev.
+// The kit (10): gauge-post with its three partners, gauge, llm and scorings, real
+// machines on the real bus. llm's server is faked through its inputs, so nothing reaches Jev.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
 
@@ -19,9 +19,16 @@ const PICTURE = {
 
 test("a Score goes through llm: decide in one request and comes back as readings on every card", async () => {
   const sent = [];
-  const { actors, unwire } = await wire(["gauge", "llm", "gauge-post"], {
+  let kept = null;
+  const { actors, unwire } = await wire(["gauge", "llm", "scorings", "gauge-post"], {
     gauge: { stored: null, save: () => {}, now: () => 42 },
-    "gauge-post": { recall: () => "A post about a practice I return to every week.", remember: () => {} },
+    scorings: { stored: null, save: (v) => (kept = v) },
+    "gauge-post": {
+      recall: () => "A post about a practice I return to every week.",
+      remember: () => {},
+      mint: () => "01K6TEST000000000000000S01",
+      now: () => 43,
+    },
     llm: {
       session: () => Promise.resolve({ userId: "u1", registrationOpen: true }),
       read: () => Promise.resolve(PICTURE),
@@ -45,6 +52,12 @@ test("a Score goes through llm: decide in one request and comes back as readings
     assert.deepEqual(post.getSnapshot().context.last, { tools: 5, questions: 25, ms: 310, inputTokens: 900 });
     const gauges = post.getSnapshot().context.gauges;
     assert.ok(gauges.every((g) => g.reading && g.reading.at === 42 && g.reading.band), "every card has a banded reading");
+    await until(() => kept != null);
+    const [scoring] = JSON.parse(kept);
+    assert.equal(scoring.id, "01K6TEST000000000000000S01");
+    assert.equal(scoring.at, 43);
+    assert.equal(scoring.gauges.length, 5, "the scoring landed in scorings with every tool");
+    assert.ok(scoring.gauges.every((g) => g.direct === 1 && g.label && g.questions.length === 4));
   } finally {
     unwire();
   }

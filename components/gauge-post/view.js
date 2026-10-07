@@ -1,6 +1,7 @@
 import { LitElement, html, svg, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, band, leaning, errorText, blocked, short, headline } from "./machine.js";
+import { ulid } from "ulid";
+import { machine, band, leaning, errorText, blocked } from "./machine.js";
 import read from "./events/gauge.read.json" with { type: "json" };
 import scored from "./events/post.scored.json" with { type: "json" };
 
@@ -35,7 +36,7 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), recall, remember },
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload), recall, remember, mint: ulid, now: () => Date.now() },
       events: { "gauge.read": read, "post.scored": scored },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -314,8 +315,8 @@ class GaugePost extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loadingGauges") || snapshot.matches("loadingLlm")) return nothing;
-    const { text, gauges, last, error } = snapshot.context;
+    if (!snapshot || snapshot.hasTag("loading")) return nothing;
+    const { text, last, error, shown } = snapshot.context;
     const scoring = snapshot.matches("scoring");
     const why = blocked(snapshot.context);
     let line = nothing;
@@ -339,28 +340,26 @@ class GaugePost extends LitElement {
           </button>
           ${line}
         </div>
-        <div class="cards">${gauges.map((g) => this.#card(g))}</div>
+        ${shown
+          ? html`<div class="cards">${shown.gauges.filter((g) => g.direct != null || g.questions.length).map((g) => this.#card(g))}</div>`
+          : html`<p class="unscored">Nothing scored yet. Paste a post and press Score.</p>`}
       </div>
     `;
   }
 
+  // One gauge of the scoring on the stage, as it was when it was scored.
   #card(g) {
-    const r = g.reading;
-    const asks = g.question.trim() !== "";
-    const answers = new Map((r?.answers ?? []).map((a) => [a.id, a.p]));
-    const rows = g.questions.filter((q) => answers.has(q.id));
-    let top;
-    if (!asks) top = html`<p class="unscored">Add the tool's question to score it</p>`;
-    else if (!r || r.score == null) top = html`<p class="unscored">Not scored yet</p>`;
-    else top = this.#dial(r.score);
     return html`
       <section class="card" data-id=${g.id}>
-        <div class="head"><h3>${g.name || "Untitled"}</h3>${top}</div>
-        ${asks ? html`<p class="headline">${headline(g)}</p>` : nothing}
-        ${rows.length
+        <div class="head">
+          <h3>${g.name || "Untitled"}</h3>
+          ${g.direct != null ? this.#dial(g.direct) : html`<p class="unscored">Add the tool's question to score it</p>`}
+        </div>
+        ${g.direct != null ? html`<p class="headline">${g.label}</p>` : nothing}
+        ${g.questions.length
           ? html`<div class="rows">
               <span class="why"><span>Why, in Jev's reading</span><span class="scale"><span>No</span><span>Yes</span></span></span>
-              ${rows.map((q) => this.#row(short(q), answers.get(q.id)))}
+              ${g.questions.map((q) => this.#row(q.label, q.p))}
             </div>`
           : nothing}
       </section>

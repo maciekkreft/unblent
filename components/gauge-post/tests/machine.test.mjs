@@ -5,10 +5,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, band, leaning, errorText, payload, readings, blocked } from "../machine.js";
+import { machine, band, leaning, errorText, payload, readings, blocked, record, short, headline } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const READ = JSON.parse(readFileSync(resolve(HERE, "..", "events", "gauge.read.json"), "utf8"));
+const SCORED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "post.scored.json"), "utf8"));
 // The decide query's schema lives with its answerer; read, never imported (11.2).
 const DECIDE = JSON.parse(readFileSync(resolve(HERE, "..", "..", "llm", "queries", "decide.json"), "utf8"));
 const valid = (schema, value) => {
@@ -99,22 +100,32 @@ test("Score is blocked with a reason until signed in, keyed and given a post", (
 });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async (decide) => {
+const S1 = "01K6TEST000000000000000S01";
+const S2 = "01K6TEST000000000000000S02";
+const NEW = "01K6TEST000000000000000S09";
+const kept = (id, text) => ({ id, at: 7, text, gauges: [{ id: G, name: "Clarity", label: "Is it clear", direct: 0.5, questions: [] }] });
+
+const start = async (decide, held = []) => {
   const kept = [];
   const asks = [];
   const ask = (target, name, p) => {
     asks.push(`${target}: ${name}`);
     if (target === "gauge") return Promise.resolve({ gauges: GAUGES });
+    if (target === "scorings" && name === "list") return Promise.resolve({ scorings: held.map(({ id, at }) => ({ id, at, text: "", gauges: [] })) });
+    if (target === "scorings") return Promise.resolve({ scoring: held.find((s) => s.id === p.id) ?? null });
     if (name === "read") return Promise.resolve({ signedIn: true, jev: { keySet: true } });
     return decide(p);
   };
-  const actor = createActor(machine, { input: { ask, recall: () => "Kept post", remember: (t) => kept.push(t) } });
+  const actor = createActor(machine, {
+    input: { ask, recall: () => "Kept post", remember: (t) => kept.push(t), mint: () => NEW, now: () => 99 },
+  });
   const emitted = [];
+  const scored = [];
   actor.on("gauge.read", (e) => emitted.push(e));
+  actor.on("post.scored", (e) => scored.push(e));
   actor.start();
-  await flush();
-  await flush();
-  return { actor, emitted, kept, asks };
+  for (let i = 0; i < 5; i++) await flush();
+  return { actor, emitted, scored, kept, asks };
 };
 
 test("a Score asks once, announces the readings and keeps the counts", async () => {
@@ -149,4 +160,79 @@ test("llm.changed decides whether Score can run", async () => {
   assert.equal(blocked(actor.getSnapshot().context), "Add your Jev key in Settings.");
   actor.send({ type: "_score" });
   assert.ok(actor.getSnapshot().matches("ready"), "a blocked Score does nothing");
+});
+
+test("the short names: a question's own or its first clause; the headline's own or its first clause", () => {
+  assert.equal(short({ text: "One idea, or many?" }), "One idea");
+  assert.equal(short({ text: "x", label: " Mine " }), "Mine");
+  assert.equal(short({ text: " " }), "Untitled question");
+  assert.equal(headline({ question: "Is it clear? Or not" }), "Is it clear");
+  assert.equal(headline({ question: "Q", label: "Clear" }), "Clear");
+  assert.equal(headline({ question: "" }), "Untitled tool");
+});
+
+test("a record holds what the cards show, and drops answers whose question or tool is gone", () => {
+  const r = record({
+    id: NEW,
+    at: 5,
+    text: "Post",
+    gauges: GAUGES,
+    answers: [
+      { id: `${G}/${Q1}`, p: 0.9 },
+      { id: `${G}/direct`, p: 0.3 },
+      { id: `${G}/01K6TEST000000000000000Q99`, p: 0.1 },
+      { id: `01K6TEST000000000000000G99/${Q1}`, p: 0.1 },
+      { id: `${H}/${Q2}`, p: 0.5 },
+    ],
+  });
+  assert.deepEqual(r, {
+    id: NEW,
+    at: 5,
+    text: "Post",
+    gauges: [
+      { id: G, name: "Clarity", label: "Is it clear", direct: 0.3, questions: [{ id: Q1, label: "One idea?", p: 0.9 }] },
+      { id: H, name: "Empty headline", label: "Untitled tool", direct: null, questions: [{ id: Q2, label: "Short?", p: 0.5 }] },
+    ],
+  });
+  valid(SCORED, r);
+});
+
+test("a Score keeps a scoring and puts it on the stage", async () => {
+  const { actor, scored } = await start(() => Promise.resolve({ answers: [{ id: `${G}/direct`, p: 0.8 }], inputTokens: 1, ms: 1 }));
+  assert.equal(actor.getSnapshot().context.shown, null, "nothing is on the stage before any scoring");
+  actor.send({ type: "_score" });
+  await flush();
+  assert.equal(scored.length, 1);
+  const { type, ...sent } = scored[0];
+  valid(SCORED, sent);
+  assert.equal(sent.id, NEW);
+  assert.equal(sent.at, 99);
+  assert.equal(sent.text, "Kept post");
+  assert.deepEqual(actor.getSnapshot().context.shown, sent);
+  actor.send({ type: "scoring.changed", scorings: [{ id: NEW, at: 99, text: "", gauges: [] }] });
+  assert.deepEqual(actor.getSnapshot().context.shown, sent, "its own announcement keeps it on the stage");
+});
+
+test("the stage opens on the newest scoring; a pick brings another back with its post", async () => {
+  const { actor, kept: remembered } = await start(() => Promise.resolve({ error: "busy" }), [kept(S2, "Newer"), kept(S1, "Older")]);
+  assert.ok(actor.getSnapshot().matches("ready"));
+  assert.equal(actor.getSnapshot().context.shown.id, S2);
+  assert.equal(actor.getSnapshot().context.text, "Kept post", "loading leaves the box as it was");
+  actor.send({ type: "scoring.selected", id: S1 });
+  assert.ok(actor.getSnapshot().matches("recalling"));
+  await flush();
+  assert.equal(actor.getSnapshot().context.shown.id, S1);
+  assert.equal(actor.getSnapshot().context.text, "Older");
+  assert.deepEqual(remembered, ["Older"], "the recalled post survives a reload");
+  actor.send({ type: "scoring.changed", scorings: [{ id: S2, at: 7, text: "", gauges: [] }] });
+  assert.equal(actor.getSnapshot().context.shown, null, "a deleted scoring leaves the stage");
+});
+
+test("a pick while scoring is ignored", async () => {
+  let finish;
+  const { actor } = await start(() => new Promise((r) => (finish = r)), [kept(S1, "Older")]);
+  actor.send({ type: "_score" });
+  actor.send({ type: "scoring.selected", id: S1 });
+  assert.ok(actor.getSnapshot().matches("scoring"));
+  finish({ answers: [], inputTokens: 1, ms: 1 });
 });

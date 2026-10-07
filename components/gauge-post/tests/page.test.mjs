@@ -2,10 +2,11 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // The gauge stem page (8): Score sends the post and every question in one request and
-// draws a dial, a band word and a leaning per answer on each card. Jev is never called:
+// draws a dial, a band word and a leaning per answer on each card; every Score is kept in
+// History, where a pick brings it back and a delete waits out the undo window. Jev is never called:
 // the page's request to its own server is answered here with canned answers.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, forgeCookie, signedIn, shortUndo } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -69,6 +70,63 @@ for (const engine of ENGINES) {
         // The list in the dock shows the same band word as the card.
         const listBands = await page.locator("gauge-list .band").allTextContents();
         assert.deepEqual(listBands, words);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("History keeps every Score, brings one back, and deletes with Undo", async () => {
+      const cookie = forgeCookie("gauge-history");
+      const res = await fetch(`${BASE_URL}/api/llm`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+        body: JSON.stringify({ jevKey: "not-a-real-key" }),
+      });
+      assert.equal(res.status, 200);
+      const context = await browser.newContext();
+      context.setDefaultTimeout(3000);
+      try {
+        await signedIn(context, cookie);
+        // Long enough to press Undo, short enough to wait out.
+        await shortUndo(context, 700);
+        // The first Score reads high everywhere, the second low, so the cards tell them apart.
+        let calls = 0;
+        await context.route("**/api/llm/decide", (route) => {
+          const p = calls++ === 0 ? 0.9 : 0.1;
+          const answers = route.request().postDataJSON().questions.map((q) => ({ id: q.id, p }));
+          route.fulfill({ json: { answers, inputTokens: 10, ms: 5 } });
+        });
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/gauge`, { waitUntil: "domcontentloaded" });
+        const stage = page.locator("gauge-post .page");
+        await until(async () => (await stage.textContent()).includes("Nothing scored yet"));
+        assert.equal(await page.locator("scoring-list .empty").textContent(), "No scores yet");
+        const box = page.locator("gauge-post textarea");
+        const score = page.locator("gauge-post button");
+        const rows = page.locator("scoring-list .row");
+        for (const [i, post] of ["First post\nmore", "Second post"].entries()) {
+          await box.fill(post);
+          await until(() => score.isEnabled());
+          await score.click();
+          await until(async () => (await rows.count()) === i + 1);
+        }
+        assert.match(await rows.nth(0).textContent(), /Second post/);
+        assert.equal(await rows.nth(0).getAttribute("aria-selected"), "true", "the newest is the one on the stage");
+        assert.deepEqual([...new Set(await page.locator("gauge-post .bandword").allTextContents())], ["Low"]);
+        await rows.nth(1).click();
+        await until(async () => (await box.inputValue()) === "First post\nmore");
+        await until(async () => (await rows.nth(1).getAttribute("aria-selected")) === "true");
+        assert.deepEqual([...new Set(await page.locator("gauge-post .bandword").allTextContents())], ["High"]);
+        await rows.nth(1).hover();
+        await rows.nth(1).locator(".bin").click();
+        await page.locator("scoring-list .undo").click();
+        assert.equal(await page.locator("scoring-list .undo").count(), 0);
+        await rows.nth(1).hover();
+        await rows.nth(1).locator(".bin").click();
+        await until(async () => (await rows.count()) === 1);
+        await until(async () => (await stage.textContent()).includes("Nothing scored yet"));
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

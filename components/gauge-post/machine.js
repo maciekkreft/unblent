@@ -1,13 +1,16 @@
 import { setup, assign, emit, fromPromise } from "xstate";
 
 // The stage of the Gauge app (a view, 3.1): the post, the Score button and one card per
-// gauge. It owns only UI state — the post being typed, kept on the device (3.1), and how
-// the last Score went — and points at two facts: `gauge` for the gauges and their
-// readings, `llm` for whether Jev can be asked and for the asking itself. A Score sends
-// every question of every gauge, with the post, in one `llm: decide`, and announces
-// Jev's answers as gauge.read (4.3, fifth rule); `gauge` scores them and announces the
-// cards' new picture as gauge.changed. The ask and the device storage arrive through
-// input, so the machine is a pure definition importable in Node.
+// gauge. It owns only UI state — the post being typed, kept on the device (3.1), how the
+// last Score went, and which scoring is on the stage — and points at three facts: `gauge`
+// for the gauges, `llm` for whether Jev can be asked and for the asking itself, and
+// `scorings` for the scorings kept. A Score sends every question of every gauge, with the
+// post, in one `llm: decide`, and announces Jev's answers twice (4.3, fifth rule): as
+// gauge.read, which keeps each tool's last reading for the Tools list, and as post.scored,
+// the whole record `scorings` keeps. The cards draw that record, not the gauges, so an
+// old scoring picked in History reads as it was. The ask, the clock, the id minting and
+// the device storage arrive through input, so the machine is a pure definition
+// importable in Node.
 
 // The band a score falls in. `gauge` keeps the same rule for the list; components never
 // import each other (11.2), so the two copies are a known duplication.
@@ -92,6 +95,24 @@ export const blocked = (context) => {
   return null;
 };
 
+// The record of one Score, self-contained so a later edit of a tool never changes it:
+// each asked gauge's name and short names as the card showed them, its headline answer,
+// and the answers to questions it still has.
+export const record = ({ id, at, text, gauges, answers }) => ({
+  id,
+  at,
+  text,
+  gauges: readings(answers).flatMap((r) => {
+    const g = gauges.find((x) => x.id === r.id);
+    if (!g) return [];
+    const questions = r.answers.flatMap((a) => {
+      const q = g.questions.find((x) => x.id === a.id);
+      return q ? [{ id: q.id, label: short(q), p: a.p }] : [];
+    });
+    return [{ id: g.id, name: g.name, label: headline(g), direct: r.direct, questions }];
+  }),
+});
+
 const adoptLlm = (picture) => ({ signedIn: picture?.signedIn === true, keySet: picture?.jev?.keySet === true });
 
 // Typing keeps the post on the device; after a failure it also clears the error, so
@@ -108,6 +129,8 @@ export const machine = setup({
     gauges: fromPromise(({ input }) => input.ask("gauge", "read", {})),
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
     decide: fromPromise(({ input }) => input.ask("llm", "decide", input.payload)),
+    scorings: fromPromise(({ input }) => input.ask("scorings", "list", {})),
+    scoring: fromPromise(({ input }) => input.ask("scorings", "read", { id: input.id })),
   },
   guards: {
     canScore: ({ context }) => blocked(context) === null,
@@ -117,18 +140,23 @@ export const machine = setup({
   meta: {
     description:
       "The stage of the Gauge app: a box for the text to judge, a Score button, and one card " +
-      "per gauge showing its score and how each question was answered. Score sends every " +
-      "question of every gauge with the text in one request to Jev, and the cards update from " +
-      "the answers. The text being typed is kept on this device. When Score cannot run, for " +
-      "example while signed out or without a Jev key, the line under the button says why.",
+      "per gauge. A card's dial shows Jev's answer to the tool's own question, as High, Mixed " +
+      "or Low with no number, and its rows show how Jev answered each of the tool's other " +
+      "questions, which explain the reading. Score sends every question of every gauge with " +
+      "the text in one request to Jev and keeps the result as a scoring; the stage shows the " +
+      "newest scoring, or the one picked in History, whose post comes back into the box. The " +
+      "text being typed is kept on this device. When Score cannot run, for example while " +
+      "signed out or without a Jev key, the line under the button says why.",
     kind: "view",
     emits: ["gauge.read", "post.scored"],
     attributes: ["height"],
-    asks: ["gauge: read", "llm: read", "llm: decide"],
+    asks: ["gauge: read", "llm: read", "llm: decide", "scorings: list", "scorings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     remember: input.remember,
+    mint: input.mint,
+    now: input.now,
     text: input.recall() ?? "",
     gauges: [],
     signedIn: false,
@@ -136,10 +164,13 @@ export const machine = setup({
     // The last Score that came back: how many tools and questions went, and Jev's time.
     last: null,
     error: null,
+    // The scoring on the stage, in full, or null before any.
+    shown: null,
   }),
   initial: "loadingGauges",
   states: {
     loadingGauges: {
+      tags: "loading",
       invoke: {
         src: "gauges",
         input: ({ context }) => ({ ask: context.ask }),
@@ -148,15 +179,62 @@ export const machine = setup({
       },
     },
     loadingLlm: {
+      tags: "loading",
       invoke: {
         src: "llm",
         input: ({ context }) => ({ ask: context.ask }),
-        onDone: { target: "ready", actions: assign(({ event }) => adoptLlm(event.output)) },
+        onDone: { target: "loadingScorings", actions: assign(({ event }) => adoptLlm(event.output)) },
+        onError: "loadingScorings",
+      },
+    },
+    // The stage opens on the newest scoring, as History marks it.
+    loadingScorings: {
+      tags: "loading",
+      invoke: {
+        src: "scorings",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => Boolean(event.output.scorings?.length), target: "loadingShown", actions: assign({ shown: ({ event }) => ({ id: event.output.scorings[0].id }) }) },
+          { target: "ready" },
+        ],
         onError: "ready",
       },
     },
+    loadingShown: {
+      tags: "loading",
+      invoke: {
+        src: "scoring",
+        input: ({ context }) => ({ ask: context.ask, id: context.shown.id }),
+        onDone: { target: "ready", actions: assign({ shown: ({ event }) => event.output.scoring ?? null }) },
+        onError: { target: "ready", actions: assign({ shown: null }) },
+      },
+    },
     ready: {
-      on: { ...typing(undefined), _score: { guard: "canScore", target: "scoring" } },
+      on: { ...typing(undefined), _score: { guard: "canScore", target: "scoring" }, "scoring.selected": "recalling" },
+    },
+    // A scoring picked in History: its record comes onto the stage and its post into the
+    // box, so it can be read in full or scored again.
+    recalling: {
+      on: {
+        ...typing(undefined),
+        "scoring.selected": { target: "recalling", reenter: true },
+      },
+      invoke: {
+        src: "scoring",
+        input: ({ context, event }) => ({ ask: context.ask, id: event.id }),
+        onDone: [
+          {
+            guard: ({ event }) => event.output.scoring != null,
+            target: "ready",
+            actions: [
+              assign({ shown: ({ event }) => event.output.scoring, text: ({ event }) => event.output.scoring.text, error: null }),
+              ({ context }) => context.remember(context.text),
+            ],
+          },
+          { target: "ready" },
+        ],
+        onError: "ready",
+      },
     },
     scoring: {
       on: { _type: { actions: [assign({ text: ({ event }) => event.text }), ({ context }) => context.remember(context.text)] } },
@@ -169,6 +247,11 @@ export const machine = setup({
             target: "ready",
             actions: [
               emit(({ event }) => ({ type: "gauge.read", readings: readings(event.output.answers) })),
+              assign({
+                shown: ({ context, event }) =>
+                  record({ id: context.mint(), at: context.now(), text: context.text, gauges: context.gauges, answers: event.output.answers }),
+              }),
+              emit(({ context }) => ({ type: "post.scored", ...context.shown })),
               assign({
                 last: ({ event }) => {
                   const asked = readings(event.output.answers);
@@ -184,11 +267,17 @@ export const machine = setup({
       },
     },
     failed: {
-      on: { ...typing("ready"), _score: { guard: "canScore", target: "scoring" } },
+      on: { ...typing("ready"), _score: { guard: "canScore", target: "scoring" }, "scoring.selected": "recalling" },
     },
   },
   on: {
     "gauge.changed": { actions: assign({ gauges: ({ event }) => event.gauges }) },
     "llm.changed": { actions: assign(({ event }) => adoptLlm(event)) },
+    // The scoring on the stage was deleted in History: the stage empties rather than
+    // showing what is gone.
+    "scoring.changed": {
+      guard: ({ context, event }) => context.shown != null && !event.scorings.some((s) => s.id === context.shown.id),
+      actions: assign({ shown: null }),
+    },
   },
 });
