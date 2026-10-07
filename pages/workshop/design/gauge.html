@@ -39,15 +39,19 @@
     <script type="module" src="/static/components/pages/fact.js"></script>
     <script type="module" src="/static/components/viewport/fact.js"></script>
     <script type="module" src="/static/components/settings/fact.js"></script>
+    <script type="module" src="/static/components/session/fact.js"></script>
+    <script type="module" src="/static/components/llm/fact.js"></script>
     <script type="module" src="/static/components/gauge/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
+    <script type="module" src="/static/components/gauge-post/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/components/gauge-list/view.js"></script>
     <script type="module" src="/static/components/gauge-editor/view.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
+    <gauge-post height="fill"></gauge-post>
     <list-then-item id="gauges" label="Tools" height="fill">
       <gauge-list label="Tools"></gauge-list>
       <gauge-editor shows-on="gauge.selected" height="fill"></gauge-editor>
