@@ -4,10 +4,11 @@ import { setup, assign, emit, enqueueActions, fromPromise, fromCallback } from "
 // because a completion can only come from the server, which also holds the
 // account's model settings and API key (3.1, 7.7). It answers `read` (the account's
 // picture, never the key) and `complete` (start one answer; the answer arrives as
-// `completion.progressed` events, 6.3). It follows `session.changed`, because the
+// `completion.progressed` events, 6.3), and `decide` (ask Jev yes/no questions; the
+// answers come back in the reply, because there is nothing to stream). It follows `session.changed`, because the
 // picture depends on who is signed in (3.4), `llm.edited` (the user's settings
-// gestures) and `turn.steered` (a stop). Two parallel regions keep the account
-// picture and the running answer from waiting on each other. Everything with a side
+// gestures) and `turn.steered` (a stop). Three parallel regions keep the account
+// picture, the running answer and the running decision from waiting on each other. Everything with a side
 // effect — the fetch, the stream — arrives through `input`, so the machine is a pure
 // definition importable in Node.
 
@@ -36,7 +37,7 @@ const needsKey = (picture) => {
 // The key rides through to the server from here and never enters context.
 const patchOf = (event) => {
   const patch = {};
-  for (const field of ["provider", "key", "model", "effort", "ttl"]) if (field in event) patch[field] = event[field];
+  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey"]) if (field in event) patch[field] = event[field];
   return patch;
 };
 
@@ -89,6 +90,9 @@ export const machine = setup({
       const cancel = input.stream(input.request, (piece) => sendBack({ type: "_piece", piece }));
       return () => cancel?.();
     }),
+    // One Jev request (llm: decide): the server module answers with Jev's answers or an
+    // error code, so a failure rides the reply to the asker.
+    decide: fromPromise(({ input }) => input.decide(input.payload)),
   },
   actions: {
     // Held read? replies are answered with the picture once a load lands (4.2), the
@@ -157,10 +161,12 @@ export const machine = setup({
     save: input.save,
     stream: input.stream,
     session: input.session,
+    decide: input.decide,
     picture: SIGNED_OUT,
     pending: [], // read? replies held while a load is in flight (4.2)
     announce: false, // emit llm.changed when the next picture load lands (a re-sync)
     run: null, // the answer being streamed: { id, text, thinking, calls, dirty }
+    decided: null, // the reply of the decide? in flight
   }),
   type: "parallel",
   states: {
@@ -248,6 +254,37 @@ export const machine = setup({
             ],
             _flush: { actions: "onFlush" },
           },
+        },
+      },
+    },
+    // One Jev request at a time, like one completion at a time (12): a second asker is
+    // told busy rather than queued behind a request it did not see start.
+    decision: {
+      initial: "idle",
+      states: {
+        idle: {
+          on: {
+            "decide?": [
+              { guard: ({ context }) => !context.picture.signedIn, actions: ({ event }) => event.reply({ error: "signed-out" }) },
+              { guard: ({ context }) => !context.picture.jev?.keySet, actions: ({ event }) => event.reply({ error: "no-key" }) },
+              { target: "running", actions: assign({ decided: ({ event }) => event.reply }) },
+            ],
+          },
+        },
+        running: {
+          invoke: {
+            src: "decide",
+            input: ({ context, event }) => ({ decide: context.decide, payload: event.payload }),
+            onDone: {
+              target: "idle",
+              actions: [({ context, event }) => context.decided(event.output), assign({ decided: null })],
+            },
+            onError: {
+              target: "idle",
+              actions: [({ context }) => context.decided({ error: "unavailable" }), assign({ decided: null })],
+            },
+          },
+          on: { "decide?": { actions: ({ event }) => event.reply({ error: "busy" }) } },
         },
       },
     },

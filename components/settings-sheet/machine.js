@@ -104,7 +104,9 @@ export const machine = setup({
     emits: ["settings.edited", "llm.edited", "tools.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
-    attributes: ["account"],
+    // `judging` (plan: Gauge): with it, and `account`, the account section also offers
+    // the Jev key; only the Gauge page sets it, so every other Settings stays as it was.
+    attributes: ["account", "judging"],
     asks: ["pages: list", "settings: read", "catalog: list", "llm: read", "catalog: contracts", "conversations: tools"],
   },
   // The active profile (§12), adopted from settings; a page without settings
@@ -115,6 +117,7 @@ export const machine = setup({
     ask: input.ask,
     current: input.current,
     account: Boolean(input.account),
+    judging: Boolean(input.judging),
     pages: [],
     settings: { ...DEFAULT },
     roles: {},
@@ -279,6 +282,9 @@ export const machine = setup({
         _setModel: { actions: emit(({ event }) => llmEdited({ model: event.model })) },
         _saveKey: { actions: emit(({ event }) => llmEdited({ key: event.key })) },
         _removeKey: { actions: emit(() => llmEdited({ key: "" })) },
+        // The Jev key, the same two gestures as the provider's key, under its own field.
+        _saveJevKey: { actions: emit(({ event }) => llmEdited({ jevKey: event.key })) },
+        _removeJevKey: { actions: emit(() => llmEdited({ jevKey: "" })) },
         _setEffort: { actions: emit(({ event }) => llmEdited({ effort: event.effort })) },
         _setTtl: { actions: emit(({ event }) => llmEdited({ ttl: event.ttl })) },
         // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
@@ -309,6 +315,7 @@ export const machine = setup({
           effort: event.effort,
           efforts: event.efforts,
           ttl: event.ttl,
+          ...(event.jev ? { jev: event.jev } : {}),
         }),
       }),
     },

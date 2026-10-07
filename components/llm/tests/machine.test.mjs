@@ -24,6 +24,7 @@ const EVENTS = {
 };
 const READ = load("queries/read.json");
 const COMPLETE = load("queries/complete.json");
+const DECIDE = load("queries/decide.json");
 const SESSION_READ = JSON.parse(readFileSync(resolve(HERE, "..", "..", "session", "queries", "read.json"), "utf8"));
 
 // A valid ULID for the pending assistant turn (the complete id, and so the run id).
@@ -59,8 +60,8 @@ const completePayload = (over = {}) => ({
 const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
-function start({ userId = "u1", picture = PICTURE, save } = {}) {
-  const calls = { read: 0, save: [] };
+function start({ userId = "u1", picture = PICTURE, save, decide } = {}) {
+  const calls = { read: 0, save: [], decide: [] };
   const streamer = {};
   const input = {
     session: () => {
@@ -83,6 +84,10 @@ function start({ userId = "u1", picture = PICTURE, save } = {}) {
         streamer.cancelled = true;
       };
     },
+  };
+  input.decide = (payload) => {
+    calls.decide.push(payload);
+    return decide ? decide(payload) : Promise.resolve({ answers: [], inputTokens: 0, ms: 0 });
   };
   const clock = new SimulatedClock();
   const actor = createActor(machine, { input, clock });
@@ -351,6 +356,50 @@ test("the recorded progressed fixtures are what the machine emits (seam for conv
     }
     assert.deepEqual(events, JSON.parse(readFileSync(file, "utf8")), `progressed-${name}.json is stale; re-run with RECORD=1`);
   }
+});
+
+const DECISION = { state: { post: "hello" }, questions: [{ id: "a/b", instructions: "Is it a greeting?", yes: "it greets", no: "it does not" }] };
+const withJev = { ...PICTURE, jev: { keySet: true } };
+
+test("decide? passes the payload to the server and replies its answers", async () => {
+  const answer = { answers: [{ id: "a/b", p: 0.9 }], inputTokens: 120, ms: 310 };
+  const h = start({ picture: withJev, decide: () => Promise.resolve(answer) });
+  await ready(h.actor);
+  assert.deepEqual(await query(h.actor, "decide?", DECISION, DECIDE.reply), answer);
+  assert.deepEqual(h.calls.decide, [DECISION]);
+});
+
+test("decide? refuses honestly: signed-out, no-key and busy; a failure is unavailable", async () => {
+  const out = start({ userId: null });
+  await ready(out.actor);
+  assert.deepEqual(await query(out.actor, "decide?", DECISION, DECIDE.reply), { error: "signed-out" });
+
+  const noKey = start();
+  await ready(noKey.actor);
+  assert.deepEqual(await query(noKey.actor, "decide?", DECISION, DECIDE.reply), { error: "no-key" });
+  assert.equal(noKey.calls.decide.length, 0, "nothing is sent without a key");
+
+  let finish;
+  const busy = start({ picture: withJev, decide: () => new Promise((r) => (finish = r)) });
+  await ready(busy.actor);
+  const first = query(busy.actor, "decide?", DECISION, DECIDE.reply);
+  assert.deepEqual(await query(busy.actor, "decide?", DECISION, DECIDE.reply), { error: "busy" });
+  finish({ error: "rate-limited" });
+  assert.deepEqual(await first, { error: "rate-limited" }, "the server's error rides the reply");
+
+  const broken = start({ picture: withJev, decide: () => Promise.reject(new Error("offline")) });
+  await ready(broken.actor);
+  assert.deepEqual(await query(broken.actor, "decide?", DECISION, DECIDE.reply), { error: "unavailable" });
+});
+
+test("llm.edited carries the Jev key through to the server and never into context", async () => {
+  const h = start({ save: () => withJev });
+  await ready(h.actor);
+  h.actor.send({ type: "llm.edited", jevKey: "jev-secret-value" });
+  await until(() => h.emitted.some((e) => e.type === "llm.changed"));
+  assert.deepEqual(h.calls.save[0], { jevKey: "jev-secret-value" });
+  assert.deepEqual(h.emitted.filter((e) => e.type === "llm.changed").at(-1).jev, { keySet: true });
+  assert.ok(!JSON.stringify(h.actor.getSnapshot().context).includes("jev-secret-value"));
 });
 
 test("every payload matches its schema", () => {

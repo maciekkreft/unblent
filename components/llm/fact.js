@@ -4,6 +4,7 @@ import changed from "./events/llm.changed.json" with { type: "json" };
 import progressed from "./events/completion.progressed.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import complete from "./queries/complete.json" with { type: "json" };
+import decide from "./queries/decide.json" with { type: "json" };
 
 // The browser entry (3.2): the one place this component touches the network, and
 // only to reach its own server module (section 3). All fetch and streaming lives
@@ -126,13 +127,31 @@ const stream = (request, onPiece) => {
   };
 };
 
+// POST one Jev request. The server answers with the answers or an error code; any
+// other failure (offline, a refused body, a lapsed session) is reported as unavailable.
+const decideOnce = async (payload) => {
+  try {
+    const res = await fetch("/api/llm/decide", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...json },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return { error: "unavailable" };
+    return await res.json();
+  } catch {
+    return { error: "unavailable" };
+  }
+};
+
 mount(machine, {
   input: {
     session: () => ask(machine, "session", "read", {}),
     read: readPicture,
     save: savePatch,
     stream,
+    decide: decideOnce,
   },
   events: { "llm.changed": changed, "completion.progressed": progressed },
-  queries: { read, complete },
+  queries: { read, complete, decide },
 });

@@ -39,6 +39,7 @@ class ActorController {
         // The `account` attribute (7.7): read from the host's light DOM, so the
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
+        judging: this.host.hasAttribute("judging"),
       },
       events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited },
     });
@@ -64,16 +65,22 @@ class SettingsSheet extends LitElement {
   // manifest is visible. `keyDraft` holds what the user typed in the key box until
   // they save it, and is cleared after, so the key never lingers in the field. `replacingKey` is true while
   // the box is open over a key already saved.
+  // `jevDraft` and `replacingJev` are the same two states for the Jev key (`judging`).
   static properties = {
     account: { type: Boolean, reflect: true },
+    judging: { type: Boolean, reflect: true },
     keyDraft: { state: true },
     replacingKey: { state: true },
+    jevDraft: { state: true },
+    replacingJev: { state: true },
   };
 
   constructor() {
     super();
     this.keyDraft = "";
     this.replacingKey = false;
+    this.jevDraft = "";
+    this.replacingJev = false;
   }
 
   static styles = css`
@@ -115,9 +122,16 @@ class SettingsSheet extends LitElement {
       gap: var(--space-sm);
       margin-top: var(--space-md);
     }
-    .tools .group {
+    .tools .group,
+    .judging .group {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
+    }
+    .judging {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      margin-top: var(--space-md);
     }
     .field {
       display: grid;
@@ -329,7 +343,7 @@ class SettingsSheet extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current, roles, profile, account, llm, toolList, tools } = snapshot.context;
+    const { pages, settings, current, roles, profile, account, judging, llm, toolList, tools } = snapshot.context;
     const rows = merge(pages, settings.nav);
     // The product profile (§12) shows only the production options: the editor
     // selects and the layout-switch row. The page order and the viewport switch
@@ -410,7 +424,7 @@ class SettingsSheet extends LitElement {
       <h3>This device</h3>
       ${device}
       <h3 class="later">Your account</h3>
-      ${this.#account(llm, profile, toolList, tools)}
+      ${this.#account(llm, profile, toolList, tools, judging)}
     `;
   }
 
@@ -448,7 +462,7 @@ class SettingsSheet extends LitElement {
   // reversible by choosing the previous value; removing the key can only be undone by
   // entering it again, so its button is plainly labelled (Don Norman: forgiveness,
   // honest signifiers).
-  #account(llm, profile, toolList, tools) {
+  #account(llm, profile, toolList, tools, judging) {
     if (!llm || !llm.signedIn) return html`<p class="hint">Sign in to set up the chat.</p>`;
     const current = llm.providers.find((p) => p.id === llm.provider);
     // Echo is a test provider (§12): offered only in the workshop, except that an
@@ -466,7 +480,16 @@ class SettingsSheet extends LitElement {
             )}
           </select>
         </label>
-        ${current?.needsKey ? this.#key(current) : nothing}
+        ${current?.needsKey
+          ? this.#keyField({
+              keySet: current.keySet,
+              label: "API key",
+              draftName: "keyDraft",
+              replacingName: "replacingKey",
+              save: (key) => this.#actor.send({ type: "_saveKey", key }),
+              remove: () => this.#actor.send({ type: "_removeKey" }),
+            })
+          : nothing}
         ${llm.models.length
           ? html`
               <label class="field">
@@ -494,56 +517,73 @@ class SettingsSheet extends LitElement {
           </select>
           <span class="help">${TTL_NOTE}</span>
         </label>
+        ${judging
+          ? html`<div class="judging">
+              <span class="group">Judging</span>
+              ${this.#keyField({
+                keySet: llm.jev?.keySet === true,
+                label: "Jev key",
+                draftName: "jevDraft",
+                replacingName: "replacingJev",
+                save: (key) => this.#actor.send({ type: "_saveJevKey", key }),
+                remove: () => this.#actor.send({ type: "_removeJevKey" }),
+              })}
+            </div>`
+          : nothing}
         ${this.#tools(toolList, tools, profile)}
       </div>
     `;
   }
 
-  // The API key. A saved key reads as a plain statement with Replace
-  // and Remove, so nothing on screen looks disabled; the box appears only when a key is
-  // wanted, and Cancel or Escape closes it again without a change (forgiveness).
-  #key(provider) {
+  // A key field: the provider's API key, or the Jev key. A saved key reads as a plain
+  // statement with Replace and Remove, so nothing on screen looks disabled; the box
+  // appears only when a key is wanted, and Cancel or Escape closes it again without a
+  // change (forgiveness). `draftName` and `replacingName` name this field's own two
+  // state properties, so the two keys never share a draft.
+  #keyField({ keySet, label, draftName, replacingName, save: saveKey, remove }) {
+    const draft = this[draftName];
     const cancel = () => {
-      this.keyDraft = "";
-      this.replacingKey = false;
+      this[draftName] = "";
+      this[replacingName] = false;
     };
     const save = () => {
-      this.#actor.send({ type: "_saveKey", key: this.keyDraft });
+      saveKey(draft);
       cancel();
     };
-    const open = !provider.keySet || this.replacingKey;
+    const open = !keySet || this[replacingName];
     return html`
       <div class="field">
-        <span>API key</span>
-        <div class="key">
+        <span>${label}</span>
+        <div class="key" data-key=${draftName}>
           ${open
             ? html`
                 <input
                   type="password"
-                  placeholder="Paste your API key"
-                  .value=${this.keyDraft}
-                  @input=${(e) => (this.keyDraft = e.target.value)}
+                  aria-label=${label}
+                  placeholder="Paste your ${label}"
+                  .value=${draft}
+                  @input=${(e) => (this[draftName] = e.target.value)}
                   @keydown=${(e) => {
-                    if (e.key === "Enter" && this.keyDraft) save();
-                    if (e.key === "Escape" && provider.keySet) cancel();
+                    if (e.key === "Enter" && draft) save();
+                    if (e.key === "Escape" && keySet) cancel();
                   }}
                 />
-                <button class="act" ?disabled=${this.keyDraft.length === 0} @click=${save}>Save</button>
-                ${provider.keySet ? html`<button class="act" @click=${cancel}>Cancel</button>` : nothing}
+                <button class="act" ?disabled=${draft.length === 0} @click=${save}>Save</button>
+                ${keySet ? html`<button class="act" @click=${cancel}>Cancel</button>` : nothing}
               `
             : html`
                 <span class="saved">Key saved</span>
                 <button
                   class="act"
                   @click=${async () => {
-                    this.replacingKey = true;
+                    this[replacingName] = true;
                     await this.updateComplete;
-                    this.renderRoot.querySelector(".key input")?.focus();
+                    this.renderRoot.querySelector(`.key[data-key="${draftName}"] input`)?.focus();
                   }}
                 >
                   Replace
                 </button>
-                <button class="act" @click=${() => this.#actor.send({ type: "_removeKey" })}>Remove</button>
+                <button class="act" @click=${remove}>Remove</button>
               `}
         </div>
       </div>

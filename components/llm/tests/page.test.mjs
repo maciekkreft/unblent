@@ -178,7 +178,7 @@ for (const engine of ENGINES) {
         }, label);
 
       await until(async () => (await key())?.input === true);
-      await page.locator("settings-sheet .key input").fill("sk-ant-not-a-real-key");
+      await page.locator('settings-sheet .key input[aria-label="API key"]').fill("sk-ant-not-a-real-key");
       await press("Save");
       await until(async () => (await key())?.text.startsWith("Key saved"));
       assert.equal((await key()).input, false, "a saved key shows no box");
@@ -186,6 +186,17 @@ for (const engine of ENGINES) {
       await until(async () => (await key())?.input === true);
       await press("Cancel");
       await until(async () => (await key())?.text.startsWith("Key saved"));
+
+      // The Jev key (the page sets `judging`) is its own field, saved the same way.
+      const jev = () =>
+        page.evaluate(() => {
+          const group = document.querySelector("settings-sheet").shadowRoot.querySelector(".judging");
+          return group ? group.textContent.replace(/\s+/g, " ").trim() : null;
+        });
+      await page.locator('settings-sheet .key input[aria-label="Jev key"]').fill("jev-not-a-real-key");
+      await page.locator("settings-sheet .judging button", { hasText: "Save" }).click();
+      await until(async () => (await jev())?.includes("Key saved"));
+      assert.ok((await key()).text.startsWith("Key saved"), "the API key is untouched");
 
       // The model's description is a hover hint in the workshop, never printed.
       const tools = await page.evaluate(() =>

@@ -72,7 +72,7 @@ const TOOLS = { tools: { "notes: list": false }, approval: "auto" };
 // Drive the actor with a fake ask (4.2): pages, then settings, then catalog (list), and —
 // only when the account section is shown — llm, the tool contracts and the tool
 // preferences. `account` mirrors the tag attribute.
-const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS } = {}) => {
+const start = (settings, current = "/a", { account = false, judging = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS } = {}) => {
   const ask = (target, name) =>
     Promise.resolve(
       target === "pages"
@@ -87,7 +87,7 @@ const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, c
               ? llm
               : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
     );
-  const actor = createActor(machine, { input: { ask, current, account } });
+  const actor = createActor(machine, { input: { ask, current, account, judging } });
   const emitted = [];
   const emittedLlm = [];
   const emittedTools = [];
@@ -274,6 +274,22 @@ test("each account gesture emits only the field it changed (7.7)", async () => {
   assert.deepEqual(emittedLlm[2], { type: "llm.edited", key: "" }, "an empty key removes it");
   actor.send({ type: "_setModel", model: "echo" });
   assert.deepEqual(emittedLlm[3], { type: "llm.edited", model: "echo" });
+});
+
+test("the Jev key gestures emit only jevKey, and an empty one removes it (judging)", async () => {
+  const { actor, emittedLlm, snapshot } = await start(undefined, "/a", { account: true, judging: true });
+  assert.equal(snapshot.context.judging, true);
+  actor.send({ type: "_saveJevKey", key: "jev-typed" });
+  assert.deepEqual(emittedLlm[0], { type: "llm.edited", jevKey: "jev-typed" });
+  actor.send({ type: "_removeJevKey" });
+  assert.deepEqual(emittedLlm[1], { type: "llm.edited", jevKey: "" });
+  actor.send({ type: "llm.changed", ...LLM_PICTURE, jev: { keySet: true } });
+  assert.deepEqual(actor.getSnapshot().context.llm.jev, { keySet: true }, "whether a Jev key is saved is adopted");
+});
+
+test("without the judging attribute the sheet does not offer the Jev key", async () => {
+  const { snapshot } = await start(undefined, "/a", { account: true });
+  assert.equal(snapshot.context.judging, false);
 });
 
 test("the thinking effort and cache lifetime each emit only their field (§13)", async () => {

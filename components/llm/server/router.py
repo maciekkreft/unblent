@@ -5,8 +5,9 @@ Every route needs a signed-in user (require_user) and resolves that user's own
 SQLite file, so isolation holds by construction.
 
 Routes: GET "" returns the account's picture (without signedIn, which the browser
-adds); PUT "" changes settings and the key; POST "/complete" streams one answer as
-newline-delimited JSON pieces (6.3). A request body that fails validation is answered
+adds); PUT "" changes settings and the keys; POST "/complete" streams one answer as
+newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no questions and
+returns its answers. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
 """
 
@@ -23,7 +24,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.user import require_user, user_dir
 
-from . import anthropic_adapter, crypto
+from . import anthropic_adapter, crypto, jev_adapter
 from .adapters import complete
 
 router = APIRouter()
@@ -107,6 +108,7 @@ def _picture(user_id: str, connection: sqlite3.Connection) -> dict:
         "effort": settings["effort"],
         "efforts": list(_EFFORTS),
         "ttl": settings["ttl"],
+        "jev": {"keySet": _key(connection, "jev") is not None},
     }
 
 
@@ -134,6 +136,9 @@ def _valid(payload) -> dict | None:
     ttl = payload.get("ttl")
     model = payload.get("model")
     key = payload.get("key")
+    jev_key = payload.get("jevKey")
+    if jev_key is not None and not isinstance(jev_key, str):
+        return None
     if provider is not None and provider not in _PROVIDERS:
         return None
     if effort is not None and effort not in _EFFORTS:
@@ -144,7 +149,7 @@ def _valid(payload) -> dict | None:
         return None
     if key is not None and not isinstance(key, str):
         return None
-    return {"provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key}
+    return {"provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key}
 
 
 def _apply(user_id: str, fields: dict) -> dict:
@@ -172,6 +177,17 @@ def _apply(user_id: str, fields: dict) -> dict:
                     " ON CONFLICT(provider) DO UPDATE SET cipher = excluded.cipher, at = excluded.at",
                     (provider, crypto.encrypt(key), int(time.time() * 1000)),
                 )
+        # The Jev key sits in the same table under its own name, independent of the
+        # chosen provider, so `keys` needs no new column.
+        jev_key = fields["jevKey"]
+        if jev_key == "":
+            connection.execute("DELETE FROM keys WHERE provider = 'jev'")
+        elif jev_key is not None:
+            connection.execute(
+                "INSERT INTO keys (provider, cipher, at) VALUES ('jev', ?, ?)"
+                " ON CONFLICT(provider) DO UPDATE SET cipher = excluded.cipher, at = excluded.at",
+                (crypto.encrypt(jev_key), int(time.time() * 1000)),
+            )
         _models_cache.pop(user_id, None)
         return _picture(user_id, connection)
 
@@ -207,3 +223,38 @@ async def do_complete(request: Request, user_id: str = Depends(require_user)):
 
     # X-Accel-Buffering off so a proxy does not hold the pieces back (6.3).
     return StreamingResponse(lines(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _jev_key(user_id: str) -> str | None:
+    with _connect(user_id) as connection:
+        return _key(connection, "jev")
+
+
+def _decide_body(body) -> tuple[dict, list] | None:
+    if not isinstance(body, dict) or not isinstance(body.get("state"), dict):
+        return None
+    questions = body.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return None
+    for q in questions:
+        if not isinstance(q, dict) or not isinstance(q.get("id"), str) or not isinstance(q.get("instructions"), str):
+            return None
+        if not all(isinstance(q.get(side, ""), str) for side in ("yes", "no")):
+            return None
+    return body["state"], questions
+
+
+@router.post("/decide")
+async def do_decide(request: Request, user_id: str = Depends(require_user)):
+    try:
+        parsed = _decide_body(await request.json())
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        return JSONResponse({"error": "bad-request"}, status_code=400)
+    key = await run_in_threadpool(_jev_key, user_id)
+    if key is None:
+        # The error rides the reply, as complete's does, so the asker shows it.
+        return {"error": "no-key"}
+    state, questions = parsed
+    return await run_in_threadpool(jev_adapter.decide, key, state, questions)

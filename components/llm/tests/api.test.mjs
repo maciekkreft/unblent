@@ -150,3 +150,35 @@ test("a valid tool call carries the mapped target and name, no invalid", async (
   assert.deepEqual(call.payload, { index: 3 });
   assert.ok(!("invalid" in call), "a valid input is not marked");
 });
+
+const decide = (body, cookie) =>
+  fetch(`${BASE_URL}/api/llm/decide`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify(body),
+  });
+// No test reaches typesafe.ai: every decide below stops before the call (no key, or a
+// refused body).
+const DECISION = { state: { post: "hello" }, questions: [{ id: "q", instructions: "Is it a greeting?" }] };
+
+test("a Jev key is saved beside the provider's, shown only as keySet, and removed by an empty one", async () => {
+  const cookie = cookieFor(freshUser());
+  assert.deepEqual((await (await read(cookie)).json()).jev, { keySet: false });
+  const res = await edit({ jevKey: "jev-secret-value" }, cookie);
+  const text = await res.text();
+  assert.ok(!text.includes("jev-secret-value"), "the key is never in the reply");
+  assert.deepEqual(JSON.parse(text).jev, { keySet: true });
+  assert.deepEqual((await (await read(cookie)).json()).jev, { keySet: true });
+  assert.equal((await (await read(cookie)).json()).providers.find((p) => p.id === "anthropic").keySet, false, "independent of the provider's key");
+  assert.deepEqual((await (await edit({ jevKey: "" }, cookie)).json()).jev, { keySet: false });
+});
+
+test("decide needs a user, replies no-key without a key, and refuses a bad body with 400", async () => {
+  assert.equal((await decide(DECISION)).status, 401);
+  const cookie = cookieFor(freshUser());
+  const res = await decide(DECISION, cookie);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { error: "no-key" });
+  assert.equal((await decide({ state: "text", questions: [] }, cookie)).status, 400);
+  assert.equal((await decide({ state: {}, questions: [{ id: 1, instructions: "x" }] }, cookie)).status, 400);
+});
