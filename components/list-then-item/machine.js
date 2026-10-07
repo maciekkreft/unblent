@@ -7,7 +7,8 @@ import { setup, assign } from "xstate";
 
 // The item to show for a selection gesture: the last child whose `shows-on` names this
 // event (6.4). The selection gestures are the closed set the container consumes:
-// book.selected, note.selected, conversation.selected and highlights.selected.
+// book.selected, note.selected, conversation.selected, highlights.selected and
+// gauge.selected.
 const shownFor = (items, type) => {
   const matching = items.filter((item) => item.showsOn === type);
   return matching.length ? matching[matching.length - 1].name : null;
@@ -40,6 +41,7 @@ export const machine = setup({}).createMachine({
         "note.selected": select,
         "conversation.selected": select,
         "highlights.selected": select,
+        "gauge.selected": select,
         // Leading underscore (7.2): a user gesture forwarded by the view, an internal
         // message the bus never routes.
         _back: { actions: assign({ shown: null }) },

@@ -34,7 +34,14 @@
     },
     "effort": { "type": "string" },
     "efforts": { "type": "array", "items": { "type": "string" } },
-    "ttl": { "type": "string" }
+    "ttl": { "type": "string" },
+    "jev": {
+      "type": "object",
+      "description": "Whether the account has a Jev key saved, for llm: decide. Never the key.",
+      "properties": { "keySet": { "type": "boolean" } },
+      "required": ["keySet"],
+      "additionalProperties": false
+    }
   },
   "required": ["signedIn", "provider", "providers", "model", "models", "effort", "efforts", "ttl"],
   "additionalProperties": false
