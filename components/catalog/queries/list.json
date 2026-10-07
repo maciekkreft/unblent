@@ -21,6 +21,7 @@
                 "name": { "type": "string" },
                 "status": { "enum": ["built", "planned"] },
                 "kind": { "enum": ["fact", "view"] },
+                "description": { "type": "string" },
                 "shape": { "type": ["string", "null"] },
                 "owns": { "type": ["string", "null"] },
                 "attributes": { "type": ["array", "null"], "items": { "type": "string" } },

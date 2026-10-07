@@ -60,6 +60,11 @@ export const machine = setup({
 }).createMachine({
   id: "book-shelf",
   meta: {
+    description:
+      "Shows the library as tiles, newest first, and lets the user add a book from an epub " +
+      "file, open one, or remove one. A book being added shows as a placeholder tile until the " +
+      "book arrives or the import is refused with a reason. Removing a book waits out the undo " +
+      "window before it becomes a deletion, so it can be taken back in one step.",
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
     attributes: ["renames"],

@@ -98,6 +98,16 @@ export const machine = setup({
 }).createMachine({
   id: "note-list",
   meta: {
+    description:
+      "Lists the notes, newest first, with New note always the first row, and lets the user " +
+      "open or delete one; deleting waits out the undo window. With `subject` it lists only the " +
+      "notes about the subject, and a note open in the editor that is not about it, such as a " +
+      "pinned note, is listed apart at the top so the open row is never missing; it learns " +
+      "which note is open from the editor. While the subject has at least one highlight, a " +
+      "fixed Highlights row under New note shows how many there are and the time of the latest, " +
+      "and picking it shows the highlights editor in the note editor's place, under the same " +
+      "Back bar. The Highlights row has no record of its own, so it cannot be deleted, and its " +
+      "mark as open is not kept across a reload. Highlights are never listed as separate notes.",
     kind: "view",
     emits: ["note.selected", "note.discarded", "highlights.selected"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,

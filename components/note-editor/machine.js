@@ -226,6 +226,19 @@ export const machine = setup({
 }).createMachine({
   id: "note-editor",
   meta: {
+    description:
+      "Edits one note as a single page whose lines have four levels, Title, Heading, Subheading " +
+      "and Body, set from four buttons at the bottom that mark the level of the line under the " +
+      "cursor, flash when a level changes, and show their Vim keys while Vim keys is on. It " +
+      "saves a short time into typing and when the editor loses focus. With `subject` it opens " +
+      "the most recently edited note about the subject whenever the subject changes, or an " +
+      "empty page that a note about the subject arriving later fills; a new note is linked to " +
+      "the subject at its first save, the About line shows that link, and a keystroke made " +
+      "before the subject is known waits for it. A pinned note stays: a request to open another " +
+      "note is refused with a notice until it is unpinned, and the pin and the titles of " +
+      "subjects seen are kept on this device. It announces the note it shows, or none for the " +
+      "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
+      "here.",
     kind: "view",
     emits: ["note.saved", "note.opened", "note.refused"],
     attributes: ["height", "follows", "subject"],

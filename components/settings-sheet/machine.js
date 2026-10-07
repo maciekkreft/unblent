@@ -100,6 +100,13 @@ export const machine = setup({
 }).createMachine({
   id: "settings-sheet",
   meta: {
+    description:
+      "The Settings sheet, in two sections. This device holds the preferences `settings` keeps: " +
+      "page order and visibility, the switches, and Vim keys. Your account holds the chat " +
+      "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
+      "which lookups the chat may use, which `conversations` keeps. Every change is saved at " +
+      "once by the fact that owns it. Echo is offered as a provider only in the workshop " +
+      "profile.",
     kind: "view",
     emits: ["settings.edited", "llm.edited", "tools.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside

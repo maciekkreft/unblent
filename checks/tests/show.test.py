@@ -78,6 +78,35 @@ class ComponentAndPageLines(unittest.TestCase):
             "    answers: list",
         ])
 
+    def test_the_description_follows_the_contract_lines(self):
+        catalog = {"components": [
+            {"name": "dock", "kind": "fact", "status": "built", "shape": "local-only",
+             "emits": ["dock.changed"], "consumes": [], "answers": [], "accepts": [], "asks": [],
+             "description": "Owns the desk layout."},
+        ]}
+        self.assertEqual(show.component_lines(catalog), [
+            "dock  fact  built  local-only",
+            "    emits: dock.changed",
+            "    Owns the desk layout.",
+        ])
+
+    def test_one_component_adds_what_it_owns_and_whom_it_interacts_with(self):
+        catalog = {"components": [
+            {"name": "dock", "kind": "fact", "status": "built", "shape": "local-only",
+             "owns": "the desk layout", "emits": ["dock.changed"], "consumes": [], "answers": [],
+             "accepts": [], "asks": [], "description": "Owns the desk layout.",
+             "interacts": [{"with": "dock-desk", "via": "dock.changed", "how": "emits"}]},
+        ]}
+        self.assertEqual(show.one_component_lines(catalog, "dock"), [
+            "dock  fact  built  local-only",
+            "    emits: dock.changed",
+            "    Owns the desk layout.",
+            "    owns: the desk layout",
+            "    interacts:",
+            "      emits dock.changed  dock-desk",
+        ])
+        self.assertEqual(show.one_component_lines(catalog, "nothing"), [])
+
     def test_pages_are_aligned_by_kind_and_path(self):
         pages = {"pages": [
             {"kind": "app", "path": "/", "title": "Unblent"},

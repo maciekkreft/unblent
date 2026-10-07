@@ -74,7 +74,15 @@ function show(context, event, enqueue) {
 
 export const machine = setup({}).createMachine({
   id: "notice-stack",
-  meta: { kind: "view", emits: ["note.saved"], attributes: [], asks: [] },
+  meta: {
+    description:
+      "Shows what a fact could not do for the user as notices that can be dismissed: a refused " +
+      "sign-in, a refused note, and a save conflict. A conflict offers Keep mine, which saves " +
+      "the user's copy again, because `notes` otherwise keeps the server's copy. Notices are " +
+      "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
+      "because `notes` does not keep conflicts.",
+    kind: "view", emits: ["note.saved"], attributes: [], asks: [],
+  },
   context: ({ input }) => ({
     // How long a passing notice stays (the --duration-undo token, read in the view
     // and passed in so the machine stays importable in Node).

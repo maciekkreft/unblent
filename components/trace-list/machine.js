@@ -51,7 +51,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "trace-list",
-  meta: { kind: "view", emits: [], asks: ["trace: list"], attributes: [] },
+  meta: {
+    description:
+      "Shows the bus traffic `trace` keeps, as it arrives, with each row able to open to the " +
+      "whole record. Records with the same sender and name that arrive close together, such as " +
+      "a run of typing, are folded into one row.",
+    kind: "view", emits: [], asks: ["trace: list"], attributes: [],
+  },
   context: ({ input }) => ({ ask: input.ask, records: [], expanded: new Set() }),
   initial: "loading",
   states: {

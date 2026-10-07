@@ -55,6 +55,9 @@ def _records(manifests: dict) -> list:
             "answers": manifest["answers"],
             "asks": meta.get("asks", []),
             "interacts": [],
+            # Optional in the reply (7.1: an added field is never required), so a
+            # machine without one still lists.
+            **({"description": meta["description"]} if isinstance(meta.get("description"), str) else {}),
         })
     return sorted(records, key=lambda r: r["name"])
 

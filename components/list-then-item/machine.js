@@ -27,7 +27,18 @@ const select = {
 
 export const machine = setup({}).createMachine({
   id: "list-then-item",
-  meta: { kind: "view", emits: [], asks: [], attributes: ["height"] },
+  meta: {
+    description:
+      "A container for a list and the thing picked from it, shown in one panel. The first child " +
+      "is the list, and each later child is an item whose `shows-on` names the selection " +
+      "gesture that brings it up (`book.selected`, `note.selected`, `conversation.selected`, " +
+      "`highlights.selected`, `gauge.selected`); the item is shown under a Back bar naming the " +
+      "list's `label`, and Back shows the list again. Which child is shown is kept on this " +
+      "device under the container's id. It emits and asks nothing, so a new kind of list needs " +
+      "only one more consumed gesture here. On a desk it is one tab, with its own `label`, " +
+      "`side`, `height` and `shows-on`.",
+    kind: "view", emits: [], asks: [], attributes: ["height"],
+  },
   context: ({ input }) => ({
     list: input.list,
     items: input.items,

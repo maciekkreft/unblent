@@ -55,7 +55,15 @@ export const machine = setup({
   },
 }).createMachine({
   id: "trace",
-  meta: { kind: "fact", shape: "local-only", emits: ["trace.recorded"], owns: "the bus traffic of this session" },
+  meta: {
+    description:
+      "Owns the record of everything the bus routed since the page loaded: each event and " +
+      "query, who received it, and anything held, ignored, dropped or refused. It shares the " +
+      "records with the other tabs of this browser, but not with other devices, and prints one " +
+      "line per record to the console, so the console reads as a complete transcript. A field " +
+      "marked secret never reaches it.",
+    kind: "fact", shape: "local-only", emits: ["trace.recorded"], owns: "the bus traffic of this session",
+  },
   context: ({ input }) => ({
     tab: input.tab,
     records: [],

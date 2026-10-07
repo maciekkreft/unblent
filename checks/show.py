@@ -5,6 +5,7 @@ schema in full; one line per contract is what a reader needs first."""
 
 import json
 import sys
+import textwrap
 import urllib.error
 import urllib.request
 
@@ -12,7 +13,9 @@ URL = "http://127.0.0.1:8080"
 
 USAGE = """Prints what the running server reports (architecture.md 7.1).
 
-  python3 checks/show.py components         every component: kind, status, emits, consumes, answers, asks
+  python3 checks/show.py components         every component: kind, status, emits, consumes, answers, asks,
+                                            and what it does for the user
+  python3 checks/show.py components <name>  one component in full, with whom it interacts
   python3 checks/show.py contracts          every event, query and command, one line each
   python3 checks/show.py contracts <name>   one contract in full: its schema and who consumes or asks it
                                             (an event `note.changed`, a query or command `read`, or `notes: read`)
@@ -62,15 +65,37 @@ def find_contracts(contracts: dict, name: str) -> list:
     return found
 
 
+def _component(c: dict) -> list:
+    head = [c["name"], c["kind"] or "?", c["status"]]
+    head += [c[key] for key in ("shape", "role") if c.get(key)]
+    lines = ["  ".join(head)]
+    for key in ("emits", "consumes", "answers", "accepts", "asks"):
+        if c.get(key):
+            lines.append(f"    {key}: " + ", ".join(c[key]))
+    if c.get("description"):
+        lines += textwrap.wrap(c["description"], 96, initial_indent="    ", subsequent_indent="    ")
+    return lines
+
+
 def component_lines(catalog: dict) -> list:
-    lines = []
-    for c in catalog["components"]:
-        head = [c["name"], c["kind"] or "?", c["status"]]
-        head += [c[key] for key in ("shape", "role") if c.get(key)]
-        lines.append("  ".join(head))
-        for key in ("emits", "consumes", "answers", "accepts", "asks"):
-            if c.get(key):
-                lines.append(f"    {key}: " + ", ".join(c[key]))
+    return [line for c in catalog["components"] for line in _component(c)]
+
+
+def one_component_lines(catalog: dict, name: str) -> list:
+    """One component in full: its lines, what it owns or understands, and whom it
+    interacts with, which the full listing leaves out to stay short."""
+    found = [c for c in catalog["components"] if c["name"] == name]
+    if not found:
+        return []
+    c = found[0]
+    lines = _component(c)
+    if c.get("owns"):
+        lines.append(f"    owns: {c['owns']}")
+    if c.get("attributes"):
+        lines.append("    attributes: " + ", ".join(c["attributes"]))
+    if c.get("interacts"):
+        lines.append("    interacts:")
+        lines += [f"      {i['how']} {i['via']}  {i['with']}" for i in c["interacts"]]
     return lines
 
 
@@ -99,8 +124,13 @@ def main() -> None:
         print(USAGE)
         return
     what, rest = argv[0], argv[1:]
-    if what == "components":
+    if what == "components" and not rest:
         print("\n".join(component_lines(_get(base, "/api/catalog"))))
+    elif what == "components":
+        lines = one_component_lines(_get(base, "/api/catalog"), rest[0])
+        if not lines:
+            sys.exit(f"show.py: no component is called {rest[0]!r}")
+        print("\n".join(lines))
     elif what == "pages":
         print("\n".join(page_lines(_get(base, "/api/pages"))))
     elif what == "contracts" and not rest:

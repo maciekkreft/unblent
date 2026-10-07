@@ -415,7 +415,14 @@ export const machine = setup({
   },
 }).createMachine({
   id: "redline-editor",
-  meta: { kind: "view", emits: ["redline.saved"], attributes: [], asks: ["redline: read"] },
+  meta: {
+    description:
+      "The Review app's editor: the user pastes a markdown text, reads it formatted, selects a " +
+      "passage and writes a comment on it. A selection on the formatted page maps back to the " +
+      "exact characters of the pasted text, because a comment belongs to the text and not to " +
+      "the page. Removing a comment waits out the undo window.",
+    kind: "view", emits: ["redline.saved"], attributes: [], asks: ["redline: read"],
+  },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,

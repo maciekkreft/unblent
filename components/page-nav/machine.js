@@ -64,7 +64,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "page-nav",
-  meta: { kind: "view", emits: [], attributes: [], asks: ["pages: list", "settings: read"] },
+  meta: {
+    description:
+      "The bar of links to the other pages, grouped by kind in the order of section 8, in the " +
+      "order and with the visibility the user set in Settings. The page being shown is always " +
+      "listed, even when hidden. In the product profile it shows no page links.",
+    kind: "view", emits: [], attributes: [], asks: ["pages: list", "settings: read"],
+  },
   context: ({ input }) => ({
     ask: input.ask,
     current: input.current,

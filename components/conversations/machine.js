@@ -812,6 +812,17 @@ export const machine = setup({
 }).createMachine({
   id: "conversations",
   meta: {
+    description:
+      "Owns the chats: each chat's links, its start, its turns, which chat is open on this " +
+      "device, and which lookups the model may use. Every turn needs the model, so a chat " +
+      "cannot be written offline; each finished turn goes to the server at once and the server " +
+      "adds turns by id, so a resend is harmless and another device sees every turn, while an " +
+      "answer still arriving when the page closes is lost and Continue asks again. It runs the " +
+      "lookup loop (7.7): when an answer asks to look something up it asks that query, stores " +
+      "the result, and asks the model again, at most eight rounds per question, each result cut " +
+      "at 120,000 characters. A chat's start is written once, by the view where the chat was " +
+      "created, and never changes. When the subject changes the open chat becomes the most " +
+      "recently updated chat about it, or none, so the panel shows an empty new chat.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",

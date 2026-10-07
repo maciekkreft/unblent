@@ -16,7 +16,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "profile-switch",
-  meta: { kind: "view", emits: ["profile.switched"], attributes: [], asks: ["settings: read"] },
+  meta: {
+    description:
+      "The one way from the product into the workshop and back. It is deliberately not a " +
+      "visible signifier: it appears only on hover or focus (12, Two profiles). Which profile " +
+      "is active belongs to `settings`, which refuses a switch on any page but the product.",
+    kind: "view", emits: ["profile.switched"], attributes: [], asks: ["settings: read"],
+  },
   context: ({ input }) => ({ ask: input.ask, profile: "workshop" }),
   initial: "loading",
   states: {

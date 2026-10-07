@@ -11,7 +11,14 @@ export const machine = setup({
   },
 }).createMachine({
   id: "component-list",
-  meta: { kind: "view", emits: [], attributes: [], asks: ["catalog: list"] },
+  meta: {
+    description:
+      "Shows every component, built or planned, grouped into facts and views: its description, " +
+      "kind, storage shape, what it emits, consumes, accepts, answers and asks, and the " +
+      "components it interacts with. It reads everything from `catalog` once when the page " +
+      "opens, because components change only when the code is deployed.",
+    kind: "view", emits: [], attributes: [], asks: ["catalog: list"],
+  },
   context: ({ input }) => ({ ask: input.ask, components: [], error: null }),
   initial: "loading",
   states: {

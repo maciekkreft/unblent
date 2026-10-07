@@ -29,6 +29,8 @@ test("GET /api/catalog lists every component from its manifest", async () => {
   assert.equal(c.catalog.shape, "remote-only");
   assert.deepEqual(c.catalog.answers, ["list", "contracts"]);
   assert.equal(c.catalog.attributes, null);
+  // Section 7.3: what a component does for the user is read from its manifest.
+  assert.match(c.catalog.description, /manifest/);
 
   assert.deepEqual(c["color-scheme"].emits, ["color-scheme.changed"]);
   assert.deepEqual(c["color-scheme"].accepts, []);

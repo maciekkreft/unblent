@@ -12,7 +12,12 @@ export const machine = setup({
   },
 }).createMachine({
   id: "viewport-switch",
-  meta: { kind: "view", emits: ["viewport.selected"], attributes: [], asks: ["viewport: read", "settings: read"] },
+  meta: {
+    description:
+      "The control that switches the page preview between the desk and a phone. The choice " +
+      "belongs to `viewport`, and whether the switch is shown belongs to `settings`.",
+    kind: "view", emits: ["viewport.selected"], attributes: [], asks: ["viewport: read", "settings: read"],
+  },
   context: ({ input }) => ({ ask: input.ask, viewport: null, hidden: false }),
   initial: "loadingViewport",
   states: {

@@ -183,6 +183,14 @@ export const machine = setup({
 }).createMachine({
   id: "highlight-notes",
   meta: {
+    description:
+      "The highlights editor: it shows every highlight of the book on the stage as one " +
+      "document, the Highlights, with a quote line per highlight in reading order and the " +
+      "user's comment under it. The quote lines cannot be edited and the comments can; all " +
+      "changes on the page are saved together a short time after typing stops. Deleting a quote " +
+      "line whole, or `dd` on it with Vim keys on, removes that highlight after the undo " +
+      "window. Each highlight is stored as its own note whose link to the book carries a place, " +
+      "but the user sees and edits them only here, as one note.",
     kind: "view",
     emits: ["note.saved", "note.discarded"],
     attributes: ["height"],

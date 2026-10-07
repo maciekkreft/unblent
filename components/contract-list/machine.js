@@ -12,7 +12,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "contract-list",
-  meta: { kind: "view", emits: [], attributes: [], asks: ["catalog: contracts"] },
+  meta: {
+    description:
+      "Shows the shared vocabulary: every event, query and command, with its schema, its owner, " +
+      "and who consumes or asks it. It reads everything from `catalog` once when the page " +
+      "opens, because the vocabulary changes only when the code is deployed.",
+    kind: "view", emits: [], attributes: [], asks: ["catalog: contracts"],
+  },
   context: ({ input }) => ({ ask: input.ask, events: [], queries: [], commands: [], error: null }),
   initial: "loading",
   states: {

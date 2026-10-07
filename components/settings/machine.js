@@ -101,6 +101,13 @@ const changed = emit(({ context }) => ({ type: "settings.changed", ...active(con
 export const machine = setup({}).createMachine({
   id: "settings",
   meta: {
+    description:
+      "Owns this device's preferences: the order and visibility of pages in the navigation, " +
+      "whether the viewport and layout switches are shown, whether the desk is being arranged, " +
+      "whether editors use Vim keys, and which profile is active. It keeps one copy per " +
+      "profile, `product` and `workshop`; the product hides the switches and does not arrange. " +
+      "Hiding the layout switch also turns arranging off. These follow the device, not the " +
+      "account.",
     kind: "fact",
     shape: "local-only",
     emits: ["settings.changed"],

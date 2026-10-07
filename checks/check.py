@@ -141,6 +141,11 @@ def check_manifests(manifests: dict) -> None:
         if "status" in meta:
             fail(path, "manifest check (7.3)",
                  "status is derived from the browser entry (7.3); remove meta.status")
+        # Section 7.3: what the component does for the user is read from the running
+        # system, so architecture.md need not list it.
+        if "description" in meta and not (isinstance(meta.get("description"), str) and meta["description"].strip()):
+            fail(path, "manifest check (7.3)",
+                 "meta.description must be a non-empty string saying what the component does for the user")
         if not isinstance(meta.get("emits"), list):
             fail(path, "manifest check (7.3)", "meta.emits must be a list, empty if it emits nothing")
         asks = meta.get("asks", [])

@@ -14,7 +14,16 @@ export const machine = setup({
   },
 }).createMachine({
   id: "catalog",
-  meta: { kind: "fact", shape: "remote-only", emits: [], owns: "every component's manifest" },
+  meta: {
+    description:
+      "Owns every component's manifest, read on the server from each component's machine file " +
+      "with the same reader the check uses, so the components page and the check cannot " +
+      "disagree. It answers `list`, every component with its manifest, its description and the " +
+      "components it interacts with, and `contracts`, every event, query and command with its " +
+      "schema. Manifests change only when the code is deployed, so it emits nothing; when the " +
+      "server cannot answer it replies with an error.",
+    kind: "fact", shape: "remote-only", emits: [], owns: "every component's manifest",
+  },
   context: ({ input }) => ({
     list: input.list,
     contracts: input.contracts,

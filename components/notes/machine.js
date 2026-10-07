@@ -239,6 +239,17 @@ export const machine = setup({
 }).createMachine({
   id: "notes",
   meta: {
+    description:
+      "Owns the notes: each note's text, its links, and which note is open. It works offline " +
+      "and syncs to the account when signed in (section 5); while signed out it numbers " +
+      "versions itself, and signing in uploads every note with its history. A note's `about` " +
+      "names what it is about, none, one or many: a save without `about` keeps the links, a " +
+      "save with it replaces them, and a link to a book that carries a place and a quote makes " +
+      "the note a highlight. The open note is the one in front in the Notes pair, the note in " +
+      "the editor or the subject's Highlights, kept in memory on this device; `notes: open` " +
+      "answers with it in full, or with the Highlights in reading order, and is offered to the " +
+      "chat as \"Reading the open note\". A deleted note is kept as a tombstone with its title " +
+      "and body, so it can still be shown or restored.",
     kind: "fact",
     shape: "replicated",
     emits: ["note.changed", "note.deleted", "note.conflicted"],

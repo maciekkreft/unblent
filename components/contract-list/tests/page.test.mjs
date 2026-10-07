@@ -73,14 +73,14 @@ for (const engine of ENGINES) {
         for (const card of root.querySelectorAll(".card")) {
           if (card.querySelector("h3")?.textContent !== "llm.edited") continue;
           const rows = [...card.querySelectorAll("tbody tr")];
-          const keyRow = rows.find((r) => r.querySelector("td.field")?.textContent.trim() === "key");
-          return { keyBadged: !!keyRow?.querySelector(".secret"), badges: card.querySelectorAll(".secret").length };
+          const badged = (name) => !!rows.find((r) => r.querySelector("td.field")?.textContent.trim() === name)?.querySelector(".secret");
+          return { keyBadged: badged("key") && badged("jevKey"), badges: card.querySelectorAll(".secret").length };
         }
         return null;
       });
       assert.ok(edited, "the llm.edited card is shown");
-      assert.ok(edited.keyBadged, "the secret key field wears the badge");
-      assert.equal(edited.badges, 1, "only the secret field is badged");
+      assert.ok(edited.keyBadged, "the two secret key fields wear the badge");
+      assert.equal(edited.badges, 2, "only the secret fields are badged");
 
       // The label is upper-cased by CSS, which innerText reflects.
       const contracts = await cardText(page, "catalog: contracts");

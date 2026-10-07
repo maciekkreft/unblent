@@ -69,6 +69,12 @@ export const machine = setup({
 }).createMachine({
   id: "session",
   meta: {
+    description:
+      "Owns who is signed in. Signing in and registering use passkeys, and the server sets a " +
+      "cookie the browser code never sees, so this fact asks its own server who the user is. " +
+      "Instead of an outbox it keeps a copy of the answer on the device and owes the server a " +
+      "sign-out made while offline. Registration closes once the number of users reaches " +
+      "`MAX_USERS`, and a refused sign-in or registration is announced so a notice can show it.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused"],

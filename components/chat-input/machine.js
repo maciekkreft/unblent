@@ -161,6 +161,16 @@ export const machine = setup({
 }).createMachine({
   id: "chat-input",
   meta: {
+    description:
+      "The box where the user types a question to the chat and sends it. While an answer is " +
+      "arriving Send becomes Stop, and a chat left without an answer offers Continue or Try " +
+      "again. It writes the instructions a new chat starts with once, when the chat is created, " +
+      "naming the open item on one line; they never change afterwards, so the provider's cache " +
+      "holds and the chat is an honest record of what the model was told. When the user picks a " +
+      "chat with no messages yet, such as the New chat row, the box takes focus, in Vim's " +
+      "insert mode when Vim keys is on; it follows the user's pick and not which chat is open, " +
+      "so a change of subject or a reload never moves the cursor. It disables itself while " +
+      "nobody is signed in or the chosen provider has no key.",
     kind: "view",
     attributes: [],
     emits: ["turn.submitted", "turn.steered"],

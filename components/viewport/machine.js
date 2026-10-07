@@ -10,7 +10,13 @@ const viewportFor = (stored) => (stored === "phone" ? "phone" : "desk");
 
 export const machine = setup({}).createMachine({
   id: "viewport",
-  meta: { kind: "fact", shape: "local-only", emits: ["viewport.changed"], owns: "the viewport the page is previewed in" },
+  meta: {
+    description:
+      "Owns which viewport the page is previewed in, desk or phone, kept on this device. It " +
+      "writes the one attribute `data-viewport` on the page (7.5), and the base styles frame " +
+      "the page as a phone from it, so no view changes.",
+    kind: "fact", shape: "local-only", emits: ["viewport.changed"], owns: "the viewport the page is previewed in",
+  },
   context: ({ input }) => ({
     viewport: viewportFor(input.stored),
     save: input.save,

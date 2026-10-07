@@ -360,6 +360,14 @@ export const machine = setup({
 }).createMachine({
   id: "books",
   meta: {
+    description:
+      "Owns the books in the library: each book's title, chapters, table of contents, reading " +
+      "position, and which book is open. A book is added only while signed in, because adding " +
+      "uploads the epub file; its chapters and images are extracted once on the server and " +
+      "fetched by URL, so this fact never holds the file. The reading position, a title the " +
+      "user gives a book, and which book is open are last write wins: they are never refused, " +
+      "and a pull brings them to every device. An empty title restores the title read from the " +
+      "file, and a re-import refreshes the file's title without touching the user's.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],

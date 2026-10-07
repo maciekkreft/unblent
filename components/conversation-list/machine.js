@@ -86,6 +86,12 @@ export const machine = setup({
 }).createMachine({
   id: "conversation-list",
   meta: {
+    description:
+      "Lists the chats, newest first, and lets the user open one, start a new one, or delete " +
+      "one. The first row is always New chat. While a subject is on the stage only the chats " +
+      "about it are listed; with no subject every chat is listed. Deleting waits out the undo " +
+      "window, so it can be taken back in one step. It learns which chat is open from " +
+      "`conversations` and never decides it.",
     kind: "view",
     emits: ["conversation.selected", "conversation.discarded"],
     // The subject attribute (12): off is every chat shown, no subject ask; on, only the

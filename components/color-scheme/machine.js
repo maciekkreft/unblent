@@ -15,7 +15,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "color-scheme",
-  meta: { kind: "fact", shape: "local-only", emits: ["color-scheme.changed"], owns: "light or dark mode" },
+  meta: {
+    description:
+      "Owns whether the page is in light or dark mode, following the device's own setting. It " +
+      "writes the one attribute `data-color-scheme` on the page (7.5), and the tokens change " +
+      "colour from it, so no view needs a dark mode of its own.",
+    kind: "fact", shape: "local-only", emits: ["color-scheme.changed"], owns: "light or dark mode",
+  },
   context: ({ input }) => ({
     scheme: schemeFor(input.media.matches),
     media: input.media,

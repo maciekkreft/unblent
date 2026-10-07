@@ -14,7 +14,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "layout-switch",
-  meta: { kind: "view", emits: ["layout.switched"], attributes: [], asks: ["settings: read"] },
+  meta: {
+    description:
+      "The switch that turns arranging the desk layout on and off. Whether arranging is on, and " +
+      "whether the switch is shown at all, belong to `settings`; with no settings on the page " +
+      "the switch shows nothing.",
+    kind: "view", emits: ["layout.switched"], attributes: [], asks: ["settings: read"],
+  },
   context: ({ input }) => ({ ask: input.ask, arranging: true, hidden: false }),
   initial: "loading",
   states: {

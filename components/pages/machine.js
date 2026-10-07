@@ -11,7 +11,13 @@ export const machine = setup({
   },
 }).createMachine({
   id: "pages",
-  meta: { kind: "fact", shape: "remote-only", emits: [], owns: "the pages of this site" },
+  meta: {
+    description:
+      "Owns the list of pages, read on the server from `pages/`, with each page's path, title " +
+      "and kind. The list changes only when the code is deployed, so it emits nothing; when the " +
+      "server cannot answer it replies with an error.",
+    kind: "fact", shape: "remote-only", emits: [], owns: "the pages of this site",
+  },
   context: ({ input }) => ({ load: input.load, pending: [] }),
   initial: "idle",
   states: {

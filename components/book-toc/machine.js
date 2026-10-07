@@ -53,6 +53,11 @@ export const machine = setup({
 }).createMachine({
   id: "book-toc",
   meta: {
+    description:
+      "Shows the open book's table of contents and lets the user jump to a chapter. The current " +
+      "chapter is marked: the one just clicked, until the book's saved position moves, and then " +
+      "the position. A part of the book the contents does not list, such as a dedication page, " +
+      "counts as part of the entry before it.",
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],

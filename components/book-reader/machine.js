@@ -336,6 +336,15 @@ export const machine = setup({
 }).createMachine({
   id: "book-reader",
   meta: {
+    description:
+      "Shows one book a chapter at a time, split into pages that fit this device's screen and " +
+      "type size, and turns the pages. It saves the reading place as a chapter and a block, " +
+      "never a page number, because page numbers differ between devices; each device opens the " +
+      "page that holds the saved place. The place is saved a short time after page turns stop, " +
+      "so a run of turns saves once. It paints the book's highlights and lets the user mark a " +
+      "new passage. After a re-import it finds each highlight's quote again and saves its " +
+      "corrected place; a highlight whose quote is no longer in the book stays a note with its " +
+      "quote and its comment.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded"],
     attributes: ["height", "highlights"],

@@ -73,6 +73,12 @@ class ComponentList extends LitElement {
       color: var(--color-ink);
       word-break: break-word;
     }
+    .description {
+      margin: 0;
+      font-size: var(--text-sm);
+      line-height: var(--leading-normal);
+      color: var(--color-body);
+    }
     .badges {
       display: flex;
       flex-wrap: wrap;
@@ -161,6 +167,7 @@ class ComponentList extends LitElement {
   #card = (c) => html`
     <article class="card">
       <h3>${c.name}</h3>
+      ${c.description ? html`<p class="description">${c.description}</p>` : nothing}
       <div class="badges">
         ${c.status === "planned" ? html`<span class="badge planned">planned</span>` : nothing}
         <span class="badge">${c.kind}</span>

@@ -6,7 +6,13 @@ import { setup, assign } from "xstate";
 // view, so the machine stays a pure definition importable in Node.
 export const machine = setup({}).createMachine({
   id: "work-desk",
-  meta: { kind: "view", emits: [], attributes: [] },
+  meta: {
+    description:
+      "A container that shows one of its child views at a time and lets the user pick which. It " +
+      "is the root of the workshop's design stem page, holding the tokens, contracts and " +
+      "components views.",
+    kind: "view", emits: [], attributes: [],
+  },
   context: ({ input }) => ({ views: input.views, open: input.views[0] ?? null }),
   initial: "ready",
   states: {

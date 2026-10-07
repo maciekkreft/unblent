@@ -47,6 +47,10 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const machine = setup({}).createMachine({
   id: "redline",
   meta: {
+    description:
+      "Owns the text under review and the comments on it, kept on this device. A comment is a " +
+      "range of the source text; a comment that falls outside the text or overlaps an earlier " +
+      "one is dropped, and an empty text means there is no redline.",
     kind: "fact",
     shape: "local-only",
     emits: ["redline.changed"],

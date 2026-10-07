@@ -73,6 +73,16 @@ export const machine = setup({
 }).createMachine({
   id: "subject",
   meta: {
+    description:
+      "Owns what the user is working on, as a kind, an id, a title and the view that shows it, " +
+      "or nothing; it stores nothing and combines what `dock` and `books` announce. Some views " +
+      "show a thing, today `book-reader`, which shows the open book; the subject is the thing " +
+      "shown by the one of those last in front on the stage, and it stays while any other view " +
+      "is in front, because those views are about the subject. After a reload, before any such " +
+      "view has been in front, the subject is the open item of the first view in its table. The " +
+      "table from a view to the kind of thing it shows lives only here, so a new kind of thing " +
+      "changes only this component, and a follower compares kind and id without knowing what " +
+      "kinds exist. It announces a change only when the answer differs.",
     kind: "fact",
     shape: "local-only",
     owns: "current subject",

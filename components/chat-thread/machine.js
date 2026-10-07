@@ -201,6 +201,13 @@ export const machine = setup({
 }).createMachine({
   id: "chat-thread",
   meta: {
+    description:
+      "Shows the open chat: the questions, the answers as they arrive, the model's thinking, " +
+      "which can be opened, and the lookups the model made, each named by what it read. Answers " +
+      "are written in markdown and drawn as formatted text by a small renderer of our own, " +
+      "always as escaped text, so nothing the model writes reaches the page as HTML. It holds " +
+      "only the scroll position and which thinking records are open; the chat itself belongs to " +
+      "`conversations`.",
     kind: "view",
     attributes: ["height", "markdown"],
     emits: [],

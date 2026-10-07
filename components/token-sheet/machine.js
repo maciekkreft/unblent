@@ -35,7 +35,13 @@ export function groupByPrefix(tokens) {
 // shape is metadata of fact components only.
 export const machine = createMachine({
   id: "token-sheet",
-  meta: { kind: "view", emits: [], attributes: [] },
+  meta: {
+    description:
+      "Shows every design token, grouped by family, and every icon, so the visual vocabulary " +
+      "can be reviewed before a view uses it. A token in a family it does not know is shown " +
+      "under Other rather than left out.",
+    kind: "view", emits: [], attributes: [],
+  },
   context: ({ input }) => ({ collect: input.collect, groups: groupByPrefix(input.collect()) }),
   on: {
     // Section 4.3, fourth rule: the starting picture comes from the stylesheet;

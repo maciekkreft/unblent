@@ -14,6 +14,10 @@ export const machine = setup({
 }).createMachine({
   id: "session-switch",
   meta: {
+    description:
+      "The control in the nav bar that signs in and out with a passkey. Who is signed in, and " +
+      "whether a new passkey may still be registered, belong to `session`; with no session on " +
+      "the page it shows nothing.",
     kind: "view",
     emits: ["signin.requested", "signout.requested"],
     attributes: [],

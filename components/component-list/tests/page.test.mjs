@@ -81,6 +81,8 @@ for (const engine of ENGINES) {
       assert.match(catalog, /remote-only/);
       assert.match(catalog, /answers list/);
       assert.match(catalog, /component-list · answers list/);
+      // The description sits under the name (7.3), so the page says what each one does.
+      assert.match(catalog, /^catalog Owns every component's manifest/);
 
       const list = await cardText(page, "component-list");
       assert.match(list, /\bview\b/);

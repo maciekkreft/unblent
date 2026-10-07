@@ -70,6 +70,11 @@ const same = (a, b) => a.stage === b.stage && SIDES.every((s) => sameSide(a.dock
 export const machine = setup({}).createMachine({
   id: "dock",
   meta: {
+    description:
+      "Owns the desk layout: which view is on the stage, and for each side (left, right, " +
+      "bottom) which views are docked there, which one is shown, and whether the side is open. " +
+      "It keeps the layout on this device, in localStorage. A view is docked in at most one " +
+      "place.",
     kind: "fact",
     shape: "local-only",
     emits: ["dock.changed"],
