@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "description": "One Score finished (4.3, fifth rule): a self-contained snapshot, so a later edit of a tool never changes what was recorded.",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "at": {
+      "type": "integer",
+      "description": "When Jev answered, ms since the epoch."
+    },
+    "text": {
+      "type": "string",
+      "description": "The post as it was scored."
+    },
+    "gauges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string",
+            "description": "The tool's name when it was scored."
+          },
+          "label": {
+            "type": "string",
+            "description": "The headline question's short name as the card showed it."
+          },
+          "direct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Jev's answer to the headline question, the tool's score; null when it was not asked."
+          },
+          "questions": {
+            "type": "array",
+            "description": "Only the questions Jev answered.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "label": {
+                  "type": "string",
+                  "description": "The question's short name as the card showed it."
+                },
+                "p": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "p"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "label",
+          "direct",
+          "questions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "id",
+    "at",
+    "text",
+    "gauges"
+  ],
+  "additionalProperties": false
+}

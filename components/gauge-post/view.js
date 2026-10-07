@@ -2,6 +2,7 @@ import { LitElement, html, svg, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { machine, band, leaning, errorText, blocked, short, headline } from "./machine.js";
 import read from "./events/gauge.read.json" with { type: "json" };
+import scored from "./events/post.scored.json" with { type: "json" };
 
 // The post is UI state worth keeping across a reload (3.1): kept on the device under a
 // key beginning with the view's name.
@@ -35,7 +36,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), recall, remember },
-      events: { "gauge.read": read },
+      events: { "gauge.read": read, "post.scored": scored },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

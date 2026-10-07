@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "description": "The scorings changed: every header, newest first, every time anything changed.",
+  "properties": {
+    "scorings": {
+      "type": "array",
+      "description": "Newest first.",
+      "items": {
+        "type": "object",
+        "description": "One scoring as a row of the History list.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "at": {
+            "type": "integer",
+            "description": "When Jev answered, ms since the epoch."
+          },
+          "text": {
+            "type": "string",
+            "description": "The post's first line, cut at 200 characters."
+          },
+          "gauges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "band": {
+                  "enum": [
+                    "high",
+                    "mixed",
+                    "low",
+                    null
+                  ],
+                  "description": "high above 0.7, mixed from 0.4, low below, from the headline answer."
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "band"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "text",
+          "gauges"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "scorings"
+  ],
+  "additionalProperties": false
+}

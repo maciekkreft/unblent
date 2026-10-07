@@ -122,7 +122,7 @@ export const machine = setup({
       "the answers. The text being typed is kept on this device. When Score cannot run, for " +
       "example while signed out or without a Jev key, the line under the button says why.",
     kind: "view",
-    emits: ["gauge.read"],
+    emits: ["gauge.read", "post.scored"],
     attributes: ["height"],
     asks: ["gauge: read", "llm: read", "llm: decide"],
   },

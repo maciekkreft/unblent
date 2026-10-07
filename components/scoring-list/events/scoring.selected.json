@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "description": "The user picked a scoring in the History list.",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+}
