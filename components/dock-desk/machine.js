@@ -176,14 +176,15 @@ export const machine = setup({
       "`control` to place it at the end of the stage header with no tab; `button=\"gear\"` to " +
       "show it from a button in the stage header that takes the stage while pressed, until it " +
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
-      "arrives, and is never saved; and `shows-on` naming a selection gesture (`book.selected`, " +
+      "arrives, and is never saved (the desk owns the glyphs it can draw, so the icon stays a " +
+      "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
       "`note.selected`, `conversation.selected`), which shows that child's tab when the gesture " +
       "arrives, the same as a click, while a reload or another device's change never moves a " +
-      "tab. While the desk is being arranged, a dock with more than one tab offers two buttons " +
-      "that move the shown tab one place earlier or later; the stage keeps the page's order. " +
-      "The tab of the view that shows the subject carries a mark with the subject's title as " +
-      "its hover text; the mark is an indicator, not a control, and no mark means there is no " +
-      "subject.",
+      "tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
+      "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
+      "the shown tab one place earlier or later; the stage keeps the page's order. The tab of " +
+      "the view that shows the subject carries a mark with the subject's title as its hover " +
+      "text; the mark is an indicator, not a control, and no mark means there is no subject.",
     kind: "view",
     emits: ["dock.arranged"],
     attributes: [],

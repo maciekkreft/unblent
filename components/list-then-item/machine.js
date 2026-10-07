@@ -36,7 +36,8 @@ export const machine = setup({}).createMachine({
       "list's `label`, and Back shows the list again. Which child is shown is kept on this " +
       "device under the container's id. It emits and asks nothing, so a new kind of list needs " +
       "only one more consumed gesture here. On a desk it is one tab, with its own `label`, " +
-      "`side`, `height` and `shows-on`.",
+      "`side`, `height` and `shows-on`, and a page holds one per pair, each with its own `id` " +
+      "(4.1).",
     kind: "view", emits: [], asks: [], attributes: ["height"],
   },
   context: ({ input }) => ({
