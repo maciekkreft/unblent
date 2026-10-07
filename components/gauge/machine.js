@@ -69,14 +69,46 @@ export const normalise = (value) => {
 
 const q = (id, label, text, yes, no) => ({ id, text, yes, no, label });
 
-// The four tools a first visit starts with (the plan's seed). The ids are fixed, so the
-// seed is the same in every browser and in the tests. A browser that already holds a
-// list keeps it as it is, even when this seed changes: the stored list is the user's,
-// possibly edited, so only a fresh browser starts from the new seed.
-export const SEED = Object.freeze([
+// The tools a first visit starts with (the plan's seed). The ids are fixed, so the seed
+// is the same in every browser and in the tests. `since` is the seed version that added a
+// tool; it stays in this file and the store's catch-up, never on the bus. A browser
+// that already holds a list is never reset to this seed, because the list is the user's
+// and may be edited: it only catches up once on what a newer seed version added
+// (`catchUp` below).
+export const SEED_VERSION = 2;
+
+const SOURCE = [
+  {
+    id: "01K6SEED00000000000000G5Q0",
+    name: "Viewability",
+    since: 2,
+    question: "Does this post give someone a reason to stop scrolling and read it?",
+    yes: "a reader scanning a feed would pause on it",
+    no: "a reader would pass it without noticing what it said",
+    rule: "adds",
+    questions: [
+      q("01K6SEED00000000000000G5Q1", "Stops the scroll",
+        "Does the first line stop the scroll on its own?",
+        "the opening line carries a surprise, a claim, a number or a name a reader cannot pass over",
+        "the opening is setup that only pays off later"),
+      q("01K6SEED00000000000000G5Q2", "Opens a gap",
+        "Does the post open a gap the reader wants closed?",
+        "it promises something not yet said, such as an outcome, a reveal or a reason",
+        "the first line already gives everything away, or promises nothing"),
+      q("01K6SEED00000000000000G5Q3", "Known subject",
+        "Is the subject one a broad audience already knows?",
+        "it names a widely known person, event, product or experience",
+        "it needs context only insiders have"),
+      q("01K6SEED00000000000000G5Q4", "Taken in at a glance",
+        "Is the post easy to take in at a glance?",
+        "it is short, or its shape is visible at once: a list, a quote, a before and after",
+        "it is a dense block that must be read from the top"),
+    ],
+  },
   {
     id: "01K6SEED00000000000000G1Q0",
     name: "Followability",
+    since: 1,
     question: "Does this post give someone a reason to want more from this account?",
     yes: "a reader of this topic would want the next post from this author",
     no: "nothing suggests the author will say anything more worth reading",
@@ -103,6 +135,7 @@ export const SEED = Object.freeze([
   {
     id: "01K6SEED00000000000000G2Q0",
     name: "Shareability",
+    since: 1,
     question: "Does this post give someone a reason to send it to another specific person?",
     yes: "a reader could name the person they would send it to and why",
     no: "it is read, maybe liked, and left",
@@ -129,6 +162,7 @@ export const SEED = Object.freeze([
   {
     id: "01K6SEED00000000000000G3Q0",
     name: "Likeability",
+    since: 1,
     question: "Does this post give someone a reason to signal quick agreement or approval?",
     yes: "a reader would tap like without thinking twice",
     no: "a reader would have to think before reacting, or would not react",
@@ -155,6 +189,7 @@ export const SEED = Object.freeze([
   {
     id: "01K6SEED00000000000000G4Q0",
     name: "Saveability",
+    since: 1,
     question: "Does this post give someone a reason to come back to it later?",
     yes: "a reader would bookmark it to use again",
     no: "once read it is done with",
@@ -178,19 +213,52 @@ export const SEED = Object.freeze([
         "a narrative that must be re-read start to finish"),
     ],
   },
-].map(normalise));
+];
 
-// What the store held, as gauges, or the seed when nothing is stored or it does not
-// parse. An empty stored list stays empty: the user deleted every tool.
+export const SEED = Object.freeze(SOURCE.map(normalise));
+const fresh = () => SEED.map((g) => ({ ...g }));
+
+// A list stored by an older seed version catches up once: the seed's wording fills only
+// what is empty on the seed's own tools and questions, so nothing the user wrote, renamed,
+// added or chose is touched; and a tool a newer seed added appears, unless its id is
+// already there. A seed tool the user deleted is not brought back, because it was added
+// by a version the list already had.
+export const catchUp = (gauges, version) => {
+  if (version >= SEED_VERSION) return gauges;
+  const fill = (mine, seed) => (mine.trim() ? mine : seed);
+  const filled = gauges.map((g) => {
+    const seed = SEED.find((s) => s.id === g.id);
+    if (!seed) return g;
+    return {
+      ...g,
+      yes: fill(g.yes, seed.yes),
+      no: fill(g.no, seed.no),
+      questions: g.questions.map((q) => {
+        const sq = seed.questions.find((x) => x.id === q.id);
+        return sq ? { ...q, yes: fill(q.yes, sq.yes), no: fill(q.no, sq.no) } : q;
+      }),
+    };
+  });
+  const have = new Set(gauges.map((g) => g.id));
+  const added = SOURCE.filter((s) => s.since > version && !have.has(s.id)).map(normalise);
+  return [...added, ...filled];
+};
+
+// What the store held, as gauges at the current seed version: the seed when nothing is
+// stored or it does not parse. The store holds { version, gauges }; a bare list is what
+// seed version 1 wrote. An empty stored list stays empty: the user deleted every tool.
 export const parse = (stored) => {
-  if (stored == null || stored === "") return SEED.map((g) => ({ ...g }));
+  if (stored == null || stored === "") return fresh();
   try {
     const value = JSON.parse(stored);
-    if (!Array.isArray(value)) return SEED.map((g) => ({ ...g }));
+    const list = Array.isArray(value) ? value : value?.gauges;
+    if (!Array.isArray(list)) return fresh();
+    const version = Array.isArray(value) ? 1 : Number.isInteger(value.version) ? value.version : 1;
     const seen = new Set();
-    return value.map(normalise).filter((g) => g && !seen.has(g.id) && seen.add(g.id));
+    const gauges = list.map(normalise).filter((g) => g && !seen.has(g.id) && seen.add(g.id));
+    return catchUp(gauges, version);
   } catch {
-    return SEED.map((g) => ({ ...g }));
+    return fresh();
   }
 };
 
@@ -219,7 +287,10 @@ const change = (next) => ({
   guard: ({ context, event }) => !same(next(context, event), context.gauges),
   actions: [
     assign({ gauges: ({ context, event }) => next(context, event) }),
-    ({ context }) => context.save(JSON.stringify(context.gauges)),
+    // The caught-up list is written with the next change, not at load: catching up is
+    // idempotent (it fills only what is empty and adds only what is missing), so a load
+    // that writes nothing simply catches up again, and loading never writes.
+    ({ context }) => context.save(JSON.stringify({ version: SEED_VERSION, gauges: context.gauges })),
     emit(({ context }) => ({ type: "gauge.changed", gauges: context.gauges })),
   ],
 });

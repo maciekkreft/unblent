@@ -41,8 +41,8 @@ test("a Score goes through llm: decide in one request and comes back as readings
     post.send({ type: "_score" });
     await until(() => post.getSnapshot().context.last != null);
     assert.equal(sent.length, 1, "one request for every tool");
-    assert.equal(sent[0].questions.length, 20, "four tools of four questions and a headline each");
-    assert.deepEqual(post.getSnapshot().context.last, { tools: 4, questions: 20, ms: 310, inputTokens: 900 });
+    assert.equal(sent[0].questions.length, 25, "five tools of four questions and a headline each");
+    assert.deepEqual(post.getSnapshot().context.last, { tools: 5, questions: 25, ms: 310, inputTokens: 900 });
     const gauges = post.getSnapshot().context.gauges;
     assert.ok(gauges.every((g) => g.reading && g.reading.at === 42 && g.reading.band), "every card has a banded reading");
   } finally {

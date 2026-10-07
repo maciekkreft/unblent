@@ -10,7 +10,7 @@ const NEW = "01K6TEST000000000000000N01";
 test("a new tool typed in the editor reaches gauge, is stored and comes back as gauge.changed", async () => {
   const stored = [];
   const { actors, unwire } = await wire(["gauge", "gauge-editor"], {
-    gauge: { stored: "[]", save: (v) => stored.push(v), now: () => 1 },
+    gauge: { stored: JSON.stringify({ version: 2, gauges: [] }), save: (v) => stored.push(v), now: () => 1 },
     "gauge-editor": { mint: () => "01K6TEST000000000000000Q01", undoMs: 100, throttleMs: 0 },
   });
   try {
@@ -20,7 +20,7 @@ test("a new tool typed in the editor reaches gauge, is stored and comes back as 
     editor.send({ type: "_edit", patch: { name: "Warmth" } });
     editor.send({ type: "_blur" });
     await until(() => stored.length > 0);
-    const [g] = JSON.parse(stored.at(-1));
+    const [g] = JSON.parse(stored.at(-1)).gauges;
     assert.equal(g.id, NEW);
     assert.equal(g.name, "Warmth");
     await until(() => editor.getSnapshot().context.gauges.some((x) => x.id === NEW));

@@ -14,7 +14,7 @@ test("the list shows the seed from gauge and a pick goes out on the bus", async 
     const list = actors["gauge-list"];
     await until(() => list.getSnapshot().matches("ready"));
     const names = list.getSnapshot().context.gauges.map((g) => g.name);
-    assert.deepEqual(names, ["Followability", "Shareability", "Likeability", "Saveability"]);
+    assert.deepEqual(names, ["Viewability", "Followability", "Shareability", "Likeability", "Saveability"]);
     list.send({ type: "_pick", id: list.getSnapshot().context.gauges[1].id });
     await until(() => records.some((r) => r.name === "gauge.selected" || r.type === "gauge.selected" || JSON.stringify(r).includes("gauge.selected")));
   } finally {

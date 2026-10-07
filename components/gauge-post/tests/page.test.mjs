@@ -55,10 +55,10 @@ for (const engine of ENGINES) {
         await score.click();
         const line = page.locator("gauge-post .line");
         await until(async () => (await line.textContent()).includes("310 ms"));
-        assert.equal((await line.textContent()).replace(/\s+/g, " ").trim(), "4 tools · 20 questions in one request · 310 ms");
+        assert.equal((await line.textContent()).replace(/\s+/g, " ").trim(), "5 tools · 25 questions in one request · 310 ms");
         assert.equal(sent.length, 1);
         assert.equal(sent[0].state.post, POST);
-        assert.equal(await page.locator("gauge-post .card .dial").count(), 4);
+        assert.equal(await page.locator("gauge-post .card .dial").count(), 5);
         const words = await page.locator("gauge-post .bandword").allTextContents();
         assert.ok(words.every((w) => ["High", "Mixed", "Low"].includes(w)), words.join(","));
         assert.ok((await page.locator("gauge-post .word.unsure").count()) > 0, "an unsure answer is shown as such");

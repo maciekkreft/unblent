@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, normalise, score, band, parse, SEED } from "../machine.js";
+import { machine, normalise, score, band, parse, SEED, SEED_VERSION } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (...path) => JSON.parse(readFileSync(resolve(HERE, "..", ...path), "utf8"));
@@ -32,7 +32,10 @@ const GAUGE = {
   ],
 };
 
-const start = (stored = "[]", at = 1000) => {
+// A list as the current store writes it, so these tests see no seed catch-up.
+const store = (gauges) => JSON.stringify({ version: SEED_VERSION, gauges });
+
+const start = (stored = store([]), at = 1000) => {
   const saved = [];
   const actor = createActor(machine, { input: { stored, save: (v) => saved.push(v), now: () => at } });
   const emitted = [];
@@ -76,16 +79,70 @@ test("normalise keeps the contract shape and drops what does not fit", () => {
   assert.deepEqual(g, { id: G, name: "", question: "", yes: "", no: "", rule: "adds", questions: [{ id: Q1, text: "x", yes: "", no: "" }], reading: null });
 });
 
-test("nothing stored, or garbage, is the seed; an empty list stays empty", () => {
-  assert.equal(parse(null).length, 4);
-  assert.deepEqual(parse("not json").map((g) => g.name), ["Followability", "Shareability", "Likeability", "Saveability"]);
-  assert.deepEqual(parse("[]"), []);
+const NAMES = ["Viewability", "Followability", "Shareability", "Likeability", "Saveability"];
+
+test("nothing stored, or garbage, is the whole seed; an empty current list stays empty", () => {
+  assert.deepEqual(parse(null).map((g) => g.name), NAMES);
+  assert.deepEqual(parse("not json").map((g) => g.name), NAMES);
+  assert.deepEqual(parse(store([])), []);
+  assert.ok(SEED.every((g) => !("since" in g)), "since never leaves the machine");
   for (const g of SEED) {
     assert.equal(g.questions.length, 4);
     assert.ok(g.questions.every((q) => q.label && q.yes && q.no));
     assert.ok(g.yes && g.no, `${g.name} carries criteria for its main question`);
   }
-  assert.equal(gauges(start(null).actor).length, 4);
+  assert.equal(gauges(start(null).actor).length, 5);
+});
+
+test("a fresh browser gets the whole seed and stores it at the current version on its first change", () => {
+  const { actor, saved } = start(null);
+  const { reading, ...first } = gauges(actor)[0];
+  send(actor, { type: "gauge.saved", ...first, name: "Views" }, SAVED);
+  const written = JSON.parse(saved.at(-1));
+  assert.equal(written.version, SEED_VERSION);
+  assert.deepEqual(written.gauges.map((g) => g.name), ["Views", ...NAMES.slice(1)]);
+  assert.ok(written.gauges.every((g) => !("since" in g)));
+});
+
+// What seed version 1 stored: a bare list of the four first tools, without the main
+// question's wording, which that version did not have.
+const V1 = SEED.slice(1).map((g) => ({ ...g, yes: undefined, no: undefined }));
+
+test("a version-1 list gets the main-question wording and the new tool, first", () => {
+  const list = parse(JSON.stringify(V1));
+  assert.deepEqual(list.map((g) => g.name), NAMES);
+  assert.deepEqual(list, parse(null));
+});
+
+test("a version-1 list keeps the user's own wording, names, questions and rule", () => {
+  const mine = { id: "01K6TEST000000000000000Q77", text: "My question?", yes: "", no: "" };
+  const [follow, ...rest] = V1;
+  const edited = {
+    ...follow,
+    name: "Follow-worthy",
+    rule: "holds",
+    yes: "my yes",
+    questions: [{ ...follow.questions[0], yes: "my own yes", no: "" }, ...follow.questions.slice(1), mine],
+  };
+  const [, got] = parse(JSON.stringify([edited, ...rest]));
+  assert.equal(got.name, "Follow-worthy");
+  assert.equal(got.rule, "holds");
+  assert.equal(got.yes, "my yes", "non-empty wording is never touched");
+  assert.equal(got.no, SEED[1].no, "empty wording is filled from the seed");
+  assert.equal(got.questions[0].yes, "my own yes");
+  assert.equal(got.questions[0].no, SEED[1].questions[0].no);
+  assert.deepEqual(got.questions.at(-1), mine, "a question the user added is left alone");
+});
+
+test("a seed tool deleted under version 1 stays deleted", () => {
+  const list = parse(JSON.stringify(V1.filter((g) => g.name !== "Likeability")));
+  assert.deepEqual(list.map((g) => g.name), ["Viewability", "Followability", "Shareability", "Saveability"]);
+  assert.deepEqual(parse(JSON.stringify([])).map((g) => g.name), ["Viewability"], "only what a newer seed added appears");
+});
+
+test("a list at the current version is read untouched", () => {
+  const list = [{ ...SEED[1], yes: "", no: "" }];
+  assert.deepEqual(parse(store(list)), list);
 });
 
 test("a save is stored and announced once; a repeat does nothing", () => {
@@ -98,7 +155,7 @@ test("a save is stored and announced once; a repeat does nothing", () => {
 });
 
 test("the main question's criteria are kept as written; a stored list without them reads them as empty", () => {
-  const { actor } = start(JSON.stringify([{ ...GAUGE, yes: undefined, no: undefined }]));
+  const { actor } = start(store([{ ...GAUGE, yes: undefined, no: undefined }]));
   assert.equal(gauges(actor)[0].yes, "");
   send(actor, { type: "gauge.saved", ...GAUGE }, SAVED);
   assert.equal(gauges(actor)[0].yes, "one point, plainly made");
@@ -106,7 +163,7 @@ test("the main question's criteria are kept as written; a stored list without th
 });
 
 test("a reading is kept, scored and banded; unknown answers and gauges are dropped", () => {
-  const { actor } = start(JSON.stringify([GAUGE]), 5000);
+  const { actor } = start(store([GAUGE]), 5000);
   send(
     actor,
     {
@@ -127,7 +184,7 @@ test("a reading is kept, scored and banded; unknown answers and gauges are dropp
 });
 
 test("a rule change re-scores the kept reading; a removed question's answer is dropped", () => {
-  const { actor } = start(JSON.stringify([GAUGE]));
+  const { actor } = start(store([GAUGE]));
   send(actor, { type: "gauge.read", readings: [{ id: G, answers: [{ id: Q1, p: 0.9 }, { id: Q2, p: 0.1 }], direct: null }] }, GREAD);
   assert.equal(gauges(actor)[0].reading.band, "mixed");
   send(actor, { type: "gauge.saved", ...GAUGE, rule: "holds" }, SAVED);
@@ -139,10 +196,10 @@ test("a rule change re-scores the kept reading; a removed question's answer is d
 });
 
 test("a discard removes the gauge, and the empty list is stored as empty", () => {
-  const { actor, saved, emitted } = start(JSON.stringify([GAUGE]));
+  const { actor, saved, emitted } = start(store([GAUGE]));
   send(actor, { type: "gauge.discarded", id: G }, { type: "object" });
   assert.deepEqual(emitted.at(-1).gauges, []);
-  assert.equal(saved.at(-1), "[]");
+  assert.deepEqual(JSON.parse(saved.at(-1)), { version: SEED_VERSION, gauges: [] });
   send(actor, { type: "gauge.discarded", id: G }, { type: "object" });
   assert.equal(emitted.length, 1, "discarding what is gone announces nothing");
 });
