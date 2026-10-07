@@ -14,11 +14,6 @@ const toMs = (text, fallback = 3000) => {
   return t.endsWith("ms") ? n : n * 1000;
 };
 
-const RULES = [
-  { id: "adds", name: "Each question adds", help: "The score is the average of the answers. One weak answer lowers it a little." },
-  { id: "holds", name: "Every question must hold", help: "The score is the geometric mean. One answer near zero sinks it." },
-];
-
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -122,26 +117,6 @@ class GaugeEditor extends LitElement {
       font-weight: var(--weight-semibold);
       line-height: var(--leading-tight);
     }
-    .rule {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      column-gap: var(--space-sm);
-      align-items: baseline;
-      cursor: pointer;
-      padding: var(--space-xs) 0;
-    }
-    .rule input {
-      margin: 0;
-      accent-color: var(--color-accent);
-    }
-    .rule .name {
-      color: var(--color-ink);
-    }
-    .rule .help {
-      grid-column: 2;
-      font-size: var(--text-sm);
-      color: var(--color-body-mid);
-    }
     .questions {
       display: flex;
       flex-direction: column;
@@ -232,6 +207,10 @@ class GaugeEditor extends LitElement {
             <textarea .value=${draft.question} @input=${(e) => edit({ question: e.target.value })}></textarea>
           </label>
           <label class="field">
+            <span class="caption">Short name</span>
+            <input type="text" .value=${draft.label ?? ""} @input=${(e) => edit({ label: e.target.value })} />
+          </label>
+          <label class="field">
             <span class="caption">Yes when</span>
             <textarea .value=${draft.yes} @input=${(e) => edit({ yes: e.target.value })}></textarea>
           </label>
@@ -239,26 +218,10 @@ class GaugeEditor extends LitElement {
             <span class="caption">No when</span>
             <textarea .value=${draft.no} @input=${(e) => edit({ no: e.target.value })}></textarea>
           </label>
-          <fieldset>
-            <legend>Rule</legend>
-            ${RULES.map(
-              (r) => html`
-                <label class="rule">
-                  <input
-                    type="radio"
-                    name="rule"
-                    .checked=${draft.rule === r.id}
-                    @change=${() => {
-                      edit({ rule: r.id });
-                      this.#send({ type: "_blur" });
-                    }}
-                  />
-                  <span class="name">${r.name}</span>
-                  <span class="help">${r.help}</span>
-                </label>
-              `,
-            )}
-          </fieldset>
+          <p class="help">
+            The question above is the tool's score. The questions below explain the reading and do not change the
+            score.
+          </p>
           <fieldset>
             <legend>Questions</legend>
             <div class="questions">${draft.questions.map((q, i) => this.#question(q, i, removing.has(q.id)))}</div>
@@ -266,10 +229,6 @@ class GaugeEditor extends LitElement {
           <div class="actions">
             <button type="button" @click=${() => this.#send({ type: "_addQuestion" })}>Add a question</button>
           </div>
-          <p class="help">
-            Score on the stage runs every tool on the post. The question above is asked directly and shown beside
-            the score; it is not part of the score.
-          </p>
           <div class="actions">
             ${deleting
               ? html`<button type="button" class="undo" @click=${() => this.#send({ type: "_undoDelete" })}>Deleted · Undo</button>`

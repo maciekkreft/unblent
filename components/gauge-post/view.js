@@ -1,6 +1,6 @@
 import { LitElement, html, svg, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, band, leaning, errorText, blocked } from "./machine.js";
+import { machine, band, leaning, errorText, blocked, short, headline } from "./machine.js";
 import read from "./events/gauge.read.json" with { type: "json" };
 
 // The post is UI state worth keeping across a reload (3.1): kept on the device under a
@@ -24,9 +24,6 @@ const remember = (text) => {
 const BAND = { high: "High", mixed: "Mixed", low: "Low" };
 // The half-dial's arc, M10 50 A40 40 0 0 1 90 50: half a circle of radius 40.
 const ARC = 125.7;
-
-// A question's short name on the card: its own, or its first clause.
-const short = (q) => q.label?.trim() || q.text.split(/[,:]/)[0].trim() || "Untitled question";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -158,7 +155,15 @@ class GaugePost extends LitElement {
       box-shadow: var(--shadow-card);
       min-width: 0;
     }
+    .head {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
     h3 {
+      flex: 1;
+      min-width: 0;
+      overflow-wrap: anywhere;
       margin: 0;
       font-size: var(--text-body);
       font-weight: var(--weight-semibold);
@@ -176,8 +181,8 @@ class GaugePost extends LitElement {
     }
     .dial svg {
       display: block;
-      width: calc(var(--space-2xl) * 2);
-      height: calc(var(--space-2xl) * 1.12);
+      width: calc(var(--space-2xl) * 1.5);
+      height: calc(var(--space-2xl) * 0.84);
     }
     .dial .track {
       fill: none;
@@ -185,11 +190,6 @@ class GaugePost extends LitElement {
     }
     .dial .fill {
       fill: none;
-    }
-    .dial .value {
-      fill: var(--color-ink);
-      font-family: var(--font-sans);
-      font-weight: var(--weight-semibold);
     }
     .high .fill {
       stroke: var(--color-success);
@@ -213,6 +213,13 @@ class GaugePost extends LitElement {
     .bandword.low {
       color: var(--color-danger);
     }
+    .headline {
+      margin: 0;
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
     .rows {
       display: grid;
       grid-template-columns: minmax(0, 1fr) calc(var(--space-2xl) * 1.25) calc(var(--space-2xl) * 1.1);
@@ -220,6 +227,16 @@ class GaugePost extends LitElement {
       row-gap: var(--space-xs);
       align-items: center;
       font-size: var(--text-sm);
+    }
+    .why {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: subgrid;
+      align-items: baseline;
+      border-top: var(--border-width) solid var(--color-border);
+      padding-top: var(--space-xs);
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
     }
     .scale {
       grid-column: 2;
@@ -290,11 +307,6 @@ class GaugePost extends LitElement {
     .word.unsure {
       color: var(--color-body-mid);
     }
-    .rule {
-      grid-column: 1 / -1;
-      border-top: var(--border-width) solid var(--color-border);
-      margin: var(--space-2xs) 0;
-    }
   `;
 
   #actor = new ActorController(this);
@@ -333,35 +345,39 @@ class GaugePost extends LitElement {
 
   #card(g) {
     const r = g.reading;
-    if (!r || r.score == null) {
-      return html`<section class="card" data-id=${g.id}>
-        <h3>${g.name || "Untitled"}</h3>
-        <p class="unscored">Not scored yet</p>
-      </section>`;
-    }
-    const b = band(r.score);
-    const answers = new Map(r.answers.map((a) => [a.id, a.p]));
+    const asks = g.question.trim() !== "";
+    const answers = new Map((r?.answers ?? []).map((a) => [a.id, a.p]));
+    const rows = g.questions.filter((q) => answers.has(q.id));
+    let top;
+    if (!asks) top = html`<p class="unscored">Add the tool's question to score it</p>`;
+    else if (!r || r.score == null) top = html`<p class="unscored">Not scored yet</p>`;
+    else top = this.#dial(r.score);
     return html`
       <section class="card" data-id=${g.id}>
-        <h3>${g.name || "Untitled"}</h3>
-        <div class="dial ${b}">
-          <svg viewBox="0 0 100 56" role="img" aria-label="Score ${r.score.toFixed(2)}, ${BAND[b]}">
-            ${svg`<path class="track" d="M10 50 A40 40 0 0 1 90 50" stroke-width="8" stroke-linecap="round"></path>
-              <path class="fill" d="M10 50 A40 40 0 0 1 90 50" stroke-width="8" stroke-linecap="round"
-                stroke-dasharray="${ARC * r.score} ${ARC}"></path>
-              <text class="value" x="50" y="46" text-anchor="middle" font-size="16">${r.score.toFixed(2)}</text>`}
-          </svg>
-          <span class="bandword ${b}">${BAND[b]}</span>
-        </div>
-        <div class="rows">
-          <span></span><span class="scale"><span>No</span><span>Yes</span></span><span></span>
-          ${g.questions.map((q) => (answers.has(q.id) ? this.#row(short(q), answers.get(q.id)) : nothing))}
-          ${r.direct != null
-            ? html`<span class="rule"></span>${this.#row("Asked as one question", r.direct)}`
-            : nothing}
-        </div>
+        <div class="head"><h3>${g.name || "Untitled"}</h3>${top}</div>
+        ${asks ? html`<p class="headline">${headline(g)}</p>` : nothing}
+        ${rows.length
+          ? html`<div class="rows">
+              <span class="why"><span>Why, in Jev's reading</span><span class="scale"><span>No</span><span>Yes</span></span></span>
+              ${rows.map((q) => this.#row(short(q), answers.get(q.id)))}
+            </div>`
+          : nothing}
       </section>
     `;
+  }
+
+  // No number on the dial: the band word says what the reading can bear, and a figure
+  // would dress a guess as a measurement.
+  #dial(score) {
+    const b = band(score);
+    return html`<div class="dial ${b}">
+      <svg viewBox="0 0 100 56" role="img" aria-label=${BAND[b]}>
+        ${svg`<path class="track" d="M10 50 A40 40 0 0 1 90 50" stroke-width="10" stroke-linecap="round"></path>
+          <path class="fill" d="M10 50 A40 40 0 0 1 90 50" stroke-width="10" stroke-linecap="round"
+            stroke-dasharray="${ARC * score} ${ARC}"></path>`}
+      </svg>
+      <span class="bandword ${b}">${BAND[b]}</span>
+    </div>`;
   }
 
   #row(label, p) {

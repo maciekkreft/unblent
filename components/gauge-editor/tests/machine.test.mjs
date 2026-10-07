@@ -22,7 +22,7 @@ const GAUGE = {
   question: "Is it clear?",
   yes: "one point",
   no: "a guess",
-  rule: "adds",
+  label: "",
   questions: [
     { id: Q1, text: "One idea?", yes: "one", no: "many", label: "One idea" },
     { id: Q2, text: "Short?", yes: "", no: "" },
@@ -87,10 +87,10 @@ test("typing saves the whole gauge at the throttle, not per keystroke; blur save
   assert.equal(emitted[0].name, "Cl");
   assert.equal(emitted[0].questions[0].yes, "just one");
   assert.equal(emitted[0].questions[0].label, "One idea");
-  actor.send({ type: "_edit", patch: { rule: "holds" } });
+  actor.send({ type: "_edit", patch: { label: "Clear" } });
   actor.send({ type: "_blur" });
   assert.equal(emitted.length, 2);
-  assert.equal(emitted[1].rule, "holds");
+  assert.equal(emitted[1].label, "Clear");
   assert.equal(emitted[1].yes, "one point", "the main question's criteria ride every save");
   actor.send({ type: "_edit", patch: { no: "the reader has to guess" } });
   actor.send({ type: "_blur" });

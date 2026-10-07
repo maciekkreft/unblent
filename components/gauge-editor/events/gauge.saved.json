@@ -12,7 +12,11 @@
     },
     "question": {
       "type": "string",
-      "description": "The headline question, asked directly and not counted in the score."
+      "description": "The headline question. Jev's answer to it is the gauge's score."
+    },
+    "label": {
+      "type": "string",
+      "description": "A short name for the headline question, shown under the dial; optional."
     },
     "yes": {
       "type": "string",
@@ -27,7 +31,7 @@
         "adds",
         "holds"
       ],
-      "description": "adds: the score is the average of the answers; holds: the geometric mean."
+      "description": "Unused since the score became the headline question's answer; kept so stored gauges stay valid."
     },
     "questions": {
       "type": "array",
@@ -70,7 +74,6 @@
     "id",
     "name",
     "question",
-    "rule",
     "questions"
   ],
   "additionalProperties": false

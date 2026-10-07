@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, normalise, score, band, parse, SEED, SEED_VERSION } from "../machine.js";
+import { machine, normalise, band, parse, SEED, SEED_VERSION } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (...path) => JSON.parse(readFileSync(resolve(HERE, "..", ...path), "utf8"));
@@ -23,6 +23,7 @@ const GAUGE = {
   id: G,
   name: "Clarity",
   question: "Is it clear?",
+  label: "",
   yes: "one point, plainly made",
   no: "the reader has to guess",
   rule: "adds",
@@ -58,13 +59,6 @@ const read = (actor) => {
 };
 const gauges = (actor) => read(actor).gauges;
 
-test("score: adds is the average, holds the geometric mean, none is null", () => {
-  assert.equal(score("adds", [{ p: 0.2 }, { p: 0.8 }]), 0.5);
-  assert.ok(Math.abs(score("holds", [{ p: 0.2 }, { p: 0.8 }]) - 0.4) < 1e-9);
-  assert.ok(score("holds", [{ p: 0 }, { p: 1 }]) < 0.01, "a zero sinks a holds gauge without breaking it");
-  assert.equal(score("adds", []), null);
-});
-
 test("band: high above 0.7, mixed from 0.4, low below", () => {
   assert.equal(band(0.71), "high");
   assert.equal(band(0.7), "mixed");
@@ -76,7 +70,7 @@ test("band: high above 0.7, mixed from 0.4, low below", () => {
 test("normalise keeps the contract shape and drops what does not fit", () => {
   assert.equal(normalise({ id: "nope" }), null);
   const g = normalise({ id: G, name: 3, rule: "odd", questions: [{ id: Q1, text: "x" }, { id: "bad", text: "y" }, null] });
-  assert.deepEqual(g, { id: G, name: "", question: "", yes: "", no: "", rule: "adds", questions: [{ id: Q1, text: "x", yes: "", no: "" }], reading: null });
+  assert.deepEqual(g, { id: G, name: "", question: "", label: "", yes: "", no: "", rule: "adds", questions: [{ id: Q1, text: "x", yes: "", no: "" }], reading: null });
 });
 
 const NAMES = ["Viewability", "Followability", "Shareability", "Likeability", "Saveability"];
@@ -179,20 +173,26 @@ test("a reading is kept, scored and banded; unknown answers and gauges are dropp
   assert.equal(g.reading.at, 5000);
   assert.deepEqual(g.reading.answers, [{ id: Q1, p: 0.9 }, { id: Q2, p: 0.7 }]);
   assert.equal(g.reading.direct, 0.6);
-  assert.ok(Math.abs(g.reading.score - 0.8) < 1e-9);
-  assert.equal(g.reading.band, "high");
+  assert.equal(g.reading.score, 0.6, "the score is the headline question's answer");
+  assert.equal(g.reading.band, "mixed");
 });
 
-test("a rule change re-scores the kept reading; a removed question's answer is dropped", () => {
+test("editing the questions keeps the reading's score; a removed question's answer is dropped", () => {
   const { actor } = start(store([GAUGE]));
-  send(actor, { type: "gauge.read", readings: [{ id: G, answers: [{ id: Q1, p: 0.9 }, { id: Q2, p: 0.1 }], direct: null }] }, GREAD);
-  assert.equal(gauges(actor)[0].reading.band, "mixed");
-  send(actor, { type: "gauge.saved", ...GAUGE, rule: "holds" }, SAVED);
-  assert.ok(Math.abs(gauges(actor)[0].reading.score - 0.3) < 1e-9);
-  assert.equal(gauges(actor)[0].reading.band, "low");
+  send(actor, { type: "gauge.read", readings: [{ id: G, answers: [{ id: Q1, p: 0.9 }, { id: Q2, p: 0.1 }], direct: 0.8 }] }, GREAD);
+  assert.equal(gauges(actor)[0].reading.band, "high");
   send(actor, { type: "gauge.saved", ...GAUGE, questions: [GAUGE.questions[0]] }, SAVED);
   assert.deepEqual(gauges(actor)[0].reading.answers, [{ id: Q1, p: 0.9 }]);
-  assert.equal(gauges(actor)[0].reading.score, 0.9);
+  assert.equal(gauges(actor)[0].reading.score, 0.8);
+  assert.equal(gauges(actor)[0].reading.band, "high");
+});
+
+test("a version-2 list gets the seed's short names once; the user's own is kept", () => {
+  const [view, follow, ...rest] = SEED.map((g) => ({ ...g, label: "" }));
+  const list = parse(JSON.stringify({ version: 2, gauges: [{ ...view, label: "Mine" }, follow, ...rest] }));
+  assert.equal(list[0].label, "Mine");
+  assert.deepEqual(list.slice(1).map((g) => g.label), SEED.slice(1).map((g) => g.label));
+  assert.ok(SEED.every((g) => g.label), "every seed tool has a short name");
 });
 
 test("a discard removes the gauge, and the empty list is stored as empty", () => {

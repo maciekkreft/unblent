@@ -11,16 +11,16 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // arrive through input, so the machine is a pure definition importable in Node.
 
 const blankQuestion = (id) => ({ id, text: "", yes: "", no: "" });
-const blank = (id, mint) => ({ id, name: "", question: "", yes: "", no: "", rule: "adds", questions: [blankQuestion(mint())] });
+const blank = (id, mint) => ({ id, name: "", question: "", yes: "", no: "", label: "", questions: [blankQuestion(mint())] });
 
 // The draft as gauge.saved carries it: the gauge's own fields, never its reading.
 const wire = (g) => ({
   id: g.id,
   name: g.name,
   question: g.question,
+  label: g.label ?? "",
   yes: g.yes ?? "",
   no: g.no ?? "",
-  rule: g.rule,
   questions: g.questions.map((q) => {
     const out = { id: q.id, text: q.text, yes: q.yes, no: q.no };
     if (typeof q.label === "string") out.label = q.label;
@@ -89,8 +89,8 @@ export const machine = setup({
   id: "gauge-editor",
   meta: {
     description:
-      "Edits one gauge: its name, its headline question, its questions with their yes and no " +
-      "criteria, and its rule. Every edit is saved as the whole gauge a short time into typing " +
+      "Edits one gauge: its name, its headline question and its short name, and its questions " +
+      "with their yes and no criteria. Every edit is saved as the whole gauge a short time into typing " +
       "and when a field loses focus, and a gauge with nothing written in it is never saved. " +
       "Removing a question or deleting the gauge waits out the undo window, and moving to " +
       "another gauge settles what was pending on the one being left, so nothing the user did is " +

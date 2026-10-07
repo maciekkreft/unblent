@@ -28,9 +28,9 @@ const start = async (gauges = [gauge(G)], reply) => {
   return { actor, emitted };
 };
 
-test("the subtitle counts the questions and names the rule", () => {
-  assert.equal(subtitle(gauge(G, { questions: [{}, {}, {}, {}] })), "4 questions · each adds");
-  assert.equal(subtitle(gauge(G, { rule: "holds", questions: [{}] })), "1 question · every must hold");
+test("the subtitle counts the questions", () => {
+  assert.equal(subtitle(gauge(G, { questions: [{}, {}, {}, {}] })), "4 questions");
+  assert.equal(subtitle(gauge(G, { questions: [{}] })), "1 question");
 });
 
 test("picking a gauge or the draft announces it; a stale id does nothing", async () => {

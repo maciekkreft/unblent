@@ -11,10 +11,10 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // note-list's New note does: picking it opens an empty editor under that id; once the
 // editor saves, gauge.changed brings the real row and a fresh draft is minted.
 
-// The second line of a row: how many questions and how they are combined.
+// The second line of a row: how many questions explain the tool's score.
 export const subtitle = (gauge) => {
   const n = gauge.questions.length;
-  return `${n} question${n === 1 ? "" : "s"} · ${gauge.rule === "holds" ? "every must hold" : "each adds"}`;
+  return `${n} question${n === 1 ? "" : "s"}`;
 };
 
 const remint = (context, gauges) => (gauges.some((g) => g.id === context.draft) ? context.mint() : context.draft);
@@ -30,7 +30,7 @@ export const machine = setup({
       "Lists the gauges and lets the user pick one to edit; it is the list of a list-then-item " +
       "pair in the Tools dock. New tool is always the first row and opens an empty editor; the " +
       "gauge appears in the list once something is written in it. Each row shows how many " +
-      "questions the gauge has and how they are combined.",
+      "questions the gauge has.",
     kind: "view", emits: ["gauge.selected"], attributes: [], asks: ["gauge: read"],
   },
   context: ({ input }) => ({

@@ -13,6 +13,12 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // import each other (11.2), so the two copies are a known duplication.
 export const band = (s) => (s == null ? null : s > 0.7 ? "high" : s >= 0.4 ? "mixed" : "low");
 
+// A question's short name on the card: its own, or its first clause.
+export const short = (q) => q.label?.trim() || q.text.split(/[,:]/)[0].trim() || "Untitled question";
+
+// The headline question's short name under the dial, found the same way.
+export const headline = (g) => g.label?.trim() || g.question.split(/[,:?]/)[0].trim() || "Untitled tool";
+
 // Which way an answer leans, in a word. Unsure sits in the middle fifth.
 export const leaning = (p) => {
   if (p >= 0.8) return { word: "Yes", side: "yes" };

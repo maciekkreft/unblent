@@ -62,6 +62,10 @@ for (const engine of ENGINES) {
         const words = await page.locator("gauge-post .bandword").allTextContents();
         assert.ok(words.every((w) => ["High", "Mixed", "Low"].includes(w)), words.join(","));
         assert.ok((await page.locator("gauge-post .word.unsure").count()) > 0, "an unsure answer is shown as such");
+        assert.equal(await page.locator("gauge-post .card .headline").count(), 5, "every card names its headline question");
+        const cards = (await page.locator("gauge-post .cards").textContent()).replace(/\s+/g, " ");
+        assert.ok(!cards.includes("Asked as one question"), "the headline is the score, not a row");
+        assert.ok(!/\d/.test(cards), `no number on a card: ${cards}`);
         // The list in the dock shows the same band word as the card.
         const listBands = await page.locator("gauge-list .band").allTextContents();
         assert.deepEqual(listBands, words);

@@ -1,8 +1,8 @@
 import { setup, assign, emit } from "xstate";
 
 // A local-only fact component (3.1): headless owner of the gauges. A gauge is a tool of
-// yes/no questions with a rule that turns Jev's answers into one score, and the last
-// reading of it. gauge-editor, where the user edits, emits the whole gauge as
+// yes/no questions, a headline question whose answer is the score, and the last reading
+// of it. gauge-editor, where the user edits, emits the whole gauge as
 // gauge.saved; gauge-post, where the user pressed Score, emits Jev's answers as
 // gauge.read (4.3, fifth rule). This fact keeps them, saves them and announces the whole
 // list as gauge.changed, and answers gauge: read for the starting picture. The store and
@@ -12,19 +12,6 @@ const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
 const str = (v) => (typeof v === "string" ? v : "");
 const isP = (p) => typeof p === "number" && Number.isFinite(p) && p >= 0 && p <= 1;
-
-// A zero answer under "every question must hold" would make the log -Infinity; flooring
-// it keeps the geometric mean a number that is still effectively zero.
-const FLOOR = 1e-6;
-
-// The rule's score from the answers: "adds" is the average, "holds" the geometric mean,
-// so one answer near zero sinks a "holds" gauge and only lowers an "adds" one.
-export const score = (rule, answers) => {
-  if (!answers.length) return null;
-  const ps = answers.map((a) => a.p);
-  if (rule === "holds") return Math.exp(ps.reduce((s, p) => s + Math.log(Math.max(p, FLOOR)), 0) / ps.length);
-  return ps.reduce((s, p) => s + p, 0) / ps.length;
-};
 
 // The band a score falls in. gauge-post keeps its own copy for the dial: components
 // never import each other (11.2).
@@ -37,33 +24,35 @@ const question = (q) => {
   return out;
 };
 
-// A reading kept against the gauge's current questions and rule: answers to questions
-// since removed are dropped and the score is recomputed, so a rule change re-scores
-// without asking Jev again.
-const reading = (value, questions, rule) => {
+// A reading kept against the gauge's current questions: answers to questions since
+// removed are dropped. The score is Jev's answer to the headline question, because that
+// answer is the honest reading; the questions' answers only explain it.
+const reading = (value, questions) => {
   if (!value || !Number.isInteger(value.at)) return null;
   const ids = new Set(questions.map((q) => q.id));
   const answers = (Array.isArray(value.answers) ? value.answers : [])
     .filter((a) => a && ids.has(a.id) && isP(a.p))
     .map((a) => ({ id: a.id, p: a.p }));
-  const s = score(rule, answers);
-  return { at: value.at, answers, direct: isP(value.direct) ? value.direct : null, score: s, band: band(s) };
+  const direct = isP(value.direct) ? value.direct : null;
+  return { at: value.at, answers, direct, score: direct, band: band(direct) };
 };
 
 // Sanitise a candidate into the contract shape, or null when it has no valid id.
 export const normalise = (value) => {
   if (!value || !isId(value.id)) return null;
+  // The rule no longer counts, but stored gauges and the contract still carry it.
   const rule = value.rule === "holds" ? "holds" : "adds";
   const questions = (Array.isArray(value.questions) ? value.questions : []).map(question).filter(Boolean);
   return {
     id: value.id,
     name: str(value.name),
     question: str(value.question),
+    label: str(value.label),
     yes: str(value.yes),
     no: str(value.no),
     rule,
     questions,
-    reading: reading(value.reading, questions, rule),
+    reading: reading(value.reading, questions),
   };
 };
 
@@ -75,7 +64,7 @@ const q = (id, label, text, yes, no) => ({ id, text, yes, no, label });
 // that already holds a list is never reset to this seed, because the list is the user's
 // and may be edited: it only catches up once on what a newer seed version added
 // (`catchUp` below).
-export const SEED_VERSION = 2;
+export const SEED_VERSION = 3;
 
 const SOURCE = [
   {
@@ -83,6 +72,7 @@ const SOURCE = [
     name: "Viewability",
     since: 2,
     question: "Does this post give someone a reason to stop scrolling and read it?",
+    label: "Reason to stop and read",
     yes: "a reader scanning a feed would pause on it",
     no: "a reader would pass it without noticing what it said",
     rule: "adds",
@@ -110,6 +100,7 @@ const SOURCE = [
     name: "Followability",
     since: 1,
     question: "Does this post give someone a reason to want more from this account?",
+    label: "Reason to want more from this account",
     yes: "a reader of this topic would want the next post from this author",
     no: "nothing suggests the author will say anything more worth reading",
     rule: "adds",
@@ -137,6 +128,7 @@ const SOURCE = [
     name: "Shareability",
     since: 1,
     question: "Does this post give someone a reason to send it to another specific person?",
+    label: "Reason to send it to someone",
     yes: "a reader could name the person they would send it to and why",
     no: "it is read, maybe liked, and left",
     rule: "adds",
@@ -164,6 +156,7 @@ const SOURCE = [
     name: "Likeability",
     since: 1,
     question: "Does this post give someone a reason to signal quick agreement or approval?",
+    label: "Reason to tap like",
     yes: "a reader would tap like without thinking twice",
     no: "a reader would have to think before reacting, or would not react",
     rule: "adds",
@@ -191,6 +184,7 @@ const SOURCE = [
     name: "Saveability",
     since: 1,
     question: "Does this post give someone a reason to come back to it later?",
+    label: "Reason to come back to it",
     yes: "a reader would bookmark it to use again",
     no: "once read it is done with",
     rule: "adds",
@@ -231,6 +225,7 @@ export const catchUp = (gauges, version) => {
     if (!seed) return g;
     return {
       ...g,
+      label: fill(g.label, seed.label),
       yes: fill(g.yes, seed.yes),
       no: fill(g.no, seed.no),
       questions: g.questions.map((q) => {
@@ -264,21 +259,21 @@ export const parse = (stored) => {
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-// The list after a gesture: the saved gauge in place of the one with its id (keeping and
-// re-scoring that one's reading), or appended when it is new.
+// The list after a gesture: the saved gauge in place of the one with its id (keeping that
+// one's reading, less answers to removed questions), or appended when it is new.
 const saved = (gauges, event) => {
   const next = normalise({ ...event, reading: null });
   if (!next) return gauges;
   const old = gauges.find((g) => g.id === next.id);
   if (!old) return [...gauges, next];
-  const kept = { ...next, reading: reading(old.reading, next.questions, next.rule) };
+  const kept = { ...next, reading: reading(old.reading, next.questions) };
   return gauges.map((g) => (g.id === next.id ? kept : g));
 };
 
 const read = (gauges, readings, at) =>
   gauges.map((g) => {
     const r = readings.find((x) => x && x.id === g.id);
-    return r ? { ...g, reading: reading({ at, answers: r.answers, direct: r.direct }, g.questions, g.rule) } : g;
+    return r ? { ...g, reading: reading({ at, answers: r.answers, direct: r.direct }, g.questions) } : g;
   });
 
 // Every gesture becomes a candidate list; only a list that differs is saved and
@@ -300,14 +295,12 @@ export const machine = setup({}).createMachine({
   meta: {
     description:
       "Owns the gauges, kept on this device: tools that judge a piece of text with yes-or-no " +
-      "questions Jev answers, each question with optional yes and no criteria, a headline " +
-      "question asked directly and not counted in the score, a rule that turns the answers into " +
-      "one score, and the last reading of each tool. The rule \"adds\" takes the average, so one " +
-      "low answer only lowers the score; \"holds\" takes the geometric mean, so one answer near " +
-      "zero sinks it. Changing the questions or the rule re-scores the last reading without " +
-      "asking Jev again. A first visit starts with a set of example tools; a later version of " +
-      "that set only adds what is new, never changing what the user wrote and never bringing " +
-      "back a tool the user deleted.",
+      "questions Jev answers. A gauge's score is Jev's answer to its headline question; its " +
+      "other questions, each with optional yes and no criteria and a short name, explain that " +
+      "reading and do not change the score. The last reading of each tool is kept. A first " +
+      "visit starts with a set of example tools; a later version of that set only adds what is " +
+      "new or fills what is empty, never changing what the user wrote and never bringing back a " +
+      "tool the user deleted.",
     kind: "fact",
     shape: "local-only",
     emits: ["gauge.changed"],
