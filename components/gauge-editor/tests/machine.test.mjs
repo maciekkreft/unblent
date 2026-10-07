@@ -20,6 +20,8 @@ const GAUGE = {
   id: G,
   name: "Clarity",
   question: "Is it clear?",
+  yes: "one point",
+  no: "a guess",
   rule: "adds",
   questions: [
     { id: Q1, text: "One idea?", yes: "one", no: "many", label: "One idea" },
@@ -89,12 +91,18 @@ test("typing saves the whole gauge at the throttle, not per keystroke; blur save
   actor.send({ type: "_blur" });
   assert.equal(emitted.length, 2);
   assert.equal(emitted[1].rule, "holds");
+  assert.equal(emitted[1].yes, "one point", "the main question's criteria ride every save");
+  actor.send({ type: "_edit", patch: { no: "the reader has to guess" } });
+  actor.send({ type: "_blur" });
+  assert.equal(emitted[2].no, "the reader has to guess");
 });
 
 test("a New tool is a blank draft that is not saved until something is written", async () => {
   const { actor, clock, emitted, ctx } = await start();
   actor.send({ type: "gauge.selected", id: NEW });
   assert.equal(ctx().draft.questions.length, 1);
+  assert.equal(ctx().draft.yes, "");
+  assert.equal(ctx().draft.no, "");
   assert.ok(isEmpty(ctx().draft));
   actor.send({ type: "_edit", patch: { name: "" } });
   clock.increment(300);

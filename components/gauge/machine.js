@@ -59,6 +59,8 @@ export const normalise = (value) => {
     id: value.id,
     name: str(value.name),
     question: str(value.question),
+    yes: str(value.yes),
+    no: str(value.no),
     rule,
     questions,
     reading: reading(value.reading, questions, rule),
@@ -68,12 +70,16 @@ export const normalise = (value) => {
 const q = (id, label, text, yes, no) => ({ id, text, yes, no, label });
 
 // The four tools a first visit starts with (the plan's seed). The ids are fixed, so the
-// seed is the same in every browser and in the tests.
+// seed is the same in every browser and in the tests. A browser that already holds a
+// list keeps it as it is, even when this seed changes: the stored list is the user's,
+// possibly edited, so only a fresh browser starts from the new seed.
 export const SEED = Object.freeze([
   {
     id: "01K6SEED00000000000000G1Q0",
     name: "Followability",
     question: "Does this post give someone a reason to want more from this account?",
+    yes: "a reader of this topic would want the next post from this author",
+    no: "nothing suggests the author will say anything more worth reading",
     rule: "adds",
     questions: [
       q("01K6SEED00000000000000G1Q1", "Signals more in this area",
@@ -98,6 +104,8 @@ export const SEED = Object.freeze([
     id: "01K6SEED00000000000000G2Q0",
     name: "Shareability",
     question: "Does this post give someone a reason to send it to another specific person?",
+    yes: "a reader could name the person they would send it to and why",
+    no: "it is read, maybe liked, and left",
     rule: "adds",
     questions: [
       q("01K6SEED00000000000000G2Q1", "A line that stands alone",
@@ -122,6 +130,8 @@ export const SEED = Object.freeze([
     id: "01K6SEED00000000000000G3Q0",
     name: "Likeability",
     question: "Does this post give someone a reason to signal quick agreement or approval?",
+    yes: "a reader would tap like without thinking twice",
+    no: "a reader would have to think before reacting, or would not react",
     rule: "adds",
     questions: [
       q("01K6SEED00000000000000G3Q1", "Grasped in five seconds",
@@ -146,6 +156,8 @@ export const SEED = Object.freeze([
     id: "01K6SEED00000000000000G4Q0",
     name: "Saveability",
     question: "Does this post give someone a reason to come back to it later?",
+    yes: "a reader would bookmark it to use again",
+    no: "once read it is done with",
     rule: "adds",
     questions: [
       q("01K6SEED00000000000000G4Q1", "Reusable information",

@@ -231,6 +231,14 @@ class GaugeEditor extends LitElement {
             <span class="caption">The question this tool answers</span>
             <textarea .value=${draft.question} @input=${(e) => edit({ question: e.target.value })}></textarea>
           </label>
+          <label class="field">
+            <span class="caption">Yes when</span>
+            <textarea .value=${draft.yes} @input=${(e) => edit({ yes: e.target.value })}></textarea>
+          </label>
+          <label class="field">
+            <span class="caption">No when</span>
+            <textarea .value=${draft.no} @input=${(e) => edit({ no: e.target.value })}></textarea>
+          </label>
           <fieldset>
             <legend>Rule</legend>
             ${RULES.map(

@@ -23,6 +23,8 @@ const GAUGE = {
   id: G,
   name: "Clarity",
   question: "Is it clear?",
+  yes: "one point, plainly made",
+  no: "the reader has to guess",
   rule: "adds",
   questions: [
     { id: Q1, text: "One idea?", yes: "one", no: "many" },
@@ -71,7 +73,7 @@ test("band: high above 0.7, mixed from 0.4, low below", () => {
 test("normalise keeps the contract shape and drops what does not fit", () => {
   assert.equal(normalise({ id: "nope" }), null);
   const g = normalise({ id: G, name: 3, rule: "odd", questions: [{ id: Q1, text: "x" }, { id: "bad", text: "y" }, null] });
-  assert.deepEqual(g, { id: G, name: "", question: "", rule: "adds", questions: [{ id: Q1, text: "x", yes: "", no: "" }], reading: null });
+  assert.deepEqual(g, { id: G, name: "", question: "", yes: "", no: "", rule: "adds", questions: [{ id: Q1, text: "x", yes: "", no: "" }], reading: null });
 });
 
 test("nothing stored, or garbage, is the seed; an empty list stays empty", () => {
@@ -81,6 +83,7 @@ test("nothing stored, or garbage, is the seed; an empty list stays empty", () =>
   for (const g of SEED) {
     assert.equal(g.questions.length, 4);
     assert.ok(g.questions.every((q) => q.label && q.yes && q.no));
+    assert.ok(g.yes && g.no, `${g.name} carries criteria for its main question`);
   }
   assert.equal(gauges(start(null).actor).length, 4);
 });
@@ -92,6 +95,14 @@ test("a save is stored and announced once; a repeat does nothing", () => {
   assert.equal(emitted.length, 1);
   assert.deepEqual(gauges(actor), [{ ...GAUGE, reading: null }]);
   assert.deepEqual(gauges(start(saved.at(-1)).actor), [{ ...GAUGE, reading: null }], "what was stored is what a reload reads");
+});
+
+test("the main question's criteria are kept as written; a stored list without them reads them as empty", () => {
+  const { actor } = start(JSON.stringify([{ ...GAUGE, yes: undefined, no: undefined }]));
+  assert.equal(gauges(actor)[0].yes, "");
+  send(actor, { type: "gauge.saved", ...GAUGE }, SAVED);
+  assert.equal(gauges(actor)[0].yes, "one point, plainly made");
+  assert.equal(gauges(actor)[0].no, "the reader has to guess");
 });
 
 test("a reading is kept, scored and banded; unknown answers and gauges are dropped", () => {

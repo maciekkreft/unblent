@@ -11,13 +11,15 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // arrive through input, so the machine is a pure definition importable in Node.
 
 const blankQuestion = (id) => ({ id, text: "", yes: "", no: "" });
-const blank = (id, mint) => ({ id, name: "", question: "", rule: "adds", questions: [blankQuestion(mint())] });
+const blank = (id, mint) => ({ id, name: "", question: "", yes: "", no: "", rule: "adds", questions: [blankQuestion(mint())] });
 
 // The draft as gauge.saved carries it: the gauge's own fields, never its reading.
 const wire = (g) => ({
   id: g.id,
   name: g.name,
   question: g.question,
+  yes: g.yes ?? "",
+  no: g.no ?? "",
   rule: g.rule,
   questions: g.questions.map((q) => {
     const out = { id: q.id, text: q.text, yes: q.yes, no: q.no };

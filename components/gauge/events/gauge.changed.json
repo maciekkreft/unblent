@@ -19,6 +19,14 @@
             "type": "string",
             "description": "The headline question, asked directly and not counted in the score."
           },
+          "yes": {
+            "type": "string",
+            "description": "When the main question's answer is yes; empty or absent for no criteria."
+          },
+          "no": {
+            "type": "string",
+            "description": "When the main question's answer is no; empty or absent for no criteria."
+          },
           "rule": {
             "enum": [
               "adds",

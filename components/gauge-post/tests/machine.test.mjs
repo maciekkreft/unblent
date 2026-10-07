@@ -25,6 +25,8 @@ const GAUGES = [
     id: G,
     name: "Clarity",
     question: "Is it clear?",
+    yes: "one point",
+    no: "a guess",
     rule: "adds",
     questions: [
       { id: Q1, text: "One idea?", yes: "one", no: "many" },
@@ -62,11 +64,16 @@ test("one payload carries every written question and headline, the post once", (
     state: { post: "A post." },
     questions: [
       { id: `${G}/${Q1}`, instructions: "One idea?", yes: "one", no: "many" },
-      { id: `${G}/direct`, instructions: "Is it clear?" },
+      { id: `${G}/direct`, instructions: "Is it clear?", yes: "one point", no: "a guess" },
       { id: `${H}/${Q2}`, instructions: "Short?", yes: "", no: "" },
     ],
   });
   valid(DECIDE.payload, p);
+});
+
+test("a main question without criteria is sent with them empty, which llm leaves out", () => {
+  const [, direct] = payload([{ ...GAUGES[0], yes: undefined, no: undefined }], "A post.").questions;
+  assert.deepEqual(direct, { id: `${G}/direct`, instructions: "Is it clear?", yes: "", no: "" });
 });
 
 test("the answers split back into one reading per gauge asked", () => {

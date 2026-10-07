@@ -55,7 +55,8 @@ export const payload = (gauges, text) => {
     for (const q of g.questions) {
       if (q.text.trim()) questions.push({ id: `${g.id}/${q.id}`, instructions: q.text, yes: q.yes, no: q.no });
     }
-    if (g.question.trim()) questions.push({ id: `${g.id}/${DIRECT}`, instructions: g.question });
+    if (g.question.trim())
+      questions.push({ id: `${g.id}/${DIRECT}`, instructions: g.question, yes: g.yes ?? "", no: g.no ?? "" });
   }
   return { state: { post: text }, questions };
 };
