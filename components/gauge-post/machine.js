@@ -109,6 +109,12 @@ export const machine = setup({
 }).createMachine({
   id: "gauge-post",
   meta: {
+    description:
+      "The stage of the Gauge app: a box for the text to judge, a Score button, and one card " +
+      "per gauge showing its score and how each question was answered. Score sends every " +
+      "question of every gauge with the text in one request to Jev, and the cards update from " +
+      "the answers. The text being typed is kept on this device. When Score cannot run, for " +
+      "example while signed out or without a Jev key, the line under the button says why.",
     kind: "view",
     emits: ["gauge.read"],
     attributes: ["height"],

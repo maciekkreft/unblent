@@ -150,6 +150,15 @@ export const machine = setup({
 }).createMachine({
   id: "llm",
   meta: {
+    description:
+      "Owns access to the language models and the account's model settings: provider, model, " +
+      "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
+      "server and never sent back to the browser. A chat answer streams back piece by piece as " +
+      "events, one answer at a time; `decide` asks Jev yes-or-no questions and returns the " +
+      "answers in the reply. The settings belong to the account, so they are the same on every " +
+      "device. Every lookup the model proposes is checked against the query's own schema on the " +
+      "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
+      "network call.",
     kind: "fact",
     shape: "remote-only",
     owns: "access to the language model",

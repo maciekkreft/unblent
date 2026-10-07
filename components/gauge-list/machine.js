@@ -25,7 +25,14 @@ export const machine = setup({
   },
 }).createMachine({
   id: "gauge-list",
-  meta: { kind: "view", emits: ["gauge.selected"], attributes: [], asks: ["gauge: read"] },
+  meta: {
+    description:
+      "Lists the gauges and lets the user pick one to edit; it is the list of a list-then-item " +
+      "pair in the Tools dock. New tool is always the first row and opens an empty editor; the " +
+      "gauge appears in the list once something is written in it. Each row shows how many " +
+      "questions the gauge has and how they are combined.",
+    kind: "view", emits: ["gauge.selected"], attributes: [], asks: ["gauge: read"],
+  },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,

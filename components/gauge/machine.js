@@ -298,6 +298,16 @@ const change = (next) => ({
 export const machine = setup({}).createMachine({
   id: "gauge",
   meta: {
+    description:
+      "Owns the gauges, kept on this device: tools that judge a piece of text with yes-or-no " +
+      "questions Jev answers, each question with optional yes and no criteria, a headline " +
+      "question asked directly and not counted in the score, a rule that turns the answers into " +
+      "one score, and the last reading of each tool. The rule \"adds\" takes the average, so one " +
+      "low answer only lowers the score; \"holds\" takes the geometric mean, so one answer near " +
+      "zero sinks it. Changing the questions or the rule re-scores the last reading without " +
+      "asking Jev again. A first visit starts with a set of example tools; a later version of " +
+      "that set only adds what is new, never changing what the user wrote and never bringing " +
+      "back a tool the user deleted.",
     kind: "fact",
     shape: "local-only",
     emits: ["gauge.changed"],

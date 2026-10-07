@@ -87,7 +87,16 @@ export const machine = setup({
   },
 }).createMachine({
   id: "gauge-editor",
-  meta: { kind: "view", emits: ["gauge.saved", "gauge.discarded"], attributes: ["height"], asks: ["gauge: read"] },
+  meta: {
+    description:
+      "Edits one gauge: its name, its headline question, its questions with their yes and no " +
+      "criteria, and its rule. Every edit is saved as the whole gauge a short time into typing " +
+      "and when a field loses focus, and a gauge with nothing written in it is never saved. " +
+      "Removing a question or deleting the gauge waits out the undo window, and moving to " +
+      "another gauge settles what was pending on the one being left, so nothing the user did is " +
+      "lost.",
+    kind: "view", emits: ["gauge.saved", "gauge.discarded"], attributes: ["height"], asks: ["gauge: read"],
+  },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
