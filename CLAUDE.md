@@ -4,10 +4,14 @@
 
 The architecture is the spec. If a request conflicts with it, name the section and propose the document change; never work around it.
 
-- architecture.md describes the target. `components/` and `git log` describe
-  what exists; the components the document names are examples, mostly unbuilt.
-- Where the architecture is silent, do not improvise: propose the amendment,
-  then wait, the same as for a conflict.
+- architecture.md holds the decisions and the rules. What exists, and what each
+  component does for the user, is read from the running system:
+  `python3 checks/show.py components` (with a component's description),
+  `contracts` and `pages`.
+- A new component or page that keeps every rule needs no amendment to
+  architecture.md. Propose an amendment, and wait, only for a new rule, a new
+  kind of contract, or a change to a shared vocabulary (events, tokens, icons,
+  document facts), the same as for a conflict.
 - Smallest scope first: one component or one piece of infrastructure per task.
   Decisions and contracts are agreed before any code (section 9, step 2).
 - Run `python3 checks/check.py --help` for what to run when. `check.py --changed`
