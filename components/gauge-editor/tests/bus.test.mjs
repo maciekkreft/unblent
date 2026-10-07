@@ -9,8 +9,9 @@ const NEW = "01K6TEST000000000000000N01";
 
 test("a new tool typed in the editor reaches gauge, is stored and comes back as gauge.changed", async () => {
   const stored = [];
+  // An empty list stored at a seed version no example set reaches, so gauge adds none.
   const { actors, unwire } = await wire(["gauge", "gauge-editor"], {
-    gauge: { stored: JSON.stringify({ version: 2, gauges: [] }), save: (v) => stored.push(v), now: () => 1 },
+    gauge: { stored: JSON.stringify({ version: 1000, gauges: [] }), save: (v) => stored.push(v), now: () => 1 },
     "gauge-editor": { mint: () => "01K6TEST000000000000000Q01", undoMs: 100, throttleMs: 0 },
   });
   try {

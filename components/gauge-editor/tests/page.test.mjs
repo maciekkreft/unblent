@@ -31,8 +31,8 @@ for (const engine of ENGINES) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/gauge`, { waitUntil: "domcontentloaded" });
-        await until(async () => (await names(page)).length === 6);
-        assert.deepEqual(await names(page), ["New tool", "Viewability", "Followability", "Shareability", "Likeability", "Saveability"]);
+        await until(async () => (await names(page)).length === 7);
+        assert.deepEqual(await names(page), ["New tool", "Replyability", "Viewability", "Followability", "Shareability", "Likeability", "Saveability"]);
 
         await page.locator("gauge-list .row", { hasText: "Shareability" }).click();
         const title = page.locator("gauge-editor input.title");

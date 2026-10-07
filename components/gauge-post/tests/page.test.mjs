@@ -56,14 +56,14 @@ for (const engine of ENGINES) {
         await score.click();
         const line = page.locator("gauge-post .line");
         await until(async () => (await line.textContent()).includes("310 ms"));
-        assert.equal((await line.textContent()).replace(/\s+/g, " ").trim(), "5 tools · 25 questions in one request · 310 ms");
+        assert.equal((await line.textContent()).replace(/\s+/g, " ").trim(), "6 tools · 30 questions in one request · 310 ms · $0.000050");
         assert.equal(sent.length, 1);
         assert.equal(sent[0].state.post, POST);
-        assert.equal(await page.locator("gauge-post .card .dial").count(), 5);
+        assert.equal(await page.locator("gauge-post .card .dial").count(), 6);
         const words = await page.locator("gauge-post .bandword").allTextContents();
         assert.ok(words.every((w) => ["High", "Mixed", "Low"].includes(w)), words.join(","));
         assert.ok((await page.locator("gauge-post .word.unsure").count()) > 0, "an unsure answer is shown as such");
-        assert.equal(await page.locator("gauge-post .card .headline").count(), 5, "every card names its headline question");
+        assert.equal(await page.locator("gauge-post .card .headline").count(), 6, "every card names its headline question");
         const cards = (await page.locator("gauge-post .cards").textContent()).replace(/\s+/g, " ");
         assert.ok(!cards.includes("Asked as one question"), "the headline is the score, not a row");
         assert.ok(!/\d/.test(cards), `no number on a card: ${cards}`);

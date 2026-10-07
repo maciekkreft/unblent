@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, band, leaning, errorText, payload, readings, blocked, record, short, headline } from "../machine.js";
+import { machine, band, leaning, errorText, payload, readings, blocked, record, short, headline, cost } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const READ = JSON.parse(readFileSync(resolve(HERE, "..", "events", "gauge.read.json"), "utf8"));
@@ -235,4 +235,10 @@ test("a pick while scoring is ignored", async () => {
   actor.send({ type: "scoring.selected", id: S1 });
   assert.ok(actor.getSnapshot().matches("scoring"));
   finish({ answers: [], inputTokens: 1, ms: 1 });
+});
+
+test("the cost of a Score at Jev's price per input token", () => {
+  assert.equal(cost(1200), "$0.000050");
+  assert.equal(cost(1_000_000), "$0.042");
+  assert.equal(cost(0), "$0");
 });

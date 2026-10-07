@@ -73,7 +73,7 @@ test("normalise keeps the contract shape and drops what does not fit", () => {
   assert.deepEqual(g, { id: G, name: "", question: "", label: "", yes: "", no: "", rule: "adds", questions: [{ id: Q1, text: "x", yes: "", no: "" }], reading: null });
 });
 
-const NAMES = ["Viewability", "Followability", "Shareability", "Likeability", "Saveability"];
+const NAMES = ["Replyability", "Viewability", "Followability", "Shareability", "Likeability", "Saveability"];
 
 test("nothing stored, or garbage, is the whole seed; an empty current list stays empty", () => {
   assert.deepEqual(parse(null).map((g) => g.name), NAMES);
@@ -85,7 +85,7 @@ test("nothing stored, or garbage, is the whole seed; an empty current list stays
     assert.ok(g.questions.every((q) => q.label && q.yes && q.no));
     assert.ok(g.yes && g.no, `${g.name} carries criteria for its main question`);
   }
-  assert.equal(gauges(start(null).actor).length, 5);
+  assert.equal(gauges(start(null).actor).length, 6);
 });
 
 test("a fresh browser gets the whole seed and stores it at the current version on its first change", () => {
@@ -98,9 +98,9 @@ test("a fresh browser gets the whole seed and stores it at the current version o
   assert.ok(written.gauges.every((g) => !("since" in g)));
 });
 
-// What seed version 1 stored: a bare list of the four first tools, without the main
+// What seed version 1 stored: a bare list of the four tools that version had, without the main
 // question's wording, which that version did not have.
-const V1 = SEED.slice(1).map((g) => ({ ...g, yes: undefined, no: undefined }));
+const V1 = SEED.slice(2).map((g) => ({ ...g, yes: undefined, no: undefined }));
 
 test("a version-1 list gets the main-question wording and the new tool, first", () => {
   const list = parse(JSON.stringify(V1));
@@ -118,20 +118,20 @@ test("a version-1 list keeps the user's own wording, names, questions and rule",
     yes: "my yes",
     questions: [{ ...follow.questions[0], yes: "my own yes", no: "" }, ...follow.questions.slice(1), mine],
   };
-  const [, got] = parse(JSON.stringify([edited, ...rest]));
+  const [, , got] = parse(JSON.stringify([edited, ...rest]));
   assert.equal(got.name, "Follow-worthy");
   assert.equal(got.rule, "holds");
   assert.equal(got.yes, "my yes", "non-empty wording is never touched");
-  assert.equal(got.no, SEED[1].no, "empty wording is filled from the seed");
+  assert.equal(got.no, SEED[2].no, "empty wording is filled from the seed");
   assert.equal(got.questions[0].yes, "my own yes");
-  assert.equal(got.questions[0].no, SEED[1].questions[0].no);
+  assert.equal(got.questions[0].no, SEED[2].questions[0].no);
   assert.deepEqual(got.questions.at(-1), mine, "a question the user added is left alone");
 });
 
 test("a seed tool deleted under version 1 stays deleted", () => {
   const list = parse(JSON.stringify(V1.filter((g) => g.name !== "Likeability")));
-  assert.deepEqual(list.map((g) => g.name), ["Viewability", "Followability", "Shareability", "Saveability"]);
-  assert.deepEqual(parse(JSON.stringify([])).map((g) => g.name), ["Viewability"], "only what a newer seed added appears");
+  assert.deepEqual(list.map((g) => g.name), ["Replyability", "Viewability", "Followability", "Shareability", "Saveability"]);
+  assert.deepEqual(parse(JSON.stringify([])).map((g) => g.name), ["Replyability", "Viewability"], "only what a newer seed added appears");
 });
 
 test("a list at the current version is read untouched", () => {

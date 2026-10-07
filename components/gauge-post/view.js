@@ -1,7 +1,7 @@
 import { LitElement, html, svg, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
-import { machine, band, leaning, errorText, blocked } from "./machine.js";
+import { machine, band, leaning, errorText, blocked, cost } from "./machine.js";
 import read from "./events/gauge.read.json" with { type: "json" };
 import scored from "./events/post.scored.json" with { type: "json" };
 
@@ -326,7 +326,7 @@ class GaugePost extends LitElement {
     else if (last)
       line = html`<span class="line"
         >${last.tools} tool${last.tools === 1 ? "" : "s"} · ${last.questions} question${last.questions === 1 ? "" : "s"} in one
-        request · ${last.ms} ms</span
+        request · ${last.ms} ms · ${cost(last.inputTokens)}</span
       >`;
     return html`
       <div class="page">

@@ -31,7 +31,7 @@ for (const engine of ENGINES) {
         await page.goto(`${BASE_URL}/workshop/apps/gauge`, { waitUntil: "domcontentloaded" });
         await until(() => page.evaluate(() => document.querySelector("profile-switch")?.dataset.profile === "product"));
         await until(() => page.evaluate(() => Boolean(document.querySelector("gauge-post")?.shadowRoot?.querySelector("textarea"))));
-        await until(() => page.evaluate(() => document.querySelector("gauge-list")?.shadowRoot?.querySelectorAll(".row").length === 6));
+        await until(() => page.evaluate(() => document.querySelector("gauge-list")?.shadowRoot?.querySelectorAll(".row").length === 7));
         assert.equal(await links(page), 0, "no page links in the product");
         // Signed out, Score says why it cannot run.
         assert.equal(await page.locator("gauge-post .line").textContent(), "Sign in to score.");

@@ -48,15 +48,15 @@ test("a Score goes through llm: decide in one request and comes back as readings
     post.send({ type: "_score" });
     await until(() => post.getSnapshot().context.last != null);
     assert.equal(sent.length, 1, "one request for every tool");
-    assert.equal(sent[0].questions.length, 25, "five tools of four questions and a headline each");
-    assert.deepEqual(post.getSnapshot().context.last, { tools: 5, questions: 25, ms: 310, inputTokens: 900 });
+    assert.equal(sent[0].questions.length, 30, "six tools of four questions and a headline each");
+    assert.deepEqual(post.getSnapshot().context.last, { tools: 6, questions: 30, ms: 310, inputTokens: 900 });
     const gauges = post.getSnapshot().context.gauges;
     assert.ok(gauges.every((g) => g.reading && g.reading.at === 42 && g.reading.band), "every card has a banded reading");
     await until(() => kept != null);
     const [scoring] = JSON.parse(kept);
     assert.equal(scoring.id, "01K6TEST000000000000000S01");
     assert.equal(scoring.at, 43);
-    assert.equal(scoring.gauges.length, 5, "the scoring landed in scorings with every tool");
+    assert.equal(scoring.gauges.length, 6, "the scoring landed in scorings with every tool");
     assert.ok(scoring.gauges.every((g) => g.direct === 1 && g.label && g.questions.length === 4));
   } finally {
     unwire();

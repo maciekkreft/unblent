@@ -31,6 +31,18 @@ export const leaning = (p) => {
   return { word: "No", side: "no" };
 };
 
+// Jev's price, from typesafe.ai on 2026-10-07: $42 per billion input tokens. Jev bills
+// input only, so the reply's input tokens are the whole cost.
+const DOLLARS_PER_TOKEN = 42 / 1e9;
+
+// What a Score cost, in dollars to two significant figures, since one costs a small
+// fraction of a cent.
+export const cost = (tokens) => {
+  const c = tokens * DOLLARS_PER_TOKEN;
+  if (!(c > 0)) return "$0";
+  return `$${c.toFixed(Math.max(2, 1 - Math.floor(Math.log10(c))))}`;
+};
+
 // What a failed Score says, by the reply's error code.
 export const errorText = (code) => {
   switch (code) {

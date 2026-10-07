@@ -64,9 +64,37 @@ const q = (id, label, text, yes, no) => ({ id, text, yes, no, label });
 // that already holds a list is never reset to this seed, because the list is the user's
 // and may be edited: it only catches up once on what a newer seed version added
 // (`catchUp` below).
-export const SEED_VERSION = 3;
+export const SEED_VERSION = 4;
 
 const SOURCE = [
+  {
+    id: "01K6SEED00000000000000G6Q0",
+    name: "Replyability",
+    since: 4,
+    question: "Does this post give someone a reason to reply to it?",
+    label: "Reason to write a reply",
+    yes: "a reader would have something of their own to add and would write it",
+    no: "a reader would agree, disagree or move on without writing anything",
+    rule: "adds",
+    questions: [
+      q("01K6SEED00000000000000G6Q1", "Asks for an answer",
+        "Does the post ask the reader something they can answer from their own experience?",
+        "it asks a question a reader can answer in a line or two",
+        "it asks nothing, or only asks rhetorically"),
+      q("01K6SEED00000000000000G6Q2", "Open to disagreement",
+        "Does the post take a position a thoughtful reader could argue with?",
+        "a reader could disagree and say why",
+        "it is too obvious or too hedged to dispute"),
+      q("01K6SEED00000000000000G6Q3", "Room to add something",
+        "Does the post leave something unsaid that a reader could add?",
+        "an example, a counter-case, a tip or a story of the reader's own fits naturally under it",
+        "it is complete, and anything added would repeat it"),
+      q("01K6SEED00000000000000G6Q4", "Easy to reply to",
+        "Can a reader reply without first reading anything else?",
+        "the post carries all the context a reply needs",
+        "a reply needs a thread, a link or insider knowledge first"),
+    ],
+  },
   {
     id: "01K6SEED00000000000000G5Q0",
     name: "Viewability",
