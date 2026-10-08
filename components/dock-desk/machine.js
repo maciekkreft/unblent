@@ -209,7 +209,9 @@ export const machine = setup({
       "zh, zl and zj outside an editor, the keyboard going to the stage when its side folds. " +
       "A clicked tab puts the keyboard in the view it shows, and a click that leaves the focus " +
       "nowhere (bare space, or a button Safari does not focus) puts it back where it was, so " +
-      "the keyboard is always somewhere on the desk.",
+      "the keyboard is always somewhere on the desk. For everyone, Vim keys or not, the stage " +
+      "or dock whose view holds the keyboard wears a frame in the focus ring's accent, so a move " +
+      "between panels is seen; there is no frame on the phone, where one panel fills the screen.",
     kind: "view",
     emits: ["dock.arranged"],
     attributes: [],

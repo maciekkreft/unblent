@@ -154,6 +154,15 @@ class DockDesk extends LitElement {
       display: flex;
       flex-direction: column;
     }
+    /* The group the keyboard is in wears a frame in the accent of the focus ring, drawn
+       inside its edge so nothing beside it moves (Norman: visible signifiers). For every
+       user: a mouse click into a panel moves the keyboard too. --focus-ring itself is a
+       box-shadow value, which a scrolling body's children would paint over, so the frame
+       is an outline in the same accent. */
+    .body.keyboard {
+      outline: calc(2 * var(--border-width)) solid var(--color-accent);
+      outline-offset: calc(-2 * var(--border-width));
+    }
     /* One strip, four groups (Norman: one conceptual model). Tabs, then the
        actions for the shown tab, then on an edge the fold; every control is
        always visible, so what can be done is discoverable without hovering. The
@@ -475,6 +484,11 @@ class DockDesk extends LitElement {
        admits only tokens for lengths that place a box, and a container breakpoint is
        neither. Range syntax: WebKit ≥ 16.4 and Chromium support it. */
     @container (width < 45rem) {
+      /* On the phone one group fills the screen at a time, so where the keyboard is goes
+         without saying, and a frame round a drawer would read as a border. */
+      .body.keyboard {
+        outline: none;
+      }
       /* A folded side dock is a square button in the stage header's corner, not a
          full-height rail: it costs the header one token but leaves the whole stage
          width for the body below. Tapping it opens a full-height drawer over the
@@ -650,8 +664,23 @@ class DockDesk extends LitElement {
     this.addEventListener("focusin", () => {
       const docks = this.#actor.snapshot?.context.docks;
       if (docks) this.#lastGroup = this.#focusedGroup(docks);
+      this.#frame();
     });
-    this.addEventListener("focusout", (e) => this.#dropped(e));
+    this.addEventListener("focusout", (e) => {
+      this.#dropped(e);
+      // Where the focus went is known once the focusout is over.
+      setTimeout(() => this.#frame());
+    });
+  }
+
+  // Frame the body of the group whose view holds the focus, and no other: a header
+  // control or a strip button is not inside a body, so it frames nothing.
+  #frame() {
+    const docks = this.#actor.snapshot?.context.docks;
+    const active = document.activeElement;
+    const child = [...this.children].find((c) => c.contains(active) && !c.hasAttribute("control"));
+    const group = !child || !docks ? null : (SIDES.find((s) => docks[s]?.views.includes(addressOf(child))) ?? "stage");
+    for (const body of this.renderRoot?.querySelectorAll(".body") ?? []) body.classList.toggle("keyboard", body.dataset.side === group);
   }
 
   #vimOn() {
@@ -1153,6 +1182,9 @@ class DockDesk extends LitElement {
     }
     this.#start(snapshot);
     this.#land(snapshot.context);
+    // A body drawn afresh (a dock that appeared) starts unframed; a view moved to another
+    // group takes the frame with it.
+    this.#frame();
     // Release the sides that entered, drawn once at nothing above, to their size.
     const sides = new Set([...this.renderRoot.querySelectorAll(".dock")].map((d) => d.dataset.side));
     for (const s of this.#present) if (!sides.has(s)) this.#present.delete(s);
