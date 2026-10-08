@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, nearest, isMotion, passage } from "../machine.js";
+import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -907,7 +907,7 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
   }
 });
 
-// The reader's Vim cursor motions (12, "Vim keys"): where w, b, ), (, }, { and h, l
+// The reader's Vim cursor motions (12, "Vim keys"): where w, b, ), (, } and {
 // land is decided on the block texts, so it is checked here; the line motions need the
 // page and are the browser's. A figure is a block with no text; a book's raw white space
 // (a newline and indent between inline elements) shows as one space.
@@ -936,22 +936,26 @@ test("the Vim cursor's motions land on shown characters across blocks", () => {
   assert.deepEqual(where(go(at(0, 10), "}")), { block: 2, offset: 44 });
   assert.deepEqual(where(go(at(2, 5), "{")), { block: 2, offset: 0 });
   assert.deepEqual(where(go(at(2, 0), "{")), { block: 0, offset: 0 });
-  // l and h by character; a run of white space is the one space it collapses to.
-  assert.deepEqual(where(go(at(2, 15), "l")), { block: 2, offset: 16 });
-  assert.deepEqual(where(go(at(2, 16), "l")), { block: 2, offset: 18 });
-  assert.deepEqual(where(go(at(2, 18), "h")), { block: 2, offset: 16 });
-  assert.deepEqual(where(go(at(0, 10), "l")), { block: 2, offset: 0 });
+  // One character at a time, as the line motions walk: a run of white space is the one
+  // space it collapses to, and the walk crosses blocks and stops at the chapter's ends.
+  assert.deepEqual(where(charStep(ch, at(2, 15), 1)), { block: 2, offset: 16 });
+  assert.deepEqual(where(charStep(ch, at(2, 16), 1)), { block: 2, offset: 18 });
+  assert.deepEqual(where(charStep(ch, at(2, 18), -1)), { block: 2, offset: 16 });
+  assert.deepEqual(where(charStep(ch, at(0, 10), 1)), { block: 2, offset: 0 });
+  assert.deepEqual(where(charStep(ch, at(3, 9), 1)), { block: 3, offset: 9 });
+  assert.deepEqual(where(charStep(ch, at(0, 0), -1)), { block: 0, offset: 0 });
   // The chapter's edges hold: past the last block is its last character, before the first
   // is the first.
   assert.deepEqual(where(go(at(3, 5), "}")), { block: 3, offset: 9 });
-  assert.deepEqual(where(go(at(3, 9), "l")), { block: 3, offset: 9 });
-  assert.deepEqual(where(go(at(0, 0), "h", "b", "{", "(")), { block: 0, offset: 0 });
+  assert.deepEqual(where(go(at(3, 9), "w", "}", ")")), { block: 3, offset: 9 });
+  assert.deepEqual(where(go(at(0, 0), "b", "{", "(")), { block: 0, offset: 0 });
   // The cursor starts on the first shown character at or after the page's anchor, past a
   // figure.
   assert.deepEqual(where(nearest(ch, at(1, 0))), { block: 2, offset: 0 });
   // An exclusive end just after a block's last character is that block's end.
   assert.deepEqual(where(at(0, 10) + 1), { block: 0, offset: 11 });
-  assert.ok(isMotion("w") && isMotion("}") && !isMotion("j") && !isMotion("Enter"));
+  // h and l turn pages (12, "Vim keys"), so they are no motion of the cursor.
+  assert.ok(isMotion("w") && isMotion("}") && !isMotion("j") && !isMotion("Enter") && !isMotion("h") && !isMotion("l"));
 });
 
 // A keyboard highlight is the same _highlight message the mouse sends. The cursor is

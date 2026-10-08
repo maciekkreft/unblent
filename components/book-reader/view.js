@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, nearest, isMotion, passage } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -67,11 +67,10 @@ const EDGE = 0.3; // the fraction of the width, each side, that a tap turns from
 const BUBBLE_GAP = 6;
 // How long "Copied" stands on the Copy button after a copy, before it reads Copy again.
 const COPIED_MS = 1200;
-// The keyboard highlight's paint (12, "Vim keys"): names in the document's one highlight
+// The keyboard highlight's paint (12, "Vim keys"): the name in the document's one highlight
 // registry, which a page holding a single reader never shares, and how many characters a
 // line motion (0, $, j, k) reads before it gives up on a line that never ends.
 const PENDING = "reader-pending";
-const CURSOR = "reader-cursor";
 const LINE_SCAN = 4000;
 // One line holds two characters whose boxes share the column and overlap by more than
 // half their height; a fraction, not a length (7.4).
@@ -140,6 +139,7 @@ class BookReader extends LitElement {
       padding-inline: var(--space-lg);
       box-sizing: border-box;
       overflow: hidden;
+      isolation: isolate;
       /* A size container, so the strip can name the page's width as 100cqw (below) and
          an image its height as 100cqh: a percentage on an image resolves against the
          multicol box, which spans every column, so it must size to the page instead. */
@@ -197,7 +197,8 @@ class BookReader extends LitElement {
       animation: leave var(--duration-slide) var(--ease) forwards;
     }
     @media (prefers-reduced-motion: reduce) {
-      .strip {
+      .strip,
+      .cursor {
         transition: none;
         animation: none;
       }
@@ -269,17 +270,37 @@ class BookReader extends LitElement {
       box-decoration-break: clone;
       cursor: pointer;
     }
-    /* The Vim cursor and the highlight in progress (12, "Vim keys"), painted through the
-       CSS Custom Highlight API, which never touches the DOM, so the marks and the measure
-       stay as they are: the passage in the selection colour, so it reads as not yet made
-       beside a finished highlight, the cursor a solid block in the accent pair
-       note-editor's Vim cursor uses, so Vim has one cursor across the app. */
+    /* The highlight in progress (12, "Vim keys"), painted through the CSS Custom Highlight
+       API, which never touches the DOM, so the marks and the measure stay as they are: in
+       the selection colour, so it reads as not yet made beside a finished highlight. */
     ::highlight(reader-pending) {
       background-color: var(--color-accent-selection);
     }
-    ::highlight(reader-cursor) {
-      background-color: var(--color-accent);
+    /* The Vim cursor: a solid block in the accent pair note-editor's Vim cursor uses, so
+       Vim has one cursor across the app. A real box placed on its character's own rect and
+       carrying that character in the character's own type, rather than a custom
+       highlight: Safari repaints a highlight whose range moved only when something else
+       repaints, so a highlight cursor showed late and in the old place. Placed in JS, as
+       the bubble is; over the text, so a link's accent letter still reads on it. */
+    .cursor {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--cx, 0) var(--cy, 0);
+      /* The strip's own slide (above), so a page turn carries the cursor with its text. */
+      transform: translateX(calc(-1 * var(--page, 0) * (100cqw + var(--space-xl))));
+      transition: transform var(--duration-slide) var(--ease);
+      width: var(--cw, 0);
+      height: var(--ch, 0);
+      line-height: var(--ch, 0);
+      z-index: 1;
+      text-align: center;
+      white-space: pre;
+      overflow: hidden;
+      background: var(--color-accent);
       color: var(--color-accent-text);
+      border-radius: var(--radius-sm);
+      pointer-events: none;
     }
     .strip mark.commented {
       box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--color-accent);
@@ -877,14 +898,14 @@ class BookReader extends LitElement {
     const chapter = this.#chapterText();
     const here = this.#lineOf(i, chapter);
     if (!here) return i;
-    const dir = key === "$" || key === "j" ? "l" : "h";
+    const dir = key === "$" || key === "j" ? 1 : -1;
     if (key === "0" || key === "$") {
       // A wrapped line's last box is the space it broke at; $ stops on the last letter,
       // as Vim's does.
       let k = i;
       let word = i;
       for (let n = 0; n < LINE_SCAN; n += 1) {
-        const next = step(chapter, k, dir);
+        const next = charStep(chapter, k, dir);
         const at = next === k ? null : this.#lineOf(next, chapter);
         if (!at || !sameLine(at, here)) break;
         k = next;
@@ -896,7 +917,7 @@ class BookReader extends LitElement {
     let line = null;
     let best = null;
     for (let n = 0; n < LINE_SCAN; n += 1) {
-      const next = step(chapter, k, dir);
+      const next = charStep(chapter, k, dir);
       if (next === k) break;
       k = next;
       const at = this.#lineOf(k, chapter);
@@ -986,32 +1007,59 @@ class BookReader extends LitElement {
     this.#sendHighlight(pointAt(chapter, from), pointAt(chapter, to));
   }
 
-  // The cursor in the accent pair note-editor's Vim cursor uses, so Vim has one cursor
-  // across the app, and the passage in progress in the selection colour, distinct from
-  // a finished highlight. Painted through the CSS Custom Highlight API, which never
-  // touches the DOM, so the marks and the measure stay as they are.
+  // The cursor and the passage in progress, drawn in the same task as the key that moved
+  // them (or the turn, resize or click), so what shows is never a step behind.
   #paintCursor() {
     const registry = globalThis.CSS?.highlights;
-    if (!registry) return;
     if (!this.#cursorShown()) {
-      registry.delete(PENDING);
-      registry.delete(CURSOR);
+      this.#drawCursor(null);
+      registry?.delete(PENDING);
       return;
     }
     this.#placeCursor();
     const chapter = this.#chapterText();
-    const cursor = this.#cursor == null ? null : this.#rangeOf(this.#cursor, this.#cursor + 1, chapter);
-    const mark = cursor ? new Highlight(cursor) : new Highlight();
-    // Over the passage, which it sits inside of.
-    mark.priority = 1;
-    registry.set(CURSOR, mark);
+    this.#drawCursor(this.#cursor == null ? null : this.#rangeOf(this.#cursor, this.#cursor + 1, chapter), chapter);
+    if (!registry) return;
     if (!this.#visual || this.#cursor == null) {
       registry.delete(PENDING);
+    } else {
+      const [from, to] = passage(chapter, this.#visual.start, this.#cursor);
+      const pending = this.#rangeOf(from, to, chapter);
+      // A new Highlight every time, never one whose ranges change, and a class flipped
+      // on the strip: Safari otherwise leaves the old passage painted until something
+      // else repaints the text.
+      registry.set(PENDING, pending ? new Highlight(pending) : new Highlight());
+    }
+    this.#strip.classList.toggle("repaint");
+  }
+
+  // The cursor box on its character's rect, read against the strip's own box: the strip
+  // slides by whole pages under a transform the cursor shares (#place), so the offset
+  // into the strip is all it needs, mid-slide or not. The place it names is for tests.
+  #drawCursor(range, chapter) {
+    const el = this.renderRoot?.querySelector(".cursor");
+    if (!el) return;
+    const rect = range && [...range.getClientRects()].find((r) => r.width > 0 || r.height > 0);
+    if (!rect) {
+      el.hidden = true;
       return;
     }
-    const [from, to] = passage(chapter, this.#visual.start, this.#cursor);
-    const pending = this.#rangeOf(from, to, chapter);
-    registry.set(PENDING, pending ? new Highlight(pending) : new Highlight());
+    const strip = this.#strip;
+    const box = strip.getBoundingClientRect();
+    const x = strip.offsetLeft + rect.left - box.left;
+    const y = strip.offsetTop + rect.top - box.top;
+    el.style.setProperty("--cx", `${x}px`);
+    el.style.setProperty("--cy", `${y}px`);
+    el.style.setProperty("--cw", `${rect.width}px`);
+    el.style.setProperty("--ch", `${rect.height}px`);
+    // The letter as the page sets it: a heading's size and weight, a capitalised heading.
+    const type = getComputedStyle(range.startContainer.parentElement);
+    for (const p of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "textTransform", "letterSpacing"]) el.style[p] = type[p];
+    el.textContent = range.toString();
+    const { block, offset } = pointAt(chapter, this.#cursor);
+    el.dataset.block = block;
+    el.dataset.offset = offset;
+    el.hidden = false;
   }
 
   // The reader's Vim keys; true when the key was one of them. Letters only while the
@@ -1023,10 +1071,13 @@ class BookReader extends LitElement {
     if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return false;
     const key = e.key;
     if (e.ctrlKey) {
-      // Vim's page keys. Ctrl+h/j/k/l and Ctrl+. belong to the desk, which takes them first.
-      if (key !== "f" && key !== "b") return false;
-      if (key === "f") this.#next();
-      else this.#prev();
+      // Vim's page keys, a whole page each, and Ctrl+v, Vim's other way into visual mode;
+      // their browser defaults (bookmark, view source, paste) mean nothing on a read-only
+      // page. Ctrl+h/j/k/l and Ctrl+. belong to the desk, which takes them first.
+      if (key === "f" || key === "d") this.#next();
+      else if (key === "b" || key === "u") this.#prev();
+      else if (key === "v") this.#visualKey();
+      else return false;
     } else {
       const second = key === "g" && Date.now() - this.#gAt < 1000;
       this.#gAt = key === "g" && !second ? Date.now() : 0;
@@ -1034,19 +1085,28 @@ class BookReader extends LitElement {
       if (key === "g") {
         if (second) this.#edge(0);
       } else if (key === "G") this.#edge(this.#pages - 1);
+      // h and l turn the page, as the owner asked, not one letter: a highlight in progress
+      // goes on to the page turned to, as with Space.
+      else if (key === "l") this.#next();
+      else if (key === "h") this.#prev();
       else if (isMotion(key) || ["0", "$", "j", "k"].includes(key)) {
         if (this.#cursor == null) return false;
         this.#move(key);
-      } else if (key === "v") {
-        if (this.#visual) this.#endVisual(false);
-        else if (this.highlights && this.#actor.snapshot.context.highlighting && this.#cursor != null) this.#startVisual();
-      } else if (key === "Enter" && this.#visual) this.#endVisual(true);
+      } else if (key === "v") this.#visualKey();
+      else if (key === "Enter" && this.#visual) this.#endVisual(true);
       else if (key === "Escape" && this.#visual) this.#endVisual(false);
       else return false;
     }
     e.preventDefault();
     e.stopPropagation();
     return true;
+  }
+
+  // v (or Ctrl+v) starts a highlight at the cursor, or drops the one in progress.
+  #visualKey() {
+    if (this.#cursor == null) this.#placeCursor();
+    if (this.#visual) this.#endVisual(false);
+    else if (this.highlights && this.#actor.snapshot.context.highlighting && this.#cursor != null) this.#startVisual();
   }
 
   // gg and G: the chapter's first or last page, the cursor at its top.
@@ -1268,12 +1328,17 @@ class BookReader extends LitElement {
   // the chapter to slide from (a chapter-crossing turn slides the whole strip instead,
   // #swapStrip). The transition is suspended for the one flush that applies the page.
   #place(page, animate) {
-    const strip = this.#strip;
-    if (!animate) strip.style.transition = "none";
-    strip.style.setProperty("--page", page);
+    // The cursor slides with the text it sits on, the same distance at the same time.
+    const moving = [this.#strip, this.renderRoot?.querySelector(".cursor")].filter(Boolean);
+    for (const el of moving) {
+      if (!animate) el.style.transition = "none";
+      el.style.setProperty("--page", page);
+    }
     if (!animate) {
-      void strip.offsetWidth;
-      strip.style.transition = "";
+      for (const el of moving) {
+        void el.offsetWidth;
+        el.style.transition = "";
+      }
     }
   }
 
@@ -1646,7 +1711,7 @@ class BookReader extends LitElement {
           @pointerup=${(e) => this.#pointerup(e)}
           @pointercancel=${() => (this.#drag = null)}
         >
-          <div class="page">${this.#bubble(snapshot)}</div>
+          <div class="page"><span class="cursor" aria-hidden="true" hidden></span>${this.#bubble(snapshot)}</div>
         </div>
         <div class="footer">
           <span class="chap">${title}</span>

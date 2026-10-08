@@ -102,10 +102,11 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
-    test(`Escape drops a keyboard highlight in ${engine.name}`, async () => {
+    // Ctrl+v starts a highlight exactly as v does (12, "Vim keys").
+    test(`Escape drops a keyboard highlight begun with Ctrl+v in ${engine.name}`, async () => {
       const { page, problems } = await open(true);
       await until(async () => {
-        await page.keyboard.press("v");
+        await page.keyboard.press("Control+v");
         if ((await pending(page)) === "C") return true;
         await page.keyboard.press("Escape");
         return false;
@@ -124,6 +125,7 @@ for (const engine of ENGINES) {
       // Give the settings reply time to land, so off is the answer and not the default.
       await new Promise((r) => setTimeout(r, 200));
       await page.keyboard.press("v");
+      await page.keyboard.press("Control+v");
       await page.keyboard.press("w");
       await page.keyboard.press("Enter");
       assert.equal(await pending(page), "");

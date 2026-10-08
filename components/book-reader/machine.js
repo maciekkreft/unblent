@@ -245,8 +245,6 @@ const seek = (flat, i, dir, ok) => {
 };
 
 const MOTIONS = {
-  l: [1, shown],
-  h: [-1, shown],
   w: [1, wordStart],
   b: [-1, wordStart],
   ")": [1, sentenceStart],
@@ -257,6 +255,11 @@ const MOTIONS = {
 
 export const isMotion = (key) => Object.hasOwn(MOTIONS, key);
 
+// One shown character on (+1) or back (-1): what the line motions walk a line by. A run
+// of white space is the one space it collapses to. Not a key of its own, since h and l
+// turn pages (12, "Vim keys").
+export const charStep = ({ flat }, i, dir) => seek(flat, i, dir, shown) ?? i;
+
 // The cursor after one motion. Past the last word, sentence or block it goes to the
 // chapter's last character, and before the first to its first, as Vim does.
 export const step = ({ flat }, i, key) => {
@@ -266,7 +269,7 @@ export const step = ({ flat }, i, key) => {
 
 // The passage a highlight begun at `start` covers with the cursor at `cursor`, as
 // [from, to) flat indexes. The cursor is the character the next keypress acts on, so when
-// it has moved forward onto the start of a word, sentence or paragraph (w, ), l onto a
+// it has moved forward onto the start of a word, sentence or paragraph (w, ), j onto a
 // new word) that start is where the passage stops, not part of it: v w w covers two
 // whole words. Moving back, the cursor's character is the passage's first. White space
 // at either end is dropped.
@@ -468,11 +471,13 @@ export const machine = setup({
       "corrected place; a highlight whose quote is no longer in the book stays a note with its " +
       "quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
       "one-character cursor shows, starting at the top of the page and kept while the reader " +
-      "is left and returned to; w, b, ), (, }, {, 0, $, j, k, l and h move it, a click on the " +
-      "text puts it there, and a cursor that leaves the page turns the page. v starts a " +
-      "highlight at the cursor, the same keys grow it, Enter makes it and Escape drops it. " +
-      "Space, the arrows, Page Up and Page Down, and Ctrl+f and Ctrl+b turn pages, taking the " +
-      "cursor to the new page's top; gg and G go to the chapter's first and last page.",
+      "is left and returned to; w, b, ), (, }, {, 0, $, j and k move it, a click on the " +
+      "text puts it there, and a cursor that leaves the page turns the page. The cursor is a " +
+      "box drawn on its letter at once, not a painted range, so Safari never shows it late. v " +
+      "or Ctrl+v starts a highlight at the cursor, the same keys grow it, Enter makes it and " +
+      "Escape drops it. Space, the arrows, Page Up and Page Down, l and h, and Ctrl+f, Ctrl+d, " +
+      "Ctrl+b and Ctrl+u turn pages, taking the cursor to the new page's top, and a highlight " +
+      "in progress goes on to that page; gg and G go to the chapter's first and last page.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded"],
     attributes: ["height", "highlights"],

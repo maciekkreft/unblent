@@ -380,14 +380,13 @@ class SettingsSheet extends LitElement {
         ["w, b", "next or previous word"],
         [") and (", "next or previous sentence"],
         ["} and {", "end or start of the paragraph"],
-        ["l, h", "next or previous letter"],
         ["j, k", "line below or above"],
         ["0, $", "start or end of the line"],
         ["Click", "put the cursor on the letter clicked"],
-        ["v", "start a highlight at the cursor; move to make it longer"],
+        ["v, Ctrl+v", "start a highlight at the cursor; move to make it longer"],
         ["Enter, Escape", "make the highlight, or drop it"],
-        ["Space, Ctrl+f", "next page (also the right arrow and Page Down)"],
-        ["Ctrl+b", "previous page (also the left arrow and Page Up)"],
+        ["l, Space, Ctrl+f, Ctrl+d", "next page (also the right arrow and Page Down)"],
+        ["h, Ctrl+b, Ctrl+u", "previous page (also the left arrow and Page Up)"],
         ["gg, G", "first or last page of the chapter"],
       ])}
       <p class="hint">On a phone-sized window the panel, tab and fold keys are off; the list and Reader keys still work.</p>
