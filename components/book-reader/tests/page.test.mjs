@@ -149,17 +149,13 @@ for (const engine of ENGINES) {
       return ctx;
     };
 
-    test("with Vim keys on, Ctrl+f/Ctrl+b, Ctrl+d/Ctrl+u and l/h turn the page and G/gg reach the chapter's ends", async () => {
+    test("with Vim keys on, Ctrl+f/Ctrl+b and Ctrl+d/Ctrl+u turn the page and G/gg reach the chapter's ends", async () => {
       const { page, problems } = await openAndRewind({ vimKeys: true });
       try {
         await page.keyboard.press("Control+f");
         await waitPagesAtLeast(page, "Chapter Two", 3);
         await settle();
         await page.keyboard.press("Control+d");
-        await waitChapterPage(page, "Chapter Two", 2);
-        await page.keyboard.press("l");
-        await waitChapterPage(page, "Chapter Two", 3);
-        await page.keyboard.press("h");
         await waitChapterPage(page, "Chapter Two", 2);
         await page.keyboard.press("Control+u");
         await waitChapterPage(page, "Chapter Two", 1);

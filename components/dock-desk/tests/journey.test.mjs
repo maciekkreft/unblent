@@ -792,11 +792,26 @@ for (const engine of ENGINES) {
 
     // --- R4: page keys and Ctrl+v ---------------------------------------------------------
 
-    test(`l and h turn pages in ${engine.name}`, async () => {
+    // l and h move the cursor one letter, as in Vim; only the page keys turn pages, and
+    // the cursor leaving the page turns it as any motion does (12, "Vim keys").
+    test(`l and h move the Reader's cursor one letter on the same page in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+f"), (s) => s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"));
-      await step("l", keys(page, "l"), (s) => all(want(s.pageNo?.startsWith("Page 2 of"), s.pageNo), onItsLetter(s)));
-      await step("h", keys(page, "h"), (s) => all(want(s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"), `${s.chapter} ${s.pageNo}`), want(s.cursor?.at.startsWith("Chapter Two"), `the cursor is at ${JSON.stringify(s.cursor)}`)));
+      await reach(quick(page), (s) => Boolean(s.cursor?.at.startsWith("Chapter One")));
+      await step("l l l", keys(page, "l", "l", "l"), (s) =>
+        all(want(s.cursor?.at.startsWith("pter One"), `the cursor is at ${JSON.stringify(s.cursor)}`), want(s.chapter === "Chapter One" && s.pageNo === "Page 1 of 1", `${s.chapter} ${s.pageNo}`), want(!s.pending, "a highlight began"), onItsLetter(s)));
+      await step("h", keys(page, "h"), (s) =>
+        all(want(s.cursor?.at.startsWith("apter One"), `the cursor is at ${JSON.stringify(s.cursor)}`), want(s.chapter === "Chapter One" && s.pageNo === "Page 1 of 1", `${s.chapter} ${s.pageNo}`), onItsLetter(s)));
+      clean(problems);
+    });
+
+    test(`l on the page's last letter turns the page, and h turns it back in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await reach(quick(page, "Control+f"), (s) => s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of") && Boolean(s.cursor?.at.startsWith("Chapter Two")));
+      await reach(quick(page, " "), (s) => Boolean(s.pageNo?.startsWith("Page 2 of")));
+      await reach(quick(page, "k", "$"), (s) => s.pageNo?.startsWith("Page 1 of") && Boolean(s.cursor) && !s.cursor.at.startsWith("Chapter Two"));
+      const last = await step("l", keys(page, "l"), (s) => all(want(s.pageNo?.startsWith("Page 2 of"), s.pageNo), onItsLetter(s)));
+      await step("h", keys(page, "h"), (s) =>
+        all(want(s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"), `${s.chapter} ${s.pageNo}`), want(s.cursor && !s.cursor.at.startsWith("Chapter Two") && s.cursor.at !== last.cursor?.at, `the cursor is at ${JSON.stringify(s.cursor)}`), onItsLetter(s)));
       clean(problems);
     });
 
@@ -818,7 +833,7 @@ for (const engine of ENGINES) {
       clean(problems);
     });
 
-    // --- S2: l and h inside a highlight move its end by one letter -----------------------
+    // --- S2: l and h inside a highlight move its end by one letter, as outside one --------
 
     test(`v l l l h in the Reader grows the passage by three letters and shrinks it by one in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
@@ -1020,7 +1035,7 @@ for (const engine of ENGINES) {
       ["the panel and fold keys", ["Control+l", "Control+.", "Control+Shift+l", "Control+Shift+h"]],
       ["the tab and fold letters", ["g", "t", "z", "h"]],
       ["the Reader's highlight letters", ["w", "v", "w", "Enter", "Control+v"]],
-      ["the Reader's page letters", ["l", "}", "Control+f", "Control+d", "G"]],
+      ["the Reader's cursor and page letters", ["l", "}", "Control+f", "Control+d", "G"]],
     ]) {
       test(`with Vim keys off, ${what} do nothing in ${engine.name}`, async () => {
         const { page, problems, step, reach } = await open(false);

@@ -257,9 +257,9 @@ const MOTIONS = {
 
 export const isMotion = (key) => Object.hasOwn(MOTIONS, key);
 
-// One shown character on (+1) or back (-1): what the line motions walk a line by, and
-// what h and l move the end of a highlight in progress by (outside one they turn pages,
-// 12 "Vim keys"). A run of white space is the one space it collapses to.
+// One shown character on (+1) or back (-1): what l and h move the cursor by, and what
+// the line motions walk a line by (12, "Vim keys"). A run of white space is the one
+// space it collapses to.
 export const charStep = ({ flat }, i, dir) => seek(flat, i, dir, shown) ?? i;
 
 // The cursor after one motion. Past the last word, sentence or block it goes to the
@@ -475,17 +475,16 @@ export const machine = setup({
       "corrected place; a highlight whose quote is no longer in the book stays a note with its " +
       "quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
       "one-character cursor shows, starting at the top of the page and kept while the reader " +
-      "is left and returned to; w, b, ), (, }, {, 0, $, j and k move it, a click on the " +
-      "text puts it there, and a cursor that leaves the page turns the page. The cursor is a " +
-      "box drawn on its letter at once, not a painted range, so Safari never shows it late. v " +
-      "or Ctrl+v starts a highlight at the cursor, the same keys grow it, Enter makes it and " +
-      "Escape drops it. Space, the arrows, Page Up and Page Down, l and h, and Ctrl+f, Ctrl+d, " +
-      "Ctrl+b and Ctrl+u turn pages, taking the cursor to the new page's top, and a highlight " +
-      "in progress goes on to that page; gg and G go to the chapter's first and last page. " +
-      "While a highlight is in progress, l and h instead move its end one letter right or " +
-      "left, turning the page only when the cursor leaves it. A highlight made with the keys " +
-      "marks exactly the passage painted while it was made, not grown to whole words as a " +
-      "drag with the mouse is.",
+      "is left and returned to; w, b, ), (, }, {, 0, $, j, k, l and h move it (l and h one " +
+      "letter, as in Vim), a click on the text puts it there, and a cursor that leaves the " +
+      "page turns the page. The cursor is a box drawn on its letter at once, not a painted " +
+      "range, so Safari never shows it late. v or Ctrl+v starts a highlight at the cursor, the " +
+      "same keys grow it, Enter makes it and Escape drops it. Space, the arrows, Page Up and " +
+      "Page Down, and Ctrl+f, Ctrl+d, Ctrl+b and Ctrl+u turn pages, taking the cursor to the " +
+      "new page's top, and a highlight in progress goes on to that page; gg and G go to the " +
+      "chapter's first and last page. A highlight made with the keys marks exactly the passage " +
+      "painted while it was made, letter by letter if l and h made it, not grown to whole " +
+      "words as a drag with the mouse is.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded"],
     attributes: ["height", "highlights"],

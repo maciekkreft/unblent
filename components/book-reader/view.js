@@ -1131,11 +1131,8 @@ class BookReader extends LitElement {
       if (key === "g") {
         if (second) this.#edge(0);
       } else if (key === "G") this.#edge(this.#pages - 1);
-      // h and l turn the page, as the owner asked; while a highlight is in progress they
-      // move its end by one letter, as in Vim's visual mode, turning the page only when
-      // the cursor leaves it, as the other motions do.
-      else if (key === "l" && !this.#visual) this.#next();
-      else if (key === "h" && !this.#visual) this.#prev();
+      // h and l move the cursor one letter, as in Vim, inside a highlight and outside
+      // one; the page turns only when the cursor leaves it, as with the other motions.
       else if (isMotion(key) || ["0", "$", "j", "k", "l", "h"].includes(key)) {
         if (this.#cursor == null) return false;
         this.#move(key);

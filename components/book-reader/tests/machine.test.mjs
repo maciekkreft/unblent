@@ -954,8 +954,8 @@ test("the Vim cursor's motions land on shown characters across blocks", () => {
   assert.deepEqual(where(nearest(ch, at(1, 0))), { block: 2, offset: 0 });
   // An exclusive end just after a block's last character is that block's end.
   assert.deepEqual(where(at(0, 10) + 1), { block: 0, offset: 11 });
-  // h and l are no motion of their own: outside a highlight they turn pages (12, "Vim
-  // keys"), inside one the view moves the cursor by charStep.
+  // h and l are no motion of their own: the view moves the cursor by charStep, checked
+  // above (12, "Vim keys").
   assert.ok(isMotion("w") && isMotion("}") && !isMotion("j") && !isMotion("Enter") && !isMotion("h") && !isMotion("l"));
 });
 
