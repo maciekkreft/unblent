@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate } from "../machine.js";
+import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, nearest, isMotion } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -905,4 +905,58 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     await vimSettle();
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
   }
+});
+
+// The keyboard highlight's text motions (12, "Vim keys"): where w, b, ), (, }, { and h, l
+// land is decided on the block texts, so it is checked here; the line motions need the
+// page and are the browser's. A figure is a block with no text; a book's raw white space
+// (a newline and indent between inline elements) shows as one space.
+test("the keyboard highlight's motions land on shown characters across blocks", () => {
+  const texts = ["Chapter One", "", "A short opening.  It ends\n   here! Then more.", "Last block"];
+  const ch = chapterText(texts);
+  const at = (block, offset) => indexOf(ch, { block, offset });
+  const go = (i, ...keys) => keys.reduce((k, key) => step(ch, k, key), i);
+  const where = (i) => pointAt(ch, i);
+  // w and b by word, across the empty block.
+  assert.deepEqual(where(go(at(0, 0), "w")), { block: 0, offset: 8 });
+  assert.deepEqual(where(go(at(0, 0), "w", "w")), { block: 2, offset: 0 });
+  assert.deepEqual(where(go(at(2, 4), "b")), { block: 2, offset: 2 });
+  assert.deepEqual(where(go(at(2, 2), "b")), { block: 2, offset: 0 });
+  assert.deepEqual(where(go(at(2, 0), "b")), { block: 0, offset: 8 });
+  // ) and ( by sentence: after a stop and white space, or at a block's start.
+  assert.deepEqual(where(go(at(2, 0), ")")), { block: 2, offset: 18 });
+  assert.deepEqual(where(go(at(2, 18), ")")), { block: 2, offset: 35 });
+  assert.deepEqual(where(go(at(2, 35), ")")), { block: 3, offset: 0 });
+  assert.deepEqual(where(go(at(2, 20), "(")), { block: 2, offset: 18 });
+  assert.deepEqual(where(go(at(2, 18), "(")), { block: 2, offset: 0 });
+  // } and { by block, skipping the figure.
+  assert.deepEqual(where(go(at(0, 3), "}")), { block: 2, offset: 0 });
+  assert.deepEqual(where(go(at(2, 5), "{")), { block: 2, offset: 0 });
+  assert.deepEqual(where(go(at(2, 0), "{")), { block: 0, offset: 0 });
+  // l and h by character; a run of white space is the one space it collapses to.
+  assert.deepEqual(where(go(at(2, 15), "l")), { block: 2, offset: 16 });
+  assert.deepEqual(where(go(at(2, 16), "l")), { block: 2, offset: 18 });
+  assert.deepEqual(where(go(at(2, 18), "h")), { block: 2, offset: 16 });
+  assert.deepEqual(where(go(at(0, 10), "l")), { block: 2, offset: 0 });
+  // The chapter's edges hold: past the last block is its last character, before the first
+  // is the first.
+  assert.deepEqual(where(go(at(3, 5), "}")), { block: 3, offset: 9 });
+  assert.deepEqual(where(go(at(3, 9), "l")), { block: 3, offset: 9 });
+  assert.deepEqual(where(go(at(0, 0), "h", "b", "{", "(")), { block: 0, offset: 0 });
+  // v starts on the first shown character at or after the page's anchor, past a figure.
+  assert.deepEqual(where(nearest(ch, at(1, 0))), { block: 2, offset: 0 });
+  // An exclusive end just after a block's last character is that block's end.
+  assert.deepEqual(where(at(0, 10) + 1), { block: 0, offset: 11 });
+  assert.ok(isMotion("w") && isMotion("}") && !isMotion("j") && !isMotion("Enter"));
+});
+
+// A keyboard highlight is the same _highlight message the mouse sends: v on a word, two
+// w and Enter give a range whose cursor end is inclusive, and snapping grows it to three
+// whole words.
+test("v w w Enter reads as three words once snapped", () => {
+  const texts = ["A short opening chapter, one page long."];
+  const ch = chapterText(texts);
+  const cursor = step(ch, step(ch, 0, "w"), "w");
+  const range = snapToWords(texts, { start: pointAt(ch, 0), end: pointAt(ch, cursor + 1) });
+  assert.equal(quoteOf(texts, range).exact, "A short opening");
 });

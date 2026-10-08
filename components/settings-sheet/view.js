@@ -415,7 +415,7 @@ class SettingsSheet extends LitElement {
             )
           : nothing}
         ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
-        <p class="hint">j/k in lists, Ctrl+h/j/k/l between panels, Ctrl+. and Ctrl+, between tabs, Escape back to a list</p>
+        <p class="hint">j/k in lists, Ctrl+h/j/k/l between panels, Ctrl+. and Ctrl+, between tabs, Escape back to a list, v in the Reader starts a highlight</p>
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}

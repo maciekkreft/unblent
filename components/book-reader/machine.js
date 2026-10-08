@@ -50,8 +50,8 @@ const movedElsewhere = (args) =>
 // --- Highlights (Decision 1-4, session 2) ----------------------------------------
 //
 // A highlight is one ordinary note whose link to the book carries a place and a quote
-// (12). The mouse is only one producer of the _highlight message; a later Vim visual
-// mode sends the same one, so the geometry stays out of here — the machine works on
+// (12). The mouse and the reader's Vim highlight (below) both produce the _highlight
+// message, so the geometry stays out of here — the machine works on
 // text positions (block, offset) alone, never pixels or pages. `texts` is one string
 // per block of the chapter (the concatenation of a block's descendant text nodes, what
 // the view's #textNodes computes); a range is { start, end }, each a { block, offset },
@@ -163,6 +163,100 @@ export const segments = (range, texts) => {
   }
   return out;
 };
+
+// --- Highlighting from the keyboard (12, "Vim keys"; 14) ------------------------------
+//
+// Where the text motions of the reader's Vim highlight land: w and b by word, ) and ( by
+// sentence, } and { by block, l and h by character. Decided here, on the block texts, so
+// they are tested in Node; only the line motions (0, $, j, k) need the page's geometry
+// and stay in the view. The chapter is one flat string, its blocks joined by a separator
+// that is never text, and a cursor is an index into it that sits on a character the page
+// shows: a non-space, or the one space a run of white space between two words collapses
+// to. Motions stop at the chapter's edges, since a highlight's place is in one chapter.
+const SEP = "\u0000";
+const blank = (c) => c === SEP || /\s/u.test(c);
+
+export const chapterText = (texts) => {
+  const starts = [];
+  let at = 0;
+  for (const t of texts) {
+    starts.push(at);
+    at += t.length + 1;
+  }
+  return { flat: texts.join(SEP), starts };
+};
+
+// A flat index as a place; an index on a separator (or past the end) is the end of the
+// block before it, which is where an exclusive range end after a block's last character
+// belongs.
+export const pointAt = ({ starts }, i) => {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= i) lo = mid;
+    else hi = mid - 1;
+  }
+  return { block: lo, offset: i - starts[lo] };
+};
+
+export const indexOf = ({ starts }, p) => starts[p.block] + p.offset;
+
+const shown = (flat, i) => {
+  if (i < 0 || i >= flat.length || flat[i] === SEP) return false;
+  if (!blank(flat[i])) return true;
+  if (i === 0 || blank(flat[i - 1])) return false;
+  let j = i + 1;
+  while (j < flat.length && blank(flat[j]) && flat[j] !== SEP) j += 1;
+  return j < flat.length && flat[j] !== SEP;
+};
+const wordStart = (flat, i) => !blank(flat[i]) && (i === 0 || blank(flat[i - 1]));
+// The first non-space of a block: only white space back to the separator.
+const blockStart = (flat, i) => {
+  if (blank(flat[i])) return false;
+  let j = i - 1;
+  while (j >= 0 && blank(flat[j]) && flat[j] !== SEP) j -= 1;
+  return j < 0 || flat[j] === SEP;
+};
+// A sentence starts a block, or follows white space after a full stop, question or
+// exclamation mark, with any closing quote or bracket between.
+const sentenceStart = (flat, i) => {
+  if (blockStart(flat, i)) return true;
+  if (blank(flat[i]) || !blank(flat[i - 1])) return false;
+  let j = i - 1;
+  while (j >= 0 && blank(flat[j])) j -= 1;
+  while (j >= 0 && /["'”’)\]]/u.test(flat[j])) j -= 1;
+  return j >= 0 && /[.!?]/u.test(flat[j]);
+};
+
+const seek = (flat, i, dir, ok) => {
+  for (let k = i + dir; k >= 0 && k < flat.length; k += dir) if (ok(flat, k)) return k;
+  return null;
+};
+
+const MOTIONS = {
+  l: [1, shown],
+  h: [-1, shown],
+  w: [1, wordStart],
+  b: [-1, wordStart],
+  ")": [1, sentenceStart],
+  "(": [-1, sentenceStart],
+  "}": [1, blockStart],
+  "{": [-1, blockStart],
+};
+
+export const isMotion = (key) => Object.hasOwn(MOTIONS, key);
+
+// The cursor after one motion. Past the last word, sentence or block it goes to the
+// chapter's last character, and before the first to its first, as Vim does.
+export const step = ({ flat }, i, key) => {
+  const [dir, ok] = MOTIONS[key];
+  return seek(flat, i, dir, ok) ?? (dir > 0 ? seek(flat, flat.length, -1, shown) : seek(flat, -1, 1, shown)) ?? i;
+};
+
+// The first shown character at or after an index, where v starts the cursor: the page's
+// anchor may sit on white space or on a block with no text (a figure).
+export const nearest = ({ flat }, i) => seek(flat, i - 1, 1, shown) ?? seek(flat, flat.length, -1, shown);
 
 // A note's links (12), always an array; an old cached note reads as none.
 const links = (note) => (Array.isArray(note.about) ? note.about : []);
