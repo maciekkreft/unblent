@@ -954,7 +954,8 @@ test("the Vim cursor's motions land on shown characters across blocks", () => {
   assert.deepEqual(where(nearest(ch, at(1, 0))), { block: 2, offset: 0 });
   // An exclusive end just after a block's last character is that block's end.
   assert.deepEqual(where(at(0, 10) + 1), { block: 0, offset: 11 });
-  // h and l turn pages (12, "Vim keys"), so they are no motion of the cursor.
+  // h and l are no motion of their own: outside a highlight they turn pages (12, "Vim
+  // keys"), inside one the view moves the cursor by charStep.
   assert.ok(isMotion("w") && isMotion("}") && !isMotion("j") && !isMotion("Enter") && !isMotion("h") && !isMotion("l"));
 });
 
@@ -967,6 +968,7 @@ test("the passage v covers ends before the word the cursor moved onto", () => {
   const ch = chapterText(texts);
   const at = (block, offset) => indexOf(ch, { block, offset });
   const text = ([from, to]) => ch.flat.slice(from, to).replaceAll("\u0000", "|");
+  const at2 = (block, offset) => ({ block, offset });
   const start = at(1, 2);
   assert.equal(text(passage(ch, start, start)), "s");
   assert.equal(text(passage(ch, start, step(ch, step(ch, start, "w"), "w"))), "short opening");
@@ -977,6 +979,14 @@ test("the passage v covers ends before the word the cursor moved onto", () => {
   assert.equal(text(passage(ch, at(1, 4), step(ch, at(1, 4), "b"))), "sho");
   // } ends on the paragraph's last character, which is kept.
   assert.equal(text(passage(ch, at(1, 40), step(ch, at(1, 40), "}"))), "It links.");
+  // A cursor moved by a letter (h, l) keeps its own character, onto a word's start too.
+  assert.equal(text(passage(ch, start, start + 3, true)), "shor");
+  assert.equal(text(passage(ch, at(1, 2), at(1, 8), true)), "short o");
+  assert.equal(text(passage(ch, at(1, 2), at(1, 8))), "short");
+  assert.equal(text(passage(ch, at(1, 4), at(1, 2), true)), "sho");
+  // A keyboard highlight is marked as painted, not grown to whole words as a drag is.
+  assert.deepEqual(snapToWords(texts, { start: at2(1, 2), end: at2(1, 6) }, { grow: false }), { start: at2(1, 2), end: at2(1, 6) });
+  assert.deepEqual(snapToWords(texts, { start: at2(1, 2), end: at2(1, 6) }), { start: at2(1, 2), end: at2(1, 7) });
   const range = snapToWords(texts, { start: pointAt(ch, start), end: pointAt(ch, passage(ch, start, start + 3)[1]) });
   assert.equal(quoteOf(texts, range).exact, "short");
 });

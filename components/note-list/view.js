@@ -408,9 +408,14 @@ class NoteList extends LitElement {
       event.preventDefault();
       this.#focusId = next.id;
       this.requestUpdate();
-      this.updateComplete.then(() =>
-        this.renderRoot.querySelector(`.row[data-id="${next.id}"]`)?.focus(),
-      );
+      // The row the keyboard moved to is scrolled into view by whichever box scrolls around
+      // the list (its own, a panel's or the dock's), at once, so it is never left out of
+      // sight below the fold.
+      this.updateComplete.then(() => {
+        const el = this.renderRoot.querySelector(`.row[data-id="${next.id}"]`);
+        el?.focus({ preventScroll: true });
+        el?.scrollIntoView({ block: "nearest", behavior: "instant" });
+      });
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       this.#activate(current);

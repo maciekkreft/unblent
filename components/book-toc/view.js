@@ -161,7 +161,14 @@ class BookToc extends LitElement {
       event.preventDefault();
       this.#focusIndex = next;
       this.requestUpdate();
-      this.updateComplete.then(() => this.renderRoot.querySelector(`.entry[data-at="${next}"]`)?.focus());
+      // The row the keyboard moved to is scrolled into view by whichever box scrolls around
+      // the list (its own, a panel's or the dock's), at once, so it is never left out of
+      // sight below the fold.
+      this.updateComplete.then(() => {
+        const el = this.renderRoot.querySelector(`.entry[data-at="${next}"]`);
+        el?.focus({ preventScroll: true });
+        el?.scrollIntoView({ block: "nearest", behavior: "instant" });
+      });
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       this.#select(rows[at], at);

@@ -375,6 +375,7 @@ class SettingsSheet extends LitElement {
         ["gg, G", "first or last row"],
         ["Enter", "open the row"],
         ["Escape", "from a note or a chat, back to its list (while typing, the first Escape only stops the typing)"],
+        ["In the chat box", "Enter sends; while typing, press Escape first (Enter there makes a new line)"],
       ])}
       ${group("In the Reader, a cursor shows on the text", [
         ["w, b", "next or previous word"],
@@ -385,8 +386,9 @@ class SettingsSheet extends LitElement {
         ["Click", "put the cursor on the letter clicked"],
         ["v, Ctrl+v", "start a highlight at the cursor; move to make it longer"],
         ["Enter, Escape", "make the highlight, or drop it"],
-        ["l, Space, Ctrl+f, Ctrl+d", "next page (also the right arrow and Page Down)"],
-        ["h, Ctrl+b, Ctrl+u", "previous page (also the left arrow and Page Up)"],
+        ["l, h", "next or previous page; while making a highlight, one letter right or left"],
+        ["Space, Ctrl+f, Ctrl+d", "next page (also the right arrow and Page Down)"],
+        ["Ctrl+b, Ctrl+u", "previous page (also the left arrow and Page Up)"],
         ["gg, G", "first or last page of the chapter"],
       ])}
       <p class="hint">On a phone-sized window the panel, tab and fold keys are off; the list and Reader keys still work.</p>

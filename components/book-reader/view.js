@@ -827,12 +827,13 @@ class BookReader extends LitElement {
   }
 
   // Two places as the _highlight message, whichever comes first: the tail the mouse and
-  // the keyboard share, so both make exactly the same highlight (12).
-  #sendHighlight(p, q) {
+  // the keyboard share (12). The keyboard's is `exact`: its passage was painted letter
+  // by letter as it was made, so it is not grown to whole words as a drag is.
+  #sendHighlight(p, q, exact = false) {
     if (!p || !q) return false;
     const [start, end] = p.block > q.block || (p.block === q.block && p.offset > q.offset) ? [q, p] : [p, q];
     if (start.block === end.block && start.offset === end.offset) return false;
-    this.#actor.send({ type: "_highlight", start, end, texts: this.#blockTexts() });
+    this.#actor.send({ type: "_highlight", start, end, exact, texts: this.#blockTexts() });
     return true;
   }
 
@@ -953,7 +954,13 @@ class BookReader extends LitElement {
 
   #move(key) {
     const chapter = this.#chapterText();
-    this.#cursor = isMotion(key) ? step(chapter, this.#cursor, key) : this.#lineStep(this.#cursor, key);
+    const letter = key === "l" || key === "h";
+    this.#cursor = isMotion(key)
+      ? step(chapter, this.#cursor, key)
+      : letter
+        ? charStep(chapter, this.#cursor, key === "l" ? 1 : -1)
+        : this.#lineStep(this.#cursor, key);
+    if (this.#visual) this.#visual.letter = letter;
     const at = this.#lineOf(this.#cursor, chapter);
     const page = at ? Math.max(0, Math.min(this.#pages - 1, at.col)) : this.#page;
     if (page !== this.#page) {
@@ -1003,8 +1010,8 @@ class BookReader extends LitElement {
     this.#paintCursor();
     if (!make) return;
     const chapter = this.#chapterText();
-    const [from, to] = passage(chapter, v.start, this.#cursor);
-    this.#sendHighlight(pointAt(chapter, from), pointAt(chapter, to));
+    const [from, to] = passage(chapter, v.start, this.#cursor, v.letter);
+    this.#sendHighlight(pointAt(chapter, from), pointAt(chapter, to), true);
   }
 
   // The cursor and the passage in progress, drawn in the same task as the key that moved
@@ -1023,7 +1030,7 @@ class BookReader extends LitElement {
     if (!this.#visual || this.#cursor == null) {
       registry.delete(PENDING);
     } else {
-      const [from, to] = passage(chapter, this.#visual.start, this.#cursor);
+      const [from, to] = passage(chapter, this.#visual.start, this.#cursor, this.#visual.letter);
       const pending = this.#rangeOf(from, to, chapter);
       // A new Highlight every time, never one whose ranges change, and a class flipped
       // on the strip: Safari otherwise leaves the old passage painted until something
@@ -1085,11 +1092,12 @@ class BookReader extends LitElement {
       if (key === "g") {
         if (second) this.#edge(0);
       } else if (key === "G") this.#edge(this.#pages - 1);
-      // h and l turn the page, as the owner asked, not one letter: a highlight in progress
-      // goes on to the page turned to, as with Space.
-      else if (key === "l") this.#next();
-      else if (key === "h") this.#prev();
-      else if (isMotion(key) || ["0", "$", "j", "k"].includes(key)) {
+      // h and l turn the page, as the owner asked; while a highlight is in progress they
+      // move its end by one letter, as in Vim's visual mode, turning the page only when
+      // the cursor leaves it, as the other motions do.
+      else if (key === "l" && !this.#visual) this.#next();
+      else if (key === "h" && !this.#visual) this.#prev();
+      else if (isMotion(key) || ["0", "$", "j", "k", "l", "h"].includes(key)) {
         if (this.#cursor == null) return false;
         this.#move(key);
       } else if (key === "v") this.#visualKey();

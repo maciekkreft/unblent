@@ -79,16 +79,18 @@ const charBefore = (texts, p) => (p.offset > 0 ? texts[p.block][p.offset - 1] : 
 // Grow both ends to word boundaries, then trim surrounding white space; null when
 // nothing but space is left (Decision 3). Growing stays inside a block (a word does not
 // span the importer's blocks); trimming may cross a boundary a selection dragged over.
-export const snapToWords = (texts, range) => {
+// A keyboard highlight is not grown (`grow` false): the passage painted while it was
+// made, letter by letter if h and l made it, is exactly what is marked.
+export const snapToWords = (texts, range, { grow = true } = {}) => {
   let start = { ...range.start };
   let end = { ...range.end };
   // Grow an end that sits inside a word out to the word's edge; an end already at a
   // boundary (against space or punctuation) is left for the trim below, so a selection
   // that stops at a space does not swallow the next word.
-  while (start.offset > 0 && isWord(texts[start.block][start.offset]) && isWord(texts[start.block][start.offset - 1])) {
+  while (grow && start.offset > 0 && isWord(texts[start.block][start.offset]) && isWord(texts[start.block][start.offset - 1])) {
     start.offset -= 1;
   }
-  while (end.offset < texts[end.block].length && isWord(texts[end.block][end.offset]) && isWord(texts[end.block][end.offset - 1])) {
+  while (grow && end.offset < texts[end.block].length && isWord(texts[end.block][end.offset]) && isWord(texts[end.block][end.offset - 1])) {
     end.offset += 1;
   }
   // Trim leading white space forward, trailing white space back.
@@ -255,9 +257,9 @@ const MOTIONS = {
 
 export const isMotion = (key) => Object.hasOwn(MOTIONS, key);
 
-// One shown character on (+1) or back (-1): what the line motions walk a line by. A run
-// of white space is the one space it collapses to. Not a key of its own, since h and l
-// turn pages (12, "Vim keys").
+// One shown character on (+1) or back (-1): what the line motions walk a line by, and
+// what h and l move the end of a highlight in progress by (outside one they turn pages,
+// 12 "Vim keys"). A run of white space is the one space it collapses to.
 export const charStep = ({ flat }, i, dir) => seek(flat, i, dir, shown) ?? i;
 
 // The cursor after one motion. Past the last word, sentence or block it goes to the
@@ -271,12 +273,14 @@ export const step = ({ flat }, i, key) => {
 // [from, to) flat indexes. The cursor is the character the next keypress acts on, so when
 // it has moved forward onto the start of a word, sentence or paragraph (w, ), j onto a
 // new word) that start is where the passage stops, not part of it: v w w covers two
-// whole words. Moving back, the cursor's character is the passage's first. White space
-// at either end is dropped.
-export const passage = ({ flat }, start, cursor) => {
+// whole words. Moving back, the cursor's character is the passage's first. A cursor
+// moved by a letter (h, l: `letter` true) keeps its character in the passage either
+// way, as Vim's visual mode does, so each l shows one more letter. White space at
+// either end is dropped.
+export const passage = ({ flat }, start, cursor, letter = false) => {
   let lo = Math.min(start, cursor);
   let hi = Math.max(start, cursor);
-  if (cursor > start && wordStart(flat, cursor)) hi = cursor - 1;
+  if (!letter && cursor > start && wordStart(flat, cursor)) hi = cursor - 1;
   while (hi > lo && blank(flat[hi])) hi -= 1;
   while (lo < hi && blank(flat[lo])) lo += 1;
   return [lo, hi + 1];
@@ -477,7 +481,11 @@ export const machine = setup({
       "or Ctrl+v starts a highlight at the cursor, the same keys grow it, Enter makes it and " +
       "Escape drops it. Space, the arrows, Page Up and Page Down, l and h, and Ctrl+f, Ctrl+d, " +
       "Ctrl+b and Ctrl+u turn pages, taking the cursor to the new page's top, and a highlight " +
-      "in progress goes on to that page; gg and G go to the chapter's first and last page.",
+      "in progress goes on to that page; gg and G go to the chapter's first and last page. " +
+      "While a highlight is in progress, l and h instead move its end one letter right or " +
+      "left, turning the page only when the cursor leaves it. A highlight made with the keys " +
+      "marks exactly the passage painted while it was made, not grown to whole words as a " +
+      "drag with the mouse is.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded"],
     attributes: ["height", "highlights"],
@@ -628,16 +636,16 @@ export const machine = setup({
       },
       on: {
         // The user made a highlight (Decision 3): one actor message, the mouse only one
-        // producer of it. Snap to words; then, against the known highlights of this chapter:
-        // a range wholly inside one changes nothing (session 3 opens that highlight's
-        // bubble); a range clear of them all is a new note, its body the empty comment; a
-        // range that overlaps or touches one or more merges them into one (Decision 6). The
+        // producer of it. Snap to words (a keyboard highlight, `exact`, is not grown);
+        // then, against the known highlights of this chapter: a range wholly inside one
+        // changes nothing (session 3 opens that highlight's bubble); a range clear of
+        // them all is a new note, its body the empty comment; a range that overlaps or touches one or more merges them into one (Decision 6). The
         // merge needs the involved comments and versions, so it is planned here and read in
         // `merging`; the plain cases emit at once.
         _highlight: {
           guard: ({ context }) => context.highlighting && Boolean(context.book),
           actions: enqueueActions(({ context, event, enqueue }) => {
-            const range = snapToWords(event.texts, { start: event.start, end: event.end });
+            const range = snapToWords(event.texts, { start: event.start, end: event.end }, { grow: !event.exact });
             if (!range) return;
             const here = context.highlights.filter((h) => h.place.chapter === context.chapter);
             const hit = here.filter((h) => overlaps(rangeOf(h.place), range));
