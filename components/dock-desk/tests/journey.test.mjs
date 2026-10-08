@@ -212,6 +212,10 @@ const look = (page) =>
       rightFolded: folded("right"),
       editor: cm("note-editor"),
       chatBox: cm("chat-input"),
+      // Vim's normal mode in the chat box: the block cursor in place of the caret. The
+      // box enters insert mode a frame after it takes the keyboard, so letters typed
+      // before that would be Vim commands.
+      chatNormal: Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector(".cm-scroller.cm-vimMode")),
       rows,
       chapter: reader.querySelector(".footer .chap")?.textContent.trim() ?? null,
       pageNo: reader.querySelector(".footer .pageno")?.textContent.trim() ?? null,
@@ -512,7 +516,7 @@ for (const engine of ENGINES) {
       const typed = await typedNote(page, reach);
       await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
       await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
-      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input"));
+      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input") && !s.chatNormal);
       await step("type o k", keys(page, "o", "k"), (s) => all(want(s.chatBox === "ok", `the chat box holds "${s.chatBox}"`), unchanged(s, typed.look, "editor")));
       clean(problems);
     });
@@ -677,7 +681,7 @@ for (const engine of ENGINES) {
       const { page, problems, step, reach } = await open();
       await fromOpenChat(page, reach);
       await step("k k", keys(page, "k", "k"), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input"));
+      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input") && !s.chatNormal);
       await step("type hello, Escape, Enter", typeAndSend(page), asked);
       clean(problems);
     });
@@ -687,7 +691,7 @@ for (const engine of ENGINES) {
       await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
       await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
       await step("g g", keys(page, "g", "g"), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input"));
+      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input") && !s.chatNormal);
       await step("type hello, Escape, Enter", typeAndSend(page), asked);
       clean(problems);
     });
