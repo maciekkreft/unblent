@@ -81,7 +81,8 @@ class ScoringList extends LitElement {
       background: var(--color-surface-hover);
     }
     .row:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .row[aria-selected="true"] {
       background: var(--color-accent-subtle);
@@ -162,7 +163,8 @@ class ScoringList extends LitElement {
     }
     .bin:focus-visible,
     .undo:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .row.deleting {
       cursor: default;

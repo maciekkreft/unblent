@@ -66,7 +66,8 @@ class ProfileSwitch extends LitElement {
       color: var(--color-ink);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* In the product the door is deliberately not a visible signifier (§12): the
        button holds its place — still tappable on touch — but stays transparent until

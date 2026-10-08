@@ -110,7 +110,8 @@ class GaugeEditor extends LitElement {
     }
     input:focus-visible,
     textarea:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     input.title {
       font-size: var(--text-subtitle);
@@ -164,7 +165,8 @@ class GaugeEditor extends LitElement {
       background: var(--color-surface-hover);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button.quiet {
       border-color: transparent;

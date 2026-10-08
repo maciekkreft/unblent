@@ -58,7 +58,8 @@ class WorkDesk extends LitElement {
       background: var(--color-surface-hover);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button[aria-current="page"] {
       color: var(--color-ink);

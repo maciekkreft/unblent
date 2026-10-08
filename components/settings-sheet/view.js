@@ -181,7 +181,8 @@ class SettingsSheet extends LitElement {
       padding: var(--space-2xs) var(--space-xs);
     }
     .key input:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button.act,
     button.reset {
@@ -203,7 +204,8 @@ class SettingsSheet extends LitElement {
     }
     button.act:focus-visible,
     button.reset:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button.reset {
       margin-top: var(--space-md);
@@ -289,7 +291,8 @@ class SettingsSheet extends LitElement {
       cursor: default;
     }
     button.icon:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button.icon svg {
       display: block;
@@ -319,7 +322,8 @@ class SettingsSheet extends LitElement {
       cursor: pointer;
     }
     select:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .failed {
       margin: 0;

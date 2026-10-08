@@ -101,7 +101,8 @@ class GaugePost extends LitElement {
       padding: var(--space-sm);
     }
     textarea:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .run {
       display: flex;
@@ -126,7 +127,8 @@ class GaugePost extends LitElement {
       color: var(--color-body-mid);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .line {
       font-size: var(--text-sm);

@@ -84,8 +84,8 @@ class BookToc extends LitElement {
       background: var(--color-surface-hover);
     }
     .entry:focus-visible {
-      outline: var(--focus-ring);
-      outline-offset: calc(-1 * var(--border-width));
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* The entry the reader is inside: named in ink, weighted, with the accent rail lit,
        so the reader's place in the book is visible at a glance (immediate feedback as the

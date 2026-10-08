@@ -57,7 +57,8 @@ class PageNav extends LitElement {
       background: var(--color-surface-hover);
     }
     a:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     a[aria-current="page"] {
       color: var(--color-ink);

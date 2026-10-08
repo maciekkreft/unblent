@@ -112,7 +112,8 @@ class ConversationList extends LitElement {
       -webkit-user-select: none;
     }
     .row:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* The sliding layer carries the row's content, laid out like a note-list row: a title
        line and a subtitle line in a column, the trailing box beside them. The transition

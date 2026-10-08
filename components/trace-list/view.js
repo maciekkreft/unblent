@@ -150,7 +150,8 @@ class TraceList extends LitElement {
       background: var(--color-surface-hover);
     }
     .clear:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .clear:disabled {
       color: var(--color-mute);

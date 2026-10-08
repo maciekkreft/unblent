@@ -327,8 +327,8 @@ class HighlightNotes extends LitElement {
       overflow: hidden;
     }
     .region:focus-within {
-      outline: var(--focus-ring);
-      outline-offset: calc(-1 * var(--space-2xs));
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* A quote line: the note's highlighted passage, set in the app's highlight colour
        exactly as in the book (Decision 4), its rounded ends repeating on every wrapped

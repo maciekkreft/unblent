@@ -67,7 +67,8 @@ class SessionSwitch extends LitElement {
       justify-content: center;
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button svg {
       display: block;

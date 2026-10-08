@@ -109,8 +109,8 @@ class BookReader extends LitElement {
       outline: none;
     }
     .reader:focus-visible {
-      outline: var(--focus-ring);
-      outline-offset: calc(-1 * var(--space-2xs));
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* One page is shown and everything else clipped. The clip happens at the reading
        measure, not the viewport edge, so the next column never peeks into the side
@@ -352,7 +352,8 @@ class BookReader extends LitElement {
       background: var(--color-surface-hover);
     }
     .bubble .act:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .bubble .act.remove:hover {
       color: var(--color-danger);
@@ -527,7 +528,8 @@ class BookReader extends LitElement {
       cursor: default;
     }
     .turn:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* A word said plainly, centred: nothing chosen, or the server out of reach. */
     .message {
@@ -558,7 +560,8 @@ class BookReader extends LitElement {
       background: var(--color-surface-hover);
     }
     .retry:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
   `;
 

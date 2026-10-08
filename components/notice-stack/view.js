@@ -153,7 +153,8 @@ class NoticeStack extends LitElement {
       background: var(--color-accent-hover);
     }
     .act:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .dismiss {
       display: flex;
@@ -170,7 +171,8 @@ class NoticeStack extends LitElement {
       color: var(--color-ink);
     }
     .dismiss:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* The passing notice echoes its window as a hairline that drains, both reading
        --duration-undo so they cannot disagree; hover or focus pauses it in step

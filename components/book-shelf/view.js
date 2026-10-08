@@ -112,7 +112,8 @@ class BookShelf extends LitElement {
       background: var(--color-surface-hover);
     }
     .add:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .add svg {
       display: block;
@@ -136,8 +137,8 @@ class BookShelf extends LitElement {
       -webkit-user-select: none;
     }
     .tile:focus-visible {
-      outline: var(--focus-ring);
-      outline-offset: var(--space-2xs);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* The cover: a 2:3 card, the image cropped to it, a titled placeholder when a
        book has none so a tile is never a blank rectangle. */
@@ -250,7 +251,8 @@ class BookShelf extends LitElement {
       box-sizing: border-box;
     }
     .title-input:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* A book counting down to its delete: the cover dims under an Undo, with a bar
        draining the window, both reading --duration-undo so they cannot disagree. */

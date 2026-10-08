@@ -71,7 +71,8 @@ class LayoutSwitch extends LitElement {
       color: var(--color-ink);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* Pressed = arranging: a lone button whose state must read at a glance, so it
        fills with the accent rather than viewport-switch's fainter surface-active. */

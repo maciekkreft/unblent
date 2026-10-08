@@ -323,7 +323,8 @@ class NoteEditor extends LitElement {
       cursor: default;
     }
     .pin:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* CM6 owns everything inside .region; it grows with content, capped at the
        container so the status stays in view and the page does not scroll. */
@@ -341,7 +342,8 @@ class NoteEditor extends LitElement {
       min-height: 0;
     }
     .region:focus-within {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .footer {
       flex: none;
@@ -395,7 +397,8 @@ class NoteEditor extends LitElement {
       color: var(--color-ink);
     }
     button.level:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* Feedback that a level change landed, however it was made (a click or a Vim key). */
     button.level.flash {

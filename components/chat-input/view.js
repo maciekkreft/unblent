@@ -162,7 +162,8 @@ class ChatInput extends LitElement {
       color: var(--color-ink);
     }
     .action:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .row {
       display: flex;
@@ -181,7 +182,8 @@ class ChatInput extends LitElement {
       overflow: hidden;
     }
     .region:focus-within {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     ::selection {
       background: var(--color-accent-selection);
@@ -211,7 +213,8 @@ class ChatInput extends LitElement {
       background: var(--color-accent-hover);
     }
     .send:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .send:disabled {
       background: var(--color-border);

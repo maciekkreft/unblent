@@ -266,7 +266,8 @@ class RedlineEditor extends LitElement {
       color: var(--color-body-mid);
     }
     .drop:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .notice {
       font-size: var(--text-sm);
@@ -304,7 +305,8 @@ class RedlineEditor extends LitElement {
       background: var(--color-surface-hover);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     button.quiet {
       border-color: transparent;

@@ -182,6 +182,9 @@ class DockDesk extends LitElement {
       background: var(--color-canvas-soft);
       cursor: pointer;
     }
+    /* A box that scrolls clips on every side, so the list keeps a margin the width of
+       the focus ring inside its edge, given back outside, and a tab's ring is drawn
+       whole without moving any tab. */
     [role="tablist"] {
       flex: 1;
       min-width: 0;
@@ -190,6 +193,8 @@ class DockDesk extends LitElement {
       gap: var(--space-2xs);
       overflow-x: auto;
       scrollbar-width: none;
+      padding: var(--space-2xs);
+      margin: calc(-1 * var(--space-2xs));
     }
     /* A strip narrower than its tabs scrolls without a bar, so the view brings the
        selected tab into the strip itself (updated()); once settled, it glides
@@ -211,7 +216,8 @@ class DockDesk extends LitElement {
       background: var(--color-surface-hover);
     }
     button:focus-visible {
-      outline: var(--focus-ring);
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* Centred rather than on the baseline, so the subject mark lines up with the
        middle of the label's letters, not sits above it. */

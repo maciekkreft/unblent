@@ -192,6 +192,8 @@ const look = (page) =>
       }
     }
     return {
+      // The focus ring (7.4's --focus-ring) as drawn on whatever has the keyboard.
+      ring: deep ? getComputedStyle(deep).boxShadow : null,
       place: peers.length ? `${peers.indexOf(deep) + 1} of ${peers.length}` : null,
       shown,
       framed,
@@ -271,6 +273,18 @@ function chatBox() {
   if (!el) return null;
   const r = el.getBoundingClientRect();
   return { x: r.left + 10, y: r.top + r.height / 2 };
+}
+function tile() {
+  const el = document.querySelector("book-shelf")?.shadowRoot?.querySelector(".tile");
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+function contentsRow(text) {
+  const el = [...(document.querySelector("book-toc")?.shadowRoot?.querySelectorAll(".entry") ?? [])].find((e) => e.textContent.includes(text));
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
 // Bare desk: the stage header between the Reader's tab and the header's buttons.
 function blankHeader() {
@@ -593,6 +607,42 @@ for (const engine of ENGINES) {
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
       await step("Ctrl+h", keys(page, "Control+h"), (s) =>
         all(want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`), want(JSON.stringify(s.framed) === '["stage"]', `framed: ${JSON.stringify(s.framed)}`)), SETTLE);
+      clean(problems);
+    });
+
+    // --- R3: what the keyboard is on wears the focus ring (7.4) --------------------------
+
+    // The ring is drawn as a box-shadow; "none" is what a view showed when its ring was
+    // written as an outline, which no engine draws from a box-shadow value.
+    const ringed = (s) => want(s.ring && s.ring !== "none", `${s.deep} "${s.deepText}" shows no focus ring`);
+    const unringed = (s) => want(s.ring === "none", `${s.deep} "${s.deepText}" shows the focus ring after a click: ${s.ring}`);
+
+    test(`Ctrl+l puts the focus ring on the Notes row in ${engine.name}`, async () => {
+      const { page, problems, step } = await open();
+      await step("Ctrl+l", keys(page, "Control+l"), (s) => all(want(onRow(s, "Note"), `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
+      clean(problems);
+    });
+
+    test(`Ctrl+h puts the focus ring on the Books tile in ${engine.name}`, async () => {
+      const { page, problems, step } = await open();
+      await step("Ctrl+h", keys(page, "Control+h"), (s) =>
+        all(want(s.deep === "li[option].tile", `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
+      clean(problems);
+    });
+
+    test(`a click on a Contents row leaves it without the focus ring in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await reach(clickAt(page, tile), (s) => s.deep === "button.entry");
+      await step("click Chapter Two", clickAt(page, contentsRow, "Chapter Two"), (s) =>
+        all(want(s.deep === "button.entry" && s.deepText === "Chapter Two", `the keyboard is on ${s.deep} "${s.deepText}"`), unringed(s)), SETTLE);
+      clean(problems);
+    });
+
+    test(`Tab from a clicked Contents row puts the focus ring on the Reader's tab in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await reach(clickAt(page, tile), (s) => s.deep === "button.entry");
+      await reach(clickAt(page, contentsRow, "Chapter Two"), (s) => s.deepText === "Chapter Two");
+      await step("Tab", keys(page, "Tab"), (s) => all(want(s.deep === "button[tab]", `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
       clean(problems);
     });
 
@@ -937,6 +987,14 @@ for (const engine of ENGINES) {
     });
 
     // --- Vim keys off: every letter and Ctrl key does nothing ----------------------------
+
+    test(`with Vim keys off, Tab from the page start puts the focus ring on the Books tab in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open(false);
+      await reach(() => safari(page), (s) => s.focus === "body");
+      await step("Tab", keys(page, "Tab"), (s) =>
+        all(want(s.deep === "button[tab]" && s.deepText === "Books", `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
+      clean(problems);
+    });
 
     for (const [what, list] of [
       ["letters on a row move nothing", ["j", "k", "G"]],
