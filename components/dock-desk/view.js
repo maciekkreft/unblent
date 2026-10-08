@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine } from "./machine.js";
+import { machine, nextGroup } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
 
 const SIDES = ["left", "right", "bottom"];
@@ -28,6 +28,9 @@ const BUTTONS = { gear: icon("gear") };
 // rem is relative to the root font-size, so a resolved px width reads it once.
 const NARROW_REM = 45;
 const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
+// The keys that move between groups and tabs while "Vim keys" is on (12), held with Ctrl.
+const PANEL_KEYS = new Set(["h", "j", "k", "l", ".", ","]);
 
 // A child's address (4.1): its role or tag name, with `#id` when the page gave it
 // one so two instances of a view on one page are distinct tabs. The subject mark
@@ -623,6 +626,127 @@ class DockDesk extends LitElement {
   #marked = null;
   #markedTitle = "";
 
+  // The group a Ctrl+h/j/k/l or Ctrl+. move should land in, and the view it should
+  // find shown there; focus waits in updated() until the layout shows it, because an
+  // unfold or a tab change comes back through dock.changed (4.3), not at once.
+  #landing = null;
+  // Whether "Vim keys" was on at the last render, so turning it on is told from staying on.
+  #vimWas = false;
+  // Counts the moves, so a focus still waiting for its view is dropped by a newer one.
+  #moves = 0;
+
+  constructor() {
+    super();
+    // Capture phase, on the host: the key reaches the desk before an editor inside a
+    // panel can claim it (CodeMirror's Vim binds none of these keys, so nothing is lost).
+    this.addEventListener("keydown", (e) => this.#panelKey(e), { capture: true });
+  }
+
+  // The desk's keyboard model for "Vim keys" (12): Ctrl+h/j/k/l between the groups,
+  // Ctrl+. and Ctrl+, between the tabs of the group that has focus. Off without the
+  // preference, so nothing changes for anyone who leaves it off, and off on a narrow
+  // desk (the phone), where the docks are drawers over the stage, not neighbours.
+  #panelKey(event) {
+    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    const key = event.key.toLowerCase();
+    if (!PANEL_KEYS.has(key)) return;
+    const snapshot = this.#actor.snapshot;
+    if (!snapshot?.matches("ready") || !snapshot.context.vimKeys) return;
+    if (this.getBoundingClientRect().width < NARROW_REM * ROOT_EM()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const { docks, stage, pressed } = snapshot.context;
+    const from = this.#focusedGroup(docks);
+    if (key === "." || key === ",") return this.#cycle(snapshot.context, from, key === "." ? 1 : -1);
+    const present = SIDES.filter((s) => docks[s]?.views.length);
+    if (stage || pressed) present.push("stage");
+    const to = nextGroup(from, key, present);
+    if (!to) return;
+    if (to !== "stage" && !docks[to].open) this.#send("_unfold", undefined, to);
+    this.#landing = { group: to, name: this.#shownIn(snapshot.context, to) };
+    this.requestUpdate();
+  }
+
+  // The group holding the focus: a docked child's side, the side of a strip control
+  // the desk draws itself, else the stage (a stage view, a header control, or nothing
+  // focused at all).
+  #focusedGroup(docks) {
+    const active = document.activeElement;
+    const child = [...this.children].find((c) => c.contains(active));
+    if (child) return SIDES.find((s) => docks[s]?.views.includes(addressOf(child))) ?? "stage";
+    if (active === this) return this.renderRoot.activeElement?.closest("aside[data-side]")?.dataset.side ?? "stage";
+    return "stage";
+  }
+
+  // The address of the view a group shows: a side's active tab (its first when none is
+  // named), or on the stage the header-button child while pressed, else the stage tab.
+  #shownIn(context, group) {
+    if (group === "stage") return context.pressed ?? context.stage;
+    const dock = context.docks[group];
+    if (!dock) return null;
+    return dock.views.includes(dock.active) ? dock.active : dock.views[0];
+  }
+
+  // Next or previous tab, wrapping as the arrow keys do in a strip (#arrow), then the
+  // focus follows into the newly shown view.
+  #cycle(context, group, step) {
+    const docked = SIDES.flatMap((s) => context.docks[s]?.views ?? []);
+    const tabs = group === "stage" ? context.views.map((v) => v.name).filter((n) => !docked.includes(n)) : context.docks[group]?.views ?? [];
+    if (!tabs.length) return;
+    const at = tabs.indexOf(group === "stage" ? context.stage : this.#shownIn(context, group));
+    const next = tabs[(at + step + tabs.length) % tabs.length];
+    if (group === "stage") this.#send("_open", next);
+    else this.#send("_activate", next, group);
+    this.#landing = { group, name: next };
+    this.requestUpdate();
+  }
+
+  // A keydown on the bare page never passes through the desk, so with nothing focused the
+  // panel keys would be dead until a first click (Norman: immediate feedback). When
+  // "Vim keys" is on at load, or turns on later, and nothing has the focus, the keyboard
+  // starts on the stage; focus the user already placed is never taken.
+  #start(snapshot) {
+    const vim = snapshot.matches("ready") && snapshot.context.vimKeys;
+    const was = this.#vimWas;
+    this.#vimWas = vim;
+    if (!vim || was || this.#landing) return;
+    const active = document.activeElement;
+    if (active && active.localName !== "body") return;
+    if (this.getBoundingClientRect().width < NARROW_REM * ROOT_EM()) return;
+    const name = this.#shownIn(snapshot.context, "stage");
+    if (name) this.#landing = { group: "stage", name };
+  }
+
+  // Focus the view a key move asked for, once the layout shows it open on its group.
+  // The view's own focus() puts the caret where it belongs (a list's row, the editor).
+  #land(context) {
+    const landing = this.#landing;
+    if (!landing) return;
+    const { group, name } = landing;
+    if (group !== "stage" && !context.docks[group]?.open) return;
+    if (this.#shownIn(context, group) !== name) return;
+    this.#landing = null;
+    const child = [...this.children].find((c) => addressOf(c) === name);
+    if (!child) return;
+    const move = ++this.#moves;
+    // At load the stage view may not be defined or drawn yet (its module loads after the
+    // desk's), and a focus() asked of it then would land nowhere.
+    customElements
+      .whenDefined(child.localName)
+      .then(() => child.updateComplete)
+      .then(() => {
+        if (move !== this.#moves) return;
+        child.focus();
+        // A view with nothing to focus right now (an empty panel, a chat box waiting for
+        // a key) must not strand the keyboard behind it: its tab takes the focus
+        // instead, so the user still sees where they are and the next Ctrl+h/l moves on.
+        if (child.contains(document.activeElement)) return;
+        const strip = group === "stage" ? ".stage .strip" : `aside.dock.${group} .panel .strip`;
+        const tab = this.renderRoot.querySelector(`${strip} [role="tab"][aria-selected="true"]`);
+        (tab ?? this.renderRoot.querySelector(`.controls .pill[data-address="${name}"]`))?.focus();
+      });
+  }
+
   #send(type, name, side, step) {
     const event = { type };
     if (name !== undefined) event.name = name;
@@ -729,7 +853,7 @@ class DockDesk extends LitElement {
   // button, as every header toggle keeps focus on itself.
   #escape(event) {
     const pressed = this.#actor.snapshot?.context.pressed;
-    if (event.key !== "Escape" || !pressed) return;
+    if (event.key !== "Escape" || !pressed || event.defaultPrevented) return;
     event.preventDefault();
     this.#send("_press", pressed);
     this.updateComplete.then(() =>
@@ -934,6 +1058,8 @@ class DockDesk extends LitElement {
       const dx = t.right > l.right ? t.right - l.right : t.left < l.left ? t.left - l.left : 0;
       if (dx) list.scrollBy({ left: dx });
     }
+    this.#start(snapshot);
+    this.#land(snapshot.context);
     // Release the sides that entered, drawn once at nothing above, to their size.
     const sides = new Set([...this.renderRoot.querySelectorAll(".dock")].map((d) => d.dataset.side));
     for (const s of this.#present) if (!sides.has(s)) this.#present.delete(s);

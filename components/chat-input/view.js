@@ -391,6 +391,13 @@ class ChatInput extends LitElement {
     else this.#send();
   }
 
+  // dock-desk's Ctrl+h/j/k/l (12) and list-then-item focus a panel by its host: land
+  // in the editor, where the typing goes.
+  focus(options) {
+    if (this.#view) this.#view.focus();
+    else super.focus(options);
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;

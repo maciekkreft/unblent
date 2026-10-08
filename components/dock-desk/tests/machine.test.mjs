@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine } from "../machine.js";
+import { machine, nextGroup } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -542,4 +542,46 @@ test("in failed, _press toggles and a stage tab or a gesture clears it", async (
   actor.send({ type: "note.selected", id: "n1" });
   assert.equal(actor.getSnapshot().context.pressed, null);
   assert.deepEqual(emitted, [], "a failed desk stores nothing");
+});
+
+// "Vim keys" (12): the desk reads the preference with arranging and follows it.
+test("vimKeys comes from the settings read and follows settings.changed", async () => {
+  const { actor } = await settle(stored({ stage: "token-sheet", docks: {} }, { vimKeys: true }));
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+  actor.send({ type: "settings.changed", nav: [], arranging: true, vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
+  actor.send({ type: "settings.changed", nav: [], arranging: true, vimKeys: true });
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+});
+
+test("vimKeys is off when the settings read has none or fails", async () => {
+  const off = await settle(stored({ stage: "token-sheet", docks: {} }));
+  assert.equal(off.actor.getSnapshot().context.vimKeys, false);
+  const failed = await settle((target) =>
+    target === "settings" ? Promise.resolve({ error: "no-answerer" }) : Promise.resolve({ stage: null, docks: {} }),
+  );
+  assert.equal(failed.actor.getSnapshot().context.vimKeys, false);
+});
+
+test("Ctrl+h and Ctrl+l walk left dock, stage, right dock, passing over what is missing", () => {
+  const all = ["left", "stage", "right", "bottom"];
+  assert.equal(nextGroup("stage", "l", all), "right");
+  assert.equal(nextGroup("stage", "h", all), "left");
+  assert.equal(nextGroup("left", "l", all), "stage");
+  assert.equal(nextGroup("right", "h", all), "stage");
+  assert.equal(nextGroup("right", "l", all), null, "the right edge goes nowhere");
+  assert.equal(nextGroup("left", "h", all), null, "the left edge goes nowhere");
+  assert.equal(nextGroup("left", "l", ["left", "right"]), "right", "an empty stage is passed over");
+  assert.equal(nextGroup("stage", "h", ["stage", "right"]), null, "no left dock, nowhere to go");
+});
+
+test("Ctrl+j goes down to the bottom dock and Ctrl+k back up to the stage", () => {
+  const all = ["left", "stage", "right", "bottom"];
+  for (const from of ["left", "stage", "right"]) assert.equal(nextGroup(from, "j", all), "bottom");
+  assert.equal(nextGroup("bottom", "j", all), null);
+  assert.equal(nextGroup("bottom", "k", all), "stage");
+  assert.equal(nextGroup("stage", "k", all), null);
+  assert.equal(nextGroup("stage", "j", ["left", "stage"]), null, "no bottom dock");
+  assert.equal(nextGroup("bottom", "h", all), "left", "the bottom spans under the row");
+  assert.equal(nextGroup("bottom", "l", all), "right");
 });

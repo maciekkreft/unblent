@@ -151,6 +151,21 @@ const show = [
   { actions: clearPressed },
 ];
 
+// Where Ctrl+h/j/k/l moves focus (12, "Vim keys"): the left dock, the stage and the
+// right dock sit in one row, the bottom dock spans under all three. `present` names
+// the groups that hold a view now; a missing or empty one is passed over, and null
+// means there is nowhere to go, so the key does nothing.
+const ROW = ["left", "stage", "right"];
+export const nextGroup = (from, key, present) => {
+  if (key === "j") return from !== "bottom" && present.includes("bottom") ? "bottom" : null;
+  if (key === "k") return from === "bottom" && present.includes("stage") ? "stage" : null;
+  const step = { h: -1, l: 1 }[key];
+  if (!step) return null;
+  for (let at = ROW.indexOf(from === "bottom" ? "stage" : from) + step; at >= 0 && at < ROW.length; at += step)
+    if (present.includes(ROW[at])) return ROW[at];
+  return null;
+};
+
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
 const isDocked = ({ context, event }) => dockedNames(context.docks).includes(event.name);
@@ -184,7 +199,12 @@ export const machine = setup({
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. The tab of " +
       "the view that shows the subject carries a mark with the subject's title as its hover " +
-      "text; the mark is an indicator, not a control, and no mark means there is no subject.",
+      "text; the mark is an indicator, not a control, and no mark means there is no subject. " +
+      "While the \"Vim keys\" preference is on, on the desk and not on the phone, Ctrl+h and " +
+      "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +
+      "Ctrl+j to the bottom dock and Ctrl+k back up to the stage, passing over an empty side " +
+      "and unfolding a folded one; Ctrl+. and Ctrl+, show the next or previous tab of the group " +
+      "that has focus and focus it.",
     kind: "view",
     emits: ["dock.arranged"],
     attributes: [],
@@ -201,6 +221,9 @@ export const machine = setup({
     stage: null,
     docks: {},
     arranging: true,
+    // The "Vim keys" preference (12): while on, the view moves focus between the
+    // groups with Ctrl+h/j/k/l and between tabs with Ctrl+. and Ctrl+,.
+    vimKeys: false,
     // The subject, learned from subject: read then subject.changed, as
     // { kind, id, title, view } or null. The view marks the tab whose name is `view`.
     subject: null,
@@ -245,7 +268,13 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "ready", actions: assign({ arranging: ({ event }) => event.output.arranging }) },
+          {
+            target: "ready",
+            actions: assign({
+              arranging: ({ event }) => event.output.arranging,
+              vimKeys: ({ event }) => event.output.vimKeys === true,
+            }),
+          },
         ],
         onError: { target: "ready" },
       },
@@ -363,7 +392,7 @@ export const machine = setup({
     // Arranging is a settings fact: adopt it, so a stray gesture past a hidden
     // control still does nothing (the guards read context.arranging).
     "settings.changed": {
-      actions: assign({ arranging: ({ event }) => event.arranging }),
+      actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
     },
     // The subject changed (4.3): mark a different tab, or none. Held for us until the
     // starting subject: read reply lands, so it is never lost and never applied before

@@ -339,6 +339,14 @@ class SettingsSheet extends LitElement {
     /></label>`;
   }
 
+  // dock-desk's Ctrl+h/j/k/l (12) focuses a panel by its host: land on its first
+  // control.
+  focus(options) {
+    const target = this.renderRoot?.querySelector("input, select, button, textarea");
+    if (target) target.focus(options);
+    else super.focus(options);
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
@@ -407,6 +415,7 @@ class SettingsSheet extends LitElement {
             )
           : nothing}
         ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
+        <p class="hint">j/k in lists, Ctrl+h/j/k/l between panels, Ctrl+. and Ctrl+, between tabs, Escape back to a list</p>
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}

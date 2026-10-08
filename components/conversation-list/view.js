@@ -439,6 +439,14 @@ class ConversationList extends LitElement {
     this.requestUpdate(); // dx back to 0; the slide settles with its transition
   }
 
+  // dock-desk's Ctrl+h/j/k/l (12) focuses a panel by its host: land on the roving row,
+  // or the first button while there is no row.
+  focus(options) {
+    const target = this.renderRoot?.querySelector('[tabindex="0"]') ?? this.renderRoot?.querySelector("button");
+    if (target) target.focus(options);
+    else super.focus(options);
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;

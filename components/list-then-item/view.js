@@ -133,6 +133,36 @@ class ListThenItem extends LitElement {
   `;
 
   #actor = new ActorController(this);
+  // The child shown at the last render, so a change of it can be told from a re-render.
+  #shownWas;
+  #hadFocus = false;
+
+  constructor() {
+    super();
+    this.addEventListener("keydown", (e) => this.#escape(e));
+  }
+
+  // Escape is the Back button's keyboard twin, on the item or on the Back bar (the
+  // target is this host then). Only an Escape the item left unhandled
+  // counts: an editor that uses it (leaving insert mode under Vim, stopping an answer)
+  // prevents it, so one Escape leaves insert mode and the next leaves the item.
+  #escape(event) {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    const shown = this.#actor.snapshot?.context.shown;
+    if (!shown || !(event.target === this || this.#child(shown)?.contains(event.target))) return;
+    event.preventDefault();
+    this.#back();
+  }
+
+  #child(name) {
+    return name ? [...this.children].find((c) => addressOf(c) === name) : this.children[0];
+  }
+
+  // A panel's focus lands in what it shows (dock-desk's Ctrl+h/j/k/l, 12): the list, or
+  // the item picked from it.
+  focus(options) {
+    this.#child(this.#actor.snapshot?.context.shown)?.focus(options);
+  }
 
   // The children as the page declares them (6.4): the first is the list, the rest are
   // items keyed by their own `shows-on`. Read from this element's light DOM, so the
@@ -172,13 +202,27 @@ class ListThenItem extends LitElement {
     `;
   }
 
+  // Read before the render: the Back bar a render removes, or the child leaving the
+  // slot, takes the focus with it.
+  willUpdate() {
+    this.#hadFocus = this.contains(document.activeElement);
+  }
+
   updated() {
     const shown = this.#actor.snapshot?.context.shown;
     const slot = this.renderRoot.querySelector("slot");
-    const child = shown
-      ? [...this.children].find((c) => addressOf(c) === shown)
-      : this.children[0];
+    const child = this.#child(shown);
+    const follow = this.#shownWas !== undefined && shown !== this.#shownWas && this.#hadFocus;
+    this.#shownWas = shown;
     slot?.assign(...(child ? [child] : []));
+    // The keyboard follows a pick made inside this panel (Enter on a row lands in the
+    // editor, Escape lands back on the row); a pick made elsewhere never steals focus.
+    if (follow) {
+      child?.focus();
+      // An item with nothing to focus yet (a chat box waiting for a key) leaves the
+      // keyboard on the Back button, not on the list it just hid.
+      if (shown && !child?.contains(document.activeElement)) this.renderRoot.querySelector(".bar button")?.focus();
+    }
   }
 }
 

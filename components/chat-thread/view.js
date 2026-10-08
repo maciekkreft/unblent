@@ -296,6 +296,14 @@ class ChatThread extends LitElement {
     this.requestUpdate();
   }
 
+  // dock-desk's Ctrl+h/j/k/l (12) and list-then-item focus a panel by its host: land
+  // in the box the page slotted below the transcript, where the next question is typed.
+  focus(options) {
+    const box = this.renderRoot?.querySelector("slot")?.assignedElements()[0];
+    if (box) box.focus(options);
+    else super.focus(options);
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     return html`

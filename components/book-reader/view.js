@@ -1212,6 +1212,7 @@ class BookReader extends LitElement {
   // when they change. A new chapter rebuilds the strip and opens its pending block; a
   // pending place in the open chapter re-opens it.
   updated() {
+    this.#keepFocus();
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return;
     const reading = snapshot.matches("reading");
@@ -1315,12 +1316,38 @@ class BookReader extends LitElement {
     `;
   }
 
+  // dock-desk's Ctrl+h/j/k/l (12) focuses a panel by its host: land on the page, where
+  // the reader's own keys are read. Asked before the first page is drawn (the desk
+  // starts the keyboard on the stage at load), it lands as soon as there is one.
+  focus(options) {
+    const target = this.renderRoot?.querySelector(".reader");
+    if (target) target.focus(options);
+    else this.#owedFocus = true;
+  }
+
+  #owedFocus = false;
+  #hadFocus = false;
+
+  // A change of state (loading, empty, reading) draws a new page element, which would
+  // drop the keyboard on the bare page; read before the render so it can be put back.
+  willUpdate() {
+    this.#hadFocus = Boolean(this.renderRoot?.activeElement);
+  }
+
+  #keepFocus() {
+    if (!(this.#owedFocus || this.#hadFocus) || this.renderRoot.activeElement) return;
+    const target = this.renderRoot.querySelector(".reader");
+    if (!target) return;
+    this.#owedFocus = false;
+    target.focus({ preventScroll: true });
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    if (snapshot.matches("empty")) return html`<div class="reader"><p class="message">Choose a book from the shelf.</p></div>`;
+    if (snapshot.matches("empty")) return html`<div class="reader" tabindex="-1"><p class="message">Choose a book from the shelf.</p></div>`;
     if (snapshot.matches({ reading: "offline" }))
-      return html`<div class="reader">
+      return html`<div class="reader" tabindex="-1">
         <p class="message">
           The server is unavailable.
           <button class="retry" type="button" @click=${() => this.#actor.send({ type: "_retry" })}>Retry</button>

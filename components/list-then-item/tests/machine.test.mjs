@@ -31,6 +31,12 @@ test("_back shows the list again", () => {
   assert.equal(a.getSnapshot().context.shown, null);
 });
 
+test("_back with the list already shown leaves it shown (Escape on the list is harmless)", () => {
+  const a = start(NOTES);
+  a.send({ type: "_back" });
+  assert.equal(a.getSnapshot().context.shown, null);
+});
+
 test("a remembered shown is kept when it names an item, dropped otherwise", () => {
   assert.equal(start(NOTES, "note-editor").getSnapshot().context.shown, "note-editor");
   assert.equal(start(NOTES, "gone").getSnapshot().context.shown, null);

@@ -33,7 +33,10 @@ export const machine = setup({}).createMachine({
       "is the list, and each later child is an item whose `shows-on` names the selection " +
       "gesture that brings it up (`book.selected`, `note.selected`, `conversation.selected`, " +
       "`highlights.selected`, `gauge.selected`); the item is shown under a Back bar naming the " +
-      "list's `label`, and Back shows the list again. Which child is shown is kept on this " +
+      "list's `label`, and Back shows the list again; so does Escape pressed inside the item when " +
+      "the item does not use it itself (an editor in Vim's insert mode leaves insert mode first). " +
+      "When the shown child changes while the keyboard is inside the container, the keyboard " +
+      "follows into the newly shown child; a pick made elsewhere never moves it. Which child is shown is kept on this " +
       "device under the container's id. It emits and asks nothing, so a new kind of list needs " +
       "only one more consumed gesture here. On a desk it is one tab, with its own `label`, " +
       "`side`, `height` and `shows-on`, and a page holds one per pair, each with its own `id` " +
