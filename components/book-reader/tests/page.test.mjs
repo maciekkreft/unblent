@@ -63,6 +63,10 @@ const foot = () => {
   return { chap, page: m ? Number(m[1]) : 0, pages: m ? Number(m[2]) : 0 };
 };
 const WAIT = { timeout: 4000, polling: 100 };
+// The "Vim keys" preference (12), seeded the way settings stores it (the workshop
+// profile, since the page is under /workshop/).
+const seed = (vimKeys) =>
+  JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
 const waitChapter = (page, chap) => page.waitForFunction((c) => { const r = document.querySelector("book-reader")?.shadowRoot; return r?.querySelector(".footer .chap")?.textContent.trim() === c; }, chap, WAIT);
 const waitChapterPage = (page, chap, n) => page.waitForFunction(({ c, n }) => { const r = document.querySelector("book-reader")?.shadowRoot; if (r?.querySelector(".footer .chap")?.textContent.trim() !== c) return false; const m = (r?.querySelector(".footer .pageno")?.textContent.trim() ?? "").match(/Page (\d+)/); return m && Number(m[1]) === n; }, { c: chap, n }, WAIT);
 const waitPagesAtLeast = (page, chap, min) => page.waitForFunction(({ c, min }) => { const r = document.querySelector("book-reader")?.shadowRoot; if (r?.querySelector(".footer .chap")?.textContent.trim() !== c) return false; const m = (r?.querySelector(".footer .pageno")?.textContent.trim() ?? "").match(/of (\d+)/); return m && Number(m[1]) >= min; }, { c: chap, min }, WAIT);
@@ -125,6 +129,7 @@ for (const engine of ENGINES) {
       watch(page, problems, opts.ignoreAborts);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+      if (opts.vimKeys != null) await page.addInitScript((v) => localStorage.setItem("settings", v), seed(opts.vimKeys));
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
@@ -143,6 +148,44 @@ for (const engine of ENGINES) {
       await waitChapterPage(ctx.page, "Chapter One", 1);
       return ctx;
     };
+
+    test("with Vim keys on, l/h turn the page and G/gg reach the chapter's ends", async () => {
+      const { page, problems } = await openAndRewind({ vimKeys: true });
+      try {
+        await page.keyboard.press("l");
+        await waitPagesAtLeast(page, "Chapter Two", 3);
+        await settle();
+        await page.keyboard.press("l");
+        await waitChapterPage(page, "Chapter Two", 2);
+        await waitStill(page);
+        await page.keyboard.press("G");
+        const { pages } = await rstate(page);
+        await waitChapterPage(page, "Chapter Two", pages);
+        await waitStill(page);
+        await page.keyboard.press("g");
+        await page.keyboard.press("g");
+        await waitChapterPage(page, "Chapter Two", 1);
+        await waitStill(page);
+        await page.keyboard.press("h");
+        await waitChapterPage(page, "Chapter One", 1);
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test("with Vim keys off, l does not turn the page", async () => {
+      const { page, problems } = await openAndRewind({ vimKeys: false });
+      try {
+        await page.keyboard.press("l");
+        await page.keyboard.press("G");
+        await page.waitForTimeout(300);
+        assert.deepEqual(await rstate(page), { chap: "Chapter One", page: 1, pages: 1 });
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
 
     test("opens a selected book at its first page, paginates a long chapter, turns a page, and announces the place", async () => {
       const { page, problems, debug } = await openAndRewind();

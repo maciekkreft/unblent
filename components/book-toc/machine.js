@@ -39,6 +39,9 @@ const isOurs = ({ context, event }) => Boolean(context.book) && event.id === con
 
 export const machine = setup({
   actors: {
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Which book is open (4.3): the starting picture on load, so a reload shows the
     // contents of the book being read. book.opened is held until the reply (supersededBy).
     open: fromPromise(({ input }) => input.ask("books", "open", {})),
@@ -61,10 +64,13 @@ export const machine = setup({
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],
-    asks: ["books: open", "books: read"],
+    asks: ["books: open", "books: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // The "Vim keys" device preference (12): off until settings says otherwise, and off
+    // on a page without it (the ask replies no-answerer).
+    vimKeys: false,
     // The book asked for while it loads (which may differ from `book` mid-switch), and
     // the loaded book's id, tree and current chapter, or null before one is selected.
     id: null,
@@ -73,8 +79,16 @@ export const machine = setup({
     // because the position only arrives after the reader settles and announces.
     jump: null,
   }),
+  // Beside the states, so the preference arrives whatever the view is doing.
+  invoke: {
+    src: "settings",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    onError: { actions: [] },
+  },
   initial: "starting",
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // The open book changed (4.3, fourth rule), opened here or on another device and
     // pulled: read its contents. A switch drops the old tree at once, so the panel never
     // shows stale contents while the new ones load; null empties it.

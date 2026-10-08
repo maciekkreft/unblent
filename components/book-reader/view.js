@@ -1100,26 +1100,42 @@ class BookReader extends LitElement {
     }
   }
 
+  // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
+  // held (those belong to the browser and the desk), and never inside a field, where a
+  // letter is typed text. gg is two presses, so a first g waits a moment for the second.
+  #gAt = 0;
+  #vim(event) {
+    if (this.#actor.snapshot?.context.vimKeys !== true) return null;
+    if (event.ctrlKey || event.metaKey || event.altKey) return null;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return null;
+    const second = event.key === "g" && Date.now() - this.#gAt < 1000;
+    this.#gAt = event.key === "g" && !second ? Date.now() : 0;
+    if (second) return "first";
+    return { l: "next", h: "prev", G: "last" }[event.key] ?? null;
+  }
+
   #keydown(e) {
-    if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
+    const vim = this.#vim(e);
+    if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " " || vim === "next") {
       e.preventDefault();
       this.#next();
-    } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+    } else if (e.key === "ArrowLeft" || e.key === "PageUp" || vim === "prev") {
       e.preventDefault();
       this.#prev();
-    } else if (e.key === "Home") {
+    } else if (e.key === "Home" || vim === "first") {
       e.preventDefault();
       this.#closeBubble();
       this.#endSettle();
       this.#turn(0);
-    } else if (e.key === "End") {
+    } else if (e.key === "End" || vim === "last") {
       e.preventDefault();
       this.#closeBubble();
       this.#endSettle();
       this.#turn(this.#pages - 1);
     } else if (e.key === "Escape" && this.#active != null) {
-      // Escape closes an open bubble (Norman: every action reversible in one step). Not
-      // a letter key, so the reader still claims none (staying open for Vim, the plan).
+      // Escape closes an open bubble (Norman: every action reversible in one step). The
+      // reader's only letters are the Vim ones above, and only while Vim keys is on (12).
       e.preventDefault();
       e.stopPropagation();
       this.#closeBubble();

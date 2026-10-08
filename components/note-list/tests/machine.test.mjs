@@ -57,7 +57,7 @@ test("the starting picture is notes: list, sorted newest first", async () => {
   const asked = [];
   const { actor } = list({
     ask: (...args) => {
-      asked.push(args);
+      if (args[0] !== "settings") asked.push(args); // the Vim keys read is its own concern (12)
       return Promise.resolve({ notes: [{ id: A, title: "A", updatedAt: 10 }, { id: B, title: "B", updatedAt: 20 }] });
     },
   });
@@ -255,7 +255,7 @@ test("with the attribute off, the subject is not asked and every note shows", as
   const { actor } = list({
     following: false,
     ask: (...args) => {
-      asked.push(args);
+      if (args[0] !== "settings") asked.push(args);
       return answeringList([{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }])(...args);
     },
   });
@@ -532,4 +532,39 @@ test("with no later change, the subject read's reply is the starting picture and
   await tick();
   assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT_BK1, "the split did not lose the starting picture");
   assert.deepEqual(shownIds(actor), [A]);
+});
+
+// The "Vim keys" preference (12): asked of settings at start, followed after.
+const VIM_INPUT = { mint: () => "01ARZ3NDEKTSV4RRFFQ69G5FZZ", undoMs: 100, following: false };
+const vimAsk = (reply) => (target, name) =>
+  Promise.resolve(target === "settings" && name === "read" ? reply : {});
+const vimActor = (reply) => createActor(machine, { input: { ...VIM_INPUT, ask: vimAsk(reply) } }).start();
+const vimSettle = async () => {
+  for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+
+test("Vim keys start from settings: read, and are off until it answers", async () => {
+  const actor = vimActor({ vimKeys: true, profile: "workshop" });
+  assert.equal(actor.getSnapshot().context.vimKeys, false, "off before the reply");
+  await vimSettle();
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+});
+
+test("Vim keys follow settings.changed, in any state, and never move the view", async () => {
+  const actor = vimActor({ vimKeys: false });
+  await vimSettle();
+  const before = actor.getSnapshot().value;
+  actor.send({ type: "settings.changed", vimKeys: true });
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
+  assert.deepEqual(actor.getSnapshot().value, before);
+});
+
+test("an error reply, or a reply without the field, leaves Vim keys off", async () => {
+  for (const reply of [{ error: "no-answerer" }, { profile: "product" }]) {
+    const actor = vimActor(reply);
+    await vimSettle();
+    assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
+  }
 });

@@ -82,6 +82,9 @@ const without = (set, id) => {
 
 export const machine = setup({
   actors: {
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // The notes starting picture (4.3): note.changed / note.deleted are held for this
     // ask until its reply lands, so a change that races the start is applied after it.
     load: fromPromise(({ input }) => input.ask("notes", "list", {})),
@@ -115,10 +118,13 @@ export const machine = setup({
     // subject on the stage, with the Highlights row above them while the subject has
     // a highlight; there is no switch to all notes.
     attributes: ["subject"],
-    asks: ["notes: list", "subject: read"],
+    asks: ["notes: list", "subject: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // The "Vim keys" device preference (12): off until settings says otherwise, and off
+    // on a page without it (the ask replies no-answerer).
+    vimKeys: false,
     mint: input.mint,
     // Whether the page set the `subject` attribute (D5); it arrives through input so
     // the machine stays importable in Node.
@@ -151,12 +157,20 @@ export const machine = setup({
   // transition (loading → ready) never cancels it: its reply lands on its own and sets
   // the subject, and the notes reply never writes the subject, so a slow notes reply
   // cannot re-apply the read's stale null over a subject.changed that arrived first.
-  invoke: {
-    src: "readSubject",
-    input: ({ context }) => ({ ask: context.ask, following: context.following }),
-    onDone: { actions: assign({ subject: ({ event }) => event.output.subject ?? null }) },
-    onError: { actions: [] },
-  },
+  invoke: [
+    {
+      src: "readSubject",
+      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      onDone: { actions: assign({ subject: ({ event }) => event.output.subject ?? null }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+  ],
   initial: "loading",
   states: {
     loading: {
@@ -179,6 +193,7 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // The fact's news (4.3, fourth rule), followed in any state so a change that
     // races the starting query is not lost. A change for the draft's id means the
     // draft became a real note, so a fresh next-note id is minted above it.

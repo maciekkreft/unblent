@@ -871,3 +871,38 @@ test("_reanchor keeps a note the read cannot find from being re-saved", async ()
   assert.equal(ctx(actor).reanchor, null);
   assert.ok(actor.getSnapshot().matches({ reading: "ready" }));
 });
+
+// The "Vim keys" preference (12): asked of settings at start, followed after.
+const VIM_INPUT = { mint: () => "01ARZ3NDEKTSV4RRFFQ69G5FZZ", undoMs: 100, highlighting: false };
+const vimAsk = (reply) => (target, name) =>
+  Promise.resolve(target === "settings" && name === "read" ? reply : {});
+const vimActor = (reply) => createActor(machine, { input: { ...VIM_INPUT, ask: vimAsk(reply) } }).start();
+const vimSettle = async () => {
+  for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+
+test("Vim keys start from settings: read, and are off until it answers", async () => {
+  const actor = vimActor({ vimKeys: true, profile: "workshop" });
+  assert.equal(actor.getSnapshot().context.vimKeys, false, "off before the reply");
+  await vimSettle();
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+});
+
+test("Vim keys follow settings.changed, in any state, and never move the view", async () => {
+  const actor = vimActor({ vimKeys: false });
+  await vimSettle();
+  const before = actor.getSnapshot().value;
+  actor.send({ type: "settings.changed", vimKeys: true });
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
+  assert.deepEqual(actor.getSnapshot().value, before);
+});
+
+test("an error reply, or a reply without the field, leaves Vim keys off", async () => {
+  for (const reply of [{ error: "no-answerer" }, { profile: "product" }]) {
+    const actor = vimActor(reply);
+    await vimSettle();
+    assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
+  }
+});

@@ -131,11 +131,28 @@ class BookToc extends LitElement {
     return at >= 0 ? at : rows.length ? 0 : null;
   }
 
+  // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
+  // held (those belong to the browser and the desk), and never inside a field, where a
+  // letter is typed text. gg is two presses, so a first g waits a moment for the second.
+  #gAt = 0;
+  #vim(event) {
+    if (this.#actor.snapshot?.context.vimKeys !== true) return null;
+    if (event.ctrlKey || event.metaKey || event.altKey) return null;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return null;
+    const second = event.key === "g" && Date.now() - this.#gAt < 1000;
+    this.#gAt = event.key === "g" && !second ? Date.now() : 0;
+    if (second) return "first";
+    return { j: "down", k: "up", G: "last" }[event.key] ?? null;
+  }
+
   #keydown(event, rows, marked) {
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
+    const vim = this.#vim(event);
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
     const at = this.#focusRow(rows, marked) ?? 0;
-    if (step) {
-      const next = Math.min(rows.length - 1, Math.max(0, at + step));
+    if (step || vim === "first" || vim === "last") {
+      const to = vim === "first" ? 0 : vim === "last" ? rows.length - 1 : at + step;
+      const next = Math.min(rows.length - 1, Math.max(0, to));
       if (next === at) return;
       event.preventDefault();
       this.#focusIndex = next;

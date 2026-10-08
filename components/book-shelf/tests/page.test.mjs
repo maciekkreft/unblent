@@ -17,6 +17,11 @@ const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 const FIXTURES = resolve(HERE, "..", "..", "books", "tests", "fixtures");
 const SAMPLE = resolve(FIXTURES, "sample.epub");
 const BROKEN = resolve(FIXTURES, "broken.epub");
+const GAPS = resolve(FIXTURES, "gaps.epub");
+// The "Vim keys" preference (12), seeded the way settings stores it (the workshop
+// profile, since the page is under /workshop/).
+const seed = (vimKeys) =>
+  JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
 
 // The trace lines that prove the round trip through the bus (section 10): the shelf
 // announces a gesture, books answers with its own news.
@@ -185,6 +190,7 @@ for (const engine of ENGINES) {
       watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+      if (opts.vimKeys != null) await page.addInitScript((v) => localStorage.setItem("settings", v), seed(opts.vimKeys));
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
@@ -320,6 +326,52 @@ for (const engine of ENGINES) {
       assert.ok(fits, "the shelf does not overflow sideways on the phone");
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `books-shelf-phone-${engine.name}.png`) });
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+    const twoBooks = async (vimKeys) => {
+      const cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+      await importBook(cookie, "01K00000000000000000000GPS", GAPS);
+      const opened = await open({ cookie, vimKeys });
+      await until(async () => (await tiles(opened.page)).length === 2);
+      return opened;
+    };
+    const focusedTile = (page) =>
+      page.evaluate(() => document.querySelector("book-shelf").shadowRoot.activeElement?.querySelector(".title")?.textContent.trim() ?? null);
+    // The roving tile, where Tab lands on the shelf: the first while no book is open.
+    const focusShelf = (page) => page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelector('.tile[tabindex="0"]').focus());
+
+    test("with Vim keys on, j/k, G and gg move along the shelf and Enter opens", async () => {
+      const { page, problems } = await twoBooks(true);
+      const [first, second] = (await tiles(page)).map((t) => t.title);
+      await focusShelf(page);
+      assert.equal(await focusedTile(page), first);
+      await page.keyboard.press("j");
+      await until(async () => (await focusedTile(page)) === second);
+      await page.keyboard.press("k");
+      await until(async () => (await focusedTile(page)) === first);
+      await page.keyboard.press("G");
+      await until(async () => (await focusedTile(page)) === second);
+      await page.keyboard.press("g");
+      await page.keyboard.press("g");
+      await until(async () => (await focusedTile(page)) === first);
+      await page.keyboard.press("j");
+      await page.keyboard.press("Enter");
+      await until(async () => (await tiles(page)).find((t) => t.title === second)?.selected === true);
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    test("with Vim keys off, j does nothing on the shelf", async () => {
+      const { page, problems } = await twoBooks(false);
+      const [first] = (await tiles(page)).map((t) => t.title);
+      await focusShelf(page);
+      assert.equal(await focusedTile(page), first);
+      await page.keyboard.press("j");
+      await page.keyboard.press("G");
+      await page.waitForTimeout(200);
+      assert.equal(await focusedTile(page), first);
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });

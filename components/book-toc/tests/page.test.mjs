@@ -106,6 +106,16 @@ const clickEntry = (page, title) =>
     const e = [...document.querySelector("book-toc").shadowRoot.querySelectorAll(".entry")].find((x) => x.textContent.trim() === t);
     e?.click();
   }, title);
+// The "Vim keys" preference (12), seeded the way settings stores it (the workshop
+// profile, since the page is under /workshop/).
+const seed = (vimKeys) =>
+  JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
+const focusedEntry = (page) =>
+  page.evaluate(() => document.querySelector("book-toc").shadowRoot.activeElement?.textContent.trim() ?? null);
+const focusEntry = (page, title) =>
+  page.evaluate((t) => [...document.querySelector("book-toc").shadowRoot.querySelectorAll(".entry")].find((x) => x.textContent.trim() === t)?.focus(), title);
+const waitFocusedEntry = (page, title) =>
+  page.waitForFunction((t) => document.querySelector("book-toc").shadowRoot.activeElement?.textContent.trim() === t, title, WAIT);
 const focusReader = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".reader").focus());
 
 const ENGINES = [
@@ -143,6 +153,7 @@ for (const engine of ENGINES) {
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
       watch(page, problems, opts.ignoreAborts);
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+      if (opts.vimKeys != null) await page.addInitScript((v) => localStorage.setItem("settings", v), seed(opts.vimKeys));
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-toc")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot && document.querySelector("book-reader")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
@@ -260,6 +271,45 @@ for (const engine of ENGINES) {
 
         mkdirSync(SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: resolve(SCREENSHOTS, `books-toc-phone-${engine.name}.png`) });
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+    test("with Vim keys on, j/k, G and gg move along the contents and Enter opens", async () => {
+      const { page, problems } = await open({ vimKeys: true });
+      try {
+        await openContents(page);
+        await waitTocCurrent(page, "Chapter One");
+        await focusEntry(page, "Chapter One");
+        await page.keyboard.press("j");
+        await waitFocusedEntry(page, "Chapter Two");
+        await page.keyboard.press("G");
+        await waitFocusedEntry(page, "Chapter Three");
+        await page.keyboard.press("k");
+        await waitFocusedEntry(page, "The Middle");
+        await page.keyboard.press("g");
+        await page.keyboard.press("g");
+        await waitFocusedEntry(page, "Chapter One");
+        await page.keyboard.press("j");
+        await page.keyboard.press("Enter");
+        await waitReaderChapter(page, "Chapter Two");
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test("with Vim keys off, j does nothing", async () => {
+      const { page, problems } = await open({ vimKeys: false });
+      try {
+        await openContents(page);
+        await waitTocCurrent(page, "Chapter One");
+        await focusEntry(page, "Chapter One");
+        await page.keyboard.press("j");
+        await page.keyboard.press("G");
+        await page.waitForTimeout(200);
+        assert.equal(await focusedEntry(page), "Chapter One");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await page.close();

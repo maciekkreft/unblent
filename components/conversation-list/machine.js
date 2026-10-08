@@ -57,6 +57,9 @@ const without = (set, id) => {
 
 export const machine = setup({
   actors: {
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // The chats starting picture (4.3): conversation.changed / conversation.deleted are
     // held for this ask until its reply lands, so a change that races the start is applied
     // after it.
@@ -97,10 +100,13 @@ export const machine = setup({
     // The subject attribute (12): off is every chat shown, no subject ask; on, only the
     // chats about the subject on the stage.
     attributes: ["subject"],
-    asks: ["conversations: list", "conversations: open", "subject: read"],
+    asks: ["conversations: list", "conversations: open", "subject: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // The "Vim keys" device preference (12): off until settings says otherwise, and off
+    // on a page without it (the ask replies no-answerer).
+    vimKeys: false,
     mint: input.mint,
     // Whether the page set the `subject` attribute (12); through input so the machine
     // stays importable in Node.
@@ -139,6 +145,12 @@ export const machine = setup({
       src: "readOpen",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ open: ({ event }) => event.output.id ?? null }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
       onError: { actions: [] },
     },
   ],
@@ -187,6 +199,7 @@ export const machine = setup({
     },
   },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Someone signed in or out (4.3): a first visit loads signed out and learns who it is
     // a moment later, so the chats the list started with were not this account's.
     "session.changed": { target: ".resyncing" },

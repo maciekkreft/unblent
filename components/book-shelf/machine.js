@@ -45,6 +45,9 @@ const without = (set, id) => {
 
 export const machine = setup({
   actors: {
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // The starting picture (4.3): the library from books, and who is signed in from
     // session, since session.changed only fires on a change and a fresh signed-out
     // load is no change — the empty invite would never appear from the event alone.
@@ -68,10 +71,13 @@ export const machine = setup({
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
     attributes: ["renames"],
-    asks: ["books: list", "session: read", "books: open"],
+    asks: ["books: list", "session: read", "books: open", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // The "Vim keys" device preference (12): off until settings says otherwise, and off
+    // on a page without it (the ask replies no-answerer).
+    vimKeys: false,
     // How long a discarded tile can be brought back (the --duration-undo token, read
     // in the view and passed in so the machine stays importable in Node). The delete
     // is not a fact until the window ends: stop it and nothing was emitted.
@@ -90,6 +96,13 @@ export const machine = setup({
     // one arrives. Books can only be added while signed in (5).
     signedIn: null,
   }),
+  // Beside the states, so the preference arrives whatever the view is doing.
+  invoke: {
+    src: "settings",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    onError: { actions: [] },
+  },
   initial: "loading",
   states: {
     loading: {
@@ -116,6 +129,7 @@ export const machine = setup({
     ready: {},
   },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Who is signed in now (4.3): signing in re-asks books: list, because the fact
     // only pulls the library then; signing out empties the shelf.
     "session.changed": [
