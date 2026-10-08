@@ -32,6 +32,15 @@ class ActorController {
     // The undo window comes from --duration-undo, read off the host so a stylesheet
     // or a test can set it; the machine only ever sees the number (importable in Node).
     const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
+    // Whether the Highlights were the open row, kept in this browser (3.1) because the
+    // panel keeps showing them across a reload.
+    this.key = `note-list${this.host.id ? `#${this.host.id}` : ""}:highlights`;
+    let highlightsOpen = false;
+    try {
+      highlightsOpen = localStorage.getItem(this.key) === "open";
+    } catch {
+      // No storage: the mark lives only for this page.
+    }
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
@@ -41,6 +50,7 @@ class ActorController {
         // the notes about it. Parsed by the time hostConnected runs. Off is exactly
         // today's behaviour.
         following: this.host.subject,
+        highlightsOpen,
       },
       events: {
         "note.selected": selected,
@@ -48,7 +58,22 @@ class ActorController {
         "highlights.selected": highlightsSelected,
       },
     });
-    this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    this.subscription = this.actor.subscribe((snapshot) => {
+      this.#keep(snapshot.context.highlightsOpen);
+      this.host.requestUpdate();
+    });
+  }
+
+  #kept = null;
+  #keep(open) {
+    if (open === this.#kept) return;
+    this.#kept = open;
+    try {
+      if (open) localStorage.setItem(this.key, "open");
+      else localStorage.removeItem(this.key);
+    } catch {
+      // No storage: nothing to keep.
+    }
   }
 
   hostDisconnected() {
@@ -370,9 +395,12 @@ class NoteList extends LitElement {
     return [...lead, ...notes];
   }
 
-  #focusRow(rows, open) {
+  // The keyboard's row: the one it moved to, else the open one — the Highlights row
+  // while the Highlights are open, else the open note — else the first.
+  #focusRow(rows, { open, highlightsOpen }) {
     const has = (id) => rows.some((r) => r.id === id);
     if (this.#focusId && has(this.#focusId)) return this.#focusId;
+    if (highlightsOpen && has(HIGHLIGHTS)) return HIGHLIGHTS;
     if (open && has(open)) return open;
     return rows[0]?.id ?? null;
   }
@@ -399,7 +427,7 @@ class NoteList extends LitElement {
     // selection, and that may be a hidden editor (WebKit).
     if (vim) event.preventDefault();
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
-    const current = this.#focusRow(rows, this.#actor.snapshot.context.open);
+    const current = this.#focusRow(rows, this.#actor.snapshot.context);
     if (step || vim === "first" || vim === "last") {
       const at = rows.findIndex((r) => r.id === current);
       const to = vim === "first" ? 0 : vim === "last" ? rows.length - 1 : at + step;
@@ -515,7 +543,7 @@ class NoteList extends LitElement {
     if (!snapshot) return nothing;
     const { open, discarding, highlightsOpen } = snapshot.context;
     const rows = this.#rows(snapshot);
-    const focusId = this.#focusRow(rows, open);
+    const focusId = this.#focusRow(rows, snapshot.context);
     // The failed state is the one time no rows show: notes could not answer, so the
     // next-note row would write into a picture we do not have. Otherwise the list is
     // always at least the next-note row, so there is no empty state.

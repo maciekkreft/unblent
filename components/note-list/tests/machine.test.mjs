@@ -24,12 +24,12 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, highlightsOpen = false } = {}) {
   const selected = [];
   const discarded = [];
   const highlighted = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following, highlightsOpen }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.on("highlights.selected", (e) => highlighted.push(e.about));
@@ -455,7 +455,7 @@ test("_pickHighlights emits highlights.selected with the subject and marks the r
   assert.equal(highlightsOpen(actor), true, "the Highlights row reads as the open one");
 });
 
-test("_pick and note.opened clear the Highlights row's open mark; the empty page does not", async () => {
+test("_pick and note.selected clear the Highlights row's open mark; the editor's note.opened does not", async () => {
   const picked = list({ following: true, ask: withHighlight() });
   await tick();
   picked.actor.send({ type: "_pickHighlights" });
@@ -466,7 +466,10 @@ test("_pick and note.opened clear the Highlights row's open mark; the empty page
   await tick();
   opened.actor.send({ type: "_pickHighlights" });
   opened.actor.send({ type: "note.opened", id: A });
-  assert.equal(highlightsOpen(opened.actor), false, "the editor announcing a note clears it");
+  assert.equal(highlightsOpen(opened.actor), true, "the editor announcing the note it holds leaves it");
+  assert.equal(opened.actor.getSnapshot().context.open, A, "while that note is the open note");
+  opened.actor.send({ type: "note.selected", id: B });
+  assert.equal(highlightsOpen(opened.actor), false, "a note put in the panel from anywhere clears it");
 
   const empty = list({ following: true, ask: withHighlight() });
   await tick();
@@ -487,6 +490,13 @@ test("_pickHighlights with no highlights emits nothing and does not mark the row
   actor.send({ type: "_pickHighlights" });
   assert.deepEqual(highlighted, [], "the guard refused the stale pick");
   assert.equal(highlightsOpen(actor), false);
+});
+
+test("the Highlights row's open mark comes back from input after a reload", async () => {
+  const { actor } = list({ following: true, ask: withHighlight(), highlightsOpen: true });
+  await tick();
+  actor.send({ type: "note.opened", id: A });
+  assert.equal(highlightsOpen(actor), true);
 });
 
 // --- The stage survives a reload: the subject race (3.5) ----------------------------

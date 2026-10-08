@@ -632,7 +632,34 @@ class BookReader extends LitElement {
       e.preventDefault();
       this.#actor.send({ type: "_link", chapter: Number(a.dataset.chapter), block: Number(a.dataset.block ?? 0) });
     });
+    strip.addEventListener("transitionend", (e) => {
+      if (e.target === strip && e.propertyName === "transform") this.#slid();
+    });
     return strip;
+  }
+
+  // A page turn slides the strip and the cursor box as two animations, which an engine
+  // may sample a frame apart, so mid-slide the box can sit a few pixels off its letter.
+  // While a slide runs the box carries `data-sliding`; when it ends (or, should no end
+  // event come, a little after the slide's own duration) the box is placed again from
+  // its letter's rect, so the settled page always shows it exactly on its letter.
+  #sliding = false;
+  #slideTimer = 0;
+  #startSlide() {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    this.#sliding = true;
+    this.renderRoot?.querySelector(".cursor")?.setAttribute("data-sliding", "");
+    clearTimeout(this.#slideTimer);
+    const ms = toMs(getComputedStyle(this).getPropertyValue("--duration-slide"), 300);
+    this.#slideTimer = setTimeout(() => this.#slid(), ms + 100);
+  }
+
+  #slid() {
+    if (!this.#sliding) return;
+    this.#sliding = false;
+    clearTimeout(this.#slideTimer);
+    this.renderRoot?.querySelector(".cursor")?.removeAttribute("data-sliding");
+    this.#paintCursor();
   }
 
   connectedCallback() {
@@ -652,6 +679,7 @@ class BookReader extends LitElement {
     cancelAnimationFrame(this.#raf);
     clearTimeout(this.#timer);
     clearTimeout(this.#copiedTimer);
+    clearTimeout(this.#slideTimer);
     this.#focused = false;
     this.#visual = null;
     this.#paintCursor();
@@ -676,7 +704,15 @@ class BookReader extends LitElement {
     const entering = this.#makeStrip();
     entering.classList.add("entering");
     entering.style.setProperty("--dir", dir);
-    entering.addEventListener("animationend", () => entering.classList.remove("entering"), { once: true });
+    entering.addEventListener(
+      "animationend",
+      () => {
+        entering.classList.remove("entering");
+        this.#slid();
+      },
+      { once: true },
+    );
+    this.#startSlide();
     // Prepended, so it is the first .strip the tests and updated() find; the leaving one
     // trails until its animation ends.
     clip.prepend(entering);
@@ -1336,6 +1372,7 @@ class BookReader extends LitElement {
   // the chapter to slide from (a chapter-crossing turn slides the whole strip instead,
   // #swapStrip). The transition is suspended for the one flush that applies the page.
   #place(page, animate) {
+    if (animate && this.#strip.style.getPropertyValue("--page") !== String(page)) this.#startSlide();
     // The cursor slides with the text it sits on, the same distance at the same time.
     const moving = [this.#strip, this.renderRoot?.querySelector(".cursor")].filter(Boolean);
     for (const el of moving) {

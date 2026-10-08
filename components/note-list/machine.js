@@ -109,8 +109,10 @@ export const machine = setup({
       "which note is open from the editor. While the subject has at least one highlight, a " +
       "fixed Highlights row under New note shows how many there are and the time of the latest, " +
       "and picking it shows the highlights editor in the note editor's place, under the same " +
-      "Back bar. The Highlights row has no record of its own, so it cannot be deleted, and its " +
-      "mark as open is not kept across a reload. Highlights are never listed as separate notes.",
+      "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
+      "the Highlights are the open row is kept in this browser across a reload, as the panel " +
+      "keeps showing them, so the row stays marked and the keyboard comes back to it. " +
+      "Highlights are never listed as separate notes.",
     kind: "view",
     emits: ["note.selected", "note.discarded", "highlights.selected"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
@@ -130,10 +132,11 @@ export const machine = setup({
     // the machine stays importable in Node.
     following: Boolean(input.following),
     // Whether the Highlights row is the picked one (Decision 7). UI state: set when it is
-    // picked, cleared when a note row is picked or the editor announces a note. Not kept
-    // across a reload; the small mismatch after one is accepted (the list is not visible
-    // while the item is shown, and the next pick corrects it).
-    highlightsOpen: false,
+    // picked, cleared by any note.selected, the gesture that puts a note in the panel in
+    // their place. The view keeps it in localStorage (3.1) and hands it back through
+    // input, because the panel keeps showing the Highlights across a reload and the
+    // keyboard must come back to their row, not to the note the editor still holds.
+    highlightsOpen: Boolean(input.highlightsOpen),
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
@@ -249,15 +252,14 @@ export const machine = setup({
         enqueue.emit({ type: "note.discarded", id: event.id });
       }),
     },
-    // The editor announced the note it now shows (6.4): highlight that row, and the
-    // Highlights row is no longer the picked one (Decision 7). The draft is untouched —
-    // the next-note row stands whatever else is open, and its id is only a name, so
-    // opening it again lands the editor in blank all the same.
-    // The empty page is not a note opened, so the Highlights row keeps its mark (12).
-    "note.opened": [
-      { guard: ({ event }) => event.id === null, actions: assign({ open: null }) },
-      { actions: assign({ open: ({ event }) => event.id, highlightsOpen: false }) },
-    ],
+    // The editor announced the note it now shows (6.4): that row reads as the open note.
+    // The draft is untouched — the next-note row stands whatever else is open, and its
+    // id is only a name, so opening it again lands the editor in blank all the same. It
+    // does not clear the Highlights row's mark (Decision 7): after a reload the editor
+    // announces the note it holds while the panel still shows the Highlights.
+    "note.opened": { actions: assign({ open: ({ event }) => event.id }) },
+    // A note put in the panel, from this list or anywhere else: the Highlights give way.
+    "note.selected": { actions: assign({ highlightsOpen: false }) },
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.

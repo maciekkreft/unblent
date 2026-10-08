@@ -89,7 +89,14 @@ const seed = (vimKeys) =>
 
 // Everything the user can see that the journey asserts on, read in one go.
 const look = (page) =>
-  page.evaluate(() => {
+  page.evaluate(async () => {
+    // A page turn in progress: the Reader's cursor is placed on its letter once the slide
+    // has settled (it says so by dropping data-sliding), so what is read is the page the
+    // user is left looking at, not a frame of the slide.
+    const box = () => document.querySelector("book-reader")?.shadowRoot?.querySelector(".cursor");
+    for (const t0 = performance.now(); box()?.hasAttribute("data-sliding") && performance.now() - t0 < 1000; ) {
+      await new Promise((r) => requestAnimationFrame(r));
+    }
     const chain = [];
     let el = document.activeElement;
     while (el) {
@@ -325,7 +332,7 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       const problems = watch(page);
       await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(
+      const ready = () => page.waitForFunction(
         ([n, vim]) => {
           const r = document.querySelector("book-reader")?.shadowRoot;
           return (
@@ -338,6 +345,12 @@ for (const engine of ENGINES) {
         },
         [NOTES.length + notes, vimKeys],
       );
+      await ready();
+      // The page loaded again, the way a person reloads it, and settled as at the start.
+      const reload = async () => {
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await ready();
+      };
       // Each step: a name, what the user does, how long they then wait, and what they
       // expect to see, as a function returning a complaint or nothing.
       const seen = [];
@@ -364,7 +377,7 @@ for (const engine of ENGINES) {
         await pause(150);
         return page.evaluate(async () => (await (await fetch("/api/notes")).json()).notes.map((n) => ({ id: n.id, title: n.title, body: n.body, version: n.version })));
       };
-      return { page, problems, step, reach, server };
+      return { page, problems, step, reach, server, reload };
     };
     const clean = (problems) => assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
 
@@ -391,13 +404,25 @@ for (const engine of ENGINES) {
       clean(problems);
     });
 
-    test(`letters after leaving the chat box type nothing into it in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
+    // In the chat box, as a person reaches it: the Chat tab, a chat, a click in the box.
+    const inChatBox = async (page, reach) => {
       await reach(clickAt(page, deskTab, "Chat"), (s) => s.rightTab === "Chat");
       await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.chatBox !== null);
       await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
+    };
+
+    test(`Escape twice from the chat box puts the keyboard on the chat's row in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await inChatBox(page, reach);
       await step("Escape Escape", keys(page, "Escape", "Escape"), (s) =>
         all(want(s.chats === "conversation-list", `Chat shows ${s.chats}`), want(onRow(s, "Chat"), `the keyboard is on ${s.deep} "${s.deepText}"`)), SETTLE);
+      clean(problems);
+    });
+
+    test(`letters after leaving the chat box type nothing into it in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await inChatBox(page, reach);
+      await reach(quick(page, "Escape", "Escape"), (s) => s.chats === "conversation-list" && onRow(s, "Chat"));
       await step("a s on the row", keys(page, "a", "s"), (s) => all(want(s.chatBox === "", `the chat box holds "${s.chatBox}"`), want(onRow(s, "Chat"), `the keyboard is on ${s.deep}`)));
       clean(problems);
     });
@@ -465,6 +490,15 @@ for (const engine of ENGINES) {
       await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
       await step("Enter on New chat", keys(page, "Enter"), (s) =>
         all(want(s.chats === "chat-thread", `Chat shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), unchanged(s, typed.look, "editor")), SETTLE);
+      clean(problems);
+    });
+
+    test(`typing after Enter on New chat from a typed note goes into the chat box only in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      const typed = await typedNote(page, reach);
+      await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
+      await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
+      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input"));
       await step("type o k", keys(page, "o", "k"), (s) => all(want(s.chatBox === "ok", `the chat box holds "${s.chatBox}"`), unchanged(s, typed.look, "editor")));
       clean(problems);
     });
@@ -628,10 +662,16 @@ for (const engine of ENGINES) {
       clean(problems);
     });
 
-    test(`the Reader's cursor moves by paragraph and sentence in ${engine.name}`, async () => {
+    test(`the Reader's cursor moves by paragraph in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
       await step("}", keys(page, "}"), (s) => want(s.cursor?.text === "e" && s.cursor.at === "e", `the cursor is at ${JSON.stringify(s.cursor)}`));
       await step("} w", keys(page, "}", "w"), (s) => want(s.cursor?.at.startsWith("A short"), `the cursor is at ${JSON.stringify(s.cursor)}`));
+      clean(problems);
+    });
+
+    test(`v ) in the Reader highlights a sentence in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await reach(quick(page, "}", "}", "w"), (s) => Boolean(s.cursor?.at.startsWith("A short")));
       await step("v )", keys(page, "v", ")"), (s) =>
         all(want(s.pending?.text === "A short opening chapter, one page long.", `pending ${JSON.stringify(s.pending)}`), want(s.cursor?.at.startsWith("It links"), `the cursor is at ${JSON.stringify(s.cursor)}`)));
       await step("Enter", keys(page, "Enter"), (s) => want(JSON.stringify(s.marks) === JSON.stringify(["A short opening chapter, one page long."]), `marks ${JSON.stringify(s.marks)}`));
@@ -657,8 +697,8 @@ for (const engine of ENGINES) {
     });
 
     // Read a frame after the key, no later: a cursor drawn late, or left in the old place,
-    // is a word or a line off its character. Two pixels allow for a slide's two animations
-    // being sampled a hair apart.
+    // is a word or a line off its character. After a page turn the read waits for the
+    // slide to settle (look). Two pixels allow for sub-pixel rounding.
     const atOnce = (page, k) => async () => {
       await page.keyboard.press(k);
       await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r())));
@@ -698,11 +738,17 @@ for (const engine of ENGINES) {
 
     // --- R4: page keys and Ctrl+v ---------------------------------------------------------
 
-    test(`l and h turn pages, and so do Ctrl+d and Ctrl+u in ${engine.name}`, async () => {
+    test(`l and h turn pages in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
       await reach(quick(page, "Control+f"), (s) => s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"));
       await step("l", keys(page, "l"), (s) => all(want(s.pageNo?.startsWith("Page 2 of"), s.pageNo), onItsLetter(s)));
       await step("h", keys(page, "h"), (s) => all(want(s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"), `${s.chapter} ${s.pageNo}`), want(s.cursor?.at.startsWith("Chapter Two"), `the cursor is at ${JSON.stringify(s.cursor)}`)));
+      clean(problems);
+    });
+
+    test(`Ctrl+d and Ctrl+u turn pages in ${engine.name}`, async () => {
+      const { page, problems, step, reach } = await open();
+      await reach(quick(page, "Control+f"), (s) => s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"));
       await step("Ctrl+d", keys(page, "Control+d"), (s) => want(s.pageNo?.startsWith("Page 2 of"), s.pageNo));
       await step("Ctrl+u", keys(page, "Control+u"), (s) => want(s.chapter === "Chapter Two" && s.pageNo?.startsWith("Page 1 of"), `${s.chapter} ${s.pageNo}`));
       clean(problems);
@@ -860,6 +906,32 @@ for (const engine of ENGINES) {
       await reach(quick(page, "Enter"), (s) => s.notes === "highlight-notes" && s.focus.includes("highlight-notes"));
       await step("Escape", keys(page, "Escape"), (s) =>
         all(want(s.notes === "note-list", `Notes shows ${s.notes}`), want(onRow(s, "Highlights"), `the keyboard is on ${s.deep} "${s.deepText}"`)), SETTLE);
+      await step("j", keys(page, "j"), (s) => want(onRow(s, "Note three"), `the keyboard is on ${s.deep} "${s.deepText}"`));
+      clean(problems);
+    });
+
+    // Highlights left open, then the page reloaded: the panel still shows them, and the
+    // list still knows its Highlights row is the open one.
+    const highlightsReloaded = async (page, reach, reload) => {
+      await reach(clickAt(page, row, ["note-list", "Highlights"]), (s) => s.notes === "highlight-notes");
+      await reload();
+      await reach(quick(page, "Control+l"), (s) => s.notes === "highlight-notes" && s.focus.includes("highlight-notes"));
+    };
+
+    test(`after a reload with the Highlights open, Escape puts the keyboard on their row in ${engine.name}`, async () => {
+      const { page, problems, step, reach, reload } = await open(true, { highlight: true });
+      await highlightsReloaded(page, reach, reload);
+      // A key's pause, not the settle: the reload already spends what the settle would
+      // within the five seconds (11); the next test's j comes a moment later still.
+      await step("Escape", keys(page, "Escape"), (s) =>
+        all(want(s.notes === "note-list", `Notes shows ${s.notes}`), want(onRow(s, "Highlights"), `the keyboard is on ${s.deep} "${s.deepText}"`)));
+      clean(problems);
+    });
+
+    test(`after a reload with the Highlights open, j from their row goes on to the notes in ${engine.name}`, async () => {
+      const { page, problems, step, reach, reload } = await open(true, { highlight: true });
+      await highlightsReloaded(page, reach, reload);
+      await reach(quick(page, "Escape"), (s) => s.notes === "note-list" && s.deep?.startsWith("li[option]"));
       await step("j", keys(page, "j"), (s) => want(onRow(s, "Note three"), `the keyboard is on ${s.deep} "${s.deepText}"`));
       clean(problems);
     });
