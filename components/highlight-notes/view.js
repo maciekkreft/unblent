@@ -507,7 +507,15 @@ class HighlightNotes extends LitElement {
       EditorView.decorations.compute([quoteField, discardField, "selection"], (state) => this.#marksAndBins(state)),
       EditorView.decorations.compute([quoteField, refusedField], (state) => this.#refusedLines(state)),
       EditorView.updateListener.of(this.#onUpdate),
-      EditorView.domEventHandlers({ blur: () => this.#actor.send({ type: "_blurred" }) }),
+      // WebKit keeps the document's selection inside a blurred editor, and a later key
+      // whose default nobody cancels is typed there although the focus sits on a list
+      // row or the bare page; dropping it on blur leaves the editor nothing to type into.
+      EditorView.domEventHandlers({
+        blur: () => {
+          document.getSelection()?.removeAllRanges();
+          this.#actor.send({ type: "_blurred" });
+        },
+      }),
     ];
   }
 

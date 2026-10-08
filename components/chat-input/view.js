@@ -265,6 +265,10 @@ class ChatInput extends LitElement {
       editorTheme,
       placeholder("Ask about your library…"),
       EditorView.updateListener.of(this.#onUpdate),
+      // WebKit keeps the document's selection inside a blurred editor, and a later key
+      // whose default nobody cancels is typed there although the focus sits on a list
+      // row or the bare page; dropping it on blur leaves the editor nothing to type into.
+      EditorView.domEventHandlers({ blur: () => void document.getSelection()?.removeAllRanges() }),
     ];
   }
 

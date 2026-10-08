@@ -143,11 +143,15 @@ class BookToc extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    return { j: "down", k: "up", G: "last" }[event.key] ?? null;
+    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
   }
 
   #keydown(event, rows, marked) {
     const vim = this.#vim(event);
+    // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
+    // last row): an uncancelled letter is typed wherever the browser still keeps a
+    // selection, and that may be a hidden editor (WebKit).
+    if (vim) event.preventDefault();
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
     const at = this.#focusRow(rows, marked) ?? 0;
     if (step || vim === "first" || vim === "last") {

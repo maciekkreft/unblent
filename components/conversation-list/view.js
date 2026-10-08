@@ -347,11 +347,15 @@ class ConversationList extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    return { j: "down", k: "up", G: "last" }[event.key] ?? null;
+    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
   }
 
   #keydown(event, rows) {
     const vim = this.#vim(event);
+    // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
+    // last row): an uncancelled letter is typed wherever the browser still keeps a
+    // selection, and that may be a hidden editor (WebKit).
+    if (vim) event.preventDefault();
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
     const current = this.#focusRow(rows, this.#actor.snapshot.context.open);
     if (step || vim === "first" || vim === "last") {
@@ -437,6 +441,16 @@ class ConversationList extends LitElement {
     this.#swallowClick = true;
     if (d.armed && event.type !== "pointercancel") this.#actor.send({ type: "_discard", id: d.id });
     this.requestUpdate(); // dx back to 0; the slide settles with its transition
+  }
+
+  // Rows are drawn by position (lit-core has no keyed repeat), so a reorder (an edited
+  // note moving to the top) would leave the focus on whatever now fills the focused
+  // element: the keyboard follows the roving row, which is keyed by id, instead.
+  updated() {
+    const active = this.renderRoot.activeElement;
+    if (!active?.matches('[data-id][tabindex]')) return;
+    const roving = this.renderRoot.querySelector('[data-id][tabindex="0"]');
+    if (roving && roving !== active) roving.focus({ preventScroll: true });
   }
 
   // dock-desk's Ctrl+h/j/k/l (12) focuses a panel by its host: land on the roving row,
