@@ -204,7 +204,12 @@ export const machine = setup({
       "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +
       "Ctrl+j to the bottom dock and Ctrl+k back up to the stage, passing over an empty side " +
       "and unfolding a folded one; Ctrl+. and Ctrl+, show the next or previous tab of the group " +
-      "that has focus and focus it.",
+      "that has focus and focus it, and so do gt and gT outside an editor; Ctrl+Shift+h, " +
+      "Ctrl+Shift+l and Ctrl+Shift+j fold or unfold the left, right and bottom dock, and so do " +
+      "zh, zl and zj outside an editor, the keyboard going to the stage when its side folds. " +
+      "A clicked tab puts the keyboard in the view it shows, and a click that leaves the focus " +
+      "nowhere (bare space, or a button Safari does not focus) puts it back where it was, so " +
+      "the keyboard is always somewhere on the desk.",
     kind: "view",
     emits: ["dock.arranged"],
     attributes: [],

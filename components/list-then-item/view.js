@@ -161,7 +161,11 @@ class ListThenItem extends LitElement {
   // A panel's focus lands in what it shows (dock-desk's Ctrl+h/j/k/l, 12): the list, or
   // the item picked from it.
   focus(options) {
-    this.#child(this.#actor.snapshot?.context.shown)?.focus(options);
+    const shown = this.#actor.snapshot?.context.shown;
+    this.#child(shown)?.focus(options);
+    // An item with nothing to focus (a chat box with no model chosen) leaves the keyboard
+    // on the Back button, never on the bare page where letters fall through.
+    if (shown && !this.contains(document.activeElement)) this.renderRoot.querySelector(".bar button")?.focus(options);
   }
 
   // The children as the page declares them (6.4): the first is the list, the rest are

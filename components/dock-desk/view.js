@@ -31,6 +31,8 @@ const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).font
 
 // The keys that move between groups and tabs while "Vim keys" is on (12), held with Ctrl.
 const PANEL_KEYS = new Set(["h", "j", "k", "l", ".", ","]);
+// The side Ctrl+Shift+<key>, or z then <key>, folds or unfolds.
+const FOLD_KEYS = { h: "left", l: "right", j: "bottom" };
 
 // A child's address (4.1): its role or tag name, with `#id` when the page gave it
 // one so two instances of a view on one page are distinct tabs. The subject mark
@@ -635,24 +637,73 @@ class DockDesk extends LitElement {
   // Counts the moves, so a focus still waiting for its view is dropped by a newer one.
   #moves = 0;
 
+  // The group that last held the focus, where a focus dropped on the bare page goes back.
+  #lastGroup = "stage";
+  // The first key of a two-key Vim command (gt, gT, zh, zl, zj) and when it was pressed.
+  #prefix = null;
+
   constructor() {
     super();
     // Capture phase, on the host: the key reaches the desk before an editor inside a
     // panel can claim it (CodeMirror's Vim binds none of these keys, so nothing is lost).
     this.addEventListener("keydown", (e) => this.#panelKey(e), { capture: true });
+    this.addEventListener("focusin", () => {
+      const docks = this.#actor.snapshot?.context.docks;
+      if (docks) this.#lastGroup = this.#focusedGroup(docks);
+    });
+    this.addEventListener("focusout", (e) => this.#dropped(e));
+  }
+
+  #vimOn() {
+    const snapshot = this.#actor.snapshot;
+    return Boolean(snapshot?.matches("ready") && snapshot.context.vimKeys) && this.getBoundingClientRect().width >= NARROW_REM * ROOT_EM();
+  }
+
+  // With "Vim keys" on the keyboard always sits somewhere on the desk (12): a click on bare
+  // space, or on a button Safari does not focus, drops the focus on the page, where no key
+  // reaches the desk. The focus goes back to the group that had it, or to the stage. Read
+  // a moment later, once the browser has settled where the focus went; a window that lost
+  // the focus to another app keeps its element and is left alone.
+  #dropped(event) {
+    if (event.relatedTarget || !this.#vimOn()) return;
+    setTimeout(() => {
+      const active = document.activeElement;
+      if ((active && active.localName !== "body") || this.#landing || !document.hasFocus() || !this.#vimOn()) return;
+      const { context } = this.#actor.snapshot;
+      const group = this.#lastGroup === "stage" || context.docks[this.#lastGroup]?.open ? this.#lastGroup : "stage";
+      const name = this.#shownIn(context, group);
+      if (!name) return;
+      this.#landing = { group, name };
+      this.requestUpdate();
+    });
+  }
+
+  // A tab clicked with "Vim keys" on puts the keyboard in the view it shows, as Ctrl+.
+  // does, so the next j moves in that view rather than on the tab (12).
+  #follow(group, name) {
+    if (!this.#vimOn()) return;
+    this.#landing = { group, name };
+    this.requestUpdate();
   }
 
   // The desk's keyboard model for "Vim keys" (12): Ctrl+h/j/k/l between the groups,
-  // Ctrl+. and Ctrl+, between the tabs of the group that has focus. Off without the
-  // preference, so nothing changes for anyone who leaves it off, and off on a narrow
-  // desk (the phone), where the docks are drawers over the stage, not neighbours.
+  // Ctrl+. and Ctrl+, between the tabs of the group that has focus, Ctrl+Shift+h/l/j
+  // fold or unfold the left, right and bottom dock; outside an editor also gt and gT for
+  // the tabs and zh, zl and zj for the folds. Off without the preference, so nothing
+  // changes for anyone who leaves it off, and off on a narrow desk (the phone), where
+  // the docks are drawers over the stage, not neighbours.
   #panelKey(event) {
-    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-    const key = event.key.toLowerCase();
-    if (!PANEL_KEYS.has(key)) return;
+    if (event.metaKey || event.altKey || !this.#vimOn()) return;
     const snapshot = this.#actor.snapshot;
-    if (!snapshot?.matches("ready") || !snapshot.context.vimKeys) return;
-    if (this.getBoundingClientRect().width < NARROW_REM * ROOT_EM()) return;
+    const key = event.key.toLowerCase();
+    if (event.ctrlKey && event.shiftKey) {
+      if (!FOLD_KEYS[key]) return;
+      event.preventDefault();
+      event.stopPropagation();
+      return this.#toggleFold(snapshot.context, FOLD_KEYS[key]);
+    }
+    if (!event.ctrlKey) return this.#letter(event, snapshot.context);
+    if (!PANEL_KEYS.has(key)) return;
     event.preventDefault();
     event.stopPropagation();
     const { docks, stage, pressed } = snapshot.context;
@@ -665,6 +716,45 @@ class DockDesk extends LitElement {
     if (to !== "stage" && !docks[to].open) this.#send("_unfold", undefined, to);
     this.#landing = { group: to, name: this.#shownIn(snapshot.context, to) };
     this.requestUpdate();
+  }
+
+  // gt / gT and zh / zl / zj: two letters, the second within a second of the first, and
+  // never inside an editor or a field, where they are text (or CodeMirror's Vim's own).
+  // The first letter is left to the view (g is half of a list's gg); a z, which no view
+  // uses, is spent so it is never typed.
+  #letter(event, context) {
+    const target = event.composedPath()[0];
+    const prefix = this.#prefix;
+    this.#prefix = null;
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
+    if ((event.key === "g" && prefix?.key !== "g") || event.key === "z") {
+      if (event.key === "z") event.preventDefault();
+      this.#prefix = { key: event.key, at: Date.now() };
+      return;
+    }
+    if (!prefix || Date.now() - prefix.at > 1000) return;
+    const tabStep = prefix.key === "g" ? { t: 1, T: -1 }[event.key] : undefined;
+    const side = prefix.key === "z" ? FOLD_KEYS[event.key] : undefined;
+    if (!tabStep && !side) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (tabStep) this.#cycle(context, this.#focusedGroup(context.docks), tabStep);
+    else this.#toggleFold(context, side);
+  }
+
+  // Fold an open side or unfold a folded one; a side the page does not have is passed
+  // over. Folding the side that holds the keyboard hands it to the stage.
+  #toggleFold(context, side) {
+    const dock = context.docks[side];
+    if (!dock?.views.length) return;
+    if (!dock.open) return this.#send("_unfold", undefined, side);
+    const had = this.#focusedGroup(context.docks) === side;
+    this.#send("_fold", undefined, side);
+    const name = this.#shownIn(context, "stage");
+    if (had && name) {
+      this.#landing = { group: "stage", name };
+      this.requestUpdate();
+    }
   }
 
   // The group holding the focus: a docked child's side, the side of a strip control
@@ -795,7 +885,7 @@ class DockDesk extends LitElement {
           ${dock("left")}
           <section class="stage">
             <div class="strip">
-              ${this.#tablist("Stage", tabs, pressed ? null : stage, labelOf, (name) => this.#send("_open", name))}
+              ${this.#tablist("Stage", tabs, pressed ? null : stage, labelOf, (name) => this.#send("_open", name), (name) => this.#follow("stage", name))}
               ${ready && !pressed && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
               <span class="controls">${this.#extras(extras, pressed)}</span>
             </div>
@@ -864,7 +954,7 @@ class DockDesk extends LitElement {
   // A group's strip: tabs first, then the shown tab's actions, then the fold. The tab
   // that shows the subject carries a mark before its label (12): an indicator, not a
   // control — no button of its own, no click, its title naming what is being worked on.
-  #tablist(group, tabs, active, labelOf, activate) {
+  #tablist(group, tabs, active, labelOf, activate, follow) {
     return html`
       <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, tabs, active, activate)}>
         ${tabs.map(
@@ -873,7 +963,10 @@ class DockDesk extends LitElement {
               role="tab"
               aria-selected=${name === active}
               tabindex=${name === active ? 0 : -1}
-              @click=${() => activate(name)}
+              @click=${() => {
+                activate(name);
+                follow?.(name);
+              }}
             >
               ${name === this.#marked
                 ? html`<span
@@ -989,7 +1082,7 @@ class DockDesk extends LitElement {
       <aside class="dock ${side} ${dock.open ? "" : "folded"} ${entering}" data-side=${side} aria-label=${group}>
         <div class="panel">
           <div class="strip" @click=${fold}>
-            ${this.#tablist(group, dock.views, active, labelOf, show)}
+            ${this.#tablist(group, dock.views, active, labelOf, show, (name) => this.#follow(side, name))}
             ${arranging ? this.#actions(side, active, labelOf, dock.views) : nothing}
             ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
           </div>
@@ -998,7 +1091,7 @@ class DockDesk extends LitElement {
           </div>
         </div>
         <div class="rail" @click=${unfold}>
-          ${this.#tablist(group, dock.views, active, labelOf, show)}
+          ${this.#tablist(group, dock.views, active, labelOf, show, (name) => this.#follow(side, name))}
           ${this.#fold("Unfold", "false", () => this.#send("_unfold", undefined, side), `Unfold ${dock.views.map(labelOf).join(", ")}`)}
         </div>
       </aside>
