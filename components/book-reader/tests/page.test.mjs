@@ -149,13 +149,13 @@ for (const engine of ENGINES) {
       return ctx;
     };
 
-    test("with Vim keys on, l/h turn the page and G/gg reach the chapter's ends", async () => {
+    test("with Vim keys on, Ctrl+f/Ctrl+b turn the page and G/gg reach the chapter's ends", async () => {
       const { page, problems } = await openAndRewind({ vimKeys: true });
       try {
-        await page.keyboard.press("l");
+        await page.keyboard.press("Control+f");
         await waitPagesAtLeast(page, "Chapter Two", 3);
         await settle();
-        await page.keyboard.press("l");
+        await page.keyboard.press("Control+f");
         await waitChapterPage(page, "Chapter Two", 2);
         await waitStill(page);
         await page.keyboard.press("G");
@@ -166,7 +166,7 @@ for (const engine of ENGINES) {
         await page.keyboard.press("g");
         await waitChapterPage(page, "Chapter Two", 1);
         await waitStill(page);
-        await page.keyboard.press("h");
+        await page.keyboard.press("Control+b");
         await waitChapterPage(page, "Chapter One", 1);
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
@@ -174,9 +174,10 @@ for (const engine of ENGINES) {
       }
     });
 
-    test("with Vim keys off, l does not turn the page", async () => {
+    test("with Vim keys off, Ctrl+f and l do not turn the page", async () => {
       const { page, problems } = await openAndRewind({ vimKeys: false });
       try {
+        await page.keyboard.press("Control+f");
         await page.keyboard.press("l");
         await page.keyboard.press("G");
         await page.waitForTimeout(300);

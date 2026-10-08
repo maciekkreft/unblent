@@ -213,6 +213,26 @@ class SettingsSheet extends LitElement {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
+    .keys-title {
+      margin: var(--space-xs) 0 0;
+      font-size: var(--text-sm);
+      font-weight: var(--weight-semibold);
+    }
+    .keys {
+      display: grid;
+      /* One key column width for every group, so the sheet reads as one table. */
+      grid-template-columns: calc(var(--space-2xl) * 2.25) 1fr;
+      gap: var(--space-2xs) var(--space-md);
+      margin: 0;
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .keys dt {
+      font-weight: var(--weight-semibold);
+    }
+    .keys dd {
+      margin: 0;
+    }
     ul {
       list-style: none;
       margin: 0 0 var(--space-lg);
@@ -332,6 +352,48 @@ class SettingsSheet extends LitElement {
     `;
   }
 
+  // The key sheet (plan Revision 1, item 3): every key "Vim keys" turns on, in plain
+  // words, written once here where the switch is, including where a key does not work.
+  #vimSheet() {
+    const group = (title, rows) => html`
+      <p class="keys-title">${title}</p>
+      <dl class="keys">${rows.map(([keys, what]) => html`<dt>${keys}</dt><dd>${what}</dd>`)}</dl>
+    `;
+    return html`
+      ${group("Anywhere on the desk, also while typing in a note or the chat box", [
+        ["Ctrl+h, Ctrl+l", "go to the panel on the left or the right"],
+        ["Ctrl+j, Ctrl+k", "go to the bottom panel, or back up to the middle"],
+        ["Ctrl+. and Ctrl+,", "show the next or the previous tab of the panel you are in"],
+        ["Ctrl+Shift+h, l, j", "fold or unfold the left, right or bottom panel"],
+      ])}
+      ${group("In a list and in the Reader, not while typing (there, use the Ctrl keys above)", [
+        ["gt, gT", "show the next or the previous tab"],
+        ["zh, zl, zj", "fold or unfold the left, right or bottom panel"],
+      ])}
+      ${group("In a list (books, contents, notes, chats)", [
+        ["j, k", "next or previous row"],
+        ["gg, G", "first or last row"],
+        ["Enter", "open the row"],
+        ["Escape", "from a note or a chat, back to its list (while typing, the first Escape only stops the typing)"],
+      ])}
+      ${group("In the Reader, a cursor shows on the text", [
+        ["w, b", "next or previous word"],
+        [") and (", "next or previous sentence"],
+        ["} and {", "end or start of the paragraph"],
+        ["l, h", "next or previous letter"],
+        ["j, k", "line below or above"],
+        ["0, $", "start or end of the line"],
+        ["Click", "put the cursor on the letter clicked"],
+        ["v", "start a highlight at the cursor; move to make it longer"],
+        ["Enter, Escape", "make the highlight, or drop it"],
+        ["Space, Ctrl+f", "next page (also the right arrow and Page Down)"],
+        ["Ctrl+b", "previous page (also the left arrow and Page Up)"],
+        ["gg, G", "first or last page of the chapter"],
+      ])}
+      <p class="hint">On a phone-sized window the panel, tab and fold keys are off; the list and Reader keys still work.</p>
+    `;
+  }
+
   // One on/off setting, in the same row format as every other setting.
   #check(name, checked, toggle) {
     return html`<label class="field"
@@ -415,7 +477,7 @@ class SettingsSheet extends LitElement {
             )
           : nothing}
         ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
-        <p class="hint">j/k in lists, Ctrl+h/j/k/l between panels, Ctrl+. and Ctrl+, between tabs, Escape back to a list, v in the Reader starts a highlight</p>
+        ${settings.vimKeys ? this.#vimSheet() : html`<p class="hint">Move around the desk, the lists and the Reader with the keyboard.</p>`}
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}

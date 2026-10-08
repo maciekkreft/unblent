@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, nearest, isMotion } from "../machine.js";
+import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, nearest, isMotion, passage } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -907,11 +907,11 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
   }
 });
 
-// The keyboard highlight's text motions (12, "Vim keys"): where w, b, ), (, }, { and h, l
+// The reader's Vim cursor motions (12, "Vim keys"): where w, b, ), (, }, { and h, l
 // land is decided on the block texts, so it is checked here; the line motions need the
 // page and are the browser's. A figure is a block with no text; a book's raw white space
 // (a newline and indent between inline elements) shows as one space.
-test("the keyboard highlight's motions land on shown characters across blocks", () => {
+test("the Vim cursor's motions land on shown characters across blocks", () => {
   const texts = ["Chapter One", "", "A short opening.  It ends\n   here! Then more.", "Last block"];
   const ch = chapterText(texts);
   const at = (block, offset) => indexOf(ch, { block, offset });
@@ -929,8 +929,11 @@ test("the keyboard highlight's motions land on shown characters across blocks", 
   assert.deepEqual(where(go(at(2, 35), ")")), { block: 3, offset: 0 });
   assert.deepEqual(where(go(at(2, 20), "(")), { block: 2, offset: 18 });
   assert.deepEqual(where(go(at(2, 18), "(")), { block: 2, offset: 0 });
-  // } and { by block, skipping the figure.
-  assert.deepEqual(where(go(at(0, 3), "}")), { block: 2, offset: 0 });
+  // } to a block's last character and { to its first, skipping the figure; from an end
+  // or a start, on to the next one. } never lands on the next block's first letter, so a
+  // highlight begun there stays in its paragraph.
+  assert.deepEqual(where(go(at(0, 3), "}")), { block: 0, offset: 10 });
+  assert.deepEqual(where(go(at(0, 10), "}")), { block: 2, offset: 44 });
   assert.deepEqual(where(go(at(2, 5), "{")), { block: 2, offset: 0 });
   assert.deepEqual(where(go(at(2, 0), "{")), { block: 0, offset: 0 });
   // l and h by character; a run of white space is the one space it collapses to.
@@ -943,20 +946,33 @@ test("the keyboard highlight's motions land on shown characters across blocks", 
   assert.deepEqual(where(go(at(3, 5), "}")), { block: 3, offset: 9 });
   assert.deepEqual(where(go(at(3, 9), "l")), { block: 3, offset: 9 });
   assert.deepEqual(where(go(at(0, 0), "h", "b", "{", "(")), { block: 0, offset: 0 });
-  // v starts on the first shown character at or after the page's anchor, past a figure.
+  // The cursor starts on the first shown character at or after the page's anchor, past a
+  // figure.
   assert.deepEqual(where(nearest(ch, at(1, 0))), { block: 2, offset: 0 });
   // An exclusive end just after a block's last character is that block's end.
   assert.deepEqual(where(at(0, 10) + 1), { block: 0, offset: 11 });
   assert.ok(isMotion("w") && isMotion("}") && !isMotion("j") && !isMotion("Enter"));
 });
 
-// A keyboard highlight is the same _highlight message the mouse sends: v on a word, two
-// w and Enter give a range whose cursor end is inclusive, and snapping grows it to three
-// whole words.
-test("v w w Enter reads as three words once snapped", () => {
-  const texts = ["A short opening chapter, one page long."];
+// A keyboard highlight is the same _highlight message the mouse sends. The cursor is
+// where the next key acts, so a forward motion that lands on the start of the next word
+// or sentence stops the passage before it: v w w covers two whole words, v ) one
+// sentence. Moving back, the cursor's own character opens the passage.
+test("the passage v covers ends before the word the cursor moved onto", () => {
+  const texts = ["Chapter One", "A short opening chapter, one page long. It links."];
   const ch = chapterText(texts);
-  const cursor = step(ch, step(ch, 0, "w"), "w");
-  const range = snapToWords(texts, { start: pointAt(ch, 0), end: pointAt(ch, cursor + 1) });
-  assert.equal(quoteOf(texts, range).exact, "A short opening");
+  const at = (block, offset) => indexOf(ch, { block, offset });
+  const text = ([from, to]) => ch.flat.slice(from, to).replaceAll("\u0000", "|");
+  const start = at(1, 2);
+  assert.equal(text(passage(ch, start, start)), "s");
+  assert.equal(text(passage(ch, start, step(ch, step(ch, start, "w"), "w"))), "short opening");
+  assert.equal(text(passage(ch, at(1, 0), step(ch, at(1, 0), ")"))), "A short opening chapter, one page long.");
+  // Across blocks, the separator and the next block's first word stay out.
+  assert.equal(text(passage(ch, at(0, 8), step(ch, at(0, 8), "w"))), "One");
+  // Backwards: from the cursor's character to where v was pressed.
+  assert.equal(text(passage(ch, at(1, 4), step(ch, at(1, 4), "b"))), "sho");
+  // } ends on the paragraph's last character, which is kept.
+  assert.equal(text(passage(ch, at(1, 40), step(ch, at(1, 40), "}"))), "It links.");
+  const range = snapToWords(texts, { start: pointAt(ch, start), end: pointAt(ch, passage(ch, start, start + 3)[1]) });
+  assert.equal(quoteOf(texts, range).exact, "short");
 });

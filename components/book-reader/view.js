@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, nearest, isMotion } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, nearest, isMotion, passage } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -269,12 +269,13 @@ class BookReader extends LitElement {
       box-decoration-break: clone;
       cursor: pointer;
     }
-    /* The keyboard highlight in progress (12, "Vim keys"), painted through the CSS Custom
-       Highlight API, which never touches the DOM, so the marks and the measure stay as
-       they are: the passage in the colour it will have, the cursor in the accent pair
+    /* The Vim cursor and the highlight in progress (12, "Vim keys"), painted through the
+       CSS Custom Highlight API, which never touches the DOM, so the marks and the measure
+       stay as they are: the passage in the selection colour, so it reads as not yet made
+       beside a finished highlight, the cursor a solid block in the accent pair
        note-editor's Vim cursor uses, so Vim has one cursor across the app. */
     ::highlight(reader-pending) {
-      background-color: var(--color-highlight);
+      background-color: var(--color-accent-selection);
     }
     ::highlight(reader-cursor) {
       background-color: var(--color-accent);
@@ -630,7 +631,9 @@ class BookReader extends LitElement {
     cancelAnimationFrame(this.#raf);
     clearTimeout(this.#timer);
     clearTimeout(this.#copiedTimer);
-    this.#endVisual(false);
+    this.#focused = false;
+    this.#visual = null;
+    this.#paintCursor();
     super.disconnectedCallback();
   }
 
@@ -663,6 +666,8 @@ class BookReader extends LitElement {
   // has no unsafeHTML directive), send external links out safely, and re-measure once
   // each image has loaded, since an unloaded image has no height and moves the blocks.
   #setFragment(htmlText) {
+    // The cursor and a highlight in progress were counted in the old fragment's text.
+    this.#forgetCursor();
     this.#strip.replaceChildren();
     // A fresh fragment starts at its first page at once, with no transform transition: a
     // jump reuses the strip, which may still be slid or mid-slide to the old page, and a
@@ -810,11 +815,30 @@ class BookReader extends LitElement {
     return true;
   }
 
-  // --- Highlighting from the keyboard (12, "Vim keys"; 14) ---------------------------
-  //
-  // The highlight in progress, the view's own UI state (3.1): the chapter's text as the
-  // motions read it, the index v was pressed at, and the cursor. Null when none is.
+  // --- The cursor and highlighting from the keyboard (12, "Vim keys"; 14) ------------
+//
+  // Vim's model: with "Vim keys" on and the reader focused, a one-character cursor is
+  // always shown. Motions move it; v starts a highlight at it, the same motions grow it,
+  // Enter makes it and Escape drops it, the cursor staying where it is. All of it is the
+  // view's own UI state (3.1): the chapter's text as the motions read it (built once per
+  // chapter), the cursor as an index into it, and where v was pressed. A cursor that
+  // leaves the page turns the page; a page turned another way takes the cursor to its top.
+  #text = null;
+  #cursor = null;
   #visual = null;
+  #focused = false;
+
+  #chapterText() {
+    this.#text ??= chapterText(this.#blockTexts());
+    return this.#text;
+  }
+
+  // A fresh chapter: nothing the cursor or a highlight in progress counted is left.
+  #forgetCursor() {
+    this.#text = null;
+    this.#cursor = null;
+    this.#visual = null;
+  }
 
   // A flat index of the chapter as a DOM boundary in the strip, through the same text
   // nodes the places are counted in.
@@ -850,7 +874,7 @@ class BookReader extends LitElement {
   // characters' boxes, as #charPage reads pages, so a page's columns and a wrapped
   // paragraph are measured the same way in every engine.
   #lineStep(i, key) {
-    const { chapter } = this.#visual;
+    const chapter = this.#chapterText();
     const here = this.#lineOf(i, chapter);
     if (!here) return i;
     const dir = key === "$" || key === "j" ? "l" : "h";
@@ -887,76 +911,150 @@ class BookReader extends LitElement {
     return best ? best.k : i;
   }
 
-  // v: the cursor starts on the page's anchor, the top of the page the reader is looking
-  // at, and the highlight in progress is that one character until a motion grows it.
-  #startVisual() {
-    this.#closeBubble();
-    const chapter = chapterText(this.#blockTexts());
-    const at = nearest(chapter, indexOf(chapter, this.#anchor));
-    if (at == null) return;
-    this.#visual = { chapter, start: at, cursor: at };
-    this.#follow();
+  // Whether the cursor shows now: the preference on, a chapter on the page, the reader
+  // focused.
+  #cursorShown() {
+    const snapshot = this.#actor.snapshot;
+    return this.#focused && snapshot?.context.vimKeys === true && snapshot.matches("reading") && this.#strip.children.length > 0;
   }
 
-  #moveVisual(key) {
-    const v = this.#visual;
-    v.cursor = isMotion(key) ? step(v.chapter, v.cursor, key) : this.#lineStep(v.cursor, key);
-    this.#follow();
+  // The cursor on the page shown: kept while it is there, else the top of the page (the
+  // anchor), which is also where it starts on a chapter and at the saved reading place.
+  #placeCursor() {
+    const chapter = this.#chapterText();
+    if (this.#cursor != null) {
+      const at = this.#lineOf(this.#cursor, chapter);
+      if (!at || Math.max(0, Math.min(this.#pages - 1, at.col)) === this.#page) return;
+    }
+    this.#cursor = nearest(chapter, indexOf(chapter, this.#anchor));
+    // A highlight in progress stays: a page turned by Space or Ctrl+f carries it on.
   }
 
-  // A cursor that leaves the page turns the page with it, so a highlight may run across
-  // pages; the cursor is always where the user can see it.
-  #follow() {
-    const at = this.#lineOf(this.#visual.cursor, this.#visual.chapter);
+  #move(key) {
+    const chapter = this.#chapterText();
+    this.#cursor = isMotion(key) ? step(chapter, this.#cursor, key) : this.#lineStep(this.#cursor, key);
+    const at = this.#lineOf(this.#cursor, chapter);
     const page = at ? Math.max(0, Math.min(this.#pages - 1, at.col)) : this.#page;
     if (page !== this.#page) {
+      this.#closeBubble();
       this.#endSettle();
       this.#turn(page);
     }
-    this.#paintVisual();
+    this.#paintCursor();
   }
 
-  // Enter makes the highlight, the cursor's character included as Vim's visual mode
-  // includes it; Escape, a page turn or a press on the page drops it, saving nothing.
+  // A click on the text puts the cursor on the character clicked: the collapsed
+  // selection the click left is that place, reached across the shadow boundary the way
+  // #selectionRange reaches a dragged one.
+  #cursorFromClick(x, y) {
+    const doc = document.getSelection();
+    const scoped = this.renderRoot.getSelection?.();
+    const range =
+      typeof doc?.getComposedRanges === "function"
+        ? doc.getComposedRanges({ shadowRoots: [this.renderRoot] })[0]
+        : scoped?.rangeCount
+          ? scoped.getRangeAt(0)
+          : null;
+    const p = range && this.#pointOf(range.startContainer, range.startOffset);
+    if (!p) return;
+    const chapter = this.#chapterText();
+    let at = nearest(chapter, indexOf(chapter, p));
+    // A caret falls between two characters, after the clicked one when the click was in
+    // its right half (Chromium): the cursor goes on the character under the pointer.
+    const before = at > 0 ? this.#rangeOf(at - 1, at, chapter)?.getBoundingClientRect() : null;
+    if (before && before.width > 0 && x >= before.left && x <= before.right && y >= before.top && y <= before.bottom) at -= 1;
+    this.#cursor = at;
+    this.#paintCursor();
+  }
+
+  #startVisual() {
+    this.#closeBubble();
+    this.#visual = { start: this.#cursor };
+    this.#paintCursor();
+  }
+
+  // Enter makes the highlight (12), sending the same message the mouse does; Escape drops
+  // it, saving nothing. Either way the cursor stays where it is.
   #endVisual(make) {
     const v = this.#visual;
     if (!v) return;
     this.#visual = null;
-    this.#paintVisual();
+    this.#paintCursor();
     if (!make) return;
-    const from = Math.min(v.start, v.cursor);
-    const to = Math.max(v.start, v.cursor) + 1;
-    this.#sendHighlight(pointAt(v.chapter, from), pointAt(v.chapter, to));
+    const chapter = this.#chapterText();
+    const [from, to] = passage(chapter, v.start, this.#cursor);
+    this.#sendHighlight(pointAt(chapter, from), pointAt(chapter, to));
   }
 
-  #paintVisual() {
+  // The cursor in the accent pair note-editor's Vim cursor uses, so Vim has one cursor
+  // across the app, and the passage in progress in the selection colour, distinct from
+  // a finished highlight. Painted through the CSS Custom Highlight API, which never
+  // touches the DOM, so the marks and the measure stay as they are.
+  #paintCursor() {
     const registry = globalThis.CSS?.highlights;
     if (!registry) return;
-    const v = this.#visual;
-    if (!v) {
+    if (!this.#cursorShown()) {
       registry.delete(PENDING);
       registry.delete(CURSOR);
       return;
     }
-    const pending = this.#rangeOf(Math.min(v.start, v.cursor), Math.max(v.start, v.cursor) + 1, v.chapter);
-    const cursor = this.#rangeOf(v.cursor, v.cursor + 1, v.chapter);
-    registry.set(PENDING, pending ? new Highlight(pending) : new Highlight());
+    this.#placeCursor();
+    const chapter = this.#chapterText();
+    const cursor = this.#cursor == null ? null : this.#rangeOf(this.#cursor, this.#cursor + 1, chapter);
     const mark = cursor ? new Highlight(cursor) : new Highlight();
     // Over the passage, which it sits inside of.
     mark.priority = 1;
     registry.set(CURSOR, mark);
+    if (!this.#visual || this.#cursor == null) {
+      registry.delete(PENDING);
+      return;
+    }
+    const [from, to] = passage(chapter, this.#visual.start, this.#cursor);
+    const pending = this.#rangeOf(from, to, chapter);
+    registry.set(PENDING, pending ? new Highlight(pending) : new Highlight());
   }
 
-  // The keys of a highlight in progress; true when the key was one of them.
-  #visualKey(e) {
-    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  // The reader's Vim keys; true when the key was one of them. Letters only while the
+  // preference is on, never with Alt or Cmd held, and never inside a field.
+  #gAt = 0;
+  #vimKey(e) {
+    if (this.#actor.snapshot?.context.vimKeys !== true || e.metaKey || e.altKey) return false;
+    const target = e.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return false;
     const key = e.key;
-    if (key === "Escape" || key === "v" || key === "Enter") this.#endVisual(key === "Enter");
-    else if (isMotion(key) || ["0", "$", "j", "k"].includes(key)) this.#moveVisual(key);
-    else return false;
+    if (e.ctrlKey) {
+      // Vim's page keys. Ctrl+h/j/k/l and Ctrl+. belong to the desk, which takes them first.
+      if (key !== "f" && key !== "b") return false;
+      if (key === "f") this.#next();
+      else this.#prev();
+    } else {
+      const second = key === "g" && Date.now() - this.#gAt < 1000;
+      this.#gAt = key === "g" && !second ? Date.now() : 0;
+      if (this.#cursor == null) this.#placeCursor();
+      if (key === "g") {
+        if (second) this.#edge(0);
+      } else if (key === "G") this.#edge(this.#pages - 1);
+      else if (isMotion(key) || ["0", "$", "j", "k"].includes(key)) {
+        if (this.#cursor == null) return false;
+        this.#move(key);
+      } else if (key === "v") {
+        if (this.#visual) this.#endVisual(false);
+        else if (this.highlights && this.#actor.snapshot.context.highlighting && this.#cursor != null) this.#startVisual();
+      } else if (key === "Enter" && this.#visual) this.#endVisual(true);
+      else if (key === "Escape" && this.#visual) this.#endVisual(false);
+      else return false;
+    }
     e.preventDefault();
     e.stopPropagation();
     return true;
+  }
+
+  // gg and G: the chapter's first or last page, the cursor at its top.
+  #edge(page) {
+    this.#closeBubble();
+    this.#endSettle();
+    this.#cursor = null;
+    this.#turn(page);
   }
 
   // Open the bubble on a highlight (session 3): its own UI state, so a normal mark click
@@ -1188,6 +1286,7 @@ class BookReader extends LitElement {
     this.#place(clamped, animate);
     this.requestUpdate();
     this.#actor.send({ type: "_settled", chapter: this.#chapter, block: this.#anchor.block });
+    this.#paintCursor();
   }
 
   // A turn: the anchor becomes the top of the page turned to.
@@ -1278,45 +1377,20 @@ class BookReader extends LitElement {
     }
   }
 
-  // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
-  // held (those belong to the browser and the desk), and never inside a field, where a
-  // letter is typed text. gg is two presses, so a first g waits a moment for the second.
-  #gAt = 0;
-  #vim(event) {
-    if (this.#actor.snapshot?.context.vimKeys !== true) return null;
-    if (event.ctrlKey || event.metaKey || event.altKey) return null;
-    const target = event.composedPath()[0];
-    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return null;
-    const second = event.key === "g" && Date.now() - this.#gAt < 1000;
-    this.#gAt = event.key === "g" && !second ? Date.now() : 0;
-    if (second) return "first";
-    return { l: "next", h: "prev", G: "last", v: "visual" }[event.key] ?? null;
-  }
-
   #keydown(e) {
-    // While a highlight is in progress its keys come first and the Vim page keys (h, l,
-    // gg, G) are suspended; a page turn by arrow, Space or Page keys drops it.
-    if (this.#visual && this.#visualKey(e)) return;
-    const vim = this.#visual ? null : this.#vim(e);
-    if (this.#visual && ["ArrowRight", "ArrowLeft", "PageDown", "PageUp", " ", "Home", "End"].includes(e.key)) this.#endVisual(false);
-    if (vim === "visual") {
-      if (!this.highlights || !this.#actor.snapshot?.context.highlighting) return;
-      e.preventDefault();
-      this.#startVisual();
-      return;
-    }
-    if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " " || vim === "next") {
+    if (this.#vimKey(e)) return;
+    if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
       e.preventDefault();
       this.#next();
-    } else if (e.key === "ArrowLeft" || e.key === "PageUp" || vim === "prev") {
+    } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
       e.preventDefault();
       this.#prev();
-    } else if (e.key === "Home" || vim === "first") {
+    } else if (e.key === "Home") {
       e.preventDefault();
       this.#closeBubble();
       this.#endSettle();
       this.#turn(0);
-    } else if (e.key === "End" || vim === "last") {
+    } else if (e.key === "End") {
       e.preventDefault();
       this.#closeBubble();
       this.#endSettle();
@@ -1328,6 +1402,12 @@ class BookReader extends LitElement {
       e.stopPropagation();
       this.#closeBubble();
     }
+  }
+
+  // The cursor shows only while the reader has the keyboard, and comes back where it was.
+  #focusChanged(focused) {
+    this.#focused = focused;
+    this.#paintCursor();
   }
 
   #pointerdown(e) {
@@ -1395,6 +1475,7 @@ class BookReader extends LitElement {
     const rel = (e.clientX - e.currentTarget.getBoundingClientRect().left) / d.width;
     if (rel <= EDGE) this.#prev();
     else if (rel >= 1 - EDGE) this.#next();
+    else if (d.mouse) this.#cursorFromClick(e.clientX, e.clientY);
   }
 
   // The fragment and the owed place are the actor's; apply them here after each render,
@@ -1434,10 +1515,8 @@ class BookReader extends LitElement {
         dir !== 0 && chapter === this.#chapter + dir && !matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.#lastHtml = htmlText;
       // A fresh chapter (a turn, a jump, a re-import) rebuilds the marks, so any open
-      // bubble's mark is gone: close it (session 3). A keyboard highlight counted in the
-      // old chapter's text has nothing left to point at.
+      // bubble's mark is gone: close it (session 3).
       this.#closeBubble();
-      this.#endVisual(false);
       if (slide) this.#swapStrip(dir);
       this.#chapter = chapter;
       // A fresh chapter is a fresh re-anchor pass: the stale highlights get one attempt
@@ -1464,8 +1543,8 @@ class BookReader extends LitElement {
     // passage again from its quote and, when found, hand the reader the corrected place. It
     // adopts the place (repainting on the next render) and re-saves the note.
     this.#reanchor(snapshot);
-    // A repaint of the marks moves the text nodes the in-progress ranges point into.
-    if (this.#visual) this.#paintVisual();
+    // A repaint of the marks moves the text nodes the cursor's ranges point into.
+    this.#paintCursor();
     // A drag inside an existing highlight opens that highlight's bubble (Decision 6),
     // told through the reveal one-shot; acted on once per nonce so a later render never
     // re-opens it.
@@ -1553,7 +1632,13 @@ class BookReader extends LitElement {
     const atFirst = this.#page === 0 && this.#chapter === 0;
     const atLast = this.#page === this.#pages - 1 && this.#chapter === count - 1;
     return html`
-      <div class="reader" tabindex="0" @keydown=${(e) => this.#keydown(e)}>
+      <div
+        class="reader"
+        tabindex="0"
+        @keydown=${(e) => this.#keydown(e)}
+        @focus=${() => this.#focusChanged(true)}
+        @blur=${() => this.#focusChanged(false)}
+      >
         <div
           class="viewport"
           @pointerdown=${(e) => this.#pointerdown(e)}

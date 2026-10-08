@@ -79,8 +79,9 @@ for (const engine of ENGINES) {
       return { page, problems };
     };
 
-    // v starts on the page's first word, two w take in two more, Enter makes the
-    // highlight the mouse would: painted in the reader and saved as a note with a place.
+    // v starts at the cursor, on the page's first word; two w move it onto the next
+    // heading, which the passage stops before. Enter makes the highlight the mouse
+    // would: painted in the reader and saved as a note with a place.
     test(`v w w Enter makes a highlight in ${engine.name}`, async () => {
       const { page, problems } = await open(true);
       // Vim arrives with the settings reply; v starts a highlight only once it has.
@@ -92,14 +93,12 @@ for (const engine of ENGINES) {
       });
       await page.keyboard.press("w");
       await page.keyboard.press("w");
-      assert.match(await pending(page), /^Chapter One\s*A$/);
+      assert.equal(await pending(page), "Chapter One");
       await page.keyboard.press("Enter");
-      // The cursor's character is inside the highlight, and snapping grows it to the word:
-      // the heading and the next heading's first word.
-      await until(async () => (await marks(page)).join(" ") === "Chapter One A");
+      await until(async () => (await marks(page)).join(" ") === "Chapter One");
       assert.equal(await pending(page), "");
       await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place && l.quote?.exact === "Chapter One\nA")), 8000);
+      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place && l.quote?.exact === "Chapter One")), 8000);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

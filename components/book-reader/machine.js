@@ -166,9 +166,9 @@ export const segments = (range, texts) => {
 
 // --- Highlighting from the keyboard (12, "Vim keys"; 14) ------------------------------
 //
-// Where the text motions of the reader's Vim highlight land: w and b by word, ) and ( by
-// sentence, } and { by block, l and h by character. Decided here, on the block texts, so
-// they are tested in Node; only the line motions (0, $, j, k) need the page's geometry
+// Where the text motions of the reader's Vim cursor land: w and b by word, ) and ( by
+// sentence, } to the end of a block and { to its start, l and h by character. Decided
+// here, on the block texts, so they are tested in Node; only the line motions (0, $, j, k) need the page's geometry
 // and stay in the view. The chapter is one flat string, its blocks joined by a separator
 // that is never text, and a cursor is an index into it that sits on a character the page
 // shows: a non-space, or the one space a run of white space between two words collapses
@@ -229,6 +229,16 @@ const sentenceStart = (flat, i) => {
   return j >= 0 && /[.!?]/u.test(flat[j]);
 };
 
+// The last non-space of a block: only white space on to the separator. Where } stops, so
+// a highlight begun there with v ends inside the paragraph, not on the next one's first
+// letter (Vim's } lands on the blank line between paragraphs, which a page does not have).
+const blockEnd = (flat, i) => {
+  if (blank(flat[i])) return false;
+  let j = i + 1;
+  while (j < flat.length && blank(flat[j]) && flat[j] !== SEP) j += 1;
+  return j >= flat.length || flat[j] === SEP;
+};
+
 const seek = (flat, i, dir, ok) => {
   for (let k = i + dir; k >= 0 && k < flat.length; k += dir) if (ok(flat, k)) return k;
   return null;
@@ -241,7 +251,7 @@ const MOTIONS = {
   b: [-1, wordStart],
   ")": [1, sentenceStart],
   "(": [-1, sentenceStart],
-  "}": [1, blockStart],
+  "}": [1, blockEnd],
   "{": [-1, blockStart],
 };
 
@@ -254,7 +264,22 @@ export const step = ({ flat }, i, key) => {
   return seek(flat, i, dir, ok) ?? (dir > 0 ? seek(flat, flat.length, -1, shown) : seek(flat, -1, 1, shown)) ?? i;
 };
 
-// The first shown character at or after an index, where v starts the cursor: the page's
+// The passage a highlight begun at `start` covers with the cursor at `cursor`, as
+// [from, to) flat indexes. The cursor is the character the next keypress acts on, so when
+// it has moved forward onto the start of a word, sentence or paragraph (w, ), l onto a
+// new word) that start is where the passage stops, not part of it: v w w covers two
+// whole words. Moving back, the cursor's character is the passage's first. White space
+// at either end is dropped.
+export const passage = ({ flat }, start, cursor) => {
+  let lo = Math.min(start, cursor);
+  let hi = Math.max(start, cursor);
+  if (cursor > start && wordStart(flat, cursor)) hi = cursor - 1;
+  while (hi > lo && blank(flat[hi])) hi -= 1;
+  while (lo < hi && blank(flat[lo])) lo += 1;
+  return [lo, hi + 1];
+};
+
+// The first shown character at or after an index, where the cursor starts on a page: the page's
 // anchor may sit on white space or on a block with no text (a figure).
 export const nearest = ({ flat }, i) => seek(flat, i - 1, 1, shown) ?? seek(flat, flat.length, -1, shown);
 
@@ -441,7 +466,13 @@ export const machine = setup({
       "so a run of turns saves once. It paints the book's highlights and lets the user mark a " +
       "new passage. After a re-import it finds each highlight's quote again and saves its " +
       "corrected place; a highlight whose quote is no longer in the book stays a note with its " +
-      "quote and its comment.",
+      "quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
+      "one-character cursor shows, starting at the top of the page and kept while the reader " +
+      "is left and returned to; w, b, ), (, }, {, 0, $, j, k, l and h move it, a click on the " +
+      "text puts it there, and a cursor that leaves the page turns the page. v starts a " +
+      "highlight at the cursor, the same keys grow it, Enter makes it and Escape drops it. " +
+      "Space, the arrows, Page Up and Page Down, and Ctrl+f and Ctrl+b turn pages, taking the " +
+      "cursor to the new page's top; gg and G go to the chapter's first and last page.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded"],
     attributes: ["height", "highlights"],
