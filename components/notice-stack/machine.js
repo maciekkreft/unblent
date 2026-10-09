@@ -45,6 +45,15 @@ const TABLE = {
     standing: false,
     actions: [],
   }),
+  // A removal waits out the undo window here, so every delete is reversible in one step: Undo brings
+  // the thing back; the window running out, or a dismiss, lets it go. One row per
+  // thing, so several removals stack, each with its own window.
+  "removal.started": (p) => ({
+    key: `removal:${p.kind}:${p.id}`,
+    standing: false,
+    actions: [{ label: "undo", emit: { type: "removal.undone", kind: p.kind, id: p.id } }],
+    settle: { type: "removal.settled", kind: p.kind, id: p.id },
+  }),
 };
 
 // A Map with one entry replaced, or removed, as a new Map so assign sees a fresh
@@ -65,9 +74,18 @@ function fade(context, notice, enqueue) {
   enqueue.raise({ type: "_elapsed", key: notice.key }, { delay: ({ context }) => context.fadeMs, id: `fade:${notice.key}` });
 }
 
+// A notice that ends without its action (elapsed, dismissed, the page leaving) lets
+// its pending news go out, if it has any: a removal settles.
+function end(context, key, enqueue) {
+  const settle = context.notices.get(key)?.settle;
+  if (settle) enqueue.emit(settle);
+  enqueue.cancel(`fade:${key}`);
+  enqueue.assign({ notices: ({ context }) => without(context.notices, key) });
+}
+
 function show(context, event, enqueue) {
   const row = TABLE[event.type](event);
-  const notice = { key: row.key, standing: row.standing, source: event, actions: row.actions, gone: false };
+  const notice = { key: row.key, standing: row.standing, source: event, actions: row.actions, settle: row.settle ?? null, gone: false };
   enqueue.assign({ notices: ({ context }) => replaced(context.notices, notice) });
   fade(context, notice, enqueue);
 }
@@ -78,7 +96,10 @@ export const machine = setup({}).createMachine({
     description:
       "Shows what a fact could not do for the user as notices that can be dismissed: a refused " +
       "sign-in, a refused note, and a save conflict. A conflict offers Keep mine, which saves " +
-      "the user's copy again, because `notes` otherwise keeps the server's copy. Notices are " +
+      "the user's copy again, because `notes` otherwise keeps the server's copy. Something the " +
+      "user deleted or removed shows as a dark notice with Undo for the undo window; hovering or " +
+      "focusing it holds the window, and when the window runs out or the notice is dismissed the " +
+      "removal is final. Leaving the page makes every open removal final. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
       "because `notes` does not keep conflicts.",
     kind: "view", emits: ["note.saved", "removal.undone", "removal.settled"], attributes: [], asks: [],
@@ -96,8 +117,7 @@ export const machine = setup({}).createMachine({
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "note.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
-    // Planned (9, step 1): the Undo notice, built with Judge; until then it does nothing.
-    "removal.started": { actions: () => {} },
+    "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and
     // says so. notes emits note.conflicted before note.deleted, so the notice exists.
@@ -109,12 +129,16 @@ export const machine = setup({}).createMachine({
       }),
     },
     // The dismiss on a notice, or Escape (7.2, internal gestures). On a conflict this
-    // keeps theirs, which is already the state, so nothing is emitted.
+    // keeps theirs, which is already the state, so nothing is emitted; a removal settles.
     _dismiss: {
       guard: ({ context, event }) => context.notices.has(event.key),
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.cancel(`fade:${event.key}`);
-        enqueue.assign({ notices: ({ context }) => without(context.notices, event.key) });
+      actions: enqueueActions(({ context, event, enqueue }) => end(context, event.key, enqueue)),
+    },
+    // The page is going away (pagehide): no one is left to press Undo, so every open
+    // removal settles now and a closed tab completes the delete.
+    _leave: {
+      actions: enqueueActions(({ context, enqueue }) => {
+        for (const [key, notice] of context.notices) if (notice.settle) end(context, key, enqueue);
       }),
     },
     // An action on a notice: the event it carries goes out as the user's gesture (4,
@@ -140,9 +164,7 @@ export const machine = setup({}).createMachine({
     // The window ran out (the timer above).
     _elapsed: {
       guard: ({ context, event }) => context.notices.has(event.key) && !context.notices.get(event.key).standing,
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.assign({ notices: ({ context }) => without(context.notices, event.key) });
-      }),
+      actions: enqueueActions(({ context, event, enqueue }) => end(context, event.key, enqueue)),
     },
   },
 });

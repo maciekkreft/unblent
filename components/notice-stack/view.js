@@ -17,7 +17,21 @@ const toMs = (text, fallback = 3000) => {
 
 // The words for a notice live here, not in the machine (a view owns its own text).
 // One case per source; a future refusal or event adds one line, nothing else.
+// A removal names the thing the way the user sees it: a rubric is a Tool (13), and
+// a question or an option is removed from its tool rather than deleted outright.
+const REMOVED = {
+  project: ["Project", "deleted"],
+  rubric: ["Tool", "deleted"],
+  case: ["Case", "deleted"],
+  question: ["Question", "removed"],
+  option: ["Option", "removed"],
+};
+
 function describe(source) {
+  if (source.type === "removal.started") {
+    const [noun, verb] = REMOVED[source.kind] ?? ["Item", "deleted"];
+    return source.name ? `${noun} “${source.name}” ${verb}.` : `${noun} ${verb}.`;
+  }
   if (source.type === "note.conflicted") {
     const title = source.theirs.title || "your note";
     return source.gone
@@ -53,7 +67,7 @@ function describe(source) {
   }
 }
 
-const ACTION_LABELS = { "keep-mine": "Keep mine" };
+const ACTION_LABELS = { "keep-mine": "Keep mine", undo: "Undo" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -72,9 +86,15 @@ class ActorController {
       events: { "note.saved": saved, "removal.undone": undone, "removal.settled": settled },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    // A closed tab completes its deletes (the facts also settle at load).
+    this.onPagehide = () => this.actor.send({ type: "_leave" });
+    window.addEventListener("pagehide", this.onPagehide);
   }
 
   hostDisconnected() {
+    window.removeEventListener("pagehide", this.onPagehide);
+    // A removed stack leaves no removal waiting for an Undo no one can press.
+    this.actor.send({ type: "_leave" });
     this.subscription?.unsubscribe();
     unmount(this.actor);
   }
@@ -122,6 +142,43 @@ class NoticeStack extends LitElement {
       line-height: var(--leading-normal);
       color: var(--color-body);
       overflow: hidden;
+    }
+    /* A removal is news with a way back, not a warning: dark, with Undo in the
+       accent, as the mockup shows. */
+    .notice.removal {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center;
+      background: var(--color-ink);
+      border-color: var(--color-ink);
+      color: var(--color-canvas);
+    }
+    .removal .undo {
+      border: none;
+      cursor: pointer;
+      padding: var(--space-2xs) var(--space-sm);
+      border-radius: var(--radius-sm);
+      font-family: inherit;
+      font-size: inherit;
+      font-weight: var(--weight-semibold);
+      color: var(--color-accent);
+      background: none;
+    }
+    .removal .undo:hover {
+      color: var(--color-accent-hover);
+    }
+    .removal .undo:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .removal .dismiss {
+      align-self: center;
+      color: var(--color-mute);
+    }
+    .removal .dismiss:hover {
+      color: var(--color-canvas);
+    }
+    .removal .timer {
+      background: var(--color-accent);
     }
     .glyph {
       display: flex;
@@ -212,11 +269,40 @@ class NoticeStack extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
     const notices = [...snapshot.context.notices.values()];
-    if (!notices.length) return nothing;
+    // The wrapper stays in the page so a screen reader is already watching it when a
+    // notice arrives; a region inserted with its content is often not announced.
     return html`
-      <div @keydown=${(e) => this.#onKeydown(e)}>
+      <div aria-live="polite" @keydown=${(e) => this.#onKeydown(e)}>
         ${notices.map((n) => {
           const source = { ...n.source, gone: n.gone };
+          const hold = {
+            enter: () => this.#actor.send({ type: "_hold", key: n.key }),
+            leave: () => this.#actor.send({ type: "_release", key: n.key }),
+          };
+          if (n.settle)
+            return html`
+              <div
+                class="notice removal"
+                role="status"
+                @mouseenter=${hold.enter}
+                @mouseleave=${hold.leave}
+                @focusin=${hold.enter}
+                @focusout=${hold.leave}
+              >
+                <p>${describe(source)}</p>
+                ${n.actions.map(
+                  (a, i) => html`
+                    <button class="undo" @click=${() => this.#actor.send({ type: "_act", key: n.key, index: i })}>
+                      ${ACTION_LABELS[a.label] ?? a.label}
+                    </button>
+                  `,
+                )}
+                <button class="dismiss" aria-label="Dismiss" @click=${() => this.#actor.send({ type: "_dismiss", key: n.key })}>
+                  ${icon("x")}
+                </button>
+                <div class="timer"></div>
+              </div>
+            `;
           return html`
             <div
               class="notice"

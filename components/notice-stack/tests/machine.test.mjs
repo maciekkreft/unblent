@@ -181,3 +181,98 @@ test("a repeated note.refused replaces rather than piles up: one row for the pin
   actor.send({ type: "note.refused", id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", reason: "pinned" });
   assert.equal(notices(actor).size, 1, "coalesced by reason");
 });
+
+// --- Removals: Undo, or settle when the window ends -------------------------------
+
+const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+
+function startRemovals() {
+  const s = start();
+  const out = [];
+  s.actor.on("removal.undone", (e) => out.push(e));
+  s.actor.on("removal.settled", (e) => out.push(e));
+  return { ...s, out };
+}
+
+const rkey = (kind, id) => "removal:" + kind + ":" + id;
+const removal = (kind = "option", id = ID, name = "Goal") => ({ type: "removal.started", kind, id, name });
+
+test("a removal shows a passing notice with one Undo action", () => {
+  const { actor, out } = startRemovals();
+  actor.send(removal());
+  const n = notice(actor, rkey("option", ID));
+  assert.ok(n, "shown at once");
+  assert.equal(n.standing, false);
+  assert.deepEqual(n.actions.map((a) => a.label), ["undo"]);
+  assert.deepEqual(out, [], "nothing is final yet");
+});
+
+test("Undo emits removal.undone, closes the notice, and never settles", () => {
+  const { actor, out, clock } = startRemovals();
+  actor.send(removal());
+  actor.send({ type: "_act", key: rkey("option", ID), index: 0 });
+  clock.increment(FADE_MS * 3);
+  assert.deepEqual(out, [{ type: "removal.undone", kind: "option", id: ID }]);
+  assert.equal(notices(actor).size, 0);
+});
+
+test("the window running out settles the removal, not before", () => {
+  const { actor, out, clock } = startRemovals();
+  actor.send(removal("case", ID, ""));
+  clock.increment(FADE_MS - 1);
+  assert.deepEqual(out, []);
+  clock.increment(1);
+  assert.deepEqual(out, [{ type: "removal.settled", kind: "case", id: ID }]);
+  assert.equal(notices(actor).size, 0);
+});
+
+test("dismissing a removal settles it at once, once", () => {
+  const { actor, out, clock } = startRemovals();
+  actor.send(removal("project"));
+  actor.send({ type: "_dismiss", key: rkey("project", ID) });
+  clock.increment(FADE_MS * 3);
+  assert.deepEqual(out, [{ type: "removal.settled", kind: "project", id: ID }]);
+});
+
+test("hovering holds a removal's window; leaving starts a whole one", () => {
+  const { actor, out, clock } = startRemovals();
+  actor.send(removal());
+  const key = rkey("option", ID);
+  clock.increment(FADE_MS - 1);
+  actor.send({ type: "_hold", key });
+  clock.increment(FADE_MS * 5);
+  assert.deepEqual(out, [], "held: not settled");
+  actor.send({ type: "_release", key });
+  clock.increment(FADE_MS - 1);
+  assert.deepEqual(out, []);
+  clock.increment(1);
+  assert.deepEqual(out, [{ type: "removal.settled", kind: "option", id: ID }]);
+});
+
+test("several removals stack, each with its own window", () => {
+  const { actor, out, clock } = startRemovals();
+  actor.send(removal("question", ID, ""));
+  clock.increment(FADE_MS / 2);
+  actor.send(removal("rubric", ID2, "Replyability"));
+  assert.equal(notices(actor).size, 2);
+  clock.increment(FADE_MS / 2);
+  assert.deepEqual(out, [{ type: "removal.settled", kind: "question", id: ID }], "the first ends on its own clock");
+  actor.send({ type: "_act", key: rkey("rubric", ID2), index: 0 });
+  clock.increment(FADE_MS * 2);
+  assert.deepEqual(out.slice(1), [{ type: "removal.undone", kind: "rubric", id: ID2 }], "the second is undone, not settled");
+});
+
+test("leaving the page settles every open removal and keeps other notices", () => {
+  const { actor, out, clock } = startRemovals();
+  actor.send(conflict());
+  actor.send(removal("case", ID));
+  actor.send(removal("option", ID2, "Value"));
+  actor.send({ type: "_leave" });
+  assert.deepEqual(out, [
+    { type: "removal.settled", kind: "case", id: ID },
+    { type: "removal.settled", kind: "option", id: ID2 },
+  ]);
+  assert.deepEqual([...notices(actor).keys()], ["note.conflicted:" + ID]);
+  clock.increment(FADE_MS * 3);
+  assert.equal(out.length, 2, "no second settle from a cancelled timer");
+});
