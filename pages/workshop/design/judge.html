@@ -50,6 +50,7 @@
     <script type="module" src="/static/components/project-bar/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/components/rubric-list/view.js"></script>
+    <script type="module" src="/static/components/rubric-editor/view.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
   </head>
   <body>
@@ -57,6 +58,7 @@
     <project-bar></project-bar>
     <list-then-item id="rubrics" label="Tools" side="right" height="fill">
       <rubric-list label="Tools"></rubric-list>
+      <rubric-editor shows-on="rubric.selected" height="fill"></rubric-editor>
     </list-then-item>
     <viewport-switch></viewport-switch>
     <notice-stack></notice-stack>
