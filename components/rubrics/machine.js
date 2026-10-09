@@ -51,9 +51,8 @@ export const normalise = (r) => {
 
 // The example tools a first visit starts with. The ids are fixed and exported, because
 // `cases` keys its right answers by question id and option id; it copies them as
-// literals. The Replies tools keep the ids they had in Gauge: a separate fact, so the
-// shared ids cannot collide. `since` is the seed version that added a tool; it stays in
-// this file and the catch-up, never on the bus.
+// literals. `since` is the seed version that added a tool; it stays in this file and the
+// catch-up, never on the bus.
 export const SEED_VERSION = 1;
 export const IDS = Object.freeze({
   goalOrValue: "01K6SEED00000000000000RB01",
@@ -69,7 +68,7 @@ export const IDS = Object.freeze({
 const yn = (id, text, yes, no) => ({ id, kind: "yesno", text, yes, no, options: [], removing: false });
 const opt = (id, name, description) => ({ id, name, description, removing: false });
 
-// Each Gauge tool's headline question, with its yes and no, becomes question 1; its id is
+// Each Replies tool's main question, with its yes and no, is question 1; its id is
 // the tool's own with H for headline in place of 0.
 const reply = (n, name, on, headline, yes, no, questions) => ({
   id: `01K6SEED00000000000000G${n}Q0`,

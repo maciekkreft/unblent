@@ -79,12 +79,6 @@ test("the container emits nothing and asks nothing (6.4)", () => {
   assert.deepEqual(machine.config.meta.asks, []);
 });
 
-test("a gauge pick shows the gauge editor", () => {
-  const a = start([{ name: "gauge-editor", showsOn: "gauge.selected" }]);
-  a.send({ type: "gauge.selected", id: "01K6SEED00000000000000G1Q0" });
-  assert.equal(a.getSnapshot().context.shown, "gauge-editor");
-});
-
 test("a tool pick shows the tool editor, and without one the list stays", () => {
   const a = start([{ name: "rubric-editor", showsOn: "rubric.selected" }]);
   a.send({ type: "rubric.selected", id: "01K6SEED00000000000000RB01" });

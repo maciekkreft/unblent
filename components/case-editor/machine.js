@@ -168,7 +168,7 @@ export const uses = (rubrics, project) => {
   return `Judges this case with ${names.length > 3 ? plural(names.length, "tool", "tools") + " that are on" : listed(names)}.`;
 };
 
-// What a run that stopped early says, by its reason; gauge-post's words, said of judging.
+// What a run that stopped early says, by its reason, in the user's words.
 export const errorText = (code) => {
   switch (code) {
     case "signed-out":

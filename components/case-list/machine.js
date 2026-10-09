@@ -135,7 +135,7 @@ export const waiting = (run, project, id) => {
   return Boolean(r?.running && r.cases.indexOf(id) >= r.done);
 };
 
-// What a run that stopped early says, by its reason; gauge-post's words, said of judging.
+// What a run that stopped early says, by its reason, in the user's words.
 export const errorText = (code) => {
   switch (code) {
     case "signed-out":

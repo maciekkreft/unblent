@@ -4,7 +4,7 @@ import { setup, assign, emit, enqueueActions, fromPromise, fromCallback } from "
 // because a completion can only come from the server, which also holds the
 // account's model settings and API key (3.1, 7.7). It answers `read` (the account's
 // picture, never the key) and `complete` (start one answer; the answer arrives as
-// `completion.progressed` events, 6.3), and `decide` (ask Jev yes/no questions; the
+// `completion.progressed` events, 6.3), and `decide` (ask Jev yes/no and pick-one questions; the
 // answers come back in the reply, because there is nothing to stream). It follows `session.changed`, because the
 // picture depends on who is signed in (3.4), `llm.edited` (the user's settings
 // gestures) and `turn.steered` (a stop). Three parallel regions keep the account
