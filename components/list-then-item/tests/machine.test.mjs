@@ -84,3 +84,11 @@ test("a gauge pick shows the gauge editor", () => {
   a.send({ type: "gauge.selected", id: "01K6SEED00000000000000G1Q0" });
   assert.equal(a.getSnapshot().context.shown, "gauge-editor");
 });
+
+test("a tool pick shows the tool editor, and without one the list stays", () => {
+  const a = start([{ name: "rubric-editor", showsOn: "rubric.selected" }]);
+  a.send({ type: "rubric.selected", id: "01K6SEED00000000000000RB01" });
+  assert.equal(a.getSnapshot().context.shown, "rubric-editor");
+  const bare = start([]);
+  assert.equal(bare.getSnapshot().can({ type: "rubric.selected", id: "01K6SEED00000000000000RB01" }), false);
+});

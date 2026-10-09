@@ -49,6 +49,8 @@
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/project-bar/view.js"></script>
+    <script type="module" src="/static/components/list-then-item/view.js"></script>
+    <script type="module" src="/static/components/rubric-list/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
     <script type="module" src="/static/components/settings-sheet/view.js"></script>
     <script type="module" src="/static/components/profile-switch/view.js"></script>
@@ -59,6 +61,9 @@
     <page-nav></page-nav>
     <project-bar></project-bar>
     <dock-desk>
+      <list-then-item id="rubrics" label="Tools" side="right" height="fill">
+        <rubric-list label="Tools"></rubric-list>
+      </list-then-item>
       <profile-switch control></profile-switch>
       <settings-sheet label="Settings" button="gear" account judging></settings-sheet>
       <session-switch control></session-switch>
