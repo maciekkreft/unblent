@@ -52,6 +52,7 @@
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/components/case-list/view.js"></script>
     <script type="module" src="/static/components/case-editor/view.js"></script>
+    <script type="module" src="/static/components/decision-results/view.js"></script>
     <script type="module" src="/static/components/rubric-list/view.js"></script>
     <script type="module" src="/static/components/rubric-editor/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
@@ -66,6 +67,7 @@
     <dock-desk>
       <case-list label="Cases" side="left" height="fill"></case-list>
       <case-editor label="Case" shows-on="case.selected" height="fill"></case-editor>
+      <decision-results label="Results" shows-on="results.selected" height="fill"></decision-results>
       <list-then-item id="rubrics" label="Tools" side="right" height="fill">
         <rubric-list label="Tools"></rubric-list>
         <rubric-editor shows-on="rubric.selected" height="fill"></rubric-editor>
