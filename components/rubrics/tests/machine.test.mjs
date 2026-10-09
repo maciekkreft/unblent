@@ -30,9 +30,9 @@ const O1 = "01K6TEST00000000000000RC01";
 const O2 = "01K6TEST00000000000000RC02";
 const O3 = "01K6TEST00000000000000RC03";
 
-const start = (stored = null) => {
+const start = (stored = null, ask) => {
   const saved = [];
-  const actor = createActor(machine, { input: { stored, save: (v) => saved.push(v) } });
+  const actor = createActor(machine, { input: { stored, save: (v) => saved.push(v), ask } });
   const emitted = [];
   actor.on("rubric.changed", (e) => {
     emitted.push(e);
@@ -237,6 +237,37 @@ test("a tool whose project is gone is dropped; a project being removed keeps its
   assert.deepEqual(s.read().rubrics.map((r) => r.project), [GOALS, GOALS]);
   assert.equal(JSON.parse(s.saved.at(-1)).rubrics.length, 2, "and the drop is saved");
   assert.deepEqual(s.emitted.at(-1), { type: "rubric.changed", ...s.read() });
+});
+
+test("at start the projects read drops the tools of a project that is gone", async () => {
+  const asked = [];
+  const s = start(null, async (target, name, payload) => {
+    asked.push([target, name, payload]);
+    return { projects: [{ id: REPLIES, name: "Replies", removing: false }], current: REPLIES };
+  });
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(asked, [["projects", "read", {}]]);
+  assert.ok(s.read().rubrics.every((r) => r.project === REPLIES));
+  assert.equal(s.read().rubrics.length, 6);
+  assert.equal(s.emitted.length, 1);
+  assert.equal(JSON.parse(s.saved.at(-1)).rubrics.length, 6);
+});
+
+test("a start read that fails, or keeps every project, changes nothing", async () => {
+  for (const reply of [{ error: "no-answerer" }, { projects: [{ id: GOALS, name: "", removing: false }, { id: REPLIES, name: "", removing: false }], current: GOALS }]) {
+    const s = start(null, async () => reply);
+    await new Promise((r) => setTimeout(r));
+    assert.equal(s.read().rubrics.length, SEED.length);
+    assert.equal(s.emitted.length, 0);
+    assert.equal(s.saved.length, 0);
+  }
+  const s = start(null, async () => {
+    throw new Error("down");
+  });
+  await new Promise((r) => setTimeout(r));
+  assert.equal(s.emitted.length, 0);
+  save(s, [yn(Q1, "Still works?")]);
+  assert.ok(tool(s, T), "the fact is ready after a failed read");
 });
 
 test("every payload matches its schema", () => {

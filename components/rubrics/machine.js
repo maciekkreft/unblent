@@ -1,4 +1,4 @@
-import { setup, assign, emit } from "xstate";
+import { setup, assign, emit, fromPromise } from "xstate";
 
 // A local-only fact component (3.1): headless owner of the Judge tools. "Tool" already
 // names a chat lookup (7.7), so the Judge tool the user sees is a rubric inside the
@@ -7,8 +7,10 @@ import { setup, assign, emit } from "xstate";
 // notice-stack emits removal.undone or removal.settled when the undo window ends (4.3,
 // fifth rule). This fact keeps the tools, saves them and announces them whole as
 // rubric.changed, and answers rubrics: read for the starting picture. It follows
-// project.changed and drops the tools of a project that no longer exists. The store
-// arrives through `input`, so the machine is a pure definition importable in Node.
+// project.changed and drops the tools of a project that no longer exists; at start it
+// asks projects: read once, which sweeps the tools of a project whose removal settled at
+// load before this fact heard of it. The store and the ask arrive through `input`, so
+// the machine is a pure definition importable in Node.
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
@@ -332,7 +334,14 @@ const projectChanged = (rubrics, { projects }) => {
   return rubrics.filter((r) => ids.has(r.project));
 };
 
-export const machine = setup({}).createMachine({
+// The start read's reply, swept like project.changed; an error reply sweeps nothing.
+const projectsRead = (rubrics, { output }) => (Array.isArray(output?.projects) ? projectChanged(rubrics, output) : rubrics);
+
+export const machine = setup({
+  actors: {
+    projects: fromPromise(({ input }) => (input.ask ? input.ask("projects", "read", {}) : Promise.resolve(null))),
+  },
+}).createMachine({
   id: "rubrics",
   meta: {
     description:
@@ -350,8 +359,21 @@ export const machine = setup({}).createMachine({
     shape: "local-only",
     owns: "the Judge tools of every project and their questions",
     emits: ["rubric.changed"],
+    asks: ["projects: read"],
   },
-  context: ({ input }) => ({ rubrics: parse(input.stored), save: input.save }),
+  context: ({ input }) => ({ rubrics: parse(input.stored), save: input.save, ask: input.ask }),
+  initial: "starting",
+  states: {
+    starting: {
+      invoke: {
+        src: "projects",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [{ target: "ready", ...change(projectsRead) }, { target: "ready" }],
+        onError: { target: "ready" },
+      },
+    },
+    ready: {},
+  },
   on: {
     "rubric.saved": change(saved),
     "rubric.switched": change(switched),
