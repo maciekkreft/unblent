@@ -131,8 +131,10 @@ test("the Judge all snapshot holds the project's live cases and its switched-on 
 });
 
 test("the reasons Judge all cannot run", () => {
-  const ok = { cases: [kase(1, A)], rubrics: [rubric(1, A)], run: null, current: A };
+  const ok = { cases: [kase(1, A)], rubrics: [rubric(1, A)], run: null, current: A, signedIn: true, keySet: true };
   assert.equal(blocked(ok), null);
+  assert.equal(blocked({ ...ok, signedIn: false }), "Sign in to judge.");
+  assert.equal(blocked({ ...ok, keySet: false }), "Add your Jev key in Settings.");
   assert.equal(counts(ok), "1 case, 1 tool on");
   assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { on: false })] }), "Switch on a tool to judge.");
   assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [yesno({ text: " " })] })] }), "Add a question to a tool to judge.");
@@ -161,9 +163,13 @@ test("progress, waiting rows and a stopped run's reason belong to the run's own 
   assert.equal(errorText("no-answerer"), "Jev is unavailable.");
 });
 
+// What llm: read answers: signed in, with a Jev key saved.
+const LLM = { signedIn: true, provider: "echo", providers: [], model: "echo", models: [], effort: "default", efforts: [], ttl: "1h", jev: { keySet: true } };
+
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ current = A, cases = [], rubrics = [], decisions = [], run = null, open = {}, fail } = {}) => {
+const start = async ({ current = A, cases = [], rubrics = [], decisions = [], run = null, open = {}, fail, llm = LLM } = {}) => {
   const replies = {
+    llm,
     projects: fail ?? { projects: [], current },
     cases: { cases, open },
     rubrics: { rubrics },
@@ -216,6 +222,18 @@ test("the list follows the facts, and New case gets a fresh id once its case is 
   assert.deepEqual(ctx().open, { [B]: D1 });
   actor.send({ type: "rubric.changed", rubrics: [] });
   assert.deepEqual(ctx().rubrics, []);
+});
+
+test("Judge all follows llm: signed out or without a key it does nothing, until llm.changed says otherwise", async () => {
+  const { actor, emitted } = await start({ cases: [kase(1, A)], rubrics: [rubric(1, A)], llm: { ...LLM, signedIn: false } });
+  actor.send({ type: "_judge" });
+  assert.equal(emitted.length, 0);
+  assert.equal(blocked(actor.getSnapshot().context), "Sign in to judge.");
+  actor.send({ type: "llm.changed", ...LLM, jev: { keySet: false } });
+  assert.equal(blocked(actor.getSnapshot().context), "Add your Jev key in Settings.");
+  actor.send({ type: "llm.changed", ...LLM });
+  actor.send({ type: "_judge" });
+  assert.deepEqual(emitted.map((e) => e.type), ["judging.requested", "results.selected"]);
 });
 
 test("a fact that cannot answer leaves the list failed", async () => {

@@ -452,6 +452,38 @@ test("a case picked stages the case, and Judge all stages the results (6.4)", as
   assert.deepEqual(emitted.map((e) => e.stage), ["case-editor", "decision-results"]);
 });
 
+test("on a narrow desk, a case picked in the Cases drawer folds the drawers and shows the case (6.4)", async () => {
+  const docks = { left: { open: true, views: ["case-list"] }, right: { open: true, views: ["rubrics"] } };
+  const { actor, emitted } = await settle(stored({ stage: "case-editor", docks }), {
+    views: [...JUDGE, { name: "rubrics", label: "Tools", side: "right" }],
+    narrow: () => true,
+  });
+  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
+  assert.deepEqual(emitted, [
+    {
+      type: "dock.arranged",
+      stage: "case-editor",
+      docks: { left: { open: false, views: ["case-list"] }, right: { open: false, views: ["rubrics"] } },
+    },
+  ]);
+});
+
+test("on a wide desk, a case picked leaves the docks open (6.4)", async () => {
+  const docks = { left: { open: true, views: ["case-list"] } };
+  const { actor, emitted } = await settle(stored({ stage: "case-editor", docks }), { views: JUDGE, narrow: () => false });
+  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
+  assert.deepEqual(emitted, [], "the case is already staged and the dock stays");
+});
+
+test("on a narrow desk, a gesture that shows a docked view keeps its own side open (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: { left: { open: false, views: ["book-toc"] } } }),
+    { views: FOLLOWERS, narrow: () => true },
+  );
+  actor.send({ type: "book.selected", id: "b1" });
+  assert.deepEqual(emitted.at(-1).docks.left, { open: true, views: ["book-toc"], active: "book-toc" });
+});
+
 test("in failed, a case picked and Judge all stage their views (6.4)", async () => {
   const { actor } = await settle(stored({ error: "unavailable" }), { views: JUDGE });
   actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });

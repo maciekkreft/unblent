@@ -1,8 +1,9 @@
 import { setup, assign, enqueueActions, fromPromise } from "xstate";
 
 // The view component that lists the Judge cases (6.4), in the Cases dock. It owns only UI
-// state — the pictures it shows and a draft id for New case — and points at four facts:
-// it asks projects: read, cases: read, rubrics: read and decisions: read for the starting
+// state — the pictures it shows and a draft id for New case — and points at five facts:
+// it asks projects: read, cases: read, rubrics: read, decisions: read and llm: read (who
+// is signed in, and whether a Jev key is saved) for the starting
 // picture and follows their .changed events after (4.3, fourth rule). A pick and Judge
 // all leave as gestures (4.3, fifth rule); `decisions` runs the judging. The ask and mint
 // arrive through input, so this stays a pure definition importable in Node.
@@ -104,10 +105,10 @@ export const snapshot = (cases, rubrics, project) => ({
 const runHere = (run, project) => (run && run.project === project ? run : null);
 
 // Why Judge all cannot run now, in the words of the line beside it, or null when it can.
-// Signed out and no Jev key are known only once a run stops on them (case-list does not
-// ask llm), so they show as a run's error instead.
-export const blocked = ({ cases, rubrics, run, current }) => {
+export const blocked = ({ cases, rubrics, run, current, signedIn, keySet }) => {
   if (run?.running) return run.project === current ? "Judge all is running." : "Judge all is running in another project.";
+  if (!signedIn) return "Sign in to judge.";
+  if (!keySet) return "Add your Jev key in Settings.";
   const tools = onTools(rubrics, current);
   if (!tools.length) return "Switch on a tool to judge.";
   if (!tools.some((t) => t.questions.some(askable))) return "Add a question to a tool to judge.";
@@ -169,7 +170,7 @@ const shownHas = (context, id) => rows(context.cases, context.current).some((c) 
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) =>
-      Promise.all(["projects", "cases", "rubrics", "decisions"].map((target) => input.ask(target, "read", {}))),
+      Promise.all(["projects", "cases", "rubrics", "decisions", "llm"].map((target) => input.ask(target, "read", {}))),
     ),
   },
 }).createMachine({
@@ -181,12 +182,13 @@ export const machine = setup({
       "for the tools that are on, with a tick or a cross once Jev's answers are in: a tick when " +
       "every right answer matches. Judge all, above the list, judges every case with the tools " +
       "that are on and shows the Results tab, and a line under it says \"Judging 3 of 18…\" " +
-      "while it runs; it is greyed out while a run is going or no tool is on, and the line beside " +
+      "while it runs; it is greyed out while a run is going, when no tool is on, and when the user " +
+      "is signed out or has no Jev key, and the line beside " +
       "it says why. A line says cases are kept on this device.",
     kind: "view",
     emits: ["case.selected", "judging.requested", "results.selected"],
     attributes: [],
-    asks: ["projects: read", "cases: read", "rubrics: read", "decisions: read"],
+    asks: ["projects: read", "cases: read", "rubrics: read", "decisions: read", "llm: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -197,6 +199,8 @@ export const machine = setup({
     rubrics: [],
     decisions: [],
     run: null,
+    signedIn: false,
+    keySet: false,
     draft: input.mint(),
   }),
   initial: "loading",
@@ -213,8 +217,10 @@ export const machine = setup({
             },
             target: "ready",
             actions: assign(({ context, event }) => {
-              const [p, c, r, d] = event.output;
+              const [p, c, r, d, l] = event.output;
               return {
+                signedIn: l?.signedIn === true,
+                keySet: l?.jev?.keySet === true,
                 current: p.current,
                 cases: c.cases,
                 open: c.open,
@@ -260,5 +266,6 @@ export const machine = setup({
     },
     "rubric.changed": { actions: assign(({ event }) => ({ rubrics: event.rubrics })) },
     "decision.changed": { actions: assign(({ event }) => ({ decisions: event.decisions, run: event.run })) },
+    "llm.changed": { actions: assign(({ event }) => ({ signedIn: event.signedIn === true, keySet: event.jev?.keySet === true })) },
   },
 });

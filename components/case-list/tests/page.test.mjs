@@ -68,7 +68,6 @@ for (const engine of ENGINES) {
         const list = await cases(page);
         assert.equal(list.length, 18);
         assert.deepEqual(list[0], { name: "To have a big house.", sub: "Right answer: Goal", mark: null, open: true });
-        assert.equal(await page.locator("case-list .run .hint").textContent(), "18 cases, 1 tool on");
         assert.equal(await page.locator("case-list .foot").textContent(), "Cases are kept on this device.");
         assert.deepEqual(problems, []);
       } finally {
@@ -76,18 +75,15 @@ for (const engine of ENGINES) {
       }
     });
 
-    test("signed out, Judge all stops and says to sign in", async () => {
+    test("signed out, Judge all is greyed out and says to sign in", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
         const page = await context.newPage();
         const problems = watch(page);
         await open(page);
-        await page.locator("case-list .judge").click();
-        const error = page.locator("case-list .error");
-        await error.waitFor();
-        assert.equal(await error.textContent(), "Sign in to judge.");
-        assert.ok(await page.locator("case-list .judge").isEnabled(), "Judge all can be pressed again once signed in");
+        await until(async () => (await page.locator("case-list .run .hint").textContent()) === "Sign in to judge.");
+        assert.ok(await page.locator("case-list .judge").isDisabled());
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -115,6 +111,7 @@ for (const engine of ENGINES) {
         const page = await context.newPage();
         const problems = watch(page);
         await open(page);
+        await until(async () => (await page.locator("case-list .run .hint").textContent()) === "18 cases, 1 tool on");
         await page.locator("case-list .judge").click();
         await page.locator("case-list .progress").waitFor();
         assert.match(await page.locator("case-list .progress span").textContent(), /^Judging \d+ of 18…$/);

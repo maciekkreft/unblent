@@ -2,13 +2,30 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { rows, onTools, firstLine, answersLine, verdict } from "../machine.js";
 
-// The kit (10): the list and its four facts, real machines on the real bus. Jev is
-// decisions' own input, faked here: it picks the right option for every seed case but
-// two, the misses the Results tab shows.
+// The kit (10): the list and its five facts, real machines on the real bus. llm's server
+// is faked through its inputs, signed in with a key saved; Jev is decisions' own input,
+// faked here: it picks the right option for every seed case but two, the misses the
+// Results tab shows.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
 
 const fact = () => ({ stored: null, save: () => {} });
+const PICTURE = {
+  provider: "echo",
+  providers: [{ id: "echo", label: "Echo", keySet: true, needsKey: false }],
+  model: "echo",
+  models: [{ id: "echo", label: "Echo" }],
+  effort: "default",
+  efforts: ["default"],
+  ttl: "1h",
+  jev: { keySet: true },
+};
+const llm = {
+  session: () => Promise.resolve({ userId: "u1", registrationOpen: true }),
+  read: () => Promise.resolve(PICTURE),
+  save: () => Promise.resolve(PICTURE),
+  stream: () => () => {},
+};
 const MISSES = { "To be warm, friendly, outgoing, supportive and genuine.": "Goal", "What time does the train leave?": "Value" };
 
 test("the seed cases list with their right answers, and Judge all marks 16 right and 2 wrong", async () => {
@@ -28,7 +45,8 @@ test("the seed cases list with their right answers, and Judge all marks 16 right
       ms: 1,
     };
   };
-  const { actors, unwire } = await wire(["projects", "rubrics", "cases", "decisions", "case-list"], {
+  const { actors, unwire } = await wire(["llm", "projects", "rubrics", "cases", "decisions", "case-list"], {
+    llm,
     projects: fact(),
     rubrics: fact(),
     cases: fact(),
@@ -38,7 +56,7 @@ test("the seed cases list with their right answers, and Judge all marks 16 right
   try {
     const list = actors["case-list"];
     const ctx = () => list.getSnapshot().context;
-    await until(() => list.getSnapshot().matches("ready"));
+    await until(() => list.getSnapshot().matches("ready") && ctx().signedIn && ctx().keySet);
     const shown = () => rows(ctx().cases, ctx().current);
     const tools = () => onTools(ctx().rubrics, ctx().current);
     assert.equal(shown().length, 18);

@@ -107,15 +107,27 @@ const adopt = (layout, views, narrow) => (isEmpty(layout) ? seed(views, narrow) 
 
 // The layout with every view that declared `shows-on` this event (6.4) brought
 // forward where it sits: a docked view shown on its side, unfolded, as _activate
-// does; a stage tab staged.
+// does; a stage tab staged. On a narrow desk an open left or right side is a drawer
+// over the stage, so staging a view folds the drawers this gesture did not open: a
+// case picked in the Cases drawer shows the case.
 const shown = (context, type) => {
   let { stage, docks } = context;
+  let staged = false;
+  const opened = new Set();
   for (const v of context.views) {
     if (v.showsOn !== type) continue;
     const s = sideOf(docks, v.name);
-    if (s) docks = { ...docks, [s]: { ...docks[s], open: true, active: v.name } };
-    else stage = v.name;
+    if (s) {
+      docks = { ...docks, [s]: { ...docks[s], open: true, active: v.name } };
+      opened.add(s);
+    } else {
+      stage = v.name;
+      staged = true;
+    }
   }
+  if (staged && context.narrow())
+    for (const s of ["left", "right"])
+      if (docks[s]?.open && !opened.has(s)) docks = { ...docks, [s]: { ...docks[s], open: false } };
   return { stage, docks };
 };
 
@@ -126,7 +138,7 @@ const showsMore = ({ context, event }) => {
   return SIDES.some((s) => {
     const was = context.docks[s];
     const now = next.docks[s];
-    return now && (!was.open || (was.active ?? was.views[0]) !== now.active);
+    return now && (was.open !== now.open || (now.open && (was.active ?? was.views[0]) !== (now.active ?? now.views[0])));
   });
 };
 
@@ -194,7 +206,8 @@ export const machine = setup({
       "arrives, and is never saved (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
       "`note.selected`, `conversation.selected`, `case.selected`, `results.selected`), which " +
-      "shows that child's tab when the gesture arrives, the same as a click, while a reload or " +
+      "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
+      "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
       "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. The tab of " +
