@@ -1,7 +1,7 @@
 {
   "payload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Ask Jev (typesafe.ai's System One model) yes/no questions about one state, all in one request. Each question's yes and no are its criteria; an empty or missing one leaves the criteria out.",
+    "description": "Ask Jev (typesafe.ai's System One model) questions about one state, all in one request. A yesno question, the default, asks how likely the answer is yes; its yes and no are its criteria, and an empty or missing one leaves the criteria out. A pick question asks Jev to pick one of its options; each option's description is its criterion, and an empty or missing one leaves it out. Option names within a question must differ, because Jev knows an option by its name.",
     "type": "object",
     "properties": {
       "state": { "type": "object", "description": "What the questions are about, any JSON object." },
@@ -14,7 +14,24 @@
             "id": { "type": "string", "description": "The asker's own id; the answer comes back under it." },
             "instructions": { "type": "string" },
             "yes": { "type": "string" },
-            "no": { "type": "string" }
+            "no": { "type": "string" },
+            "kind": { "enum": ["yesno", "pick"], "description": "yesno when absent." },
+            "options": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 255,
+              "description": "The options of a pick question.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "description": "The asker's own id; the pick comes back under it." },
+                  "name": { "type": "string", "minLength": 1, "description": "The option as Jev is offered it." },
+                  "description": { "type": "string", "description": "What the option means." }
+                },
+                "required": ["id", "name"],
+                "additionalProperties": false
+              }
+            }
           },
           "required": ["id", "instructions"],
           "additionalProperties": false
@@ -26,7 +43,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Jev's answers, each the probability the answer is yes, with the request's input tokens and time; or an error.",
+    "description": "Jev's answers, with the request's input tokens and time; or an error. For a yesno question p is the probability the answer is yes. For a pick question choice is the id of the option Jev picked, p its probability, probabilities the probability of every option, and confidence how sure Jev is, from how the probabilities are spread.",
     "oneOf": [
       {
         "type": "object",
@@ -37,7 +54,22 @@
               "type": "object",
               "properties": {
                 "id": { "type": "string" },
-                "p": { "type": "number", "minimum": 0, "maximum": 1 }
+                "p": { "type": "number", "minimum": 0, "maximum": 1 },
+                "choice": { "type": "string", "description": "For a pick question, the id of the option Jev picked." },
+                "probabilities": {
+                  "type": "array",
+                  "description": "For a pick question, every option's probability, by option id.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "p": { "type": "number", "minimum": 0, "maximum": 1 }
+                    },
+                    "required": ["id", "p"],
+                    "additionalProperties": false
+                  }
+                },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1, "description": "For a pick question, how sure Jev is." }
               },
               "required": ["id", "p"],
               "additionalProperties": false

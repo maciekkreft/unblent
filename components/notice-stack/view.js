@@ -3,6 +3,8 @@ import { mount, unmount } from "bus";
 import { icon } from "icons";
 import { machine } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
+import undone from "./events/removal.undone.json" with { type: "json" };
+import settled from "./events/removal.settled.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's fade
 // window; the token is the one clock, shared with the timer bar's animation.
@@ -67,7 +69,7 @@ class ActorController {
     const fadeMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: { fadeMs },
-      events: { "note.saved": saved },
+      events: { "note.saved": saved, "removal.undone": undone, "removal.settled": settled },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user pressed Judge or Judge all: the cases to judge, in order, and the tools that are on, as they were at that moment. Questions and options being removed are left out.",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "rubrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "description": "One question of the tool.",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "kind": {
+                  "enum": [
+                    "yesno",
+                    "pick"
+                  ],
+                  "description": "yesno: Jev says how likely the answer is yes. pick: Jev picks one of the options."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The question, as Jev is asked it."
+                },
+                "yes": {
+                  "type": "string",
+                  "description": "What yes means, for a yesno question; empty for none."
+                },
+                "no": {
+                  "type": "string",
+                  "description": "What no means, for a yesno question; empty for none."
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "One option of a pick question.",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "The option as Jev is offered it and as the user sees it."
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "What the option means; empty for none."
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "description"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "The options of a pick question; kept while the question is yesno, so switching back loses nothing."
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "text",
+                "yes",
+                "no",
+                "options"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "questions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "project",
+    "cases",
+    "rubrics"
+  ],
+  "additionalProperties": false
+}

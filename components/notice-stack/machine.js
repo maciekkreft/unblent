@@ -81,7 +81,7 @@ export const machine = setup({}).createMachine({
       "the user's copy again, because `notes` otherwise keeps the server's copy. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
       "because `notes` does not keep conflicts.",
-    kind: "view", emits: ["note.saved"], attributes: [], asks: [],
+    kind: "view", emits: ["note.saved", "removal.undone", "removal.settled"], attributes: [], asks: [],
   },
   context: ({ input }) => ({
     // How long a passing notice stays (the --duration-undo token, read in the view
@@ -96,6 +96,8 @@ export const machine = setup({}).createMachine({
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "note.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    // Planned (9, step 1): the Undo notice, built with Judge; until then it does nothing.
+    "removal.started": { actions: () => {} },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and
     // says so. notes emits note.conflicted before note.deleted, so the notice exists.

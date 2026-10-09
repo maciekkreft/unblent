@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user asked to see the results, by pressing Judge all.",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": false
+}

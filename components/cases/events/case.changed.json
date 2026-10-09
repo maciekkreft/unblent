@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The cases changed: every case of every project and the open case of each, every time anything changed.",
+  "type": "object",
+  "properties": {
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "description": "One case: a text and its right answers.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "project": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "text": {
+            "type": "string",
+            "description": "The text Jev judges."
+          },
+          "answers": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "yes",
+                    "no"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                }
+              ],
+              "description": "yes or no for a yesno question, or the id of an option for a pick question."
+            },
+            "description": "The right answers, keyed by question id. A question with no right answer has no key."
+          },
+          "removing": {
+            "type": "boolean",
+            "description": "True while its deletion can still be undone."
+          }
+        },
+        "required": [
+          "id",
+          "project",
+          "text",
+          "answers",
+          "removing"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "open": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "description": "The case open in each project, keyed by project id. It may name a new case not saved yet."
+    }
+  },
+  "required": [
+    "cases",
+    "open"
+  ],
+  "additionalProperties": false
+}

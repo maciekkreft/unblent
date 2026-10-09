@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The undo window ran out, or the user dismissed the notice: the thing is gone.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "enum": [
+        "project",
+        "rubric",
+        "question",
+        "option",
+        "case"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    }
+  },
+  "required": [
+    "kind",
+    "id"
+  ],
+  "additionalProperties": false
+}

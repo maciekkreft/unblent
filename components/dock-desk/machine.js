@@ -391,6 +391,10 @@ export const machine = setup({
     },
   },
   on: {
+    // Planned (9, step 1): followed once case-list and decision-results are built; until
+    // then they do nothing.
+    "case.selected": { actions: () => {} },
+    "results.selected": { actions: () => {} },
     // The fact's news (4.3, fourth rule): adopt it whoever caused the change. The
     // only place the layout is assigned once ready.
     "dock.changed": {

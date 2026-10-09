@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user picked a tool in the list, or New tool (a fresh id no tool has yet): the editor that follows opens it.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+}

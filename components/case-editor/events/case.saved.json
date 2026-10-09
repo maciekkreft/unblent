@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user edited a case: its whole text and right answers. A new id adds it to its project.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "project": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "text": {
+      "type": "string"
+    },
+    "answers": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "enum": [
+              "yes",
+              "no"
+            ]
+          },
+          {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        ],
+        "description": "yes or no for a yesno question, or the id of an option for a pick question."
+      },
+      "description": "The right answers, keyed by question id. A question with no right answer has no key."
+    }
+  },
+  "required": [
+    "id",
+    "project",
+    "text",
+    "answers"
+  ],
+  "additionalProperties": false
+}

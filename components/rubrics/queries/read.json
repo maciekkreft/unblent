@@ -1,0 +1,139 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every tool of every project.",
+    "type": "object",
+    "properties": {
+      "rubrics": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "description": "One tool (a rubric): a name and its questions.",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "project": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "name": {
+              "type": "string"
+            },
+            "on": {
+              "type": "boolean",
+              "description": "Whether Judge uses this tool."
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "description": "One question of the tool.",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                  },
+                  "kind": {
+                    "enum": [
+                      "yesno",
+                      "pick"
+                    ],
+                    "description": "yesno: Jev says how likely the answer is yes. pick: Jev picks one of the options."
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "The question, as Jev is asked it."
+                  },
+                  "yes": {
+                    "type": "string",
+                    "description": "What yes means, for a yesno question; empty for none."
+                  },
+                  "no": {
+                    "type": "string",
+                    "description": "What no means, for a yesno question; empty for none."
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "One option of a pick question.",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The option as Jev is offered it and as the user sees it."
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "What the option means; empty for none."
+                        },
+                        "removing": {
+                          "type": "boolean",
+                          "description": "True while its removal can still be undone."
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "description",
+                        "removing"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "description": "The options of a pick question; kept while the question is yesno, so switching back loses nothing."
+                  },
+                  "removing": {
+                    "type": "boolean",
+                    "description": "True while its removal can still be undone."
+                  }
+                },
+                "required": [
+                  "id",
+                  "kind",
+                  "text",
+                  "yes",
+                  "no",
+                  "options",
+                  "removing"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "removing": {
+              "type": "boolean",
+              "description": "True while its deletion can still be undone."
+            }
+          },
+          "required": [
+            "id",
+            "project",
+            "name",
+            "on",
+            "questions",
+            "removing"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "rubrics"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "rubric.changed"
+  ]
+}

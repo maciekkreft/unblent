@@ -57,6 +57,8 @@ export const machine = setup({}).createMachine({
         "conversation.selected": select,
         "highlights.selected": select,
         "gauge.selected": select,
+        // Planned (9, step 1): followed once rubric-list is built; until then it does nothing.
+        "rubric.selected": { actions: () => {} },
         // Leading underscore (7.2): a user gesture forwarded by the view, an internal
         // message the bus never routes.
         _back: { actions: assign({ shown: null }) },
