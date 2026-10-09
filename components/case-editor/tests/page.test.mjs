@@ -95,6 +95,20 @@ for (const engine of ENGINES) {
       assert.equal((await row(page, "To travel the world.").locator(".sub").textContent()).trim(), "Right answer: Goal");
     });
 
+    run("a right answer picked by hand still shows after opening another case and coming back", async (page) => {
+      await open(page);
+      await page.locator("case-list .row.new").click();
+      await until(async () => (await text(page).inputValue()) === "");
+      await text(page).fill("To travel the world.");
+      await menu(page).selectOption({ label: "Goal" });
+      await until(async () => (await row(page, "To travel the world.").count()) === 1);
+      await row(page, "What time does the train leave?").click();
+      await until(async () => (await menu(page).locator("option:checked").textContent()) === "Other");
+      await row(page, "To travel the world.").click();
+      await until(async () => (await text(page).inputValue()) === "To travel the world.");
+      assert.equal(await menu(page).locator("option:checked").textContent(), "Goal");
+    });
+
     run("Judge shows the pick, how sure Jev is, and a tick for the right answer", async (page, context) => {
       await judgeable(context);
       await open(page);

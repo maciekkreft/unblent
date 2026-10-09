@@ -445,6 +445,9 @@ class CaseEditor extends LitElement {
     `;
   }
 
+  // The property, not the attribute: once the user has picked an option by hand, the
+  // browser ignores that option's selected attribute, so a case opened later would show
+  // the wrong right answer.
   #menu(m) {
     return html`
       <div class="answer">
@@ -454,8 +457,8 @@ class CaseEditor extends LitElement {
           data-id=${m.id}
           @change=${(e) => this.#send({ type: "_answer", id: m.id, value: e.target.value })}
         >
-          <option value="" ?selected=${m.value === ""}>No right answer</option>
-          ${m.choices.map((c) => html`<option value=${c.value} ?selected=${m.value === c.value}>${c.label}</option>`)}
+          <option value="" .selected=${m.value === ""}>No right answer</option>
+          ${m.choices.map((c) => html`<option value=${c.value} .selected=${m.value === c.value}>${c.label}</option>`)}
         </select>
       </div>
     `;
