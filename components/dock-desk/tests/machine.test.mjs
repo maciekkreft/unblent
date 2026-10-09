@@ -433,6 +433,33 @@ test("a chat picked shows its tab on its side (6.4)", async () => {
   ]);
 });
 
+// The Judge page: a case picked in Cases brings the Case tab forward, and Judge all the
+// Results tab.
+const JUDGE = [
+  { name: "case-list", label: "Cases", side: "left" },
+  { name: "case-editor", label: "Case", showsOn: "case.selected" },
+  { name: "decision-results", label: "Results", showsOn: "results.selected" },
+];
+
+test("a case picked stages the case, and Judge all stages the results (6.4)", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "decision-results", docks: { left: { open: true, views: ["case-list"] } } }),
+    { views: JUDGE },
+  );
+  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
+  actor.send({ type: "dock.changed", stage: "case-editor", docks: { left: { open: true, views: ["case-list"] } } });
+  actor.send({ type: "results.selected" });
+  assert.deepEqual(emitted.map((e) => e.stage), ["case-editor", "decision-results"]);
+});
+
+test("in failed, a case picked and Judge all stage their views (6.4)", async () => {
+  const { actor } = await settle(stored({ error: "unavailable" }), { views: JUDGE });
+  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
+  assert.equal(actor.getSnapshot().context.stage, "case-editor");
+  actor.send({ type: "results.selected" });
+  assert.equal(actor.getSnapshot().context.stage, "decision-results");
+});
+
 test("in failed, _open switches the stage locally", async () => {
   const { actor, emitted } = await settle(stored({ error: "unavailable" }));
   actor.send({ type: "_open", name: "trace-list" });

@@ -193,9 +193,9 @@ export const machine = setup({
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
       "arrives, and is never saved (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
-      "`note.selected`, `conversation.selected`), which shows that child's tab when the gesture " +
-      "arrives, the same as a click, while a reload or another device's change never moves a " +
-      "tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
+      "`note.selected`, `conversation.selected`, `case.selected`, `results.selected`), which " +
+      "shows that child's tab when the gesture arrives, the same as a click, while a reload or " +
+      "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. The tab of " +
       "the view that shows the subject carries a mark with the subject's title as its hover " +
@@ -366,6 +366,8 @@ export const machine = setup({
         "book.selected": show,
         "note.selected": show,
         "conversation.selected": show,
+        "case.selected": show,
+        "results.selected": show,
       },
     },
     // No dock fact on the page: the desk still works as a plain tab switcher, so
@@ -387,14 +389,12 @@ export const machine = setup({
         "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "case.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "results.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },
     },
   },
   on: {
-    // Planned (9, step 1): followed once case-list and decision-results are built; until
-    // then they do nothing.
-    "case.selected": { actions: () => {} },
-    "results.selected": { actions: () => {} },
     // The fact's news (4.3, fourth rule): adopt it whoever caused the change. The
     // only place the layout is assigned once ready.
     "dock.changed": {
