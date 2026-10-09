@@ -6,8 +6,8 @@ SQLite file, so isolation holds by construction.
 
 Routes: GET "" returns the account's picture (without signedIn, which the browser
 adds); PUT "" changes settings and the keys; POST "/complete" streams one answer as
-newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no questions and
-returns its answers. A request body that fails validation is answered
+newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
+questions and returns its answers. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
 """
 
@@ -230,6 +230,22 @@ def _jev_key(user_id: str) -> str | None:
         return _key(connection, "jev")
 
 
+def _options_ok(options) -> bool:
+    # Jev takes at most 255 options and knows each by its name, so names must be
+    # non-empty and differ within a question (decide.json).
+    if not isinstance(options, list) or not 2 <= len(options) <= 255:
+        return False
+    names = set()
+    for o in options:
+        if not isinstance(o, dict) or not isinstance(o.get("id"), str):
+            return False
+        name, description = o.get("name"), o.get("description", "")
+        if not isinstance(name, str) or not name or name in names or not isinstance(description, str):
+            return False
+        names.add(name)
+    return True
+
+
 def _decide_body(body) -> tuple[dict, list] | None:
     if not isinstance(body, dict) or not isinstance(body.get("state"), dict):
         return None
@@ -240,6 +256,12 @@ def _decide_body(body) -> tuple[dict, list] | None:
         if not isinstance(q, dict) or not isinstance(q.get("id"), str) or not isinstance(q.get("instructions"), str):
             return None
         if not all(isinstance(q.get(side, ""), str) for side in ("yes", "no")):
+            return None
+        kind = q.get("kind", "yesno")
+        if kind == "pick":
+            if not _options_ok(q.get("options")):
+                return None
+        elif kind != "yesno" or "options" in q:
             return None
     return body["state"], questions
 

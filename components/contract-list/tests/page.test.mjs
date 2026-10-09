@@ -111,10 +111,8 @@ for (const engine of ENGINES) {
       assert.ok(nav.includes("Contracts"), `page-nav lists Contracts, got ${nav.join(", ")}`);
 
       mkdirSync(SCREENSHOTS, { recursive: true });
-      await page.screenshot({
-        path: resolve(SCREENSHOTS, `contracts-${engine.name}.png`),
-        fullPage: true,
-      });
+      // The first screen only: the whole vocabulary is taller than an engine can capture.
+      await page.screenshot({ path: resolve(SCREENSHOTS, `contracts-${engine.name}.png`) });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();

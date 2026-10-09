@@ -598,6 +598,9 @@ The architecture document describes the rules; the checks are what make them rea
 - **Turn**: one message in a chat, immutable once finished — a user turn (text, and any results answering the tool calls before it) or an assistant turn (text, a status, and any tool calls).
 - **Start**: the general instructions a chat begins with, written once when it is created and never changed (see `conversations`).
 - **Tool**: one of the system's own queries, opted in by its owner, that the model may ask during a chat; it only reads, never acts (7.7).
+- **Tool (in Judge)**: a name and a list of questions Jev answers about a case, switched on or off for judging, kept per project. It is stored as a *rubric*, owned by `rubrics`, because "Tool" already names a chat lookup (7.7).
+- **Case**: a text kept in a Judge project for Jev to judge, with the right answers the user expects, one per question at most: yes or no for a yes / no question, or one option for a pick-one question. It is owned by `cases`.
+- **Project**: a named set of Judge tools, cases and results, kept on this device. One project is the current one, and there is always at least one. It is owned by `projects`.
 
 ---
 

@@ -182,3 +182,15 @@ test("decide needs a user, replies no-key without a key, and refuses a bad body 
   assert.equal((await decide({ state: "text", questions: [] }, cookie)).status, 400);
   assert.equal((await decide({ state: {}, questions: [{ id: 1, instructions: "x" }] }, cookie)).status, 400);
 });
+
+test("decide refuses a pick question with too few or too many options, an empty name, or two of one name", async () => {
+  const cookie = cookieFor(freshUser());
+  const pick = (options) => ({ state: {}, questions: [{ id: "q", kind: "pick", instructions: "Which?", options }] });
+  const option = (n, name = `o${n}`) => ({ id: `o${n}`, name });
+  const many = (count) => Array.from({ length: count }, (_, n) => option(n));
+  for (const options of [many(1), many(256), [option(0, ""), option(1)], [option(0, "Same"), option(1, "Same")]]) {
+    assert.equal((await decide(pick(options), cookie)).status, 400);
+  }
+  // A well-formed pick question gets past validation and stops at the missing key.
+  assert.deepEqual(await (await decide(pick(many(255)), cookie)).json(), { error: "no-key" });
+});

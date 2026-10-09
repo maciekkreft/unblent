@@ -1,0 +1,19 @@
+{
+  "model": "jev-1.13.0",
+  "answers": {
+    "kind": {
+      "type": "choice",
+      "choice": "Goal",
+      "confidence": 1.0,
+      "probabilities": {
+        "Goal": 1.0,
+        "Value": 0.0,
+        "Other": 0.0
+      }
+    }
+  },
+  "usage": {
+    "input_tokens": 358,
+    "output_tokens": 38
+  }
+}
