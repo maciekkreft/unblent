@@ -11,13 +11,19 @@ import { setup, enqueueActions, fromPromise } from "xstate";
 // asked, so staleness is decided from the next event alone, without a starting read of
 // cases or rubrics. The store, the ask and the clock arrive through `input`, so the
 // machine is a pure definition importable in Node.
+//
+// case-journal emits passages.requested with the finished pieces of the open case. Their
+// answers are kept by the piece's text and not by case, so a sentence judged once is not
+// sent again from any case while its questions stay the same. Pieces share llm: decide
+// with the runs, so they wait in a queue behind a run, and a run waits for the one piece
+// being asked.
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
 const unit = (v) => typeof v === "number" && v >= 0 && v <= 1;
 
-// The envelope's format; a newer shape would bump it.
-export const VERSION = 1;
+// The envelope's format; a newer shape would bump it. Version 1 had no passages.
+export const VERSION = 2;
 
 const REASONS = ["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable"];
 
@@ -98,6 +104,11 @@ export const fresh = (d, cases, rubrics) => {
     const c = cases.find((x) => x.id === d.case);
     if (!c || c.text !== d.text) return null;
   }
+  return freshTool(d, rubrics);
+};
+
+// The tool half of fresh, shared by a case's decision and a piece's answer.
+const freshTool = (d, rubrics) => {
   if (!rubrics) return d;
   const r = rubrics.find((x) => x.id === d.rubric);
   if (!r) return null;
@@ -113,6 +124,34 @@ export const fresh = (d, cases, rubrics) => {
 
 export const prune = (decisions, cases, rubrics) =>
   decisions.map((d) => fresh(d, cases, rubrics)).filter(Boolean);
+
+// A piece's text still says something while some case, even one pending removal (so
+// Undo finds it), still holds it; cases null when not known yet.
+const written = (text, cases) => !cases || cases.some((c) => c.text.includes(text));
+
+// The stored answers for pieces, as `prune` does for cases' decisions.
+export const prunePassages = (passages, cases, rubrics) =>
+  passages.filter((p) => written(p.text, cases)).map((p) => freshTool(p, rubrics)).filter(Boolean);
+
+// A piece needs no request when every askable question of every requested tool has an
+// answer asked as it is now. The request leaves pending options out, so its own
+// signature is the one to match.
+export const answeredPiece = (passages, text, rubrics) =>
+  rubrics.every((r) =>
+    r.questions.filter(askable).every((q) =>
+      passages.some((p) => p.text === text && p.rubric === r.id && p.asked[q.id] === signature(q)),
+    ),
+  );
+
+// Jev's reply for one piece, as one stored answer per tool.
+const passagesOf = (text, rubrics, answers, at) =>
+  decisionsOf({ id: null, text }, rubrics, answers, at).map(({ case: _, ...p }) => p);
+
+const replacePassages = (passages, added) => {
+  const key = (p) => `${p.rubric}/${p.text}`;
+  const keys = new Set(added.map(key));
+  return [...passages.filter((p) => !keys.has(key(p))), ...added];
+};
 
 // Puts each new decision in place of the one for the same case and tool.
 const replace = (decisions, added) => {
@@ -137,6 +176,19 @@ const storedDecision = (d) =>
     ? { case: d.case, rubric: d.rubric, at: d.at, answers: d.answers.map((a) => answerOf(a, a.id)), text: d.text, asked: d.asked }
     : null;
 
+const storedPassage = (p) =>
+  p &&
+  typeof p.text === "string" &&
+  isId(p.rubric) &&
+  Number.isInteger(p.at) &&
+  p.asked &&
+  typeof p.asked === "object" &&
+  Array.isArray(p.answers) &&
+  p.answers.length > 0 &&
+  p.answers.every(answerValid)
+    ? { text: p.text, rubric: p.rubric, at: p.at, answers: p.answers.map((a) => answerOf(a, a.id)), asked: p.asked }
+    : null;
+
 const storedRun = (r) =>
   r && isId(r.project) && Array.isArray(r.cases) && r.cases.every(isId) && Number.isInteger(r.done)
     ? {
@@ -149,14 +201,19 @@ const storedRun = (r) =>
       }
     : null;
 
-// What the store held, as { decisions, run }; empty when nothing is stored or it does not parse.
+// What the store held, as { decisions, run, passages }; empty when nothing is stored or
+// it does not parse. A version-1 store has no passages and reads with none.
 export const parse = (stored) => {
-  const empty = { decisions: [], run: null };
+  const empty = { decisions: [], run: null, passages: [] };
   if (stored == null || stored === "") return empty;
   try {
     const value = JSON.parse(stored);
     if (!Array.isArray(value?.decisions)) return empty;
-    return { decisions: value.decisions.map(storedDecision).filter(Boolean), run: storedRun(value.run) };
+    return {
+      decisions: value.decisions.map(storedDecision).filter(Boolean),
+      run: storedRun(value.run),
+      passages: Array.isArray(value.passages) ? value.passages.map(storedPassage).filter(Boolean) : [],
+    };
   } catch {
     return empty;
   }
@@ -167,9 +224,18 @@ export const parse = (stored) => {
 export const body = (context) => ({
   decisions: context.decisions.map(({ text, asked, ...d }) => d),
   run: context.run,
+  passages: {
+    answers: context.passages.map(({ asked, ...p }) => p),
+    waiting: [...(context.asking ? [context.asking.text] : []), ...context.queue.map((q) => q.text)],
+    error: context.passageError,
+  },
 });
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// The queue and the passage error are not stored: a reload asks again for what the
+// journal still shows, as a run that was going stops where it got to.
+const envelope = (c) => JSON.stringify({ version: VERSION, decisions: c.decisions, run: c.run, passages: c.passages });
 
 // Each change is saved and announced whole; one that changes nothing stores and emits
 // nothing, though the cases and tools it heard of are still remembered.
@@ -179,25 +245,63 @@ const commit = (next) => ({
     // A function, because an object's function values (ask, save, now) would be read
     // by XState as property assigners and called.
     enqueue.assign(() => n);
-    if (same(n.decisions, context.decisions) && same(n.run, context.run)) return;
-    enqueue(() => context.save(JSON.stringify({ version: VERSION, decisions: n.decisions, run: n.run })));
-    enqueue.emit({ type: "decision.changed", ...body(n) });
+    const stored = envelope(n);
+    if (stored !== envelope(context)) enqueue(() => context.save(stored));
+    if (!same(body(n), body(context))) enqueue.emit({ type: "decision.changed", ...body(n) });
   }),
 });
 
 // The cases and tools as last announced, kept in memory so a case edited while its
 // answers were on the way is caught when they land.
+// The piece being asked stays: its answer is measured against the cases when it lands.
 const caseChanged = (context, { cases }) => ({
   ...context,
   cases,
   decisions: prune(context.decisions, cases, context.rubrics),
+  passages: prunePassages(context.passages, cases, context.rubrics),
+  queue: context.queue.filter((q) => written(q.text, cases)),
 });
 
 const rubricChanged = (context, { rubrics }) => ({
   ...context,
   rubrics,
   decisions: prune(context.decisions, context.cases, rubrics),
+  passages: prunePassages(context.passages, context.cases, rubrics),
 });
+
+// Queues each piece not answered for every requested tool and not already waiting. A
+// piece already waiting takes the newer tools, which are what the user now has on; the
+// one being asked keeps its own. A request clears the last error, so the queue resumes.
+const requested = (context, { rubrics, passages }) => {
+  // Nothing askable: llm: decide would refuse it, so say so with decide's own reason.
+  if (!payload("", rubrics).questions.length) return { ...context, passageError: "invalid" };
+  const queue = [...context.queue];
+  for (const text of passages) {
+    if (context.asking?.text === text) continue;
+    const i = queue.findIndex((q) => q.text === text);
+    if (i >= 0) queue[i] = { text, rubrics };
+    else if (!answeredPiece(context.passages, text, rubrics)) queue.push({ text, rubrics });
+  }
+  return { ...context, queue, passageError: null };
+};
+
+const take = (context) => ({ ...context, asking: context.queue[0], queue: context.queue.slice(1) });
+
+const pieceAnswered = (context, { output }) => {
+  const added = passagesOf(context.asking.text, context.asking.rubrics, output.answers, context.now());
+  return {
+    ...context,
+    passages: prunePassages(replacePassages(context.passages, added), context.cases, context.rubrics),
+    asking: null,
+  };
+};
+
+// An error stops the queue and keeps the reason; the pieces left go back to the journal,
+// which asks for them again with its next request.
+const pieceFailed = (error) => (context) => ({ ...context, asking: null, queue: [], passageError: error });
+
+// A Judge pressed while a piece was asked starts now, from the snapshot it was pressed with.
+const beginPending = (context) => begin({ ...context, pending: null }, context.pending);
 
 const current = (context) => context.snapshot.cases[context.run.done];
 const asking = (context) => payload(current(context).text, context.snapshot.rubrics);
@@ -246,7 +350,10 @@ export const machine = setup({
       "because they no longer say anything about what is written, and with the case or tool " +
       "they belong to once it is gone. For a yes / no question an answer is how likely yes is; " +
       "for a pick-one question it is the option Jev picked, how likely each option is, and how " +
-      "sure Jev is.",
+      "sure Jev is. Pieces of a case's text, sentences or paragraphs from the Journal tab, are " +
+      "asked one at a time between runs and kept by their text, so a piece already judged in " +
+      "any case is not sent again while its questions stay the same; a piece's answers are " +
+      "dropped once no case holds its text.",
     kind: "fact",
     shape: "local-only",
     owns: "Jev's latest answers for each case and tool, and the latest run",
@@ -263,10 +370,27 @@ export const machine = setup({
     rubrics: null,
     // The cases and tools of the run that is going, as they were requested.
     snapshot: null,
+    // Pieces waiting for Jev, each with the tools it was requested with; the one being
+    // asked; and why the last piece could not be judged.
+    queue: [],
+    asking: null,
+    passageError: null,
+    // A judging.requested that arrived while a piece was asked.
+    pending: null,
   }),
   initial: "idle",
   states: {
     idle: {
+      always: [
+        {
+          guard: ({ context }) =>
+            context.pending != null && payload(context.pending.cases[0].text, context.pending.rubrics).questions.length > 0,
+          target: "judging",
+          ...commit(beginPending),
+        },
+        { guard: ({ context }) => context.pending != null, ...commit(beginPending) },
+        { guard: ({ context }) => context.queue.length > 0, target: "passage", ...commit(take) },
+      ],
       on: {
         "judging.requested": [
           {
@@ -297,8 +421,24 @@ export const machine = setup({
         onError: { target: "idle", ...commit(failed("unavailable")) },
       },
     },
+    // One piece asked; idle then starts a waiting run first, then the next piece.
+    passage: {
+      invoke: {
+        src: "decide",
+        input: ({ context }) => ({ ask: context.ask, payload: payload(context.asking.text, context.asking.rubrics) }),
+        onDone: [
+          { guard: answered, target: "idle", ...commit(pieceAnswered) },
+          { target: "idle", ...commit((context, event) => pieceFailed(reason(event.output?.error))(context)) },
+        ],
+        onError: { target: "idle", ...commit(pieceFailed("unavailable")) },
+      },
+      on: {
+        "judging.requested": commit((context, event) => ({ ...context, pending: event })),
+      },
+    },
   },
   on: {
+    "passages.requested": commit(requested),
     "case.changed": commit(caseChanged),
     "rubric.changed": commit(rubricChanged),
     "read?": { actions: ({ context, event }) => event.reply(body(context)) },

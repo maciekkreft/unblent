@@ -102,3 +102,40 @@ test("Judge all asks llm one case at a time, never busy, with a payload decide a
     unwire();
   }
 });
+
+test("pieces and a run share llm: never two decides open, the run first once a piece is answered", async () => {
+  const sent = [];
+  let open = 0;
+  let most = 0;
+  const { actors, records, unwire } = await wire(["llm", "decisions"], {
+    llm: {
+      session: () => Promise.resolve({ userId: "u1", registrationOpen: true }),
+      read: () => Promise.resolve(PICTURE),
+      save: () => Promise.resolve(PICTURE),
+      stream: () => () => {},
+      decide: async (payload) => {
+        sent.push(payload.state.text);
+        most = Math.max(most, ++open);
+        await new Promise((r) => setTimeout(r, 5));
+        open--;
+        return reply(payload);
+      },
+    },
+    decisions: { stored: null, save: () => {}, now: () => 42 },
+  });
+  try {
+    await until(() => actors.llm.getSnapshot().context.picture.signedIn);
+    actors.decisions.send({ type: "passages.requested", project: P, rubrics: RUBRICS, passages: ["I fail.", "It rained."] });
+    actors.decisions.send({ type: "judging.requested", project: P, cases: CASES.slice(0, 2), rubrics: RUBRICS });
+    await until(() => {
+      const c = actors.decisions.getSnapshot().context;
+      return c.run?.running === false && c.queue.length === 0 && !c.asking;
+    });
+    assert.equal(most, 1, "never two requests open at once");
+    assert.deepEqual(sent, ["I fail.", CASES[0].text, CASES[1].text, "It rained."]);
+    assert.ok(!records.some((r) => JSON.stringify(r).includes('"busy"')), "llm never answered busy");
+    assert.equal(actors.decisions.getSnapshot().context.passages.length, 4, "an answer per piece and tool");
+  } finally {
+    unwire();
+  }
+});

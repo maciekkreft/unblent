@@ -13,6 +13,7 @@ const json = (...path) => JSON.parse(readFileSync(resolve(HERE, "..", ...path), 
 const CHANGED = json("events", "decision.changed.json");
 const READ = json("queries", "read.json").reply;
 const REQUESTED = json("..", "case-list", "events", "judging.requested.json");
+const PIECES = json("..", "case-journal", "events", "passages.requested.json");
 const CASES = json("..", "cases", "events", "case.changed.json");
 const RUBRICS = json("..", "rubrics", "events", "rubric.changed.json");
 const DECIDE = json("..", "llm", "queries", "decide.json");
@@ -124,7 +125,7 @@ const keys = (s) => s.read().decisions.map((d) => `${d.case.slice(-4)}/${d.rubri
 test("it starts empty and answers read with the same body it announces", () => {
   for (const stored of [null, "", "not json", '{"version":1}']) {
     const s = start(stored);
-    assert.deepEqual(s.read(), { decisions: [], run: null });
+    assert.deepEqual(s.read(), { decisions: [], run: null, passages: { answers: [], waiting: [], error: null } });
     assert.equal(s.saved.length, 0);
   }
 });
@@ -376,6 +377,173 @@ test("the pure functions: decisionsOf ignores unknown ids, fresh with nothing kn
   const out = decisionsOf({ id: C1, text: "t" }, rubrics, [{ id: "nope", p: 1 }, { id: `${R2}/${YN}`, p: 2 }, { id: `${R2}/${YN2}`, p: 0 }], 9);
   assert.deepEqual(out.map(({ text, asked, ...d }) => d), [{ case: C1, rubric: R2, at: 9, answers: [{ id: YN2, p: 0 }] }]);
   assert.equal(fresh(out[0], null, null), out[0]);
+});
+
+// Pieces (passages.requested): judged one at a time, kept by text and tool.
+const pieces = (s, passages, rubrics = BASE_RUBRICS) =>
+  s.send({ type: "passages.requested", project: P, rubrics: rubrics.map(snap), passages }, PIECES);
+const nextOpen = async (s) => {
+  await tick();
+  const open = s.llm.asked.find((c) => !c.released);
+  open.released = true;
+  return open;
+};
+const answer1 = async (s, reply) => {
+  const open = await nextOpen(s);
+  s.clock.increment(1000);
+  open.release(reply);
+  await tick();
+  return open;
+};
+const pieceKeys = (s) => s.read().passages.answers.map((p) => p.text + "|" + p.rubric.slice(-4)).sort();
+const JOURNAL = theCase(C1, "I always fail. Nobody likes me.");
+
+test("pieces are queued in order, asked one at a time, and a piece waiting or answered is not queued twice", async () => {
+  const s = start();
+  casesNow(s, [JOURNAL]);
+  pieces(s, ["I always fail.", "Nobody likes me.", "I always fail."]);
+  assert.deepEqual(s.read().passages.waiting, ["I always fail.", "Nobody likes me."]);
+  pieces(s, ["I always fail.", "Nobody likes me."]);
+  assert.deepEqual(s.read().passages.waiting, ["I always fail.", "Nobody likes me."], "waiting pieces are not queued again");
+  await tick();
+  assert.equal(s.llm.asked.length, 1, "one piece at a time");
+  assert.deepEqual(s.llm.asked[0].payload, payload("I always fail.", BASE_RUBRICS.map(snap)));
+  await answer1(s);
+  assert.deepEqual(s.read().passages.waiting, ["Nobody likes me."]);
+  await answer1(s);
+  assert.deepEqual(s.read().passages.waiting, []);
+  assert.deepEqual(pieceKeys(s), ["I always fail.|RB01", "I always fail.|RB02", "Nobody likes me.|RB01", "Nobody likes me.|RB02"]);
+  pieces(s, ["I always fail.", "Nobody likes me."]);
+  await tick();
+  assert.equal(s.llm.asked.length, 2, "answered pieces are not asked again");
+  pieces(s, ["I always fail."], [BASE_RUBRICS[0]]);
+  await tick();
+  assert.equal(s.llm.asked.length, 2, "nor for a subset of their tools");
+  assert.equal(JSON.parse(s.saved.at(-1)).version, VERSION);
+  assert.equal(parse(s.saved.at(-1)).passages.length, 4, "a reload reads them back");
+});
+
+test("an answer is kept by the piece's text, so another case holding it asks nothing", async () => {
+  const s = start();
+  casesNow(s, [JOURNAL, theCase(C2, "Nobody likes me. It rained.")]);
+  pieces(s, ["Nobody likes me."]);
+  await answer1(s);
+  pieces(s, ["Nobody likes me.", "It rained."]);
+  assert.deepEqual(s.read().passages.waiting, ["It rained."]);
+  await answer1(s);
+  assert.equal(s.llm.asked.length, 2);
+  assert.deepEqual(s.llm.asked[1].payload.state, { text: "It rained." });
+  casesNow(s, [theCase(C2, "Nobody likes me. It rained.")]);
+  assert.ok(pieceKeys(s).includes("Nobody likes me.|RB01"), "still held by the other case");
+});
+
+test("a changed question drops a piece's answer for it, and the piece is asked again", async () => {
+  const s = start();
+  pieces(s, ["I always fail."]);
+  await answer1(s);
+  rubricsNow(s, [BASE_RUBRICS[0], rubric(R2, [yn(YN, { yes: "It is over" }), yn(YN2, { text: "Is it a value?" })])]);
+  const r2 = s.read().passages.answers.find((p) => p.rubric === R2);
+  assert.deepEqual(r2.answers.map((a) => a.id), [YN2]);
+  const changed = [BASE_RUBRICS[0], rubric(R2, [yn(YN, { yes: "It is over" }), yn(YN2, { text: "Is it a value?" })])];
+  pieces(s, ["I always fail."], changed);
+  assert.deepEqual(s.read().passages.waiting, ["I always fail."]);
+  await answer1(s);
+  assert.equal(s.llm.asked.length, 2);
+  pieces(s, ["I always fail."], changed);
+  assert.deepEqual(s.read().passages.waiting, [], "fresh again");
+});
+
+test("a piece no case holds any more loses its answers and leaves the queue", async () => {
+  const s = start();
+  casesNow(s, [JOURNAL]);
+  pieces(s, ["I always fail.", "Nobody likes me."]);
+  await answer1(s);
+  pieces(s, ["Somebody else."]);
+  // "Nobody likes me." is being asked; "Somebody else." waits.
+  await tick();
+  casesNow(s, [theCase(C1, "I often fail."), { ...JOURNAL, id: C2, removing: true }]);
+  assert.deepEqual(s.read().passages.waiting, ["Nobody likes me."], "the piece being asked stays, the gone one leaves");
+  assert.equal(s.read().passages.answers.length, 2, "a case pending removal still holds its pieces");
+  casesNow(s, [theCase(C1, "I often fail.")]);
+  assert.deepEqual(s.read().passages.answers, []);
+  await answer1(s);
+  assert.deepEqual(s.read().passages, { answers: [], waiting: [], error: null }, "an answer for a gone piece is not kept");
+  await tick();
+  assert.equal(s.llm.asked.length, 2, "the dropped piece is not asked");
+});
+
+test("a Judge pressed while a piece is asked runs next, and the queue waits behind it", async () => {
+  const s = start();
+  casesNow(s, [JOURNAL, ...BASE_CASES.slice(1)]);
+  pieces(s, ["I always fail.", "Nobody likes me."]);
+  await tick();
+  judge(s, [BASE_CASES[1]]);
+  assert.equal(s.read().run, null, "the run waits for the piece");
+  await answer1(s);
+  assert.deepEqual(s.llm.asked.map((c) => c.payload.state.text), ["I always fail.", "Playing fairly."]);
+  assert.equal(s.read().run.running, true);
+  assert.deepEqual(s.read().passages.waiting, ["Nobody likes me."]);
+  await answer1(s);
+  assert.equal(s.read().run.running, false);
+  await answer1(s);
+  assert.deepEqual(s.llm.asked.map((c) => c.payload.state.text), ["I always fail.", "Playing fairly.", "Nobody likes me."]);
+  assert.deepEqual(s.read().passages.waiting, []);
+});
+
+test("a piece requested during a run is asked after it", async () => {
+  const s = start();
+  judge(s, BASE_CASES.slice(0, 2));
+  await tick();
+  pieces(s, ["It rained."]);
+  assert.deepEqual(s.read().passages.waiting, ["It rained."]);
+  await answer1(s);
+  await answer1(s);
+  assert.equal(s.read().run.running, false);
+  await answer1(s);
+  assert.deepEqual(s.llm.asked.map((c) => c.payload.state.text), ["To win the race.", "Playing fairly.", "It rained."]);
+  assert.equal(s.read().passages.answers.length, 2);
+});
+
+test("an error stops the queue and keeps the reason; the next request clears it and resumes", async () => {
+  const s = start();
+  pieces(s, ["I always fail.", "Nobody likes me.", "It rained."]);
+  await answer1(s);
+  await answer1(s, { error: "rate-limited" });
+  await tick();
+  assert.equal(s.llm.asked.length, 2, "the third piece is not asked");
+  assert.deepEqual(s.read().passages.waiting, []);
+  assert.equal(s.read().passages.error, "rate-limited");
+  pieces(s, ["I always fail.", "Nobody likes me.", "It rained."]);
+  assert.equal(s.read().passages.error, null);
+  assert.deepEqual(s.read().passages.waiting, ["Nobody likes me.", "It rained."]);
+  await answer1(s);
+  await answer1(s, { error: "no-answerer" });
+  assert.equal(s.read().passages.error, "unavailable");
+  pieces(s, ["It rained."], [rubric(R1, [yn(YN, { text: " " })])]);
+  assert.equal(s.read().passages.error, "invalid", "nothing askable asks nothing");
+  await tick();
+  assert.equal(s.llm.asked.length, 4);
+});
+
+test("a version-1 store reads with no passages; a version-2 store reads them back", async () => {
+  const s = start();
+  await judged(s, [BASE_CASES[0]]);
+  const v1 = JSON.parse(s.saved.at(-1));
+  v1.version = 1;
+  delete v1.passages;
+  const old = parse(JSON.stringify(v1));
+  assert.equal(old.decisions.length, 2);
+  assert.deepEqual(old.passages, []);
+  assert.deepEqual(start(JSON.stringify(v1)).read().passages, { answers: [], waiting: [], error: null });
+
+  pieces(s, ["It rained."]);
+  await answer1(s);
+  const t = start(s.saved.at(-1));
+  assert.deepEqual(t.read().passages.answers, s.read().passages.answers);
+  assert.equal(t.read().decisions.length, 2);
+  const bad = JSON.parse(s.saved.at(-1));
+  bad.passages.push({ text: 1 }, { text: "x", rubric: R1, at: 1, answers: [], asked: {} });
+  assert.equal(parse(JSON.stringify(bad)).passages.length, 2, "malformed passages are left out");
 });
 
 test("every payload matches its schema", () => {
