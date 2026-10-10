@@ -152,6 +152,126 @@
           }
         ],
         "description": "The latest Judge or Judge all and how far it got; null before the first."
+      },
+      "passages": {
+        "type": "object",
+        "description": "Jev's answers for pieces of a case's text, judged one by one.",
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "The latest answers for one piece and one tool.",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "description": "The piece, as Jev was asked it."
+                },
+                "rubric": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "at": {
+                  "type": "integer",
+                  "description": "When Jev answered, ms since the epoch."
+                },
+                "answers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Jev's answer to one question.",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                        "description": "The question's id."
+                      },
+                      "p": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "For a yesno question the probability of yes; for a pick question the probability of the pick."
+                      },
+                      "choice": {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                        "description": "For a pick question, the option Jev picked."
+                      },
+                      "probabilities": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                            },
+                            "p": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "p"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "description": "For a pick question, the probability of every option, by option id."
+                      },
+                      "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "For a pick question, how sure Jev is, from how its probabilities are spread."
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "p"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "text",
+                "rubric",
+                "at",
+                "answers"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "waiting": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The pieces waiting for Jev, in order."
+          },
+          "error": {
+            "enum": [
+              "signed-out",
+              "no-key",
+              "bad-key",
+              "rate-limited",
+              "overloaded",
+              "invalid",
+              "busy",
+              "unavailable",
+              null
+            ],
+            "description": "Why the latest pieces could not be judged, or null."
+          }
+        },
+        "required": [
+          "answers",
+          "waiting",
+          "error"
+        ],
+        "additionalProperties": false
       }
     },
     "required": [
