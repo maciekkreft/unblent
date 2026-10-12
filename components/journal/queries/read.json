@@ -1,0 +1,409 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The whole journal: the days, the projects and detectors, Jev's answers, the open day, and why Jev is not reading.",
+    "type": "object",
+    "properties": {
+      "days": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/day"
+        },
+        "description": "Every day, oldest first."
+      },
+      "projects": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/project"
+        }
+      },
+      "detectors": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/detector"
+        }
+      },
+      "answers": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/answer"
+        }
+      },
+      "open": {
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          }
+        ],
+        "description": "The day that can still be edited, or null when none can, and a new page for today is shown."
+      },
+      "reason": {
+        "enum": [
+          "signed-out",
+          "no-key",
+          "bad-key",
+          "rate-limited",
+          "overloaded",
+          "invalid",
+          "unavailable",
+          "no-detector",
+          null
+        ],
+        "description": "Why Jev is not reading the writing, or null when it is: signed out, no Jev key, no detector on, or why the last request failed, in llm: decide's words."
+      }
+    },
+    "required": [
+      "days",
+      "projects",
+      "detectors",
+      "answers",
+      "open",
+      "reason"
+    ],
+    "additionalProperties": false,
+    "$defs": {
+      "day": {
+        "type": "object",
+        "description": "One day's entry.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "day": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+            "description": "The local date when its first character was typed; it never changes."
+          },
+          "text": {
+            "type": "string"
+          },
+          "editedAt": {
+            "type": "integer",
+            "description": "When it was last edited, ms since the epoch."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "waiting": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its paragraphs waiting for Jev, in order."
+          },
+          "unanswered": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its finished paragraphs that lack an answer, with the current wording, to a question of a detector that is on now; what Judge this day would send."
+          }
+        },
+        "required": [
+          "id",
+          "day",
+          "text",
+          "editedAt",
+          "version",
+          "waiting",
+          "unanswered"
+        ],
+        "additionalProperties": false
+      },
+      "project": {
+        "type": "object",
+        "description": "One of the journal's projects.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean",
+            "description": "Whether its detectors that are on read the writing."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "removing": {
+            "type": "boolean",
+            "description": "True while its deletion can still be undone."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "on",
+          "version",
+          "removing"
+        ],
+        "additionalProperties": false
+      },
+      "detector": {
+        "type": "object",
+        "description": "One of the journal's detectors: a name and its questions.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "project": {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "on": {
+            "type": "boolean",
+            "description": "Whether it reads the writing while its project is on too."
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One question of the detector.",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                },
+                "kind": {
+                  "enum": [
+                    "yesno",
+                    "pick"
+                  ],
+                  "description": "yesno: Jev says how likely the answer is yes. pick: Jev picks one of the options."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The question, as Jev is asked it."
+                },
+                "yes": {
+                  "type": "string",
+                  "description": "What yes means, for a yesno question; empty for none."
+                },
+                "no": {
+                  "type": "string",
+                  "description": "What no means, for a yesno question; empty for none."
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "One option of a pick question.",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "The option as Jev is offered it and as the user sees it."
+                      },
+                      "description": {
+                        "type": "string",
+                        "description": "What the option means; empty for none."
+                      },
+                      "removing": {
+                        "type": "boolean",
+                        "description": "True while its removal can still be undone."
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "description",
+                      "removing"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "The options of a pick question; kept while the question is yesno, so switching back loses nothing."
+                },
+                "removing": {
+                  "type": "boolean",
+                  "description": "True while its removal can still be undone."
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "text",
+                "yes",
+                "no",
+                "options",
+                "removing"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "removing": {
+            "type": "boolean",
+            "description": "True while its deletion can still be undone."
+          }
+        },
+        "required": [
+          "id",
+          "project",
+          "name",
+          "on",
+          "questions",
+          "version",
+          "removing"
+        ],
+        "additionalProperties": false
+      },
+      "answer": {
+        "type": "object",
+        "description": "Jev's answer for one paragraph and one question, kept by the paragraph's text and the question's id (answer.id).",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The paragraph, as Jev was asked it."
+          },
+          "wording": {
+            "type": "object",
+            "description": "The question as it was asked.",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "yes": {
+                "type": "string",
+                "description": "What yes meant, for a yesno question; empty for none."
+              },
+              "no": {
+                "type": "string",
+                "description": "What no meant, for a yesno question; empty for none."
+              },
+              "options": {
+                "type": "array",
+                "description": "The options of a pick question as offered, so a pick still has its name after the option changes.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "text",
+              "yes",
+              "no",
+              "options"
+            ],
+            "additionalProperties": false
+          },
+          "answer": {
+            "type": "object",
+            "description": "Jev's answer to one question.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "The question's id."
+              },
+              "p": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "For a yesno question the probability of yes; for a pick question the probability of the pick."
+              },
+              "choice": {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "For a pick question, the option Jev picked."
+              },
+              "probabilities": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "p": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "p"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "For a pick question, the probability of every option, by option id."
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "For a pick question, how sure Jev is, from how its probabilities are spread."
+              }
+            },
+            "required": [
+              "id",
+              "p"
+            ],
+            "additionalProperties": false
+          },
+          "at": {
+            "type": "integer",
+            "description": "When Jev answered, ms since the epoch."
+          },
+          "earlier": {
+            "type": "boolean",
+            "description": "True when the question's wording has changed since: an earlier wording."
+          }
+        },
+        "required": [
+          "text",
+          "wording",
+          "answer",
+          "at",
+          "earlier"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "supersededBy": [
+    "journal.changed"
+  ]
+}

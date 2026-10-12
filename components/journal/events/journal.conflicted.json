@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A day's text was saved on a stale version (5): both copies, so a view can show them rather than silently losing one.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "mine": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "baseVersion": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      },
+      "required": [
+        "text",
+        "baseVersion"
+      ],
+      "additionalProperties": false
+    },
+    "theirs": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "editedAt": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "text",
+        "version",
+        "editedAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "id",
+    "mine",
+    "theirs"
+  ],
+  "additionalProperties": false
+}

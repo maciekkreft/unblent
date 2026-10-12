@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user deleted or removed something: it waits out the undo window before it is gone.",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "enum": [
+        "project",
+        "rubric",
+        "question",
+        "option",
+        "case"
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "name": {
+      "type": "string",
+      "description": "The thing's name for the notice; empty for none."
+    }
+  },
+  "required": [
+    "kind",
+    "id",
+    "name"
+  ],
+  "additionalProperties": false
+}
