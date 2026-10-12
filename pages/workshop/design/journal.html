@@ -44,6 +44,8 @@
     <script type="module" src="/static/components/journal/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
+    <script type="module" src="/static/components/journal-days/view.js"></script>
+    <script type="module" src="/static/components/journal-entry/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/components/detector-projects/view.js"></script>
     <script type="module" src="/static/components/detector-list/view.js"></script>
@@ -52,6 +54,8 @@
   </head>
   <body>
     <page-nav></page-nav>
+    <journal-days></journal-days>
+    <journal-entry></journal-entry>
     <list-then-item id="detectors" label="Detectors" height="fill">
       <detector-projects label="Projects"></detector-projects>
       <list-then-item id="project-detectors" shows-on="detector-project.selected" height="fill">
