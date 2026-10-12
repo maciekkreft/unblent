@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user wrote in the open day: its whole text. A new id starts today's entry.",
+  "description": "The user wrote in the open day: its whole text. A new id starts today's entry. left is true when the user has just left the writing box.",
   "type": "object",
   "properties": {
     "id": {
@@ -9,6 +9,10 @@
     },
     "text": {
       "type": "string"
+    },
+    "left": {
+      "type": "boolean",
+      "description": "True when the writing box was left, so every paragraph of the day is finished, the last one too. A later save without it, while typing, makes the last paragraph unfinished again."
     }
   },
   "required": [

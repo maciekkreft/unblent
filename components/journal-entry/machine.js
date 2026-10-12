@@ -23,7 +23,8 @@ export const machine = setup({}).createMachine({
       "is open until midnight or an hour after the last edit, and past midnight a banner says " +
       "when it closes. Earlier days are read only, with Judge this day when something is not " +
       "answered with the current wording. One line says why Jev is not reading, in Judge's " +
-      "words. The text is saved a short time into typing and when the box loses focus.",
+      "words. The text is saved a short time into typing and when the box loses focus, and that " +
+      "last save says the box was left, so the paragraph being written counts as finished.",
     kind: "view",
     emits: ["day.saved", "day.judging.requested"],
     attributes: [],

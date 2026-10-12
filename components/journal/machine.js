@@ -373,10 +373,74 @@ const settleAll = (held) => {
   return c;
 };
 
+// --- Asking Jev (llm: decide) ---------------------------------------------------------
+
+// decide's errors the journal shows as its reason. "busy" is not one: the queue waits it out.
+const ERRORS = ["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "unavailable"];
+// The bus's own refusals (no-answerer, invalid-payload, invalid-reply) mean Jev could
+// not be asked, which is "unavailable".
+const failure = (error) => (ERRORS.includes(error) ? error : "unavailable");
+
+// llm answers busy while another asker's decide is open (Judge's runs share it); the
+// queue tries again after this long rather than stopping.
+export const BUSY_RETRY_MS = 1000;
+
+const unit = (v) => typeof v === "number" && v >= 0 && v <= 1;
+
+// The one llm: decide payload for one paragraph: every question that is on, each under
+// its own id, which is how its answer is kept. Copied from decisions (11.2); an option
+// in its undo window is not offered, as wordingOf leaves it out.
+export const payload = (text, questions) => ({
+  state: { text },
+  questions: questions.map((q) =>
+    q.kind === "pick"
+      ? {
+          id: q.id,
+          kind: "pick",
+          instructions: q.text,
+          options: live(q.options).map((o) => ({ id: o.id, name: o.name, description: o.description })),
+        }
+      : { id: q.id, kind: "yesno", instructions: q.text, yes: q.yes, no: q.no },
+  ),
+});
+
+// One answer in the shape decisions stores: p always, and for a pick question the choice,
+// every option's probability and how sure Jev is.
+const answerOf = (a, id) => {
+  const out = { id, p: a.p };
+  if (isId(a.choice)) out.choice = a.choice;
+  if (Array.isArray(a.probabilities))
+    out.probabilities = a.probabilities.filter((x) => isId(x?.id) && unit(x.p)).map((x) => ({ id: x.id, p: x.p }));
+  if (unit(a.confidence)) out.confidence = a.confidence;
+  return out;
+};
+
+// Jev's reply for one paragraph, as one answer record per question it answered, each
+// with the wording it was asked with.
+export const answersOf = (text, questions, answers, at) => {
+  const asked = new Map(questions.map((q) => [q.id, q]));
+  const out = new Map();
+  for (const a of answers) {
+    const q = asked.get(a?.id);
+    if (q && unit(a.p)) out.set(q.id, { key: `${q.id}\n${text}`, text, wording: wordingOf(q), answer: answerOf(a, q.id), at });
+  }
+  return [...out.values()];
+};
+
+// Each new answer in place of the one for the same paragraph and question, on the next
+// version: answers are last write wins (5).
+const replaceAnswers = (answers, added) => {
+  const byKey = new Map(added.map((a) => [a.key, a]));
+  const out = answers.map((a) => (byKey.has(a.key) ? { ...byKey.get(a.key), version: a.version + 1 } : a));
+  const have = new Set(answers.map((a) => a.key));
+  return [...out, ...added.filter((a) => !have.has(a.key)).map((a) => ({ ...a, version: 1 }))];
+};
+
 // --- The picture ----------------------------------------------------------------------
 
 // Why Jev is not reading the writing, in llm: decide's words, or null when it is. Before
-// llm has answered, or with no llm on the page, nobody is known to be signed in.
+// llm has answered, or with no llm on the page, nobody is known to be signed in. Starter
+// requests used up read as no key, because llm then reports the key as not set.
 const reason = (c) => {
   if (!c.llm?.signedIn) return "signed-out";
   if (!c.llm.jev?.keySet) return "no-key";
@@ -384,19 +448,39 @@ const reason = (c) => {
   return c.error;
 };
 
+// A paragraph some question on now has not answered with its current wording.
+const missing = (text, questions, answers) =>
+  questions.some((q) => {
+    const a = answers.get(`${q.id}\n${text}`);
+    return !a || !same(a.wording, wordingOf(q));
+  });
+
 // A day's finished paragraphs that some question on now has not answered with its
-// current wording: what Judge this day would send. The open day's last line is still
-// being written, so it is not finished yet.
-const unanswered = (day, isOpen, questions, answers) => {
+// current wording: what Judge this day would send.
+const unanswered = (day, editing, questions, answers) => {
   const out = [];
-  for (const { text, finished } of paragraphs(day.text, isOpen)) {
-    if (!finished || out.includes(text)) continue;
-    const missing = questions.some((q) => {
-      const a = answers.get(`${q.id}\n${text}`);
-      return !a || !same(a.wording, wordingOf(q));
-    });
-    if (missing) out.push(text);
+  for (const { text, finished } of paragraphs(day.text, editing)) {
+    if (finished && !out.includes(text) && missing(text, questions, answers)) out.push(text);
   }
+  return out;
+};
+
+// The open day's last line is still being written, so it is not finished yet, unless the
+// last save said the writing box was left.
+const editing = (c, open, day) => day.id === open?.id && c.left !== day.id;
+
+const answersByKey = (c) => new Map(c.answers.filter((a) => !a.deleted).map((a) => [a.key, a]));
+
+// The paragraphs Jev is to be asked about, in order: the one being asked, then the open
+// day's unanswered paragraphs, then those Judge this day asked for that are still
+// unanswered. A paragraph is asked once however many days hold it, because its answers
+// are kept by its text. Nothing waits while Jev cannot be asked.
+const queued = (c, open = openDay(c.days, c.now()), questions = onQuestions(c), byKey = answersByKey(c)) => {
+  const out = c.asking ? [c.asking.text] : [];
+  if (reason(c) !== null) return out;
+  const add = (t) => !out.includes(t) && out.push(t);
+  if (open) unanswered(open, editing(c, open, open), questions, byKey).forEach(add);
+  c.requested.filter((t) => missing(t, questions, byKey)).forEach(add);
   return out;
 };
 
@@ -405,7 +489,8 @@ const shown = ({ deleted, ...r }) => r;
 const body = (c) => {
   const open = openDay(c.days, c.now());
   const questions = onQuestions(c);
-  const byKey = new Map(c.answers.map((a) => [a.key, a]));
+  const byKey = answersByKey(c);
+  const asked = queued(c, open, questions, byKey);
   const wordings = new Map(live(c.detectors).flatMap((d) => live(d.questions).map((q) => [q.id, wordingOf(q)])));
   return {
     days: c.days
@@ -417,8 +502,8 @@ const body = (c) => {
         text: d.text,
         editedAt: d.editedAt,
         version: d.version,
-        waiting: [],
-        unanswered: unanswered(d, d.id === open?.id, questions, byKey),
+        waiting: [...new Set(paragraphs(d.text, false).map((p) => p.text))].filter((t) => asked.includes(t)),
+        unanswered: unanswered(d, editing(c, open, d), questions, byKey),
       })),
     projects: c.projects.filter((p) => !p.deleted).map(shown),
     detectors: c.detectors.filter((d) => !d.deleted).map(shown),
@@ -542,23 +627,48 @@ const unmint = (c, change) =>
     }),
   );
 
-// Each gesture becomes a candidate change, or null; only a change is stored and
-// announced, so a repeat stores and emits nothing. A change is queued in the outbox
-// signed in or not, so its row keeps the last version the server gave as its base;
-// only signed in is a drain asked for.
+// Applies a candidate change: record lists, and the asking state beside them. Only a
+// record that changed is stored, and the journal is announced only when a reader would
+// see something new, so a repeat stores and emits nothing. A changed record is queued in
+// the outbox signed in or not, so its row keeps the last version the server gave as its
+// base; only signed in is a drain asked for.
+const update = (context, enqueue, change) => {
+  let records = Object.fromEntries(TABLES.filter((t) => change[t] && !same(change[t], context[t])).map((t) => [t, change[t]]));
+  const rest = Object.fromEntries(Object.entries(change).filter(([k]) => !TABLES.includes(k)));
+  const changed = Object.keys(records).length > 0;
+  if (changed) {
+    if (context.userId) records = unmint(context, records);
+    enqueueChanges(context, enqueue, context, records);
+    if (context.userId) enqueue.raise({ type: "_drain" });
+    persist(context.store, context, records, enqueue);
+    arm(enqueue, records.days ?? context.days, context.now());
+  }
+  const next = { ...context, ...records, ...rest };
+  enqueue.assign({ ...records, ...rest });
+  if (changed || !same(body(next), body(context))) announce(enqueue, next);
+};
+
+// Each gesture becomes a candidate change, or null.
 const commit = (next) =>
   enqueueActions(({ context, event, enqueue }) => {
-    const now = context.now();
-    let change = next(context, event, now);
-    if (!change || TABLES.every((t) => !change[t] || same(change[t], context[t]))) return;
-    if (context.userId) change = unmint(context, change);
-    enqueueChanges(context, enqueue, context, change);
-    if (context.userId) enqueue.raise({ type: "_drain" });
-    persist(context.store, context, change, enqueue);
-    enqueue.assign(change);
-    announce(enqueue, { ...context, ...change });
-    arm(enqueue, change.days ?? context.days, now);
+    const change = next(context, event, context.now());
+    if (change) update(context, enqueue, change);
   });
+
+// A gesture that may give Jev something new to read starts a queue an error stopped.
+const resuming = (next) => (c, event, now) => ({ ...next(c, event, now), error: null });
+
+// A save says whether the writing box was left, which finishes its last paragraph.
+const saved = resuming((c, event, now) => ({ ...daySaved(c, event, now), left: event.left === true ? event.id : null }));
+
+// Judge this day queues the day's paragraphs not answered with the current wording; a
+// paragraph already queued is not queued twice.
+const judgeDay = resuming((c, { id }) => {
+  const day = alive(c.days, id);
+  if (!day) return {};
+  const texts = unanswered(day, editing(c, openDay(c.days, c.now()), day), onQuestions(c), answersByKey(c));
+  return { requested: [...c.requested, ...texts.filter((t) => !c.requested.includes(t))] };
+});
 
 // Applies a sync's summary: the acknowledged records, the conflicts, what was pulled,
 // the cursor, and a session the server no longer knows.
@@ -652,27 +762,49 @@ const applySync = (context, output, enqueue) => {
   }
 };
 
-// The llm picture matters here only for the reason, so it is announced only when the
-// reason changes.
+// The llm picture matters here only for the reason and what that lets Jev read, so it
+// is announced only when those change. News from llm (a key added, a sign-in) starts a
+// queue an error stopped.
 const follow = (picture) =>
   enqueueActions(({ context, event, enqueue }) => {
     const llm = picture(event);
     if (!llm || typeof llm.signedIn !== "boolean") return;
-    const before = reason(context);
-    enqueue.assign({ llm });
-    if (reason({ ...context, llm }) !== before) announce(enqueue, { ...context, llm });
+    update(context, enqueue, { llm, error: null });
   });
 
 const GESTURES = {
-  "day.saved": daySaved,
-  "detector-project.saved": projectSaved,
-  "detector-project.switched": projectSwitched,
-  "detector.saved": detectorSaved,
-  "detector.switched": detectorSwitched,
+  "day.saved": saved,
+  "day.judging.requested": judgeDay,
+  "detector-project.saved": resuming(projectSaved),
+  "detector-project.switched": resuming(projectSwitched),
+  "detector.saved": resuming(detectorSaved),
+  "detector.switched": resuming(detectorSwitched),
   "removal.started": mark(true),
   "removal.undone": mark(false),
   "removal.settled": settle,
 };
+
+// What llm: decide's reply was: answers, busy (another asker's decide is open), or an error.
+const answered = ({ event }) => Array.isArray(event.output?.answers);
+const busy = ({ event }) => event.output?.error === "busy";
+
+// A reply lands: each answer replaces the earlier one for its paragraph and question, and
+// the paragraph leaves Judge this day's queue. A reply that leaves out a question asked
+// would leave the paragraph unanswered and asked again at once, so it stops the queue.
+const landed = enqueueActions(({ context, event, enqueue }) => {
+  const { text, questions } = context.asking;
+  const added = answersOf(text, questions, event.output.answers, context.now());
+  if (added.length < questions.length) return stop(context, enqueue, "unavailable");
+  update(context, enqueue, {
+    answers: replaceAnswers(context.answers, added),
+    asking: null,
+    requested: context.requested.filter((t) => t !== text),
+  });
+});
+
+// An error stops the queue and keeps the reason; Judge this day's paragraphs are dropped,
+// the open day's come back with the next gesture that resumes it.
+const stop = (context, enqueue, error) => update(context, enqueue, { asking: null, requested: [], error: failure(error) });
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 
@@ -721,6 +853,7 @@ export const machine = setup({
         userId: known ? session.userId : userId ?? null,
       };
     }),
+    decide: fromPromise(({ input }) => input.ask("llm", "decide", input.payload)),
     // No llm on the page, or a Node test without an ask, reads as nobody signed in.
     llm: fromPromise(({ input }) => (input.ask ? input.ask("llm", "read", {}) : Promise.resolve(null))),
     // One sync: drain the outbox, then pull what changed since the cursor. It returns a
@@ -776,7 +909,9 @@ export const machine = setup({
       "answer keeps the wording of the question it answered. Rewording a question re-asks " +
       "today's paragraphs; earlier days keep their answers, marked as an earlier wording, and " +
       "are asked only when the user presses Judge this day. A failed request stops the queue " +
-      "and keeps the reason.",
+      "and keeps the reason; the next save, Judge this day, change to the detectors, sign-in " +
+      "or change in Settings starts it again. While Judge is asking Jev, the journal waits " +
+      "its turn.",
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days, its projects and detectors, and Jev's answers",
@@ -789,7 +924,13 @@ export const machine = setup({
     detectors: [],
     answers: [],
     llm: null,
+    // Why the last request failed, in decide's words; it stops the queue until a gesture.
     error: null,
+    // The paragraph being asked, with the questions as they were asked; the paragraphs
+    // Judge this day asked for, in order; and the day whose writing box was left.
+    asking: null,
+    requested: [],
+    left: null,
     open: null,
     userId: null,
     cursor: 0,
@@ -850,14 +991,14 @@ export const machine = setup({
       },
       on: {
         ...Object.fromEntries(Object.keys(GESTURES).map((type) => [type, { actions: queue }])),
-        "day.judging.requested": { actions: queue },
         "session.changed": { actions: queue },
         "llm.changed": { actions: assign({ llm: ({ event }) => event }) },
         "read?": { actions: queue },
       },
     },
+    // Two regions: syncing with the server, and asking Jev, each at its own pace.
     ready: {
-      initial: "idle",
+      type: "parallel",
       invoke: {
         src: "llm",
         input: ({ context }) => ({ ask: context.ask }),
@@ -865,14 +1006,12 @@ export const machine = setup({
       },
       on: {
         ...Object.fromEntries(Object.entries(GESTURES).map(([type, next]) => [type, { actions: commit(next) }])),
-        // Judge this day is a request to llm: decide; until this fact asks Jev it is
-        // accepted and changes nothing.
-        "day.judging.requested": { actions: () => {} },
         "llm.changed": { actions: follow((event) => event) },
         // The outbox drains only while someone is signed in (5); signing out keeps it,
         // to go up at the next sign-in.
         "session.changed": {
           actions: enqueueActions(({ context, event, enqueue }) => {
+            update(context, enqueue, { error: null });
             if (event.userId === context.userId) return;
             if (event.userId) return adopt(context, enqueue, event.userId);
             enqueue.assign({ userId: null });
@@ -889,56 +1028,89 @@ export const machine = setup({
         "read?": { actions: ({ context, event }) => event.reply(body(context)) },
       },
       states: {
-        idle: {
-          on: {
-            _drain: { guard: "syncable", target: "debouncing" },
-            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
-          },
-        },
-        // A _drain re-enters this state, which restarts the window, so the drain waits
-        // until typing has paused for all of it. Signed out mid-window, it returns to
-        // idle rather than sync with no user.
-        debouncing: {
-          on: {
-            _drain: { target: "debouncing", reenter: true },
-            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
-          },
-          after: {
-            [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
-          },
-        },
-        syncing: {
-          entry: assign({ resync: false, pull: false }),
-          invoke: {
-            src: "sync",
-            // pull comes from the triggering event: the entry assign above runs before
-            // the input is read and would otherwise wipe it from context.
-            input: ({ context, event }) => ({
-              api: context.api,
-              store: context.store,
-              rows: [...context.outbox.values()],
-              cursor: context.cursor,
-              pull: Boolean(event.pull),
-            }),
-            onDone: {
-              target: "idle",
-              actions: [
-                enqueueActions(({ context, event, enqueue }) => applySync(context, event.output, enqueue)),
-                // A trigger that arrived mid-sync is owed a follow-up, unless the session
-                // went away or the network failed, when the next trigger retries. A focus
-                // mid-sync syncs at once with its pull; a save mid-sync waits out the window.
-                enqueueActions(({ context, event, enqueue }) => {
-                  const { authFailed, networkError } = event.output;
-                  if (authFailed || networkError) return;
-                  if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
-                  else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
-                }),
-              ],
+        sync: {
+          initial: "idle",
+          states: {
+            idle: {
+              on: {
+                _drain: { guard: "syncable", target: "debouncing" },
+                _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+              },
             },
-            onError: { target: "idle" },
+            // A _drain re-enters this state, which restarts the window, so the drain waits
+            // until typing has paused for all of it. Signed out mid-window, it returns to
+            // idle rather than sync with no user.
+            debouncing: {
+              on: {
+                _drain: { target: "debouncing", reenter: true },
+                _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+              },
+              after: {
+                [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
+              },
+            },
+            syncing: {
+              entry: assign({ resync: false, pull: false }),
+              invoke: {
+                src: "sync",
+                // pull comes from the triggering event: the entry assign above runs before
+                // the input is read and would otherwise wipe it from context.
+                input: ({ context, event }) => ({
+                  api: context.api,
+                  store: context.store,
+                  rows: [...context.outbox.values()],
+                  cursor: context.cursor,
+                  pull: Boolean(event.pull),
+                }),
+                onDone: {
+                  target: "idle",
+                  actions: [
+                    enqueueActions(({ context, event, enqueue }) => applySync(context, event.output, enqueue)),
+                    // A trigger that arrived mid-sync is owed a follow-up, unless the session
+                    // went away or the network failed, when the next trigger retries. A focus
+                    // mid-sync syncs at once with its pull; a save mid-sync waits out the window.
+                    enqueueActions(({ context, event, enqueue }) => {
+                      const { authFailed, networkError } = event.output;
+                      if (authFailed || networkError) return;
+                      if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
+                      else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
+                    }),
+                  ],
+                },
+                onError: { target: "idle" },
+              },
+              on: {
+                _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
+              },
+            },
           },
-          on: {
-            _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
+        },
+        // One paragraph asked at a time, in order, because llm keeps one decide open.
+        jev: {
+          initial: "idle",
+          states: {
+            idle: {
+              always: { guard: ({ context }) => queued(context).length > 0, target: "asking" },
+            },
+            asking: {
+              entry: enqueueActions(({ context, enqueue }) =>
+                update(context, enqueue, { asking: { text: queued(context)[0], questions: onQuestions(context) } }),
+              ),
+              invoke: {
+                src: "decide",
+                input: ({ context }) => ({ ask: context.ask, payload: payload(context.asking.text, context.asking.questions) }),
+                onDone: [
+                  { guard: answered, target: "idle", actions: landed },
+                  { guard: busy, target: "pausing", actions: enqueueActions(({ context, enqueue }) => update(context, enqueue, { asking: null })) },
+                  { target: "idle", actions: enqueueActions(({ context, event, enqueue }) => stop(context, enqueue, event.output?.error)) },
+                ],
+                onError: { target: "idle", actions: enqueueActions(({ context, enqueue }) => stop(context, enqueue, "unavailable")) },
+              },
+            },
+            // Another asker's decide is open; the paragraph stays queued and is tried again.
+            pausing: {
+              after: { [BUSY_RETRY_MS]: { target: "idle" } },
+            },
           },
         },
       },

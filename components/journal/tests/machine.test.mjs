@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, openDay, paragraphs, wordingOf, dateOf, catchUp, SEED, SEED_VERSION, IDS, HOUR } from "../machine.js";
+import { machine, openDay, paragraphs, wordingOf, dateOf, catchUp, SEED, SEED_VERSION, IDS, HOUR, BUSY_RETRY_MS } from "../machine.js";
 
 // The actor is where the journal's decisions live (3.2): it is driven with a fake store,
 // a clock the test sets, and a SimulatedClock for the timer that closes the open day.
@@ -432,6 +432,237 @@ test("a gesture or a read that arrives while the store loads is applied once it 
   await flush();
   assert.equal(reply.days[0].text, "Early");
   assert.equal(reply.projects.length, 2);
+});
+
+// --- Asking Jev -----------------------------------------------------------------------
+
+const DECIDE = json("..", "llm", "queries", "decide.json");
+
+// A stand-in for llm: signed in with a key, each decide held open until the test answers
+// it, so the order of requests is visible.
+function fakeJev(llm = picture(true, true)) {
+  const asked = [];
+  const open = [];
+  const ask = async (target, name, payload) => {
+    if (target === "llm" && name === "read") return llm;
+    if (target !== "llm" || name !== "decide") return { error: "no-answerer" };
+    recorded.push({ value: payload, schema: DECIDE.payload });
+    asked.push(payload);
+    return new Promise((resolve) => open.push({ payload, resolve }));
+  };
+  const reply = async (value) => {
+    if (!value.error || value.error === "busy") recorded.push({ value, schema: DECIDE.reply });
+    open.shift().resolve(value);
+    await flush();
+  };
+  // Answers every question of the oldest open request.
+  const answer = (p = 0.7) =>
+    reply({
+      answers: open[0].payload.questions.map((q) =>
+        q.kind === "pick"
+          ? { id: q.id, p, choice: q.options[0].id, probabilities: q.options.map((o, i) => ({ id: o.id, p: i ? 0 : p })), confidence: 0.5 }
+          : { id: q.id, p },
+      ),
+      inputTokens: 10,
+      ms: 5,
+    });
+  return { ask, asked, open, reply, answer, fail: (error) => reply({ error }) };
+}
+
+const texts = (jev) => jev.asked.map((p) => p.state.text);
+const leave = (s, id, text) => s.send({ type: "day.saved", id, text, left: true }, DAY_SAVED);
+const judgeDay = (s, id) => s.send({ type: "day.judging.requested", id }, JUDGING);
+const JUDGING = json("..", "journal-entry", "events", "day.judging.requested.json");
+const ON = [IDS.distortionPick, IDS.goalOrValuePick];
+
+test("each finished paragraph is asked once, one at a time, with every question on across projects", async () => {
+  const jev = fakeJev();
+  const s = await start({ ask: jev.ask });
+  assert.equal(s.read().reason, null);
+  write(s, D1, "One\nTwo\nOne\nstill typing");
+  await flush();
+  assert.deepEqual(texts(jev), ["One"], "one request open at a time");
+  assert.deepEqual(jev.asked[0].questions.map((q) => q.id), ON, "both projects' questions in the one request");
+  assert.equal(jev.asked[0].questions[0].options.length, 10);
+  assert.deepEqual(s.read().days[0].waiting, ["One", "Two"], "a paragraph written twice is asked once");
+  assert.deepEqual(s.emitted.at(-1).days[0].waiting, ["One", "Two"]);
+  write(s, D1, "One\nTwo\nOne\nstill typing more");
+  await flush();
+  assert.equal(jev.asked.length, 1, "typing on does not queue the paragraph being asked again");
+  await jev.answer();
+  assert.deepEqual(texts(jev), ["One", "Two"]);
+  assert.deepEqual(s.read().days[0].waiting, ["Two"]);
+  await jev.answer(0.4);
+  assert.deepEqual(texts(jev), ["One", "Two"], "nothing left to ask");
+  const { days, answers } = s.read();
+  assert.deepEqual([days[0].waiting, days[0].unanswered], [[], []]);
+  assert.deepEqual(answers.map((a) => [a.text, a.answer.id, a.earlier]), [
+    ["One", IDS.distortionPick, false],
+    ["One", IDS.goalOrValuePick, false],
+    ["Two", IDS.distortionPick, false],
+    ["Two", IDS.goalOrValuePick, false],
+  ]);
+  const goal = SEED.detectors[1].questions[0];
+  const two = answers.find((a) => a.text === "Two" && a.answer.id === goal.id);
+  assert.deepEqual(two.wording, wordingOf(goal), "the wording it was asked with");
+  assert.deepEqual(two.answer, { id: goal.id, p: 0.4, choice: goal.options[0].id, probabilities: goal.options.map((o, i) => ({ id: o.id, p: i ? 0 : 0.4 })), confidence: 0.5 });
+  assert.ok(s.store.outbox.has(`answers\n${goal.id}\nTwo`), "answers go up through the outbox");
+  assert.equal(s.store.tables.answers.size, 4, "and are stored");
+  write(s, D1, "One\nTwo\nOne\nstill typing more\n");
+  await flush();
+  assert.deepEqual(texts(jev).at(-1), "still typing more", "a new paragraph is asked; the answered ones are not");
+  assert.equal(jev.asked.length, 3);
+});
+
+test("leaving the writing box finishes the last paragraph; typing again unfinishes it", async () => {
+  const jev = fakeJev();
+  const s = await start({ ask: jev.ask });
+  write(s, D1, "First");
+  await flush();
+  assert.deepEqual([jev.asked.length, s.read().days[0].unanswered], [0, []], "the last line is still being written");
+  leave(s, D1, "First");
+  await flush();
+  assert.deepEqual(texts(jev), ["First"], "left: the same text, now finished");
+  assert.deepEqual(s.read().days[0].waiting, ["First"]);
+  write(s, D1, "First\nSecond");
+  await jev.answer();
+  assert.equal(jev.asked.length, 1, "back in the box, the last line is unfinished again");
+  assert.deepEqual(s.read().days[0].unanswered, []);
+  leave(s, D1, "First\nSecond");
+  await flush();
+  assert.deepEqual(texts(jev), ["First", "Second"]);
+});
+
+test("rewording a question re-asks today; an earlier day keeps its answer until Judge this day", async () => {
+  const goal = SEED.detectors[1].questions[0];
+  const distortion = SEED.detectors[0].questions[0];
+  const old = (q) => ({ key: `${q.id}\nOld`, text: "Old", wording: wordingOf(q), answer: { id: q.id, p: 0.9, choice: q.options[1].id }, at: at(10, 20), version: 1 });
+  const store = fakeStore({ days: [{ id: D1, day: "2026-10-10", text: "Old", editedAt: at(10, 20), version: 1 }], answers: [old(goal), old(distortion)] });
+  const jev = fakeJev();
+  const s = await start({ store, ask: jev.ask });
+  write(s, D2, "New\n");
+  await flush();
+  await jev.answer();
+  assert.deepEqual(texts(jev), ["New"]);
+  const reworded = { ...goal, text: "Goal, value or neither?" };
+  s.send({ type: "detector.saved", id: IDS.goalOrValue, project: IDS.goals, name: "Goal or value", questions: [reworded].map(({ removing, ...x }) => ({ ...x, options: x.options.map(({ removing: _, ...o }) => o) })) }, DETECTOR_SAVED);
+  await flush();
+  assert.deepEqual(texts(jev), ["New", "New"], "today is asked again; the earlier day is not");
+  assert.equal(jev.asked[1].questions[1].instructions, "Goal, value or neither?");
+  await jev.answer();
+  const of = (text) => s.read().answers.filter((a) => a.text === text && a.answer.id === goal.id);
+  assert.deepEqual(of("New").map((a) => [a.earlier, a.wording.text]), [[false, "Goal, value or neither?"]], "the new answer replaces the old one");
+  assert.deepEqual(of("Old").map((a) => [a.earlier, a.wording.text, a.answer.p]), [[true, "Is this a goal, a value, or neither?", 0.9]], "kept, marked earlier");
+  assert.deepEqual(s.read().days[0].unanswered, ["Old"]);
+  assert.deepEqual(s.read().days[0].waiting, []);
+  judgeDay(s, D1);
+  await flush();
+  assert.deepEqual(texts(jev).at(-1), "Old");
+  assert.deepEqual(s.read().days[0].waiting, ["Old"]);
+  await jev.answer(0.2);
+  assert.deepEqual(of("Old").map((a) => [a.earlier, a.answer.p]), [[false, 0.2]]);
+  assert.deepEqual(s.read().days[0].unanswered, []);
+  assert.equal(jev.asked.length, 3);
+});
+
+test("Judge this day asks an earlier day's paragraphs in order, each once", async () => {
+  const store = fakeStore({ days: [{ id: D1, day: "2026-10-10", text: "A\nB\nA\nC", editedAt: at(10, 20), version: 1 }] });
+  const jev = fakeJev();
+  const s = await start({ store, ask: jev.ask });
+  assert.deepEqual([jev.asked.length, s.read().days[0].waiting], [0, []], "an earlier day is never asked by itself");
+  judgeDay(s, D1);
+  judgeDay(s, D1);
+  await flush();
+  assert.deepEqual(s.read().days[0].waiting, ["A", "B", "C"]);
+  await jev.answer();
+  judgeDay(s, D1);
+  await jev.answer();
+  await jev.answer();
+  await flush();
+  assert.deepEqual(texts(jev), ["A", "B", "C"], "pressed again mid-way, nothing is asked twice");
+  assert.deepEqual(s.read().days[0].unanswered, []);
+});
+
+test("llm busy with another decide: the queue waits and tries again", async () => {
+  const jev = fakeJev();
+  const s = await start({ ask: jev.ask });
+  write(s, D1, "One\n");
+  await flush();
+  await jev.fail("busy");
+  assert.equal(jev.asked.length, 1);
+  assert.deepEqual([s.read().reason, s.read().days[0].waiting], [null, ["One"]], "still waiting, no reason shown");
+  s.advance(BUSY_RETRY_MS);
+  await flush();
+  assert.deepEqual(texts(jev), ["One", "One"]);
+  await jev.answer();
+  assert.equal(s.read().answers.length, 2);
+});
+
+test("an error stops the queue with decide's reason; a later gesture resumes it", async () => {
+  const store = fakeStore({ days: [{ id: D1, day: "2026-10-10", text: "Earlier", editedAt: at(10, 20), version: 1 }] });
+  const jev = fakeJev();
+  const s = await start({ store, ask: jev.ask });
+  write(s, D2, "One\nTwo\n");
+  judgeDay(s, D1);
+  await flush();
+  assert.deepEqual(s.read().days.map((d) => d.waiting), [["Earlier"], ["One", "Two"]]);
+  await jev.fail("rate-limited");
+  assert.equal(s.read().reason, "rate-limited");
+  assert.deepEqual(s.read().days.map((d) => d.waiting), [[], []], "nothing waits once stopped");
+  assert.equal(s.emitted.at(-1).reason, "rate-limited");
+  s.advance(10 * BUSY_RETRY_MS);
+  await flush();
+  assert.equal(jev.asked.length, 1, "no retry by itself");
+  leave(s, D2, "One\nTwo\n");
+  await flush();
+  assert.equal(s.read().reason, null, "a save resumes it");
+  assert.deepEqual(texts(jev), ["One", "One"]);
+  assert.deepEqual(s.read().days[1].waiting, ["One", "Two"], "the open day's paragraphs, not the earlier day's");
+  await jev.fail("no-answerer");
+  assert.equal(s.read().reason, "unavailable", "the bus's own refusal is unavailable");
+  s.send({ type: "llm.changed", ...picture(true, true) }, LLM_CHANGED);
+  await flush();
+  assert.equal(jev.asked.length, 3, "news from llm resumes it");
+  await jev.answer();
+  await jev.answer();
+  assert.deepEqual(texts(jev), ["One", "One", "One", "Two"]);
+  s.send({ type: "llm.changed", ...picture(true, false), jev: { keySet: false, starterLeft: 0 } }, LLM_CHANGED);
+  write(s, D2, "One\nTwo\nThree\n");
+  await flush();
+  assert.deepEqual([s.read().reason, jev.asked.length], ["no-key", 4], "starter requests used up: no key, nothing sent");
+});
+
+test("ticking a project or a detector on asks today's paragraphs again", async () => {
+  const jev = fakeJev();
+  const s = await start({ ask: jev.ask });
+  s.send({ type: "detector-project.switched", id: IDS.goals, on: false }, PROJECT_SWITCHED);
+  write(s, D1, "One\n");
+  await flush();
+  assert.deepEqual(jev.asked[0].questions.map((q) => q.id), [IDS.distortionPick]);
+  await jev.answer();
+  s.send({ type: "detector-project.switched", id: IDS.goals, on: true }, PROJECT_SWITCHED);
+  await flush();
+  assert.deepEqual(jev.asked[1].questions.map((q) => q.id), ON, "every question on, in the one request");
+  await jev.answer();
+  s.send({ type: "detector.switched", id: IDS.goalOrValueYesNo, on: true }, DETECTOR_SWITCHED);
+  await flush();
+  assert.deepEqual(jev.asked[2].questions.map((q) => [q.id, q.kind]), [
+    [IDS.distortionPick, "pick"],
+    [IDS.goalOrValuePick, "pick"],
+    [IDS.isGoal, "yesno"],
+    [IDS.isValue, "yesno"],
+  ]);
+  await jev.answer(0.8);
+  assert.equal(s.read().answers.length, 4);
+  assert.equal(jev.asked.length, 3);
+});
+
+test("signed out, nothing is sent", async () => {
+  const jev = fakeJev(picture(false, false));
+  const s = await start({ ask: jev.ask });
+  leave(s, D1, "One\nTwo");
+  await flush();
+  assert.deepEqual([jev.asked.length, s.read().reason, s.read().days[0].waiting], [0, "signed-out", []]);
 });
 
 // --- Sync (5) -------------------------------------------------------------------------
