@@ -105,9 +105,10 @@ test("an answer to an earlier wording carries the old wording, and its pick keep
   assert.equal(entry(q, answer("A.", q, { p: 0.7, choice: id("O", 9) })).pick, "Removed option");
 });
 
-test("paragraphs split at line breaks, as the journal splits them", () => {
-  assert.deepEqual(paragraphs(" One \n\nTwo\n", true), [{ text: "One", finished: true }, { text: "Two", finished: true }]);
-  assert.deepEqual(paragraphs("One\nTw", true).at(-1), { text: "Tw", finished: false });
+test("paragraphs split at line breaks, as the journal splits them, each knowing its line", () => {
+  assert.deepEqual(paragraphs(" One \n\nTwo\n", true), [{ text: "One", finished: true, line: 1 }, { text: "Two", finished: true, line: 3 }]);
+  assert.deepEqual(paragraphs("One\nTw", true).at(-1), { text: "Tw", finished: false, line: 2 });
+  assert.deepEqual(margins("A.\n\nB.", false, day(TODAY, "2026-10-12", "A.\n\nB."), picture()).map((r) => r.line), [1, 3], "a margin row names the line it sits beside");
 });
 
 // --- The open day, the banner and Judge this day ---------------------------------------
@@ -265,6 +266,24 @@ test("on a closed day the other copy stays: Keep yours does nothing, Done clears
   assert.equal(emitted.length, 0);
   actor.send({ type: "_keepTheirs" });
   assert.equal(actor.getSnapshot().context.conflict, null);
+});
+
+test("Vim keys start from settings: read and follow settings.changed", async () => {
+  const clock = new SimulatedClock();
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => Promise.resolve(target === "settings" ? { vimKeys: true } : target === "journal" ? picture() : {}),
+      mint: () => FRESH,
+      now: () => at(12, 9),
+    },
+    clock,
+  });
+  actor.start();
+  assert.equal(actor.getSnapshot().context.vimKeys, false, "off before the reply");
+  await flush();
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
 });
 
 test("the starter requests used up are read from llm", async () => {

@@ -18,8 +18,30 @@ const ALL_OR_NOTHING = "01K7SEED00000000000000JC04";
 const SUNDAY = "01K7TEST00000000000000DY01";
 
 const entry = (page) => page.locator("journal-entry");
+const editor = (page) => entry(page).locator(".cm-content");
+// Each margin block beside the text: the paragraph it sits beside and what it says.
 const margins = (page) =>
-  entry(page).evaluate((el) => [...el.shadowRoot.querySelectorAll(".para")].map((p) => [p.querySelector(".text").textContent, p.querySelector(".margin").textContent.replace(/\s+/g, " ").trim()]));
+  entry(page).evaluate((el) =>
+    [...el.shadowRoot.querySelectorAll(".margins > .margin")].map((m) => [
+      el.shadowRoot.querySelectorAll(".cm-line")[Number(m.dataset.line) - 1].textContent,
+      m.textContent.replace(/\s+/g, " ").trim(),
+    ]),
+  );
+// Where each margin block starts against where its paragraph starts, in pixels.
+const tops = (page) =>
+  entry(page).evaluate((el) =>
+    [...el.shadowRoot.querySelectorAll(".margins > .margin")].map((m) => [
+      Math.round(el.shadowRoot.querySelectorAll(".cm-line")[Number(m.dataset.line) - 1].getBoundingClientRect().top),
+      Math.round(m.getBoundingClientRect().top),
+    ]),
+  );
+// How many times the text appears on the page: once, in the editor.
+const times = (page, text) => entry(page).evaluate((el, t) => el.shadowRoot.textContent.split(t).length - 1, text);
+// Types into the editor as a user does, a line break as Enter.
+const write = async (page, text) => {
+  await editor(page).click();
+  await page.keyboard.type(text);
+};
 
 // Writes records straight into the journal's store in this browser, then reloads, as if
 // they had been written on an earlier day.
@@ -66,17 +88,18 @@ for (const engine of ENGINES) {
         }
       });
 
-    run("typing two paragraphs shows two margin rows, the last not finished until the box is left", async (page) => {
+    run("typing two paragraphs shows two margin blocks level with them, the text once, the last not finished until the box is left", async (page) => {
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
-      const text = entry(page).locator("textarea.text");
-      await text.fill("I always ruin my mornings.\nI want to run");
+      await write(page, "I always ruin my mornings.\nI want to run");
       await until(async () => (await margins(page)).length === 2);
       assert.deepEqual(await margins(page), [
         ["I always ruin my mornings.", ""],
         ["I want to run", "Not finished yet"],
       ]);
+      await until(async () => (await tops(page)).every(([line, block]) => Math.abs(line - block) <= 2));
+      assert.equal(await times(page, "I always ruin my mornings."), 1, "the text is shown once");
       assert.equal(await entry(page).locator(".reason").textContent(), "Sign in to judge.");
-      await text.blur();
+      await editor(page).blur();
       await until(async () => (await margins(page))[1][1] === "");
       // The Days list has today's entry, and says where it is kept.
       const days = page.locator("journal-days");
@@ -87,7 +110,7 @@ for (const engine of ENGINES) {
 
     run("an earlier day is read only, with Judge this day and its earlier wording", async (page) => {
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
-      await entry(page).locator("textarea.text").waitFor();
+      await editor(page).waitFor();
       const text = "I always ruin my mornings.\nNobody likes me.";
       await seed(page, {
         days: [{ id: SUNDAY, day: "2025-03-02", text, editedAt: new Date(2025, 2, 2, 21).getTime(), version: 1 }],
@@ -104,18 +127,19 @@ for (const engine of ENGINES) {
       });
       await page.locator(`journal-days .row[data-day="${SUNDAY}"]`).click();
       await until(async () => (await entry(page).locator("h2").textContent()) === "Sunday 2 March");
-      assert.equal(await entry(page).locator("textarea").count(), 0, "nothing to type in");
+      assert.equal(await editor(page).getAttribute("contenteditable"), "false", "nothing to type in");
+      assert.equal(await times(page, "Nobody likes me."), 1, "the text is shown once");
       assert.equal((await entry(page).locator(".status").textContent()).trim(), "Read only");
       const judge = entry(page).locator("button.judge-day");
       assert.equal((await judge.textContent()).trim(), "Judge this day · 2 ¶");
       assert.ok(await judge.isDisabled(), "signed out, Jev cannot be asked");
-      const tag = entry(page).locator(".para").first().locator(".earlier");
+      const tag = entry(page).locator(".margins > .margin").first().locator(".earlier");
       assert.equal(await tag.textContent(), "earlier wording");
       assert.equal(await tag.getAttribute("title"), "Asked as: Which distortion is it?\nOptions: All-or-nothing thinking");
       assert.match((await margins(page))[0][1], /Cognitive Distortion Cognitive Distortion All-or-nothing thinking sure 80%/);
-      // Back to today: the writing box returns.
+      // Back to today: the text can be typed in again.
       await page.locator('journal-days .row[data-day="new"]').click();
-      await entry(page).locator("textarea.text").waitFor();
+      await until(async () => (await editor(page).getAttribute("contenteditable")) === "true");
     });
 
     run("on the app page, a finished paragraph gets Jev's answers in its margin", async (page, context) => {
@@ -138,13 +162,42 @@ for (const engine of ENGINES) {
         route.fulfill({ json: { answers, inputTokens: 40, ms: 5 } });
       });
       await page.goto(APP, { waitUntil: "domcontentloaded" });
-      const text = entry(page).locator("textarea.text");
-      await text.fill("I want to run a marathon.\n");
+      await write(page, "I want to run a marathon.\n");
       await until(async () => /Goal sure 90%/.test((await margins(page))[0]?.[1] ?? ""));
       const [[, margin]] = await margins(page);
       assert.match(margin, /^Cognitive Distortion Cognitive Distortion .* Goals and values Goal or value Goal sure 90%$/);
       assert.deepEqual(asked, ["I want to run a marathon."], "one request for the paragraph");
       await until(async () => (await page.locator("journal-days .kept").textContent()) === "Kept on your account, on every device.");
+    });
+
+    run("with Vim keys on, the editor shows Vim's block cursor", async (page) => {
+      // The stem page is in the workshop profile, whose preferences settings keeps under its own name.
+      await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await editor(page).click();
+      await until(async () => (await entry(page).locator(".cm-fat-cursor").count()) === 1);
+    });
+
+    run("on a phone the answers sit under each paragraph, and the text is shown once", async (page) => {
+      await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
+      await write(page, "I always ruin my mornings.\nI want to run");
+      const placed = () =>
+        entry(page).evaluate((el) => {
+          const lines = [...el.shadowRoot.querySelectorAll(".cm-line")];
+          return [...el.shadowRoot.querySelectorAll(".margin.under")].map((m) => {
+            const above = m.previousElementSibling;
+            return [above.textContent, Math.round(m.getBoundingClientRect().top) >= Math.round(above.getBoundingClientRect().bottom), m.textContent.trim(), lines.includes(above)];
+          });
+        });
+      await until(async () => (await placed()).length === 2);
+      assert.deepEqual(await placed(), [
+        ["I always ruin my mornings.", true, "", true],
+        ["I want to run", true, "Not finished yet", true],
+      ]);
+      assert.equal(await entry(page).locator(".margins > .margin").count(), 0, "no column beside the text");
+      assert.equal(await times(page, "I always ruin my mornings."), 1, "the text is shown once");
     });
   });
 }

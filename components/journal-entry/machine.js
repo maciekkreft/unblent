@@ -3,9 +3,10 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 // The view component where the user writes the journal (6.4), the stage of the journal
 // app. It owns only UI state — which day is shown, the text being typed as a draft,
 // whether typing is waiting to be saved, whether the box has the keyboard, and a
-// conflict the user has not settled — and points at two facts: it asks journal: read and
-// llm: read for the starting picture and follows journal.changed and llm.changed after
-// (4.3, fourth rule). Writing leaves as day.saved, at a throttle while typing and at once
+// conflict the user has not settled — and points at three facts: it asks journal: read,
+// llm: read and settings: read for the starting picture and follows journal.changed,
+// llm.changed and settings.changed after (4.3, fourth rule); settings only for the "Vim
+// keys" preference (12). Writing leaves as day.saved, at a throttle while typing and at once
 // on blur with `left`, so the paragraph being written counts as finished (4.3, third
 // rule); whether a save lands is the journal's to decide, because the "today only" rule
 // lives there. The ask, the id minting, the clock and the throttle arrive through input,
@@ -40,13 +41,14 @@ export const longDate = (day) =>
 // The paragraphs of a day's text, in order, trimmed. A line break ends a paragraph; while
 // the box is being typed in, the line at the end is unfinished, otherwise every paragraph
 // is finished. Copied from journal's paragraphs, because components never import each
-// other (11.2): the margin must split the text the way the fact asks Jev about it.
+// other (11.2): the margin must split the text the way the fact asks Jev about it. `line`
+// (1-based) is this view's addition: where the editor draws the paragraph's margin.
 export const paragraphs = (text, editing) => {
   const lines = text.split("\n");
   const out = [];
   lines.forEach((line, i) => {
     const t = line.trim();
-    if (t) out.push({ text: t, finished: !editing || i < lines.length - 1 });
+    if (t) out.push({ text: t, finished: !editing || i < lines.length - 1, line: i + 1 });
   });
   return out;
 };
@@ -110,8 +112,8 @@ export const margins = (text, editing, day, picture) => {
   const byKey = new Map(picture.answers.map((a) => [`${a.answer.id}\n${a.text}`, a]));
   const named = groups.length > 1;
   return paragraphs(text, editing).map((p) => {
-    if (!p.finished) return { text: p.text, state: "unfinished" };
-    if (day.waiting.includes(p.text)) return { text: p.text, state: "waiting" };
+    if (!p.finished) return { text: p.text, line: p.line, state: "unfinished" };
+    if (day.waiting.includes(p.text)) return { text: p.text, line: p.line, state: "waiting" };
     const projects = groups
       .map((g) => ({
         id: g.id,
@@ -128,7 +130,7 @@ export const margins = (text, editing, day, picture) => {
           .filter((d) => d.entries.length > 0),
       }))
       .filter((g) => g.detectors.length > 0);
-    return { text: p.text, state: "answered", projects };
+    return { text: p.text, line: p.line, state: "answered", projects };
   });
 };
 
@@ -256,6 +258,7 @@ export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -265,8 +268,9 @@ export const machine = setup({
   meta: {
     description:
       "The journal's page: the day picked in the Days list, or the day that can still be " +
-      "edited, or an empty page for today. Each paragraph has Jev's answers in a margin beside " +
-      "it, or under it on a phone, grouped under each project's name when more than one project " +
+      "edited, or an empty page for today. The day's text is shown once, in one editor, read only " +
+      "on an earlier day, with Vim when the Vim keys setting is on. Each paragraph has Jev's " +
+      "answers in a margin beside it, level with its first line, or under it on a phone, grouped under each project's name when more than one project " +
       "is on. A pick-one question shows the pick and \"sure n%\", or \"unsure\" below 40%; a yes / " +
       "no question shows the chance of yes in Judge's colours. A paragraph waiting for Jev says " +
       "\"Judging…\", and the paragraph being written says \"Not finished yet\": a paragraph is " +
@@ -283,7 +287,7 @@ export const machine = setup({
     kind: "view",
     emits: ["day.saved", "day.judging.requested"],
     attributes: [],
-    asks: ["journal: read", "llm: read"],
+    asks: ["journal: read", "llm: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -299,14 +303,24 @@ export const machine = setup({
     editing: false,
     usedUp: false,
     conflict: null,
+    // The "Vim keys" device preference (12), owned by `settings`: off until it says
+    // otherwise, and off on a page without it (the ask replies no-answerer).
+    vimKeys: false,
   }),
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
-  invoke: {
-    src: "llm",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign(({ event }) => ({ usedUp: event.output?.jev?.starterLeft === 0 })) },
-  },
+  invoke: [
+    {
+      src: "llm",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign(({ event }) => ({ usedUp: event.output?.jev?.starterLeft === 0 })) },
+    },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    },
+  ],
   initial: "loading",
   states: {
     loading: {
@@ -378,6 +392,7 @@ export const machine = setup({
     "journal.changed": { actions: assign(({ event }) => ({ picture: picture(event) })) },
     "journal.conflicted": { actions: assign(({ event }) => ({ conflict: { id: event.id, mine: event.mine, theirs: event.theirs } })) },
     "llm.changed": { actions: assign(({ event }) => ({ usedUp: event.jev?.starterLeft === 0 })) },
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "day.selected": { actions: assign(({ event }) => ({ selected: event.id })) },
   },
 });
