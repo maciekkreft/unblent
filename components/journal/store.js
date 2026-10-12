@@ -21,6 +21,9 @@ export function openJournal() {
   return {
     all: (table) => db.all(table),
     put: (table, record) => db.put(table, record),
+    outboxAll: () => db.all("outbox"),
+    outboxPut: (row) => db.put("outbox", row),
+    outboxDelete: (key) => db.delete("outbox", key),
     metaGet: async (key) => (await db.get("meta", key))?.value,
     metaPut: (key, value) => db.put("meta", { key, value }),
   };

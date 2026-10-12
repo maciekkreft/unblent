@@ -1,4 +1,4 @@
-import { setup, assign, enqueueActions, fromPromise } from "xstate";
+import { setup, assign, enqueueActions, fromPromise, and } from "xstate";
 
 // The fact component that owns the journal (3.1), replicated (5): its days, its own
 // projects and detectors, and Jev's answers. One fact owns them all, so the journal has
@@ -108,7 +108,7 @@ const tomb = (r) => (r.deleted === true ? { deleted: true } : {});
 // Each record in its stored shape, or null when it has no valid id.
 const dayRecord = (d) =>
   d && isId(d.id) && /^\d{4}-\d{2}-\d{2}$/.test(d.day)
-    ? { id: d.id, day: d.day, text: str(d.text), editedAt: Number.isInteger(d.editedAt) ? d.editedAt : 0, version: version(d.version) }
+    ? { id: d.id, day: d.day, text: str(d.text), editedAt: Number.isInteger(d.editedAt) ? d.editedAt : 0, version: version(d.version), ...tomb(d) }
     : null;
 
 const projectRecord = (p) =>
@@ -135,7 +135,7 @@ const keyOf = (a) => `${a.answer.id}\n${a.text}`;
 
 const answerRecord = (a) =>
   a && typeof a.text === "string" && a.wording && a.answer && isId(a.answer.id) && Number.isInteger(a.at)
-    ? { key: keyOf(a), text: a.text, wording: a.wording, answer: a.answer, at: a.at }
+    ? { key: keyOf(a), text: a.text, wording: a.wording, answer: a.answer, at: a.at, version: version(a.version), ...tomb(a) }
     : null;
 
 // --- Seeds ----------------------------------------------------------------------------
@@ -422,7 +422,7 @@ const body = (c) => {
       })),
     projects: c.projects.filter((p) => !p.deleted).map(shown),
     detectors: c.detectors.filter((d) => !d.deleted).map(shown),
-    answers: c.answers.map(({ key, ...a }) => ({
+    answers: c.answers.filter((a) => !a.deleted).map(({ key, version: _, deleted: __, ...a }) => ({
       ...a,
       earlier: wordings.has(a.answer.id) && !same(wordings.get(a.answer.id), a.wording),
     })),
@@ -433,15 +433,21 @@ const body = (c) => {
 
 // --- The actor ------------------------------------------------------------------------
 
-const TABLES = ["days", "projects", "detectors"];
+// Each record kind and the field that keys it; an answer has no id of its own.
+const KEY = { days: "id", projects: "id", detectors: "id", answers: "key" };
+const TABLES = Object.keys(KEY);
+const idOf = (table, r) => r[KEY[table]];
+// A record's row in the outbox: one per kind and id.
+const rowKey = (table, r) => `${table}\n${idOf(table, r)}`;
+const normal = { days: dayRecord, projects: projectRecord, detectors: detectorRecord, answers: answerRecord };
 
 // Stores every record that differs from what was held, so a keystroke writes one day,
 // not the journal.
 const persist = (store, held, next, enqueue) => {
   for (const table of TABLES) {
     if (!next[table]) continue;
-    const was = new Map(held[table].map((r) => [r.id, r]));
-    for (const r of next[table]) if (!same(was.get(r.id), r)) enqueue(() => store.put(table, r).catch(() => {}));
+    const was = new Map(held[table].map((r) => [idOf(table, r), r]));
+    for (const r of next[table]) if (!same(was.get(idOf(table, r)), r)) enqueue(() => store.put(table, r).catch(() => {}));
   }
 };
 
@@ -461,18 +467,190 @@ const announce = (enqueue, c) => {
   enqueue.emit({ type: "journal.changed", ...picture });
 };
 
+// --- The outbox (5) -------------------------------------------------------------------
+
+// What the server keeps of a record: not its version (the server's to assign), the tab's
+// undo marks, the tombstone flag (sent beside it) or an answer's key (the server keys an
+// answer by its question and its text).
+const DROPPED = new Set(["removing", "version", "deleted", "key"]);
+const wire = (r) => JSON.parse(JSON.stringify(r, (k, v) => (DROPPED.has(k) ? undefined : v)));
+
+// One outbox for every kind, so three offline edits of a record become one write. The base stays the one the first unsynced change was on, which is
+// what the server compares a day's write against.
+const enqueueRow = (c, enqueue, table, r, base) => {
+  const key = rowKey(table, r);
+  const existing = c.outbox.get(key);
+  const row = { key, table, record: wire(r), baseVersion: existing ? existing.baseVersion : base };
+  if (r.deleted) row.deleted = true;
+  c.outbox.set(key, row);
+  enqueue(() => c.store.outboxPut(row).catch(() => {}));
+};
+
+// Queues every record whose content changed between `held` and `next`.
+const enqueueChanges = (c, enqueue, held, next) => {
+  for (const table of TABLES) {
+    if (!next[table]) continue;
+    const was = new Map(held[table].map((r) => [idOf(table, r), r]));
+    for (const r of next[table]) {
+      const old = was.get(idOf(table, r));
+      if (!old || content(old) !== content(r)) enqueueRow(c, enqueue, table, r, old ? old.version : null);
+    }
+  }
+};
+
+// An example record nobody has changed. Every device seeds the same ids, so uploading one
+// would overwrite, last write wins, a change the account already holds for it; the
+// account's own copy, pulled, is always newer.
+const SEEDS = new Map([...SEED.projects, ...SEED.detectors].map((r) => [r.id, r]));
+const untouchedSeed = (r) => r.version === 1 && SEEDS.has(r.id) && content(SEEDS.get(r.id)) === content(r);
+
+// Signing in makes the journal kept in this browser the account's (5): every record,
+// tombstones too, goes up, and one the server has never seen goes on the version this
+// browser numbered, so the server continues its history. A day's row pinned to a
+// version the server gave keeps that base, so an edit made while signed out is still
+// compared with what the server holds; the other kinds are last write wins, so their
+// base only numbers a record the server has not seen. The pull starts over for the new
+// user.
+const adopt = (c, enqueue, userId) => {
+  enqueue.assign({ userId, cursor: 0 });
+  enqueue(() => c.store.metaPut("userId", userId).catch(() => {}));
+  enqueue(() => c.store.metaPut("cursor", 0).catch(() => {}));
+  for (const table of TABLES) {
+    for (const r of c[table]) {
+      const key = rowKey(table, r);
+      const row = c.outbox.get(key);
+      if ((table === "days" && row?.baseVersion != null) || (!row && untouchedSeed(r))) continue;
+      if (!row) {
+        enqueueRow(c, enqueue, table, r, r.version);
+        continue;
+      }
+      const adopted = { ...row, baseVersion: r.version };
+      c.outbox.set(key, adopted);
+      enqueue(() => c.store.outboxPut(adopted).catch(() => {}));
+    }
+  }
+  enqueue.raise({ type: "_sync", pull: true });
+};
+
+// Signed in, the versions are the server's: a change keeps the version it was made on
+// until the server acknowledges it, rather than the one minted for a signed-out journal.
+const unmint = (c, change) =>
+  Object.fromEntries(
+    Object.entries(change).map(([table, list]) => {
+      const was = new Map(c[table].map((r) => [idOf(table, r), r]));
+      return [table, list.map((r) => (was.has(idOf(table, r)) ? { ...r, version: was.get(idOf(table, r)).version } : r))];
+    }),
+  );
+
 // Each gesture becomes a candidate change, or null; only a change is stored and
-// announced, so a repeat stores and emits nothing.
+// announced, so a repeat stores and emits nothing. A change is queued in the outbox
+// signed in or not, so its row keeps the last version the server gave as its base;
+// only signed in is a drain asked for.
 const commit = (next) =>
   enqueueActions(({ context, event, enqueue }) => {
     const now = context.now();
-    const change = next(context, event, now);
+    let change = next(context, event, now);
     if (!change || TABLES.every((t) => !change[t] || same(change[t], context[t]))) return;
+    if (context.userId) change = unmint(context, change);
+    enqueueChanges(context, enqueue, context, change);
+    if (context.userId) enqueue.raise({ type: "_drain" });
     persist(context.store, context, change, enqueue);
     enqueue.assign(change);
     announce(enqueue, { ...context, ...change });
     arm(enqueue, change.days ?? context.days, now);
   });
+
+// Applies a sync's summary: the acknowledged records, the conflicts, what was pulled,
+// the cursor, and a session the server no longer knows.
+const applySync = (context, output, enqueue) => {
+  const { acks = [], conflicts = [], pulled = {}, newCursor, authFailed } = output;
+  const lists = Object.fromEntries(TABLES.map((t) => [t, [...context[t]]]));
+  const held = (table, id) => lists[table].find((r) => idOf(table, r) === id);
+  const keep = (table, r) => {
+    const id = idOf(table, r);
+    const i = lists[table].findIndex((x) => idOf(table, x) === id);
+    if (i < 0) lists[table].push(r);
+    else lists[table][i] = r;
+  };
+  // A record from the server, keeping this tab's undo mark on it.
+  const adopted = (table, record) => {
+    const r = normal[table](record);
+    const was = r && held(table, idOf(table, r));
+    return r && was?.removing ? { ...r, removing: true } : r;
+  };
+  const dropRow = (key) => {
+    context.outbox.delete(key);
+    enqueue(() => context.store.outboxDelete(key).catch(() => {}));
+  };
+
+  for (const { row, record } of acks) {
+    const r = adopted(row.table, record);
+    if (!r) continue;
+    const current = context.outbox.get(row.key);
+    // Drained when the server holds what is pending now; a change made during the sync
+    // leaves a newer row, which stays and moves its base to the acknowledged version.
+    // A record the server holds as a tombstone is gone whatever was pending (5).
+    const drained =
+      current && (r.deleted || (same(current.record, row.record) && Boolean(current.deleted) === Boolean(row.deleted)));
+    if (drained) dropRow(row.key);
+    else if (current) {
+      const advanced = { ...current, baseVersion: r.version };
+      context.outbox.set(row.key, advanced);
+      enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
+    }
+    const was = held(row.table, idOf(row.table, r));
+    keep(row.table, drained || !was ? r : { ...was, version: r.version });
+  }
+
+  // Only a day conflicts: its text was written on a version another device had moved
+  // past. The server's copy is kept and both copies are announced, so a view can show
+  // the user what they wrote rather than lose it.
+  for (const { row, record } of conflicts) {
+    const theirs = adopted("days", record);
+    if (!theirs) continue;
+    const mine = context.outbox.get(row.key) ?? row;
+    dropRow(row.key);
+    keep("days", theirs);
+    enqueue.emit({
+      type: "journal.conflicted",
+      id: theirs.id,
+      mine: { text: mine.record.text, baseVersion: mine.baseVersion },
+      theirs: { text: theirs.text, version: theirs.version, editedAt: theirs.editedAt },
+    });
+  }
+
+  for (const table of TABLES) {
+    for (const record of pulled[table] ?? []) {
+      const r = adopted(table, record);
+      if (!r) continue;
+      const was = held(table, idOf(table, r));
+      if (was && r.version <= was.version) continue;
+      // A delete always wins (5): a live copy never brings back a local tombstone.
+      if (was?.deleted && !r.deleted) continue;
+      // A change still in the outbox goes up next: a day's comes back as a conflict
+      // carrying this copy, the other kinds' overwrite it, last write wins.
+      if (context.outbox.has(rowKey(table, r))) continue;
+      keep(table, r);
+    }
+  }
+
+  const change = Object.fromEntries(TABLES.filter((t) => !same(lists[t], context[t])).map((t) => [t, lists[t]]));
+  if (Object.keys(change).length) {
+    persist(context.store, context, change, enqueue);
+    enqueue.assign(change);
+    announce(enqueue, { ...context, ...change });
+    const now = context.now();
+    arm(enqueue, change.days ?? context.days, now);
+  }
+  if (newCursor !== undefined) {
+    enqueue.assign({ cursor: newCursor });
+    enqueue(() => context.store.metaPut("cursor", newCursor).catch(() => {}));
+  }
+  if (authFailed) {
+    enqueue.assign({ userId: null });
+    enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
+  }
+};
 
 // The llm picture matters here only for the reason, so it is announced only when the
 // reason changes.
@@ -504,20 +682,78 @@ const replay = (context, enqueue) => {
   enqueue.assign({ queued: [] });
 };
 
+// The pause in typing the network waits for (5): a save restarts the window, so a run of
+// saves drains once, as one coalesced write per record, after the typing stops. A load,
+// a sign-in, a tab regaining focus or going to the background does not wait.
+const SYNC_IDLE_MS = 2000;
+
 export const machine = setup({
+  guards: {
+    syncable: ({ context }) => Boolean(context.userId) && context.api != null,
+    // A pull is always worth the round trip; a bare drain only when the outbox holds something.
+    needed: ({ context, event }) => Boolean(event.pull) || context.outbox.size > 0,
+  },
   actors: {
-    load: fromPromise(async ({ input: { store } }) => {
-      const [days, projects, detectors, answers, seed] = await Promise.all([
+    load: fromPromise(async ({ input: { store, ask } }) => {
+      const [days, projects, detectors, answers, outbox, seed, cursor, userId, session] = await Promise.all([
         store.all("days"),
         store.all("projects"),
         store.all("detectors"),
         store.all("answers"),
+        store.outboxAll(),
         store.metaGet("seed"),
+        store.metaGet("cursor"),
+        store.metaGet("userId"),
+        // Who is signed in now. Without an answer (no session on the page, or a Node
+        // test without one) the user this browser last synced for is assumed.
+        ask ? ask("session", "read", {}).catch(() => null) : null,
       ]);
-      return { days, projects, detectors, answers, seed: Number.isInteger(seed) ? seed : 0 };
+      const known = session && typeof session === "object" && "userId" in session;
+      return {
+        days,
+        projects,
+        detectors,
+        answers,
+        outbox,
+        seed: Number.isInteger(seed) ? seed : 0,
+        cursor: Number.isInteger(cursor) ? cursor : 0,
+        stored: userId ?? null,
+        userId: known ? session.userId : userId ?? null,
+      };
     }),
     // No llm on the page, or a Node test without an ask, reads as nobody signed in.
     llm: fromPromise(({ input }) => (input.ask ? input.ask("llm", "read", {}) : Promise.resolve(null))),
+    // One sync: drain the outbox, then pull what changed since the cursor. It returns a
+    // summary the machine applies and never emits (4.3). A network error stops it with
+    // what it had; 401 reports the session is gone. A drained row is deleted from the
+    // store here, so it is durably gone; one changed during the sync is put back.
+    sync: fromPromise(async ({ input: { api, store, rows, cursor, pull } }) => {
+      const acks = [];
+      const conflicts = [];
+      for (const row of [...rows].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+        let result;
+        try {
+          result = await api.put(row);
+        } catch {
+          return { acks, conflicts, networkError: true };
+        }
+        if (result.error === "unauthorized") return { acks, conflicts, authFailed: true };
+        await store.outboxDelete(row.key).catch(() => {});
+        (result.conflict ? conflicts : acks).push({ row, record: result.record });
+      }
+      // A save-triggered drain does not pull: nothing this device needs changed on the
+      // server, and a pull per pause in typing would be a poll (5).
+      if (!pull) return { acks, conflicts };
+      let pulled;
+      try {
+        pulled = await api.pull(cursor);
+      } catch {
+        return { acks, conflicts, networkError: true };
+      }
+      if (pulled.error === "unauthorized") return { acks, conflicts, authFailed: true };
+      const { cursor: newCursor, ...records } = pulled;
+      return { acks, conflicts, pulled: records, newCursor };
+    }),
   },
 }).createMachine({
   id: "journal",
@@ -556,36 +792,49 @@ export const machine = setup({
     error: null,
     open: null,
     userId: null,
+    cursor: 0,
+    outbox: new Map(),
     queued: [],
+    // What a trigger that arrives mid-sync is owed: resync means sync again, pull
+    // whether that next sync must also pull.
+    resync: false,
+    pull: false,
     store: input.store,
     now: input.now,
     ask: input.ask,
+    api: input.api,
   }),
   initial: "loading",
-  // Who is signed in; the outbox drains only while someone is (5).
-  on: {
-    "session.changed": { actions: assign({ userId: ({ event }) => event.userId }) },
-  },
   states: {
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ store: context.store }),
+        input: ({ context }) => ({ store: context.store, ask: context.ask }),
         onDone: {
           target: "ready",
           actions: enqueueActions(({ context, event, enqueue }) => {
             const { output } = event;
-            const held = settleAll({
+            const before = {
               days: output.days.map(dayRecord).filter(Boolean),
               projects: catchUp("projects", output.projects.map(projectRecord).filter(Boolean), output.seed),
               detectors: catchUp("detectors", output.detectors.map(detectorRecord).filter(Boolean), output.seed),
               answers: output.answers.map(answerRecord).filter(Boolean),
-            });
+            };
+            const held = settleAll(before);
             persist(context.store, output, held, enqueue);
             if (output.seed < SEED_VERSION) enqueue(() => context.store.metaPut("seed", SEED_VERSION).catch(() => {}));
+            const outbox = new Map(output.outbox.map((row) => [row.key, row]));
+            const c = { ...context, ...held, outbox };
+            const { userId } = output;
+            // A removal settled at load is a change like any other, and goes up.
+            enqueueChanges(c, enqueue, before, held);
             const now = context.now();
-            enqueue.assign({ ...held, open: openDay(held.days, now)?.id ?? null });
+            enqueue.assign({ ...held, outbox, userId, cursor: output.cursor, open: openDay(held.days, now)?.id ?? null });
             arm(enqueue, held.days, now);
+            // Signed in since this browser last synced, perhaps in another tab, is a
+            // sign-in like any other.
+            if (userId && userId !== output.stored) adopt(c, enqueue, userId);
+            else if (userId) enqueue.raise({ type: "_sync", pull: true });
             replay(context, enqueue);
           }),
         },
@@ -602,11 +851,13 @@ export const machine = setup({
       on: {
         ...Object.fromEntries(Object.keys(GESTURES).map((type) => [type, { actions: queue }])),
         "day.judging.requested": { actions: queue },
+        "session.changed": { actions: queue },
         "llm.changed": { actions: assign({ llm: ({ event }) => event }) },
         "read?": { actions: queue },
       },
     },
     ready: {
+      initial: "idle",
       invoke: {
         src: "llm",
         input: ({ context }) => ({ ask: context.ask }),
@@ -618,6 +869,16 @@ export const machine = setup({
         // accepted and changes nothing.
         "day.judging.requested": { actions: () => {} },
         "llm.changed": { actions: follow((event) => event) },
+        // The outbox drains only while someone is signed in (5); signing out keeps it,
+        // to go up at the next sign-in.
+        "session.changed": {
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            if (event.userId === context.userId) return;
+            if (event.userId) return adopt(context, enqueue, event.userId);
+            enqueue.assign({ userId: null });
+            enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
+          }),
+        },
         _close: {
           actions: enqueueActions(({ context, enqueue }) => {
             const now = context.now();
@@ -626,6 +887,60 @@ export const machine = setup({
           }),
         },
         "read?": { actions: ({ context, event }) => event.reply(body(context)) },
+      },
+      states: {
+        idle: {
+          on: {
+            _drain: { guard: "syncable", target: "debouncing" },
+            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+          },
+        },
+        // A _drain re-enters this state, which restarts the window, so the drain waits
+        // until typing has paused for all of it. Signed out mid-window, it returns to
+        // idle rather than sync with no user.
+        debouncing: {
+          on: {
+            _drain: { target: "debouncing", reenter: true },
+            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+          },
+          after: {
+            [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
+          },
+        },
+        syncing: {
+          entry: assign({ resync: false, pull: false }),
+          invoke: {
+            src: "sync",
+            // pull comes from the triggering event: the entry assign above runs before
+            // the input is read and would otherwise wipe it from context.
+            input: ({ context, event }) => ({
+              api: context.api,
+              store: context.store,
+              rows: [...context.outbox.values()],
+              cursor: context.cursor,
+              pull: Boolean(event.pull),
+            }),
+            onDone: {
+              target: "idle",
+              actions: [
+                enqueueActions(({ context, event, enqueue }) => applySync(context, event.output, enqueue)),
+                // A trigger that arrived mid-sync is owed a follow-up, unless the session
+                // went away or the network failed, when the next trigger retries. A focus
+                // mid-sync syncs at once with its pull; a save mid-sync waits out the window.
+                enqueueActions(({ context, event, enqueue }) => {
+                  const { authFailed, networkError } = event.output;
+                  if (authFailed || networkError) return;
+                  if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
+                  else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
+                }),
+              ],
+            },
+            onError: { target: "idle" },
+          },
+          on: {
+            _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
+          },
+        },
       },
     },
   },

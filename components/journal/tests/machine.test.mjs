@@ -16,6 +16,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // Schemas are read, never imported (11.2); the gestures' schemas live with their emitters.
 const json = (...path) => JSON.parse(readFileSync(resolve(HERE, "..", ...path), "utf8"));
 const CHANGED = json("events", "journal.changed.json");
+const CONFLICTED = json("events", "journal.conflicted.json");
+const SESSION_CHANGED = json("..", "session", "events", "session.changed.json");
 const READ = json("queries", "read.json").reply;
 const DAY_SAVED = json("..", "journal-entry", "events", "day.saved.json");
 const PROJECT_SAVED = json("..", "detector-projects", "events", "detector-project.saved.json");
@@ -46,34 +48,44 @@ const flush = async (n = 6) => {
   for (let i = 0; i < n; i += 1) await tick();
 };
 
-function fakeStore({ days = [], projects = [], detectors = [], answers = [], seed } = {}) {
+function fakeStore({ days = [], projects = [], detectors = [], answers = [], seed, userId } = {}) {
   const tables = {
     days: new Map(days.map((r) => [r.id, r])),
     projects: new Map(projects.map((r) => [r.id, r])),
     detectors: new Map(detectors.map((r) => [r.id, r])),
     answers: new Map(answers.map((r) => [r.key, r])),
   };
-  const meta = new Map(seed === undefined ? [] : [["seed", seed]]);
+  const meta = new Map([...(seed === undefined ? [] : [["seed", seed]]), ...(userId === undefined ? [] : [["userId", userId]])]);
+  const outbox = new Map();
   const puts = [];
   return {
     tables,
     meta,
+    outbox,
     puts,
     all: (t) => Promise.resolve([...tables[t].values()]),
-    put: (t, r) => (puts.push([t, r.id]), tables[t].set(r.id, r), Promise.resolve()),
+    put: (t, r) => (puts.push([t, r.key ?? r.id]), tables[t].set(r.key ?? r.id, r), Promise.resolve()),
+    outboxAll: () => Promise.resolve([...outbox.values()]),
+    outboxPut: (row) => (outbox.set(row.key, row), Promise.resolve()),
+    outboxDelete: (key) => (outbox.delete(key), Promise.resolve()),
     metaGet: (k) => Promise.resolve(meta.get(k)),
     metaPut: (k, v) => (meta.set(k, v), Promise.resolve()),
   };
 }
 
-async function start({ store = fakeStore(), time = at(12, 10), ask } = {}) {
+async function start({ store = fakeStore(), time = at(12, 10), ask, api } = {}) {
   let now = time;
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { store, now: () => now, ask }, clock });
+  const actor = createActor(machine, { input: { store, now: () => now, ask, api }, clock });
   const emitted = [];
+  const conflicted = [];
   actor.on("journal.changed", (e) => {
     emitted.push(e);
     recorded.push({ value: e, schema: CHANGED });
+  });
+  actor.on("journal.conflicted", (e) => {
+    conflicted.push(e);
+    recorded.push({ value: e, schema: CONFLICTED });
   });
   actor.start();
   await flush();
@@ -93,7 +105,7 @@ async function start({ store = fakeStore(), time = at(12, 10), ask } = {}) {
     clock.increment(ms);
   };
   const setNow = (t) => (now = t);
-  return { actor, store, emitted, send, read, advance, setNow };
+  return { actor, store, emitted, conflicted, send, read, advance, setNow };
 }
 
 const write = (s, id, text) => s.send({ type: "day.saved", id, text }, DAY_SAVED);
@@ -420,6 +432,175 @@ test("a gesture or a read that arrives while the store loads is applied once it 
   await flush();
   assert.equal(reply.days[0].text, "Early");
   assert.equal(reply.projects.length, 2);
+});
+
+// --- Sync (5) -------------------------------------------------------------------------
+
+// A stand-in for journal's server module, keeping its rules: a new record continues from
+// the base it was sent on, a day on a stale base is a conflict, every other kind is last
+// write wins, and the pull returns what changed since a cursor.
+function fakeServer() {
+  const tables = { days: new Map(), projects: new Map(), detectors: new Map(), answers: new Map() };
+  const puts = [];
+  let seq = 0;
+  const keyOf = (table, r) => (table === "answers" ? `${r.answer.id}\n${r.text}` : r.id);
+  const out = ({ seq: _, ...r }) => structuredClone(r);
+  const held = (table, id) => tables[table].get(id);
+  const set = (table, record, version, deleted = false) => {
+    const r = { ...structuredClone(record), version, deleted, seq: ++seq };
+    tables[table].set(keyOf(table, record), r);
+    return out(r);
+  };
+  const api = {
+    async put(row) {
+      puts.push(structuredClone(row));
+      const was = held(row.table, keyOf(row.table, row.record));
+      if (!was) return { record: set(row.table, row.record, (row.baseVersion ?? 0) + 1, Boolean(row.deleted)) };
+      if (row.deleted) return { record: was.deleted ? out(was) : set(row.table, row.record, was.version + 1, true) };
+      if (was.deleted) return row.table === "days" ? { conflict: true, record: out(was) } : { record: out(was) };
+      const { version: _v, deleted: _d, seq: _s, ...content } = was;
+      if (same(content, row.record)) return { record: out(was) };
+      if (row.table === "days" && row.baseVersion !== was.version) return { conflict: true, record: out(was) };
+      return { record: set(row.table, row.record, was.version + 1) };
+    },
+    async pull(since) {
+      const pulled = Object.fromEntries(
+        Object.entries(tables).map(([t, m]) => [t, [...m.values()].filter((r) => r.seq > since).map(out)]),
+      );
+      return { ...pulled, cursor: seq };
+    },
+  };
+  // Another device's write, straight into the server.
+  const other = (table, record) => set(table, record, (held(table, keyOf(table, record))?.version ?? 0) + 1);
+  return { api, puts, held, other };
+}
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const signedIn = (userId) => async (target, name) =>
+  target === "session" && name === "read" ? { userId, registrationOpen: false } : { error: "no-answerer" };
+const IDLE = 2000;
+
+test("signed in, a run of saves goes up once typing pauses, as one write per record", async () => {
+  const server = fakeServer();
+  const s = await start({ store: fakeStore({ userId: "u1" }), ask: signedIn("u1"), api: server.api });
+  assert.deepEqual(server.puts, [], "nothing changed, so nothing goes up: the examples are every device's own");
+  write(s, D1, "One");
+  write(s, D1, "One\nTwo");
+  s.send({ type: "detector-project.switched", id: IDS.goals, on: false }, PROJECT_SWITCHED);
+  s.send({ type: "detector-project.switched", id: IDS.goals, on: true }, PROJECT_SWITCHED);
+  s.send({ type: "detector-project.switched", id: IDS.goals, on: false }, PROJECT_SWITCHED);
+  s.advance(IDLE - 1);
+  await flush();
+  assert.deepEqual(server.puts, [], "still inside the pause");
+  write(s, D1, "One\nTwo\nThree");
+  s.advance(IDLE - 1);
+  await flush();
+  assert.deepEqual(server.puts, [], "a save restarts the pause");
+  s.advance(1);
+  await flush();
+  assert.deepEqual(server.puts.map((r) => r.key).sort(), [`days\n${D1}`, `projects\n${IDS.goals}`]);
+  const day = server.puts.find((r) => r.table === "days");
+  assert.equal(day.record.text, "One\nTwo\nThree");
+  assert.equal(day.baseVersion, null, "a new day");
+  assert.equal(server.puts.find((r) => r.table === "projects").baseVersion, 1, "the version the first unsynced change was on");
+  assert.equal(s.store.outbox.size, 0, "acknowledged rows are gone");
+  assert.equal(s.read().days[0].version, 1, "the server's version");
+});
+
+test("a tab going to the background drains at once, without waiting for the pause", async () => {
+  const server = fakeServer();
+  const s = await start({ store: fakeStore({ userId: "u1" }), ask: signedIn("u1"), api: server.api });
+  write(s, D1, "One");
+  s.actor.send({ type: "_sync", pull: false });
+  await flush();
+  assert.equal(server.puts.length, 1);
+  assert.equal(s.store.outbox.size, 0);
+});
+
+test("a day written on a version another device moved past comes back as a conflict with both copies", async () => {
+  const server = fakeServer();
+  server.other("days", { id: D1, day: "2026-10-12", text: "Morning", editedAt: at(12, 9) });
+  const store = fakeStore({ userId: "u1", days: [{ id: D1, day: "2026-10-12", text: "Morning", editedAt: at(12, 9), version: 1 }] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api });
+  server.other("days", { id: D1, day: "2026-10-12", text: "Morning\nFrom the phone", editedAt: at(12, 9, 30) });
+  write(s, D1, "Morning\nFrom the laptop");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.puts.at(-1).baseVersion, 1);
+  assert.deepEqual(s.conflicted.map(({ type, ...e }) => e), [
+    {
+      id: D1,
+      mine: { text: "Morning\nFrom the laptop", baseVersion: 1 },
+      theirs: { text: "Morning\nFrom the phone", version: 2, editedAt: at(12, 9, 30) },
+    },
+  ]);
+  assert.equal(s.read().days[0].text, "Morning\nFrom the phone", "the server's copy is kept");
+  assert.equal(s.read().days[0].version, 2);
+  assert.equal(s.store.outbox.size, 0);
+});
+
+test("a detector is last write wins: a write on an old version replaces the server's, never a conflict", async () => {
+  const server = fakeServer();
+  const s = await start({ store: fakeStore({ userId: "u1" }), ask: signedIn("u1"), api: server.api });
+  const seed = SEED.detectors[2];
+  const { removing: _, version: __, ...record } = structuredClone(seed);
+  record.questions = record.questions.map(({ removing: _r, ...q }) => ({ ...q, options: [] }));
+  server.other("detectors", { ...record, name: "Renamed on the phone" });
+  server.other("detectors", { ...record, name: "Renamed again" });
+  s.send({ type: "detector.switched", id: seed.id, on: true }, DETECTOR_SWITCHED);
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.puts.at(-1).baseVersion, 1, "written on the version this device held");
+  assert.deepEqual(s.conflicted, []);
+  assert.equal(server.held("detectors", seed.id).version, 3);
+  assert.equal(server.held("detectors", seed.id).name, "Goal or value (yes / no)", "this device's write is the last");
+  assert.equal(detector(s, seed.id).version, 3);
+  assert.equal(detector(s, seed.id).on, true);
+  server.other("detectors", { ...record, name: "From the phone", on: true });
+  s.actor.send({ type: "_sync", pull: true });
+  await flush();
+  assert.equal(detector(s, seed.id).name, "From the phone", "a tab regaining focus pulls the newer copy");
+  assert.equal(detector(s, seed.id).version, 4);
+});
+
+test("signing in moves the journal kept in this browser to the account, with its history", async () => {
+  const server = fakeServer();
+  const s = await start({ store: fakeStore(), api: server.api });
+  write(s, D1, "One");
+  write(s, D1, "One\nTwo");
+  s.send({ type: "detector-project.switched", id: IDS.goals, on: false }, PROJECT_SWITCHED);
+  s.advance(IDLE);
+  await flush();
+  assert.deepEqual(server.puts, [], "signed out, nothing goes up");
+  assert.equal(s.read().days[0].version, 2, "versions numbered in the browser");
+  s.send({ type: "session.changed", userId: "u1" }, SESSION_CHANGED);
+  await flush();
+  assert.deepEqual(server.puts.map((r) => [r.key, r.baseVersion]).sort(), [
+    [`days\n${D1}`, 2],
+    [`projects\n${IDS.goals}`, 2],
+  ], "every changed record, on the version it holds; the untouched examples stay");
+  assert.equal(server.held("days", D1).version, 3, "the server continues the browser's history");
+  assert.equal(s.read().days[0].version, 3);
+  assert.equal(s.store.meta.get("userId"), "u1");
+  s.send({ type: "session.changed", userId: null }, SESSION_CHANGED);
+  write(s, D1, "One\nTwo\nThree");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.puts.length, 2, "signed out again, the change waits");
+  assert.equal(s.store.outbox.size, 1);
+  s.send({ type: "session.changed", userId: "u1" }, SESSION_CHANGED);
+  await flush();
+  assert.equal(server.held("days", D1).text, "One\nTwo\nThree", "and goes up at the next sign-in");
+  assert.equal(s.store.outbox.size, 0);
+});
+
+test("a browser signed in elsewhere since it last synced adopts its journal at load", async () => {
+  const server = fakeServer();
+  const store = fakeStore({ days: [{ id: D1, day: "2026-10-12", text: "Kept here", editedAt: at(12, 9), version: 1 }] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api });
+  await flush();
+  assert.equal(server.held("days", D1).text, "Kept here");
+  assert.equal(s.read().days[0].version, 2);
 });
 
 test("every payload matches its schema", () => {
