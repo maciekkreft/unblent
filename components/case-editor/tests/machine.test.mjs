@@ -269,6 +269,8 @@ test("Judge follows llm: signed out or without a key it does nothing until llm.c
   assert.equal(blocked(ctx()), "Sign in to judge.");
   actor.send({ type: "llm.changed", ...LLM, jev: { keySet: false } });
   assert.equal(blocked(ctx()), "Add your Jev key in Settings.");
+  actor.send({ type: "llm.changed", ...LLM, jev: { keySet: false, starterLeft: 0 } });
+  assert.equal(blocked(ctx()), "The 100 starter requests are used up. Add your Jev key in Settings.");
   actor.send({ type: "_judge" });
   assert.equal(emitted.length, 0);
   actor.send({ type: "llm.changed", ...LLM });

@@ -597,7 +597,10 @@ class SettingsSheet extends LitElement {
           ? html`<div class="judging">
               <span class="group">Judging</span>
               ${this.#keyField({
-                keySet: llm.jev?.keySet === true,
+                // While the starter key is in use there is no own key to replace or
+                // remove, so the box stays open for one (architecture.md 12).
+                keySet: llm.jev?.keySet === true && llm.jev.starterLeft === undefined,
+                note: this.#starterNote(llm.jev?.starterLeft),
                 label: "Jev key",
                 draftName: "jevDraft",
                 replacingName: "replacingJev",
@@ -616,7 +619,7 @@ class SettingsSheet extends LitElement {
   // appears only when a key is wanted, and Cancel or Escape closes it again without a
   // change (forgiveness). `draftName` and `replacingName` name this field's own two
   // state properties, so the two keys never share a draft.
-  #keyField({ keySet, label, draftName, replacingName, save: saveKey, remove }) {
+  #keyField({ keySet, note, label, draftName, replacingName, save: saveKey, remove }) {
     const draft = this[draftName];
     const cancel = () => {
       this[draftName] = "";
@@ -662,8 +665,15 @@ class SettingsSheet extends LitElement {
                 <button class="act" @click=${remove}>Remove</button>
               `}
         </div>
+        ${note ? html`<span class="help">${note}</span>` : nothing}
       </div>
     `;
+  }
+
+  #starterNote(left) {
+    if (left === undefined) return null;
+    if (left === 0) return "Starter requests used up. Add your own Jev key to keep judging.";
+    return `Starter key · ${left} of 100 requests left`;
   }
 }
 

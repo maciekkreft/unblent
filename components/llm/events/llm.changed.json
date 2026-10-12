@@ -37,8 +37,11 @@
     "ttl": { "type": "string" },
     "jev": {
       "type": "object",
-      "description": "Whether the account has a Jev key saved, for llm: decide. Never the key.",
-      "properties": { "keySet": { "type": "boolean" } },
+      "description": "Whether a Jev key is usable for llm: decide: the account's own, or the starter key while requests are left. starterLeft, present while the account has a starter key and no key of its own, is how many starter requests are left. Never the key.",
+      "properties": {
+        "keySet": { "type": "boolean" },
+        "starterLeft": { "type": "integer", "minimum": 0, "maximum": 100 }
+      },
       "required": ["keySet"],
       "additionalProperties": false
     }

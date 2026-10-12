@@ -104,11 +104,14 @@ export const snapshot = (cases, rubrics, project) => ({
 // The run of decisions, if it belongs to this project.
 const runHere = (run, project) => (run && run.project === project ? run : null);
 
+// The line beside Judge once a new account has used its starter requests (architecture.md 12).
+const USED_UP = "The 100 starter requests are used up. Add your Jev key in Settings.";
+
 // Why Judge all cannot run now, in the words of the line beside it, or null when it can.
-export const blocked = ({ cases, rubrics, run, current, signedIn, keySet }) => {
+export const blocked = ({ cases, rubrics, run, current, signedIn, keySet, usedUp }) => {
   if (run?.running) return run.project === current ? "Judge all is running." : "Judge all is running in another project.";
   if (!signedIn) return "Sign in to judge.";
-  if (!keySet) return "Add your Jev key in Settings.";
+  if (!keySet) return usedUp ? USED_UP : "Add your Jev key in Settings.";
   const tools = onTools(rubrics, current);
   if (!tools.length) return "Switch on a tool to judge.";
   if (!tools.some((t) => t.questions.some(askable))) return "Add a question to a tool to judge.";
@@ -201,6 +204,7 @@ export const machine = setup({
     run: null,
     signedIn: false,
     keySet: false,
+    usedUp: false, // the starter requests are used up (architecture.md 12)
     draft: input.mint(),
   }),
   initial: "loading",
@@ -221,6 +225,7 @@ export const machine = setup({
               return {
                 signedIn: l?.signedIn === true,
                 keySet: l?.jev?.keySet === true,
+                usedUp: l?.jev?.starterLeft === 0,
                 current: p.current,
                 cases: c.cases,
                 open: c.open,
@@ -266,6 +271,6 @@ export const machine = setup({
     },
     "rubric.changed": { actions: assign(({ event }) => ({ rubrics: event.rubrics })) },
     "decision.changed": { actions: assign(({ event }) => ({ decisions: event.decisions, run: event.run })) },
-    "llm.changed": { actions: assign(({ event }) => ({ signedIn: event.signedIn === true, keySet: event.jev?.keySet === true })) },
+    "llm.changed": { actions: assign(({ event }) => ({ signedIn: event.signedIn === true, keySet: event.jev?.keySet === true, usedUp: event.jev?.starterLeft === 0 })) },
   },
 });

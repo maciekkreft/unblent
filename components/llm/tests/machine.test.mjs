@@ -392,6 +392,20 @@ test("decide? refuses honestly: signed-out, no-key and busy; a failure is unavai
   assert.deepEqual(await query(broken.actor, "decide?", DECISION, DECIDE.reply), { error: "unavailable" });
 });
 
+test("a starter-key answer updates the picture and announces it; the last request leaves no key", async () => {
+  let left = 2;
+  const h = start({
+    picture: { ...PICTURE, jev: { keySet: true, starterLeft: 2 } },
+    decide: () => Promise.resolve({ answers: [{ id: "a/b", p: 0.9 }], inputTokens: 1, ms: 1, starterLeft: --left }),
+  });
+  await ready(h.actor);
+  assert.equal((await query(h.actor, "decide?", DECISION, DECIDE.reply)).starterLeft, 1);
+  assert.deepEqual(h.emitted.filter((e) => e.type === "llm.changed").at(-1).jev, { keySet: true, starterLeft: 1 });
+  await query(h.actor, "decide?", DECISION, DECIDE.reply);
+  assert.deepEqual(h.actor.getSnapshot().context.picture.jev, { keySet: false, starterLeft: 0 });
+  assert.deepEqual(await query(h.actor, "decide?", DECISION, DECIDE.reply), { error: "no-key" }, "used up, nothing is sent");
+});
+
 test("llm.edited carries the Jev key through to the server and never into context", async () => {
   const h = start({ save: () => withJev });
   await ready(h.actor);

@@ -16,3 +16,12 @@ CREATE TABLE IF NOT EXISTS keys (
     cipher   TEXT NOT NULL,
     at       INTEGER NOT NULL
 );
+-- starter: the owner's keys a new account may use for its first requests (architecture
+-- 12, "Starter keys"). It names the .env entry the key comes from and counts the
+-- requests made; the key itself is read from the environment at use, so it never
+-- reaches this file or its backup.
+CREATE TABLE IF NOT EXISTS starter (
+    provider TEXT PRIMARY KEY,
+    env      TEXT NOT NULL,
+    used     INTEGER NOT NULL
+);

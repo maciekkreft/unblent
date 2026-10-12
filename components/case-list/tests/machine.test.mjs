@@ -231,6 +231,8 @@ test("Judge all follows llm: signed out or without a key it does nothing, until 
   assert.equal(blocked(actor.getSnapshot().context), "Sign in to judge.");
   actor.send({ type: "llm.changed", ...LLM, jev: { keySet: false } });
   assert.equal(blocked(actor.getSnapshot().context), "Add your Jev key in Settings.");
+  actor.send({ type: "llm.changed", ...LLM, jev: { keySet: false, starterLeft: 0 } });
+  assert.equal(blocked(actor.getSnapshot().context), "The 100 starter requests are used up. Add your Jev key in Settings.");
   actor.send({ type: "llm.changed", ...LLM });
   actor.send({ type: "_judge" });
   assert.deepEqual(emitted.map((e) => e.type), ["judging.requested", "results.selected"]);

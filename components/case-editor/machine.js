@@ -146,12 +146,15 @@ const askable = (q) => q.text.trim() !== "" && (q.kind !== "pick" || live(q.opti
 export const judging = (run, project, id) =>
   Boolean(run?.running && run.project === project && run.cases.indexOf(id) >= run.done);
 
+// The line beside Judge once a new account has used its starter requests (architecture.md 12).
+const USED_UP = "The 100 starter requests are used up. Add your Jev key in Settings.";
+
 // Why Judge cannot run now, in the words of the line beside it, or null when it can.
-export const blocked = ({ draft, rubrics, run, current, signedIn, keySet }) => {
+export const blocked = ({ draft, rubrics, run, current, signedIn, keySet, usedUp }) => {
   if (judging(run, current, draft.id)) return "Judging this case…";
   if (run?.running) return run.project === current ? "Judge all is running." : "Judge all is running in another project.";
   if (!signedIn) return "Sign in to judge.";
-  if (!keySet) return "Add your Jev key in Settings.";
+  if (!keySet) return usedUp ? USED_UP : "Add your Jev key in Settings.";
   if (!live(rubrics).some((r) => r.project === current)) return "Make a tool in Tools to judge.";
   const tools = onTools(rubrics, current);
   if (!tools.length) return "Switch on a tool in Tools to judge.";
@@ -292,6 +295,7 @@ export const machine = setup({
     run: null,
     signedIn: false,
     keySet: false,
+    usedUp: false, // the starter requests are used up (architecture.md 12)
     draft: null,
   }),
   initial: "loading",
@@ -318,6 +322,7 @@ export const machine = setup({
                 run: d.run,
                 signedIn: l?.signedIn === true,
                 keySet: l?.jev?.keySet === true,
+                usedUp: l?.jev?.starterLeft === 0,
                 draft: opened(c.cases, c.open, p.current),
               };
             }),
@@ -416,6 +421,6 @@ export const machine = setup({
     "case.changed": { actions: assign(({ event }) => ({ cases: event.cases, open: event.open })) },
     "rubric.changed": { actions: assign(({ event }) => ({ rubrics: event.rubrics })) },
     "decision.changed": { actions: assign(({ event }) => ({ decisions: event.decisions, run: event.run })) },
-    "llm.changed": { actions: assign(({ event }) => ({ signedIn: event.signedIn === true, keySet: event.jev?.keySet === true })) },
+    "llm.changed": { actions: assign(({ event }) => ({ signedIn: event.signedIn === true, keySet: event.jev?.keySet === true, usedUp: event.jev?.starterLeft === 0 })) },
   },
 });

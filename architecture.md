@@ -483,7 +483,7 @@ composer/        the composer (3.6), loaded once per page; tests/ never served
 store/           the store interface; tests/ never served
 deploy/          systemd unit, litestream.yml (section 5) and the rclone units that copy the files (section 5) and anything else the host needs; never served
 data/            per-user SQLite files (section 5) and `books/`, the imported files, gitignored
-.env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
+.env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS, SEED_API_KEYS), gitignored
 ```
 
 Static serving is namespaced so the future app can own `/`:
@@ -564,6 +564,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Chat settings follow the account.** Provider, model, thinking effort and cache lifetime are owned by `llm` and kept on its server, so they are the same on every device and apply to the next question in any chat; there is no per-chat copy. Today's device preferences (`settings`) stay on the device. Settings shows the two as sections named "This device" and "Your account".
 
 - **"Vim keys" is one device preference.** `settings` keeps `vimKeys`, off by default, per profile like its other preferences; every editor that has Vim asks `settings: read` at start and follows `settings.changed`, turning Vim on or off in place, so no editor needs a Vim copy of itself and Settings shows one switch instead of a choice per editor.
+
+- **Starter keys.** A new account uses the owner's keys, those whose `.env` entries `SEED_API_KEYS` names, for its first 100 answered requests per key, until the user saves a key of their own. `llm` reads such a key from `.env` each time it is used and never stores it in the account's file.
 
 - **Echo is a test provider.** A standing-in provider that echoes the conversation streams answers without a key or a network call, so tests and by-hand checks never spend money. It is offered as a choice in Settings only in the `workshop` profile; the server accepts it always, and an account left on Echo in the product sees it named "Echo (test)" with the real providers to switch to.
 
