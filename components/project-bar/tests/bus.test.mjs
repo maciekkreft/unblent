@@ -20,7 +20,7 @@ test("the bar counts the seeds, and a new project becomes current", async () => 
     const bar = actors["project-bar"];
     await until(() => bar.getSnapshot().matches("ready"));
     const { projects, current, rubrics, cases } = bar.getSnapshot().context;
-    assert.deepEqual(projects.map((p) => p.name), ["Goals and values", "Replies"]);
+    assert.deepEqual(projects.map((p) => p.name), ["Goals and values", "Replies", "Cognitive Distortion"]);
     assert.equal(summary(current, rubrics, cases), "2 tools · 18 cases");
 
     bar.send({ type: "_new" });

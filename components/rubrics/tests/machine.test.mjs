@@ -22,6 +22,8 @@ const recorded = [];
 
 const GOALS = "01K6SEED00000000000000PJ01";
 const REPLIES = "01K6SEED00000000000000PJ02";
+const DISTORTION = "01M4H15KF9MDNCZAKREGYD2J2G";
+const DISTORTION_TOOL = "01M4H1GZTFKV5071GZP20X6ZM6";
 const T = "01K6TEST00000000000000RB0T";
 const Q1 = "01K6TEST00000000000000RQ01";
 const Q2 = "01K6TEST00000000000000RQ02";
@@ -63,11 +65,12 @@ const settle = (s, kind, id) => s.send({ type: "removal.settled", kind, id }, SE
 const projects = (s, list) =>
   s.send({ type: "project.changed", projects: list.map((id) => ({ id, name: "", removing: false })), current: list[0] }, PROJECTS);
 
-test("a first visit starts with the example tools, only Goal or value and Replyability on", () => {
+test("a first visit starts with the example tools, only Goal or value, Replyability and Cognitive Distortion on", () => {
   for (const stored of [null, "", "not json", '{"version":1}']) {
     const s = start(stored);
     const { rubrics } = s.read();
-    assert.deepEqual(rubrics.map((r) => [r.project === GOALS ? "G" : "R", r.name, r.on]), [
+    const letter = { [GOALS]: "G", [REPLIES]: "R", [DISTORTION]: "D" };
+    assert.deepEqual(rubrics.map((r) => [letter[r.project], r.name, r.on]), [
       ["G", "Goal or value", true],
       ["G", "Goal or value (yes / no)", false],
       ["R", "Replyability", true],
@@ -76,6 +79,7 @@ test("a first visit starts with the example tools, only Goal or value and Replya
       ["R", "Shareability", false],
       ["R", "Likeability", false],
       ["R", "Saveability", false],
+      ["D", "Cognitive Distortion", true],
     ]);
     assert.equal(s.saved.length, 0, "loading writes nothing");
   }
@@ -224,6 +228,9 @@ test("an empty stored list stays empty; an older version only gains what is new"
   assert.equal(catchUp([], 0).length, SEED.length);
   const mine = [{ ...SEED[0], name: "Mine" }];
   assert.deepEqual(catchUp(mine, 0).map((r) => r.name).slice(0, 2), ["Mine", "Goal or value (yes / no)"]);
+  assert.deepEqual(catchUp(mine, 1).map((r) => r.name), ["Mine", "Cognitive Distortion"], "version 1 gains only the distortion tool");
+  const own = [{ ...SEED.find((r) => r.id === DISTORTION_TOOL), name: "Distortions" }];
+  assert.deepEqual(catchUp(own, 1).map((r) => r.name), ["Distortions"], "the browser it was written in gains no copy");
 });
 
 test("a tool whose project is gone is dropped; a project being removed keeps its tools", () => {
@@ -231,6 +238,7 @@ test("a tool whose project is gone is dropped; a project being removed keeps its
   s.send({ type: "project.changed", projects: [
     { id: GOALS, name: "", removing: false },
     { id: REPLIES, name: "", removing: true },
+    { id: DISTORTION, name: "", removing: false },
   ], current: GOALS }, PROJECTS);
   assert.equal(s.emitted.length, 0, "every project still exists");
   projects(s, [GOALS]);
@@ -254,7 +262,7 @@ test("at start the projects read drops the tools of a project that is gone", asy
 });
 
 test("a start read that fails, or keeps every project, changes nothing", async () => {
-  for (const reply of [{ error: "no-answerer" }, { projects: [{ id: GOALS, name: "", removing: false }, { id: REPLIES, name: "", removing: false }], current: GOALS }]) {
+  for (const reply of [{ error: "no-answerer" }, { projects: [GOALS, REPLIES, DISTORTION].map((id) => ({ id, name: "", removing: false })), current: GOALS }]) {
     const s = start(null, async () => reply);
     await new Promise((r) => setTimeout(r));
     assert.equal(s.read().rubrics.length, SEED.length);

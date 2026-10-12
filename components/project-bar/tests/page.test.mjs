@@ -60,7 +60,7 @@ for (const engine of ENGINES) {
         assert.equal(await current(page), "Goals and values");
 
         await page.locator("project-bar button.open").click();
-        await until(async () => (await rows(page)).length === 2);
+        await until(async () => (await rows(page)).length === 3);
         assert.deepEqual((await rows(page))[0], { name: "Goals and values", sub: "2 tools · 18 cases", ticked: true });
         assert.equal((await rows(page))[1].ticked, false);
         await pause(page);
@@ -95,7 +95,7 @@ for (const engine of ENGINES) {
         const remove = async () => {
           await page.locator("project-bar button.open").click();
           await page.locator("project-bar .item", { hasText: "Delete this project" }).click();
-          await until(async () => (await current(page)) === "Replies");
+          await until(async () => (await current(page)) === "Cognitive Distortion");
         };
         await remove();
         await page.locator("notice-stack .undo").waitFor();
@@ -103,7 +103,7 @@ for (const engine of ENGINES) {
         await page.locator("notice-stack .undo").click();
         await until(async () => (await current(page)) === "Habits");
         await page.locator("project-bar button.open").click();
-        assert.deepEqual((await rows(page)).map((r) => r.name), ["Goals and values", "Replies", "Habits"]);
+        assert.deepEqual((await rows(page)).map((r) => r.name), ["Goals and values", "Replies", "Cognitive Distortion", "Habits"]);
         await page.keyboard.press("Escape");
         assert.equal(await page.locator("project-bar .menu").count(), 0, "Escape closes the menu");
         await pause(page);
@@ -115,8 +115,8 @@ for (const engine of ENGINES) {
         await page.reload({ waitUntil: "domcontentloaded" });
         await page.locator("project-bar button.open").click();
         await until(async () => (await rows(page)).length > 0);
-        assert.deepEqual((await rows(page)).map((r) => r.name), ["Goals and values", "Replies"]);
-        assert.equal(await current(page), "Replies");
+        assert.deepEqual((await rows(page)).map((r) => r.name), ["Goals and values", "Replies", "Cognitive Distortion"]);
+        assert.equal(await current(page), "Cognitive Distortion");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

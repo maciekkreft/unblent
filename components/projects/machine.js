@@ -11,20 +11,31 @@ import { setup, assign, emit } from "xstate";
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
 
-// The two projects a first visit starts with. The ids are fixed and exported, because
+// The example projects a first visit starts with. The ids are fixed and exported, because
 // rubrics and cases seed their records under the same projects; they copy these ids as
-// literals, since components never import each other (11.2).
+// literals, since components never import each other (11.2). Cognitive Distortion keeps
+// the ids it had in the browser it was written in, so that browser does not gain a copy.
+// `since` is the seed version that added a project; it stays in this file and the catch-up.
 export const GOALS = "01K6SEED00000000000000PJ01";
 export const REPLIES = "01K6SEED00000000000000PJ02";
-export const SEED_VERSION = 1;
-export const SEED = Object.freeze({
-  projects: [
-    { id: GOALS, name: "Goals and values", removing: false },
-    { id: REPLIES, name: "Replies", removing: false },
-  ],
-  current: GOALS,
-});
+export const DISTORTION = "01M4H15KF9MDNCZAKREGYD2J2G";
+export const SEED_VERSION = 2;
+const SOURCE = [
+  { id: GOALS, name: "Goals and values", since: 1 },
+  { id: REPLIES, name: "Replies", since: 1 },
+  { id: DISTORTION, name: "Cognitive Distortion", since: 2 },
+];
+const project = ({ id, name }) => ({ id, name, removing: false });
+export const SEED = Object.freeze({ projects: SOURCE.map(project), current: GOALS });
 const fresh = () => ({ projects: SEED.projects.map((p) => ({ ...p })), current: SEED.current });
+
+// A list stored by an older seed version gains only the seed projects a newer version
+// added, unless their id is already there; a seed project the user deleted was added by a
+// version the list already had, so it is not brought back.
+export const catchUp = (projects, version) => {
+  const have = new Set(projects.map((p) => p.id));
+  return [...projects, ...SOURCE.filter((s) => s.since > version && !have.has(s.id)).map(project)];
+};
 
 const live = (projects) => projects.filter((p) => !p.removing);
 
@@ -53,7 +64,9 @@ export const parse = (stored) => {
       .filter((p) => p && isId(p.id) && !p.removing && !seen.has(p.id) && seen.add(p.id))
       .map((p) => ({ id: p.id, name: typeof p.name === "string" ? p.name : "", removing: false }));
     if (!projects.length) return fresh();
-    return { projects, current: settleCurrent(projects, value.current) };
+    const version = Number.isInteger(value.version) ? value.version : 0;
+    const all = catchUp(projects, version);
+    return { projects: all, current: settleCurrent(all, value.current) };
   } catch {
     return fresh();
   }
@@ -127,8 +140,9 @@ export const machine = setup({}).createMachine({
       "project, so deleting the last one is refused. A deleted project waits out the undo window " +
       "before it is gone, and still exists until then, so Undo brings it back with everything in " +
       "it; while it waits, its neighbour in the list becomes the current project. A new project " +
-      "becomes the current one. A first visit starts with two example projects, \"Goals and " +
-      "values\" and \"Replies\".",
+      "becomes the current one. A first visit starts with three example projects, \"Goals " +
+      "and values\", \"Replies\" and \"Cognitive Distortion\"; a later version of the examples " +
+      "only adds what is new and never brings back a project the user deleted.",
     kind: "fact",
     shape: "local-only",
     owns: "the projects and which one is current",

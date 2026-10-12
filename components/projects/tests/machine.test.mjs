@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, parse, GOALS, REPLIES, SEED_VERSION } from "../machine.js";
+import { machine, parse, GOALS, REPLIES, DISTORTION, SEED_VERSION } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Schemas are read, never imported (11.2); the gestures' schemas live with their emitters.
@@ -49,13 +49,14 @@ const undo = (s, id) => s.send({ type: "removal.undone", kind: "project", id }, 
 const settle = (s, id) => s.send({ type: "removal.settled", kind: "project", id }, SETTLED);
 const select = (s, id) => s.send({ type: "project.selected", id }, SELECTED);
 
-test("a first visit starts with the two example projects, Goals and values current", () => {
+test("a first visit starts with the three example projects, Goals and values current", () => {
   for (const stored of [null, "", "not json", '{"version":1,"projects":[]}']) {
     const s = start(stored);
     assert.deepEqual(s.read(), {
       projects: [
         { id: GOALS, name: "Goals and values", removing: false },
         { id: REPLIES, name: "Replies", removing: false },
+        { id: DISTORTION, name: "Cognitive Distortion", removing: false },
       ],
       current: GOALS,
     });
@@ -66,7 +67,7 @@ test("a first visit starts with the two example projects, Goals and values curre
 test("a new project is added at the end, becomes current, and is stored in the envelope", () => {
   const s = start();
   save(s, C, "Tone");
-  assert.deepEqual(names(s.read()), ["Goals and values", "Replies", "Tone"]);
+  assert.deepEqual(names(s.read()), ["Goals and values", "Replies", "Cognitive Distortion", "Tone"]);
   assert.equal(s.read().current, C);
   assert.deepEqual(s.emitted.at(-1), { type: "project.changed", ...s.read() });
   const written = JSON.parse(s.saved.at(-1));
@@ -77,7 +78,7 @@ test("a new project is added at the end, becomes current, and is stored in the e
 test("a rename keeps the project's place and the current project", () => {
   const s = start();
   save(s, REPLIES, "Answers");
-  assert.deepEqual(names(s.read()), ["Goals and values", "Answers"]);
+  assert.deepEqual(names(s.read()), ["Goals and values", "Answers", "Cognitive Distortion"]);
   assert.equal(s.read().current, GOALS);
   save(s, REPLIES, "Answers");
   assert.equal(s.emitted.length, 1, "a repeat announces nothing");
@@ -96,11 +97,11 @@ test("removing waits for the undo window: Undo restores it and makes it current 
   const s = start();
   remove(s, GOALS);
   let r = s.read();
-  assert.deepEqual(r.projects.map((p) => p.removing), [true, false], "it still exists while it waits");
+  assert.deepEqual(r.projects.map((p) => p.removing), [true, false, false], "it still exists while it waits");
   assert.equal(r.current, REPLIES, "the first project's neighbour is the next one");
   undo(s, GOALS);
   r = s.read();
-  assert.deepEqual(r.projects.map((p) => p.removing), [false, false]);
+  assert.deepEqual(r.projects.map((p) => p.removing), [false, false, false]);
   assert.equal(r.current, GOALS);
 });
 
@@ -117,10 +118,10 @@ test("the neighbour before a removed current project takes over", () => {
   const s = start();
   save(s, C, "Tone");
   remove(s, C);
-  assert.equal(s.read().current, REPLIES);
+  assert.equal(s.read().current, DISTORTION);
   settle(s, C);
-  assert.deepEqual(names(s.read()), ["Goals and values", "Replies"]);
-  assert.equal(s.read().current, REPLIES);
+  assert.deepEqual(names(s.read()), ["Goals and values", "Replies", "Cognitive Distortion"]);
+  assert.equal(s.read().current, DISTORTION);
 });
 
 test("a settled removal is purged; settling what is not being removed changes nothing", () => {
@@ -129,13 +130,15 @@ test("a settled removal is purged; settling what is not being removed changes no
   assert.equal(s.emitted.length, 0);
   remove(s, REPLIES);
   settle(s, REPLIES);
-  assert.deepEqual(names(s.read()), ["Goals and values"]);
+  assert.deepEqual(names(s.read()), ["Goals and values", "Cognitive Distortion"]);
   undo(s, REPLIES);
-  assert.deepEqual(names(s.read()), ["Goals and values"], "Undo after it settled brings nothing back");
+  assert.deepEqual(names(s.read()), ["Goals and values", "Cognitive Distortion"], "Undo after it settled brings nothing back");
 });
 
 test("the last project that is not being removed cannot be removed", () => {
   const s = start();
+  remove(s, DISTORTION);
+  settle(s, DISTORTION);
   remove(s, GOALS);
   const before = s.emitted.length;
   remove(s, REPLIES);
@@ -165,6 +168,21 @@ test("at load a leftover removing flag is settled, and current moves off it", ()
   });
   const s = start(stored);
   assert.deepEqual(s.read(), { projects: [{ id: REPLIES, name: "Replies", removing: false }], current: REPLIES });
+});
+
+test("a list from an older version gains only the newer examples, once, and keeps its current project", () => {
+  const older = (projects) => JSON.stringify({ version: 1, projects, current: C });
+  const tone = { id: C, name: "Tone", removing: false };
+  let s = start(older([tone]));
+  assert.deepEqual(names(s.read()), ["Tone", "Cognitive Distortion"], "the deleted version-1 examples stay deleted");
+  assert.equal(s.read().current, C);
+  assert.equal(s.saved.length, 0, "loading writes nothing");
+
+  s = start(older([tone, { id: DISTORTION, name: "Distortions", removing: false }]));
+  assert.deepEqual(names(s.read()), ["Tone", "Distortions"], "the browser it was written in gains no copy");
+
+  s = start(JSON.stringify({ version: SEED_VERSION, projects: [tone], current: C }));
+  assert.deepEqual(names(s.read()), ["Tone"], "deleted after it arrived, it is not brought back");
 });
 
 test("every payload matches its schema", () => {

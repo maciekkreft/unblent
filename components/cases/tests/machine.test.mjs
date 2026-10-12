@@ -29,6 +29,9 @@ const OTHER = "01K6SEED00000000000000RC03";
 const IS_GOAL = "01K6SEED00000000000000RQ02";
 const IS_VALUE = "01K6SEED00000000000000RQ03";
 const REPLYABLE = "01K6SEED00000000000000G6QH";
+const DISTORTION = "01M4H15KF9MDNCZAKREGYD2J2G";
+const DISTORTED = "01M4H1HFNYE3GGNNGVVQ6G5S40";
+const FIRST_DISTORTION = "01M4H4Q3W8RRE1F2JAH2KA69X6";
 const cs = (n) => `01K6SEED00000000000000CS${String(n).padStart(2, "0")}`;
 const C = "01K6TEST00000000000000CS0C";
 const D = "01K6TEST00000000000000CS0D";
@@ -66,13 +69,14 @@ const settle = (s, id) => s.send({ type: "removal.settled", kind: "case", id }, 
 const projects = (s, list) =>
   s.send({ type: "project.changed", projects: list.map((id) => ({ id, name: "", removing: false })), current: list[0] }, PROJECTS);
 
-test("a first visit starts with 18 goals-and-values cases and 4 replies cases, the first of each open", () => {
+test("a first visit starts with 18 goals-and-values, 4 replies and 10 distortion cases, the first of each open", () => {
   for (const stored of [null, "", "not json", '{"version":1}']) {
     const s = start(stored);
     const { cases, open } = s.read();
-    assert.equal(cases.length, 22);
-    assert.deepEqual(cases.map((c) => c.id), Array.from({ length: 22 }, (_, i) => cs(i + 1)));
-    assert.deepEqual(open, { [GOALS]: cs(1), [REPLIES]: cs(19) });
+    assert.equal(cases.length, 32);
+    assert.deepEqual(cases.slice(0, 22).map((c) => c.id), Array.from({ length: 22 }, (_, i) => cs(i + 1)));
+    assert.equal(cases.filter((c) => c.project === DISTORTION).length, 10);
+    assert.deepEqual(open, { [GOALS]: cs(1), [REPLIES]: cs(19), [DISTORTION]: FIRST_DISTORTION });
     assert.ok(cases.every((c) => !c.removing));
     assert.equal(s.saved.length, 0, "loading writes nothing");
   }
@@ -97,7 +101,10 @@ test("the seed answers name only real seeded questions and options", () => {
   // The ids the rubrics seed holds, literally (11.2): RQ01 is pick with RC01-03, RQ02-03 and G6QH yes / no.
   const pickOptions = new Set([GOAL, VALUE, OTHER]);
   const yesno = new Set([IS_GOAL, IS_VALUE, REPLYABLE]);
-  for (const c of SEED.cases)
+  const distortion = SEED.cases.filter((c) => c.project === DISTORTION);
+  assert.ok(distortion.every((c) => Object.keys(c.answers).join() === DISTORTED), "one pick answer each");
+  assert.equal(new Set(distortion.map((c) => c.answers[DISTORTED])).size, 10, "every distortion is answered once");
+  for (const c of SEED.cases.filter((x) => x.project !== DISTORTION))
     for (const [q, v] of Object.entries(c.answers))
       assert.ok(q === PICK ? pickOptions.has(v) : yesno.has(q) && (v === "yes" || v === "no"), `${c.text}: ${q}=${v}`);
 });
@@ -117,7 +124,7 @@ test("a save upserts the whole case in place; a repeat stores and announces noth
   save(s, cs(2), "To win the cup.", { [PICK]: GOAL, [Q]: "yes" });
   assert.deepEqual(find(s, cs(2)).answers, { [PICK]: GOAL, [Q]: "yes" }, "an answer to an unknown question is kept");
   assert.equal(s.read().cases[1].id, cs(2), "it keeps its place");
-  assert.equal(s.read().cases.length, 22);
+  assert.equal(s.read().cases.length, 32);
   save(s, cs(2), "To win the cup.", {});
   assert.deepEqual(find(s, cs(2)).answers, {}, "the whole case is replaced");
   const n = s.emitted.length;
@@ -131,7 +138,7 @@ test("selecting opens a case, or a new one not saved yet, in its project", () =>
   select(s, cs(5));
   assert.equal(s.read().open[GOALS], cs(5));
   select(s, C);
-  assert.deepEqual(s.read().open, { [GOALS]: C, [REPLIES]: cs(19) });
+  assert.deepEqual(s.read().open, { [GOALS]: C, [REPLIES]: cs(19), [DISTORTION]: FIRST_DISTORTION });
   const n = s.emitted.length;
   select(s, C);
   select(s, cs(19), GOALS);
@@ -209,11 +216,24 @@ test("an empty stored list stays empty; an older version only gains what is new"
   assert.equal(catchUp([], 0).length, SEED.cases.length);
 });
 
+test("a list from version 1 gains the distortion cases once, with the first of them open", () => {
+  const kept = { id: C, project: GOALS, text: "kept", answers: {}, removing: false };
+  const s = start(JSON.stringify({ version: 1, cases: [kept], open: { [GOALS]: C } }));
+  assert.deepEqual(s.read().cases.map((c) => c.project), [GOALS, ...Array(10).fill(DISTORTION)], "deleted version-1 cases stay deleted");
+  assert.deepEqual(s.read().open, { [GOALS]: C, [DISTORTION]: FIRST_DISTORTION });
+
+  const own = { id: FIRST_DISTORTION, project: DISTORTION, text: "edited", answers: {}, removing: false };
+  const mine = start(JSON.stringify({ version: 1, cases: [own], open: {} })).read();
+  assert.equal(mine.cases.filter((c) => c.id === FIRST_DISTORTION).length, 1, "the browser it was written in gains no copy");
+  assert.equal(mine.cases[0].text, "edited");
+});
+
 test("a case whose project is gone is dropped with its open entry; a project being removed keeps its cases", () => {
   const s = start();
   s.send({ type: "project.changed", projects: [
     { id: GOALS, name: "", removing: false },
     { id: REPLIES, name: "", removing: true },
+    { id: DISTORTION, name: "", removing: false },
   ], current: GOALS }, PROJECTS);
   assert.equal(s.emitted.length, 0, "every project still exists");
   projects(s, [GOALS]);
@@ -237,11 +257,12 @@ test("at start the projects read drops the cases of a project that is gone", asy
 });
 
 test("a start read that fails, or keeps every project, changes nothing", async () => {
-  const both = { projects: [{ id: GOALS, name: "", removing: false }, { id: REPLIES, name: "", removing: false }], current: GOALS };
-  for (const ask of [async () => ({ error: "no-answerer" }), async () => both, async () => { throw new Error("down"); }]) {
+  const every = [GOALS, REPLIES, DISTORTION].map((id) => ({ id, name: "", removing: false }));
+  const all = { projects: every, current: GOALS };
+  for (const ask of [async () => ({ error: "no-answerer" }), async () => all, async () => { throw new Error("down"); }]) {
     const s = start(null, ask);
     await tick();
-    assert.equal(s.read().cases.length, 22);
+    assert.equal(s.read().cases.length, 32);
     assert.equal(s.emitted.length, 0);
     assert.equal(s.saved.length, 0);
     select(s, cs(4));

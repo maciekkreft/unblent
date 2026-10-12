@@ -18,6 +18,7 @@ const isId = (v) => typeof v === "string" && ULID.test(v);
 // each other (11.2).
 const GOALS = "01K6SEED00000000000000PJ01";
 const REPLIES = "01K6SEED00000000000000PJ02";
+const DISTORTION = "01M4H15KF9MDNCZAKREGYD2J2G";
 
 // The question and option ids the seed answers, copied as literals from `rubrics` (11.2).
 const PICK = "01K6SEED00000000000000RQ01";
@@ -27,6 +28,19 @@ const OTHER = "01K6SEED00000000000000RC03";
 const IS_GOAL = "01K6SEED00000000000000RQ02";
 const IS_VALUE = "01K6SEED00000000000000RQ03";
 const REPLYABLE = "01K6SEED00000000000000G6QH";
+const DISTORTED = "01M4H1HFNYE3GGNNGVVQ6G5S40";
+const D = Object.freeze({
+  allOrNothing: "01M4H1HV1MCTRQSYVBEQ92FDVK",
+  overgeneralization: "01M4H1M5387PE1Q8B2DS7JPS7Z",
+  mindReading: "01M4H1NX3YAQ0Q40Z6RTRNC12E",
+  fortuneTelling: "01M4H1Q1DWQ6J4ZR4YBV2MW244",
+  catastrophizing: "01M4H1Q9Y9PK2348V9ZX8P1KC0",
+  emotionalReasoning: "01M4H1QD70BFBTY7AP9AA6XRQ9",
+  should: "01M4H1SSVHXAAS13QHTKNDB4KK",
+  labeling: "01M4H1SWTF13DM6JF3TGNMW0SQ",
+  personalization: "01M4H1T1398QM5RSEMWBJWYWPY",
+  mentalFiltering: "01M4H4HTZ8RHK76SRTEZZJR2Y3",
+});
 
 // Right answers keep only valid keys and values. One whose question or option no longer
 // exists is kept, so an Undo of that removal finds it again; views ignore what does not fit.
@@ -51,7 +65,7 @@ export const normalise = (c) => {
 
 // The example cases a first visit starts with, in the order the list shows them. `since`
 // is the seed version that added a case; it stays in this file and the catch-up.
-export const SEED_VERSION = 1;
+export const SEED_VERSION = 2;
 const seedId = (n) => `01K6SEED00000000000000CS${String(n).padStart(2, "0")}`;
 
 const GROUPS = [
@@ -73,7 +87,7 @@ const REPLY_CASES = [
   ["Here is the full list of all 40 settings and what each one does.", "no"],
 ];
 
-const SOURCE = [
+const SOURCE_V1 = [
   ...GROUPS.flatMap(([pick, texts]) =>
     texts.map((text) => ({
       project: GOALS,
@@ -84,9 +98,31 @@ const SOURCE = [
   ...REPLY_CASES.map(([text, right]) => ({ project: REPLIES, text, answers: { [REPLYABLE]: right } })),
 ].map((c, i) => ({ ...c, id: seedId(i + 1), since: 1, removing: false }));
 
+// Cognitive Distortion's cases keep the ids they had in the browser they were written in,
+// so that browser does not gain a copy.
+const DISTORTION_CASES = [
+  ["01M4H4Q3W8RRE1F2JAH2KA69X6", "It's my fault that my gf is angry at me.", D.personalization],
+  ["01M4H4NK0VYKH19QKM1SXX95CY", "I failed to build business, so I'm stupid.", D.labeling],
+  ["01M4H4M78QACEFBMSMFVV2J545", "I must always work at 100%", D.should],
+  ["01M4H4DVSBCCN99RD96S00EMGV", "I feel anxious, so something bad will happen.", D.emotionalReasoning],
+  ["01M4H46CQNJBE0ZR9KVKA7G6JF", "This mistake could ruin my entire career.", D.catastrophizing],
+  ["01M4H44H2ZFS2HP7GK4S3Q3TKN", "I know I will do mediocre on the show", D.fortuneTelling],
+  ["01M4H3ZZBKT25TX5C703GT7G34", "They are probably talking about me behind my back", D.mindReading],
+  ["01M4H3K3MV2YPK25DY5ZB35EZ5", "I've only achieved success because I was lucky.", D.mentalFiltering],
+  ["01M4H1GZT2MG968DA8599EVZBG", "I was not able to build business so far, so I will never be able to do that.", D.overgeneralization],
+  ["01M4GYQT1GYPFX63XB9TCS9YTY", "It must be done perfectly or it doesn't matter", D.allOrNothing],
+];
+
+const SOURCE = [
+  ...SOURCE_V1,
+  ...DISTORTION_CASES.map(([id, text, pick]) => ({
+    id, project: DISTORTION, text, answers: { [DISTORTED]: pick }, since: 2, removing: false,
+  })),
+];
+
 const firstOf = (cases, project) => cases.find((c) => c.project === project && !c.removing)?.id;
 const seedOpen = (cases) =>
-  Object.fromEntries([GOALS, REPLIES].map((p) => [p, firstOf(cases, p)]).filter(([, id]) => id));
+  Object.fromEntries([GOALS, REPLIES, DISTORTION].map((p) => [p, firstOf(cases, p)]).filter(([, id]) => id));
 
 export const SEED = Object.freeze({ cases: SOURCE.map(normalise), open: seedOpen(SOURCE) });
 const fresh = () => structuredClone(SEED);
@@ -138,7 +174,8 @@ export const parse = (stored) => {
     for (const c of cases.filter((x) => x.removing)) open = moveOff(cases, open, c.id);
     cases = cases.filter((c) => !c.removing);
     const version = Number.isInteger(value.version) ? value.version : 0;
-    return { cases: catchUp(cases, version), open };
+    const all = catchUp(cases, version);
+    return { cases: all, open: { ...seedOpen(all.slice(cases.length)), ...open } };
   } catch {
     return fresh();
   }

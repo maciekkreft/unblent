@@ -20,6 +20,7 @@ const str = (v) => (typeof v === "string" ? v : "");
 // each other (11.2).
 const GOALS = "01K6SEED00000000000000PJ01";
 const REPLIES = "01K6SEED00000000000000PJ02";
+const DISTORTION = "01M4H15KF9MDNCZAKREGYD2J2G";
 
 const option = (o) => (o && isId(o.id) ? { id: o.id, name: str(o.name), description: str(o.description), removing: o.removing === true } : null);
 
@@ -51,9 +52,10 @@ export const normalise = (r) => {
 
 // The example tools a first visit starts with. The ids are fixed and exported, because
 // `cases` keys its right answers by question id and option id; it copies them as
-// literals. `since` is the seed version that added a tool; it stays in this file and the
-// catch-up, never on the bus.
-export const SEED_VERSION = 1;
+// literals. Cognitive Distortion's tool keeps the ids it had in the browser it was
+// written in, so that browser does not gain a copy. `since` is the seed version that
+// added a tool; it stays in this file and the catch-up, never on the bus.
+export const SEED_VERSION = 2;
 export const IDS = Object.freeze({
   goalOrValue: "01K6SEED00000000000000RB01",
   goalOrValuePick: "01K6SEED00000000000000RQ01",
@@ -221,6 +223,44 @@ const SOURCE = [
         "numbered or bulleted, with a structure to jump back into",
         "a narrative that must be re-read start to finish"],
     ]),
+  {
+    id: "01M4H1GZTFKV5071GZP20X6ZM6",
+    project: DISTORTION,
+    name: "Cognitive Distortion",
+    on: true,
+    since: 2,
+    removing: false,
+    questions: [{
+      id: "01M4H1HFNYE3GGNNGVVQ6G5S40",
+      kind: "pick",
+      text: "What cognitive distortion it is, if any?",
+      yes: "",
+      no: "",
+      options: [
+        opt("01M4H1HV1MCTRQSYVBEQ92FDVK", "All-or-nothing thinking",
+          "Seeing things in extremes, with no middle ground."),
+        opt("01M4H1M5387PE1Q8B2DS7JPS7Z", "Overgeneralization",
+          "Drawing a broad conclusion from a single event or a small number of events."),
+        opt("01M4H1NX3YAQ0Q40Z6RTRNC12E", "Mind reading",
+          "Assuming you know what other people are thinking, usually negatively."),
+        opt("01M4H1Q1DWQ6J4ZR4YBV2MW244", "Fortune telling",
+          "Predicting that something bad will happen and treating the prediction as fact."),
+        opt("01M4H1Q9Y9PK2348V9ZX8P1KC0", "Catastrophizing",
+          "Expecting the worst possible outcome and struggling to consider more likely alternatives."),
+        opt("01M4H1QD70BFBTY7AP9AA6XRQ9", "Emotional reasoning",
+          "Treating feelings as proof that something is true."),
+        opt("01M4H1SSVHXAAS13QHTKNDB4KK", "Should statements",
+          "Rigid rules about how you or other people must behave."),
+        opt("01M4H1SWTF13DM6JF3TGNMW0SQ", "Labeling",
+          "Defining yourself or another person by a single characteristic or behavior."),
+        opt("01M4H1T1398QM5RSEMWBJWYWPY", "Personalization",
+          "Taking excessive responsibility for events that are not entirely within your control."),
+        opt("01M4H4HTZ8RHK76SRTEZZJR2Y3", "Mental filtering",
+          "Focusing exclusively on negative details while ignoring positive ones."),
+      ],
+      removing: false,
+    }],
+  },
 ];
 
 export const SEED = Object.freeze(SOURCE.map(normalise));
