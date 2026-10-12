@@ -1,16 +1,525 @@
-import { setup } from "xstate";
+import { setup, assign, enqueueActions, fromPromise } from "xstate";
 
-// A planned replicated fact component (3.1, 9 step 1): metadata and the handlers its
-// contract needs, no behaviour yet. One fact owns the days, the journal's own projects
-// and detectors, and Jev's answers, so the journal has one sync, one server module and
-// one per-user database (5). The "today only" rule lives here, in how day.saved is
-// handled, and nowhere else.
+// The fact component that owns the journal (3.1), replicated (5): its days, its own
+// projects and detectors, and Jev's answers. One fact owns them all, so the journal has
+// one sync, one server module and one per-user database. journal-entry, where the user
+// writes, emits day.saved; the Detectors dock emits the project and detector gestures;
+// whoever shows a delete emits removal.started, and notice-stack emits removal.undone or
+// removal.settled when the undo window ends (4.3, fifth rule). This fact keeps them,
+// stores each changed record, announces the whole journal as journal.changed and answers
+// journal: read for the starting picture. The "today only" rule lives here, in how
+// day.saved is handled, and nowhere else. While signed out it numbers versions itself,
+// as notes does (5). Everything with a side effect (the store, the clock, the ask)
+// arrives through `input`, so the machine is a pure definition importable in Node.
 
-// XState drops a handler with nothing in it, and the manifest is read from the handlers
-// (7.3), so each planned handler holds an action that does nothing.
-const planned = { actions: () => {} };
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const isId = (v) => typeof v === "string" && ULID.test(v);
+const str = (v) => (typeof v === "string" ? v : "");
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-export const machine = setup({}).createMachine({
+export const HOUR = 60 * 60 * 1000;
+
+const pad = (n) => String(n).padStart(2, "0");
+
+// The device's local date at `ms`, as YYYY-MM-DD: "today" is the user's day, not UTC's.
+export const dateOf = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// The local midnight that ends `day`. Built from the calendar date, so a day that is 23
+// or 25 hours long across a clock change still ends at its own midnight.
+const endOf = (day) => {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(y, m - 1, d + 1).getTime();
+};
+
+// The day that can still be edited at `now`, or null: the one whose date is today, or
+// that was edited less than an hour ago, so writing past midnight keeps going in the
+// same entry. A new day is only started while none is open, so at most one qualifies;
+// the latest edited wins should a clock change ever let two.
+export const openDay = (days, now) =>
+  days
+    .filter((d) => !d.deleted && (d.day === dateOf(now) || now - d.editedAt < HOUR))
+    .reduce((a, b) => (a && a.editedAt >= b.editedAt ? a : b), null);
+
+// The earliest moment the open day can close. Only a schedule: whether it is open is
+// always decided by openDay, so a clock set back merely re-checks early.
+const closesAt = (day) => Math.max(endOf(day.day), day.editedAt + HOUR);
+
+// The paragraphs of a day's text, in order, trimmed. A line break ends a paragraph; while
+// the box is being typed in, the line at the end is unfinished, otherwise every paragraph
+// is finished. Copied from the paragraph mode of case-journal's pieces, because
+// components never import each other (11.2).
+export const paragraphs = (text, editing) => {
+  const lines = text.split("\n");
+  const out = [];
+  lines.forEach((line, i) => {
+    const t = line.trim();
+    if (t) out.push({ text: t, finished: !editing || i < lines.length - 1 });
+  });
+  return out;
+};
+
+const live = (items) => items.filter((x) => !x.removing && !x.deleted);
+
+// The question as Jev is asked it: its text, and its yes and no words or its options. A
+// yes / no question keeps its options for a switch back, but they are not asked, so they
+// are not part of its wording; an option being removed is not offered either.
+export const wordingOf = (q) =>
+  q.kind === "pick"
+    ? { text: q.text, yes: "", no: "", options: live(q.options).map((o) => ({ id: o.id, name: o.name })) }
+    : { text: q.text, yes: q.yes, no: q.no, options: [] };
+
+// A question llm: decide would accept.
+const askable = (q) => q.text.trim() !== "" && (q.kind !== "pick" || live(q.options).length >= 2);
+
+// Every question that reads the writing now: an askable question of a detector that is
+// on, in a project that is on.
+const onQuestions = ({ projects, detectors }) => {
+  const on = new Set(live(projects).filter((p) => p.on).map((p) => p.id));
+  return live(detectors)
+    .filter((d) => d.on && on.has(d.project))
+    .flatMap((d) => live(d.questions).filter(askable));
+};
+
+// --- Records --------------------------------------------------------------------------
+
+const option = (o) => (o && isId(o.id) ? { id: o.id, name: str(o.name), description: str(o.description), removing: o.removing === true } : null);
+
+const question = (q) => {
+  if (!q || !isId(q.id)) return null;
+  return {
+    id: q.id,
+    kind: q.kind === "pick" ? "pick" : "yesno",
+    text: str(q.text),
+    yes: str(q.yes),
+    no: str(q.no),
+    options: (Array.isArray(q.options) ? q.options : []).map(option).filter(Boolean),
+    removing: q.removing === true,
+  };
+};
+
+const version = (v) => (Number.isInteger(v) && v >= 1 ? v : 1);
+
+// `deleted` marks a tombstone (5): kept so a later sync tells other devices, never shown.
+const tomb = (r) => (r.deleted === true ? { deleted: true } : {});
+
+// Each record in its stored shape, or null when it has no valid id.
+const dayRecord = (d) =>
+  d && isId(d.id) && /^\d{4}-\d{2}-\d{2}$/.test(d.day)
+    ? { id: d.id, day: d.day, text: str(d.text), editedAt: Number.isInteger(d.editedAt) ? d.editedAt : 0, version: version(d.version) }
+    : null;
+
+const projectRecord = (p) =>
+  p && isId(p.id)
+    ? { id: p.id, name: str(p.name), on: p.on !== false, version: version(p.version), removing: p.removing === true, ...tomb(p) }
+    : null;
+
+const detectorRecord = (r) =>
+  r && isId(r.id) && isId(r.project)
+    ? {
+        id: r.id,
+        project: r.project,
+        name: str(r.name),
+        on: r.on !== false,
+        questions: (Array.isArray(r.questions) ? r.questions : []).map(question).filter(Boolean),
+        version: version(r.version),
+        removing: r.removing === true,
+        ...tomb(r),
+      }
+    : null;
+
+// An answer is kept by its question's id and its paragraph's text.
+const keyOf = (a) => `${a.answer.id}\n${a.text}`;
+
+const answerRecord = (a) =>
+  a && typeof a.text === "string" && a.wording && a.answer && isId(a.answer.id) && Number.isInteger(a.at)
+    ? { key: keyOf(a), text: a.text, wording: a.wording, answer: a.answer, at: a.at }
+    : null;
+
+// --- Seeds ----------------------------------------------------------------------------
+
+// The example projects a first visit starts with, copied from rubrics' examples with ids
+// of their own: a removal names only an id, and each fact recognises only its own, so
+// the journal's detectors never share an id with Judge's. The ids are fixed, so two
+// devices seeding the same journal make the same records. `since` is the seed version
+// that added a record; it stays in this file and the catch-up.
+export const SEED_VERSION = 1;
+export const IDS = Object.freeze({
+  distortion: "01K7SEED00000000000000JP01",
+  goals: "01K7SEED00000000000000JP02",
+  distortionDetector: "01K7SEED00000000000000JD01",
+  goalOrValue: "01K7SEED00000000000000JD02",
+  goalOrValueYesNo: "01K7SEED00000000000000JD03",
+  distortionPick: "01K7SEED00000000000000JQ01",
+  goalOrValuePick: "01K7SEED00000000000000JQ02",
+  isGoal: "01K7SEED00000000000000JQ03",
+  isValue: "01K7SEED00000000000000JQ04",
+});
+
+const yn = (id, text, yes, no) => ({ id, kind: "yesno", text, yes, no, options: [] });
+const opt = (id, name, description) => ({ id, name, description });
+const optId = (n) => `01K7SEED00000000000000JC${pad(n)}`;
+
+const PROJECTS = [
+  { id: IDS.distortion, name: "Cognitive Distortion", on: true, since: 1 },
+  { id: IDS.goals, name: "Goals and values", on: true, since: 1 },
+];
+
+const DETECTORS = [
+  {
+    id: IDS.distortionDetector,
+    project: IDS.distortion,
+    name: "Cognitive Distortion",
+    on: true,
+    since: 1,
+    questions: [{
+      id: IDS.distortionPick,
+      kind: "pick",
+      text: "What cognitive distortion it is, if any?",
+      yes: "",
+      no: "",
+      options: [
+        opt(optId(4), "All-or-nothing thinking", "Seeing things in extremes, with no middle ground."),
+        opt(optId(5), "Overgeneralization", "Drawing a broad conclusion from a single event or a small number of events."),
+        opt(optId(6), "Mind reading", "Assuming you know what other people are thinking, usually negatively."),
+        opt(optId(7), "Fortune telling", "Predicting that something bad will happen and treating the prediction as fact."),
+        opt(optId(8), "Catastrophizing", "Expecting the worst possible outcome and struggling to consider more likely alternatives."),
+        opt(optId(9), "Emotional reasoning", "Treating feelings as proof that something is true."),
+        opt(optId(10), "Should statements", "Rigid rules about how you or other people must behave."),
+        opt(optId(11), "Labeling", "Defining yourself or another person by a single characteristic or behavior."),
+        opt(optId(12), "Personalization", "Taking excessive responsibility for events that are not entirely within your control."),
+        opt(optId(13), "Mental filtering", "Focusing exclusively on negative details while ignoring positive ones."),
+      ],
+    }],
+  },
+  {
+    id: IDS.goalOrValue,
+    project: IDS.goals,
+    name: "Goal or value",
+    on: true,
+    since: 1,
+    questions: [{
+      id: IDS.goalOrValuePick,
+      kind: "pick",
+      text: "Is this a goal, a value, or neither?",
+      yes: "",
+      no: "",
+      options: [
+        opt(optId(1), "Goal", "Something you can achieve and then it is finished."),
+        opt(optId(2), "Value", "An ongoing way of acting that is never finished."),
+        opt(optId(3), "Other", "Neither a goal nor a value."),
+      ],
+    }],
+  },
+  {
+    id: IDS.goalOrValueYesNo,
+    project: IDS.goals,
+    name: "Goal or value (yes / no)",
+    on: false,
+    since: 1,
+    questions: [
+      yn(IDS.isGoal, "Is this a goal?", "it is something you can achieve and then it is finished", "it is never finished, or it is not something to achieve"),
+      yn(IDS.isValue, "Is this a value?", "it is an ongoing way of acting that is never finished", "it can be finished, or it is not a way of acting"),
+    ],
+  },
+];
+
+export const SEED = Object.freeze({ projects: PROJECTS.map(projectRecord), detectors: DETECTORS.map(detectorRecord) });
+
+const SOURCES = { projects: [PROJECTS, projectRecord], detectors: [DETECTORS, detectorRecord] };
+
+// A journal stored by an older seed version gains only the seed records a newer version
+// added, unless their id is already there; a seed record the user deleted was added by a
+// version the journal already had, and its tombstone keeps the id, so it is not brought
+// back. Nothing stored is a first visit, version 0, which gains every seed.
+export const catchUp = (table, list, version) => {
+  const [source, record] = SOURCES[table];
+  const have = new Set(list.map((r) => r.id));
+  return [...list, ...source.filter((s) => s.since > version && !have.has(s.id)).map(record)];
+};
+
+// --- Changes --------------------------------------------------------------------------
+
+// The incoming list with every flagged item of the old list that it left out put back
+// after the nearest item before it that is still there, so a save never drops what is
+// still in its undo window. An incoming item flagged in the old list stays flagged.
+// Copied from rubrics (11.2).
+const keepFlagged = (old, incoming) => {
+  const flagged = new Set(old.filter((x) => x.removing).map((x) => x.id));
+  const out = incoming.map((x) => (flagged.has(x.id) ? { ...x, removing: true } : x));
+  old.forEach((x, i) => {
+    if (!x.removing || out.some((y) => y.id === x.id)) return;
+    const before = old.slice(0, i).reverse().find((p) => out.some((y) => y.id === p.id));
+    out.splice(before ? out.findIndex((y) => y.id === before.id) + 1 : 0, 0, x);
+  });
+  return out;
+};
+
+// A record as another device would be told it. The removing marks belong to this tab's
+// undo window, so setting or clearing one is not a new version.
+const content = (r) => JSON.stringify(r, (k, v) => (k === "removing" || k === "version" ? undefined : v));
+
+// The next list with versions minted locally (5, while signed out): a record whose
+// content changed takes the next version; a new one starts at 1.
+const mint = (old, next) => {
+  const was = new Map(old.map((r) => [r.id, r]));
+  return next.map((r) => {
+    const o = was.get(r.id);
+    if (!o) return { ...r, version: 1 };
+    return { ...r, version: content(o) === content(r) ? o.version : o.version + 1 };
+  });
+};
+
+// A save to the open day, or a new day while none is open. A new day takes today's date
+// at its first character, so an empty new day is not a day yet. A save to any other day
+// is refused: this is the one place the "today only" rule is kept.
+const daySaved = (c, { id, text }, now) => {
+  const open = openDay(c.days, now);
+  const was = c.days.find((d) => d.id === id);
+  if (was) {
+    if (open?.id !== id || was.text === text) return null;
+    return { days: mint(c.days, c.days.map((d) => (d.id === id ? { ...d, text, editedAt: now } : d))) };
+  }
+  if (open || text === "") return null;
+  return { days: [...c.days, { id, day: dateOf(now), text, editedAt: now, version: 1 }] };
+};
+
+const find = (list, id) => list.find((x) => x.id === id);
+const alive = (list, id) => {
+  const x = find(list, id);
+  return x && !x.deleted ? x : null;
+};
+
+// A deleted id stays deleted (5): a late save for it does not bring it back.
+const projectSaved = (c, { id, name }) => {
+  if (find(c.projects, id)?.deleted) return null;
+  const projects = alive(c.projects, id)
+    ? c.projects.map((p) => (p.id === id ? { ...p, name } : p))
+    : [...c.projects, projectRecord({ id, name })];
+  return { projects: mint(c.projects, projects) };
+};
+
+// Unticking a project keeps each detector's own tick.
+const projectSwitched = (c, { id, on }) =>
+  alive(c.projects, id) ? { projects: mint(c.projects, c.projects.map((p) => (p.id === id ? { ...p, on } : p))) } : null;
+
+const detectorSwitched = (c, { id, on }) =>
+  alive(c.detectors, id) ? { detectors: mint(c.detectors, c.detectors.map((d) => (d.id === id ? { ...d, on } : d))) } : null;
+
+// A detector belongs to one of the journal's projects; a new id adds it there, switched
+// on, and a save keeps its tick and whatever of it is still in its undo window.
+const detectorSaved = (c, event) => {
+  if (!alive(c.projects, event.project) || find(c.detectors, event.id)?.deleted) return null;
+  const was = alive(c.detectors, event.id);
+  const r = detectorRecord({ ...event, on: was ? was.on : true, removing: was?.removing, version: was?.version });
+  if (!was) return { detectors: mint(c.detectors, [...c.detectors, r]) };
+  const questions = keepFlagged(
+    was.questions,
+    r.questions.map((q) => {
+      const old = was.questions.find((x) => x.id === q.id);
+      return { ...q, options: keepFlagged(old ? old.options : [], q.options) };
+    }),
+  );
+  return { detectors: mint(c.detectors, c.detectors.map((d) => (d.id === r.id ? { ...r, questions } : d))) };
+};
+
+// Sets `removing` on the one item of `kind` named by `id`, wherever it sits. A detector
+// is a "rubric" in the removal vocabulary, Judge's name for the same thing. An id that
+// is not one of the journal's own matches nothing, so Judge's removals pass by.
+const mark = (removing) => (c, { kind, id }) => {
+  const set = (x) => (x.id === id && !x.deleted ? { ...x, removing } : x);
+  if (kind === "project") return { projects: c.projects.map(set) };
+  if (kind === "rubric") return { detectors: c.detectors.map(set) };
+  if (kind === "question") return { detectors: c.detectors.map((d) => ({ ...d, questions: d.questions.map(set) })) };
+  if (kind === "option")
+    return { detectors: c.detectors.map((d) => ({ ...d, questions: d.questions.map((q) => ({ ...q, options: q.options.map(set) })) })) };
+  return null;
+};
+
+// A settled removal makes a tombstone of a project or a detector, and of every detector
+// of a settled project, and drops a question or an option from its detector. Only an
+// item still flagged settles: one that was undone, or never removed, stays.
+const settle = (c, { kind, id }) => {
+  const flagged = (x) => x.id === id && x.removing;
+  const bury = (x) => ({ ...x, removing: false, deleted: true });
+  if (kind === "project") {
+    if (!c.projects.some(flagged)) return null;
+    return {
+      projects: mint(c.projects, c.projects.map((p) => (flagged(p) ? bury(p) : p))),
+      detectors: mint(c.detectors, c.detectors.map((d) => (d.project === id && !d.deleted ? bury(d) : d))),
+    };
+  }
+  if (kind === "rubric") return { detectors: mint(c.detectors, c.detectors.map((d) => (flagged(d) ? bury(d) : d))) };
+  const keep = (x) => !flagged(x);
+  if (kind === "question") return { detectors: mint(c.detectors, c.detectors.map((d) => ({ ...d, questions: d.questions.filter(keep) }))) };
+  if (kind === "option")
+    return {
+      detectors: mint(c.detectors, c.detectors.map((d) => ({ ...d, questions: d.questions.map((q) => ({ ...q, options: q.options.filter(keep) })) }))),
+    };
+  return null;
+};
+
+// At load no tab can undo anything any more, because the tab that showed the undo
+// notice closed, so every leftover flag settles.
+const settleAll = (held) => {
+  let c = held;
+  const apply = (kind, id) => (c = { ...c, ...settle(c, { kind, id }) });
+  for (const p of c.projects.filter((x) => x.removing)) apply("project", p.id);
+  for (const d of c.detectors.filter((x) => x.removing)) apply("rubric", d.id);
+  for (const q of c.detectors.flatMap((d) => d.questions).filter((x) => x.removing)) apply("question", q.id);
+  for (const o of c.detectors.flatMap((d) => d.questions.flatMap((q) => q.options)).filter((x) => x.removing)) apply("option", o.id);
+  return c;
+};
+
+// --- The picture ----------------------------------------------------------------------
+
+// Why Jev is not reading the writing, in llm: decide's words, or null when it is. Before
+// llm has answered, or with no llm on the page, nobody is known to be signed in.
+const reason = (c) => {
+  if (!c.llm?.signedIn) return "signed-out";
+  if (!c.llm.jev?.keySet) return "no-key";
+  if (!onQuestions(c).length) return "no-detector";
+  return c.error;
+};
+
+// A day's finished paragraphs that some question on now has not answered with its
+// current wording: what Judge this day would send. The open day's last line is still
+// being written, so it is not finished yet.
+const unanswered = (day, isOpen, questions, answers) => {
+  const out = [];
+  for (const { text, finished } of paragraphs(day.text, isOpen)) {
+    if (!finished || out.includes(text)) continue;
+    const missing = questions.some((q) => {
+      const a = answers.get(`${q.id}\n${text}`);
+      return !a || !same(a.wording, wordingOf(q));
+    });
+    if (missing) out.push(text);
+  }
+  return out;
+};
+
+const shown = ({ deleted, ...r }) => r;
+
+const body = (c) => {
+  const open = openDay(c.days, c.now());
+  const questions = onQuestions(c);
+  const byKey = new Map(c.answers.map((a) => [a.key, a]));
+  const wordings = new Map(live(c.detectors).flatMap((d) => live(d.questions).map((q) => [q.id, wordingOf(q)])));
+  return {
+    days: c.days
+      .filter((d) => !d.deleted)
+      .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id))
+      .map((d) => ({
+        id: d.id,
+        day: d.day,
+        text: d.text,
+        editedAt: d.editedAt,
+        version: d.version,
+        waiting: [],
+        unanswered: unanswered(d, d.id === open?.id, questions, byKey),
+      })),
+    projects: c.projects.filter((p) => !p.deleted).map(shown),
+    detectors: c.detectors.filter((d) => !d.deleted).map(shown),
+    answers: c.answers.map(({ key, ...a }) => ({
+      ...a,
+      earlier: wordings.has(a.answer.id) && !same(wordings.get(a.answer.id), a.wording),
+    })),
+    open: open?.id ?? null,
+    reason: reason(c),
+  };
+};
+
+// --- The actor ------------------------------------------------------------------------
+
+const TABLES = ["days", "projects", "detectors"];
+
+// Stores every record that differs from what was held, so a keystroke writes one day,
+// not the journal.
+const persist = (store, held, next, enqueue) => {
+  for (const table of TABLES) {
+    if (!next[table]) continue;
+    const was = new Map(held[table].map((r) => [r.id, r]));
+    for (const r of next[table]) if (!same(was.get(r.id), r)) enqueue(() => store.put(table, r).catch(() => {}));
+  }
+};
+
+// The open day closes by time alone, once its date has passed and an hour after its last
+// edit, with nobody acting, so a timer wakes the fact then to re-check it and announce
+// the closing. It is re-armed after every change, since an edit moves the moment.
+const arm = (enqueue, days, now) => {
+  enqueue.cancel("close");
+  const open = openDay(days, now);
+  // setTimeout fires at once past 2^31 ms, so a clock set far back would otherwise spin.
+  if (open) enqueue.raise({ type: "_close" }, { id: "close", delay: Math.min(closesAt(open) - now, 2 ** 31 - 1) });
+};
+
+const announce = (enqueue, c) => {
+  const picture = body(c);
+  enqueue.assign({ open: picture.open });
+  enqueue.emit({ type: "journal.changed", ...picture });
+};
+
+// Each gesture becomes a candidate change, or null; only a change is stored and
+// announced, so a repeat stores and emits nothing.
+const commit = (next) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const now = context.now();
+    const change = next(context, event, now);
+    if (!change || TABLES.every((t) => !change[t] || same(change[t], context[t]))) return;
+    persist(context.store, context, change, enqueue);
+    enqueue.assign(change);
+    announce(enqueue, { ...context, ...change });
+    arm(enqueue, change.days ?? context.days, now);
+  });
+
+// The llm picture matters here only for the reason, so it is announced only when the
+// reason changes.
+const follow = (picture) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const llm = picture(event);
+    if (!llm || typeof llm.signedIn !== "boolean") return;
+    const before = reason(context);
+    enqueue.assign({ llm });
+    if (reason({ ...context, llm }) !== before) announce(enqueue, { ...context, llm });
+  });
+
+const GESTURES = {
+  "day.saved": daySaved,
+  "detector-project.saved": projectSaved,
+  "detector-project.switched": projectSwitched,
+  "detector.saved": detectorSaved,
+  "detector.switched": detectorSwitched,
+  "removal.started": mark(true),
+  "removal.undone": mark(false),
+  "removal.settled": settle,
+};
+
+const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
+
+// What arrived while the store loaded, replayed in order once it is ready.
+const replay = (context, enqueue) => {
+  for (const message of context.queued) enqueue.raise(message);
+  enqueue.assign({ queued: [] });
+};
+
+export const machine = setup({
+  actors: {
+    load: fromPromise(async ({ input: { store } }) => {
+      const [days, projects, detectors, answers, seed] = await Promise.all([
+        store.all("days"),
+        store.all("projects"),
+        store.all("detectors"),
+        store.all("answers"),
+        store.metaGet("seed"),
+      ]);
+      return { days, projects, detectors, answers, seed: Number.isInteger(seed) ? seed : 0 };
+    }),
+    // No llm on the page, or a Node test without an ask, reads as nobody signed in.
+    llm: fromPromise(({ input }) => (input.ask ? input.ask("llm", "read", {}) : Promise.resolve(null))),
+  },
+}).createMachine({
   id: "journal",
   meta: {
     description:
@@ -38,18 +547,86 @@ export const machine = setup({}).createMachine({
     emits: ["journal.changed", "journal.conflicted"],
     asks: ["session: read", "llm: read", "llm: decide"],
   },
+  context: ({ input }) => ({
+    days: [],
+    projects: [],
+    detectors: [],
+    answers: [],
+    llm: null,
+    error: null,
+    open: null,
+    userId: null,
+    queued: [],
+    store: input.store,
+    now: input.now,
+    ask: input.ask,
+  }),
+  initial: "loading",
+  // Who is signed in; the outbox drains only while someone is (5).
   on: {
-    "day.saved": planned,
-    "day.judging.requested": planned,
-    "detector-project.saved": planned,
-    "detector-project.switched": planned,
-    "detector.saved": planned,
-    "detector.switched": planned,
-    "removal.started": planned,
-    "removal.undone": planned,
-    "removal.settled": planned,
-    "session.changed": planned,
-    "llm.changed": planned,
-    "read?": planned,
+    "session.changed": { actions: assign({ userId: ({ event }) => event.userId }) },
+  },
+  states: {
+    loading: {
+      invoke: {
+        src: "load",
+        input: ({ context }) => ({ store: context.store }),
+        onDone: {
+          target: "ready",
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            const { output } = event;
+            const held = settleAll({
+              days: output.days.map(dayRecord).filter(Boolean),
+              projects: catchUp("projects", output.projects.map(projectRecord).filter(Boolean), output.seed),
+              detectors: catchUp("detectors", output.detectors.map(detectorRecord).filter(Boolean), output.seed),
+              answers: output.answers.map(answerRecord).filter(Boolean),
+            });
+            persist(context.store, output, held, enqueue);
+            if (output.seed < SEED_VERSION) enqueue(() => context.store.metaPut("seed", SEED_VERSION).catch(() => {}));
+            const now = context.now();
+            enqueue.assign({ ...held, open: openDay(held.days, now)?.id ?? null });
+            arm(enqueue, held.days, now);
+            replay(context, enqueue);
+          }),
+        },
+        // A store that cannot open still takes writing for this page, rather than
+        // refusing every keystroke.
+        onError: {
+          target: "ready",
+          actions: enqueueActions(({ context, enqueue }) => {
+            enqueue.assign({ projects: structuredClone(SEED.projects), detectors: structuredClone(SEED.detectors) });
+            replay(context, enqueue);
+          }),
+        },
+      },
+      on: {
+        ...Object.fromEntries(Object.keys(GESTURES).map((type) => [type, { actions: queue }])),
+        "day.judging.requested": { actions: queue },
+        "llm.changed": { actions: assign({ llm: ({ event }) => event }) },
+        "read?": { actions: queue },
+      },
+    },
+    ready: {
+      invoke: {
+        src: "llm",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: { actions: follow((event) => event.output) },
+      },
+      on: {
+        ...Object.fromEntries(Object.entries(GESTURES).map(([type, next]) => [type, { actions: commit(next) }])),
+        // Judge this day is a request to llm: decide; until this fact asks Jev it is
+        // accepted and changes nothing.
+        "day.judging.requested": { actions: () => {} },
+        "llm.changed": { actions: follow((event) => event) },
+        _close: {
+          actions: enqueueActions(({ context, enqueue }) => {
+            const now = context.now();
+            if ((openDay(context.days, now)?.id ?? null) !== context.open) announce(enqueue, context);
+            arm(enqueue, context.days, now);
+          }),
+        },
+        "read?": { actions: ({ context, event }) => event.reply(body(context)) },
+      },
+    },
   },
 });
