@@ -610,6 +610,8 @@ The architecture document describes the rules; the checks are what make them rea
 
 Where the product is heading. Nothing here is designed or built; each line is one sentence, and a proposal says how it leaves every line open.
 
+- Detectors that trigger tools, where a detector notices something in what the user writes (a yes / no or pick-one judgment by Jev), a tool does something, and a tool can be set to run when a detector fires; these tools act, unlike the chat's tools of 7.7, which only look things up.
+- Using the journal and Judge signed out, on the owner's Jev key for up to 100 requests and then asking for a key, leaving open how a signed-out visitor is counted and how all signed-out use together is capped, how a signed-out visitor gives a key, whether signing up keeps the count, and whether the count is shared between apps.
 - The side-dock chat, now being built, knowing more of what the reader is looking at: the open book and the chapter being read.
 - Every chat able to draw on the whole library — every book, note and highlight — so that what the reader marked and wrote shapes the answers.
 - Chats linked to books, so a book shows its notes and its chats.
