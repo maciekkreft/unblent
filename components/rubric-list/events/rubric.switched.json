@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user ticked or unticked a tool: whether Judge uses it.",
+  "description": "The user ticked or unticked a detector: whether Judge uses it.",
   "type": "object",
   "properties": {
     "id": {

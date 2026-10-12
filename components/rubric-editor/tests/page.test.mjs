@@ -110,10 +110,10 @@ for (const engine of ENGINES) {
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await page.locator("rubric-list .row.new .open").click();
       const editor = page.locator("rubric-editor");
-      await editor.getByPlaceholder("Name the tool").fill("Kindness");
+      await editor.getByPlaceholder("Name the detector").fill("Kindness");
       await editor.getByRole("textbox", { name: "Question 1" }).fill("Is it kind?");
       await editor.locator("textarea.yes").fill("it helps someone");
-      await page.locator("list-then-item").getByRole("button", { name: "Back to Tools" }).click();
+      await page.locator("list-then-item").getByRole("button", { name: "Back to Detectors" }).click();
       await until(async () => (await listed(page)).some(([name]) => name === "Kindness"));
       assert.deepEqual((await listed(page)).find(([name]) => name === "Kindness"), ["Kindness", "1 question"]);
     });

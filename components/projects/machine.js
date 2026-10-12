@@ -135,7 +135,7 @@ export const machine = setup({}).createMachine({
   id: "projects",
   meta: {
     description:
-      "Owns the Judge projects, kept on this device: each project has a name and its own tools, " +
+      "Owns the Judge projects, kept on this device: each project has a name and its own detectors, " +
       "cases and results, and one project is the current one. There is always at least one " +
       "project, so deleting the last one is refused. A deleted project waits out the undo window " +
       "before it is gone, and still exists until then, so Undo brings it back with everything in " +

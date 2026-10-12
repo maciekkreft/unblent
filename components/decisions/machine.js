@@ -341,13 +341,13 @@ export const machine = setup({
   id: "decisions",
   meta: {
     description:
-      "Owns what Jev answered, kept on this device: the latest answers for each case and tool, " +
+      "Owns what Jev answered, kept on this device: the latest answers for each case and detector, " +
       "and the latest run of Judge or Judge all with how far it got. Judge and Judge all arrive " +
-      "with the cases and the switched-on tools as they were when the button was pressed, and " +
+      "with the cases and the switched-on detectors as they were when the button was pressed, and " +
       "this fact asks Jev about one case at a time, in order, because only one request may be " +
       "open at a time. A run stops at the first error and keeps the reason, so the user sees " +
       "why. Answers are dropped once the case's text or a question they answer changes, " +
-      "because they no longer say anything about what is written, and with the case or tool " +
+      "because they no longer say anything about what is written, and with the case or detector " +
       "they belong to once it is gone. For a yes / no question an answer is how likely yes is; " +
       "for a pick-one question it is the option Jev picked, how likely each option is, and how " +
       "sure Jev is. Pieces of a case's text, sentences or paragraphs from the Journal tab, are " +
@@ -356,7 +356,7 @@ export const machine = setup({
       "dropped once no case holds its text.",
     kind: "fact",
     shape: "local-only",
-    owns: "Jev's latest answers for each case and tool, and the latest run",
+    owns: "Jev's latest answers for each case and detector, and the latest run",
     emits: ["decision.changed"],
     asks: ["llm: decide"],
   },

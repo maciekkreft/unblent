@@ -8,14 +8,14 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Every tool of every project.",
+    "description": "Every detector of every project.",
     "type": "object",
     "properties": {
       "rubrics": {
         "type": "array",
         "items": {
           "type": "object",
-          "description": "One tool (a rubric): a name and its questions.",
+          "description": "One detector (a rubric): a name and its questions.",
           "properties": {
             "id": {
               "type": "string",
@@ -30,13 +30,13 @@
             },
             "on": {
               "type": "boolean",
-              "description": "Whether Judge uses this tool."
+              "description": "Whether Judge uses this detector."
             },
             "questions": {
               "type": "array",
               "items": {
                 "type": "object",
-                "description": "One question of the tool.",
+                "description": "One question of the detector.",
                 "properties": {
                   "id": {
                     "type": "string",

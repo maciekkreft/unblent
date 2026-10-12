@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Pieces of the open case are finished: judge each one Jev has not already judged with these tools, as they were at that moment. Questions and options being removed are left out.",
+  "description": "Pieces of the open case are finished: judge each one Jev has not already judged with these detectors, as they were at that moment. Questions and options being removed are left out.",
   "type": "object",
   "properties": {
     "project": {
@@ -25,7 +25,7 @@
             "minItems": 1,
             "items": {
               "type": "object",
-              "description": "One question of the tool.",
+              "description": "One question of the detector.",
               "properties": {
                 "id": {
                   "type": "string",

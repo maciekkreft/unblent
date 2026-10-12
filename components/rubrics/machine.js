@@ -384,19 +384,19 @@ export const machine = setup({
   id: "rubrics",
   meta: {
     description:
-      "Owns the Judge tools of every project, kept on this device. A tool is a name, whether it " +
+      "Owns the Judge detectors of every project, kept on this device. A detector is a name, whether it " +
       "is switched on for judging, and a list of questions. A question is either yes / no, with " +
       "optional words for what yes means and what no means, or pick one, with options that each " +
       "have a name and an optional description; a question keeps its options while it is yes / " +
-      "no, so switching its kind back loses nothing. A new tool starts switched on. Deleting a " +
-      "tool, or removing a question or an option, waits out the undo window and is marked until " +
-      "then, so the editor can show it and Judge leaves it out. The tools of a project that no " +
-      "longer exists are dropped. A first visit starts with example tools in each example " +
+      "no, so switching its kind back loses nothing. A new detector starts switched on. Deleting a " +
+      "detector, or removing a question or an option, waits out the undo window and is marked until " +
+      "then, so the editor can show it and Judge leaves it out. The detectors of a project that no " +
+      "longer exists are dropped. A first visit starts with example detectors in each example " +
       "project; a later version of the examples only adds what is new and never brings back a " +
-      "tool the user deleted.",
+      "detector the user deleted.",
     kind: "fact",
     shape: "local-only",
-    owns: "the Judge tools of every project and their questions",
+    owns: "the Judge detectors of every project and their questions",
     emits: ["rubric.changed"],
     asks: ["projects: read"],
   },

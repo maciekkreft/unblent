@@ -60,7 +60,7 @@ export const block = (tool, q, cases, decisions) => {
   const grid = names.map(() => names.map(() => 0));
   for (const j of judged) grid[index.get(j.right)][index.get(j.pick)] += 1;
   return {
-    tool: tool.name.trim() || "Untitled tool",
+    tool: tool.name.trim() || "Untitled detector",
     question: q.text.trim() || "Untitled question",
     id: q.id,
     right: judged.filter((j) => j.pick === j.right).length,
@@ -102,8 +102,8 @@ export const emptyLine = (context, shown) => {
   const { rubrics, cases, current } = context;
   const hasTool = live(rubrics).some((r) => r.project === current);
   const hasCase = live(cases).some((c) => c.project === current);
-  if (!hasTool || !hasCase) return "Results appear here after the first Judge all. Add a tool and some cases with right answers first.";
-  if (!onTools(rubrics, current).length) return "Switch on a tool in Tools to see its results.";
+  if (!hasTool || !hasCase) return "Results appear here after the first Judge all. Add a detector and some cases with right answers first.";
+  if (!onTools(rubrics, current).length) return "Switch on a detector in Detectors to see its results.";
   if (!shown.length) return "Results appear here after the first Judge all, for every question where a case has a right answer.";
   return null;
 };
@@ -118,11 +118,11 @@ export const machine = setup({
   id: "decision-results",
   meta: {
     description:
-      "The Results tab: for every question of a tool that is on, over the cases that have a " +
+      "The Results tab: for every question of a detector that is on, over the cases that have a " +
       "right answer for it and an answer from Jev, how many Jev got right (\"16 of 18 right\"), " +
       "how many it got right for each right answer, a table of what Jev picked against the right " +
       "answer, and the misses. Clicking a miss opens its case. While a run is going the results " +
-      "are dimmed under its progress line. With no tool on, no case or nothing judged yet, it " +
+      "are dimmed under its progress line. With no detector on, no case or nothing judged yet, it " +
       "says what to do first.",
     kind: "view",
     emits: ["case.selected"],

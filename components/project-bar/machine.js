@@ -25,7 +25,7 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 export const summary = (id, rubrics, cases) => {
   const tools = live(rubrics).filter((r) => r.project === id).length;
   const kept = live(cases).filter((c) => c.project === id).length;
-  return `${plural(tools, "tool", "tools")} · ${plural(kept, "case", "cases")}`;
+  return `${plural(tools, "detector", "detectors")} · ${plural(kept, "case", "cases")}`;
 };
 
 // Only the last project left cannot be deleted; projects refuses it too.
@@ -44,7 +44,7 @@ export const machine = setup({
   meta: {
     description:
       "The bar across the top of Judge: it names the current project, and its button opens a " +
-      "menu listing every project with how many tools and cases it has, the current one ticked. " +
+      "menu listing every project with how many detectors and cases it has, the current one ticked. " +
       "Picking a project makes it current. The menu also makes a new project, which becomes " +
       "current and opens its name for writing; renames the current project; and deletes it, " +
       "with Undo in a notice for a few seconds. Delete is greyed out while only one project is " +

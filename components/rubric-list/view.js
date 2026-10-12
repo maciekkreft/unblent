@@ -174,21 +174,21 @@ class RubricList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
-    if (snapshot.matches("failed")) return html`<p class="empty">Tools unavailable.</p>`;
+    if (snapshot.matches("failed")) return html`<p class="empty">Detectors unavailable.</p>`;
     const { draft, open, rubrics, current } = snapshot.context;
     const tools = rows(rubrics, current);
     return html`
-      <ul class="list" aria-label="Tools" @keydown=${(e) => this.#keydown(e)}>
+      <ul class="list" aria-label="Detectors" @keydown=${(e) => this.#keydown(e)}>
         <li class="row new" @click=${(e) => this.#rowClick(e, draft)}>
           <button class="open" type="button">
-            <span class="name draft">${icon("plus")}New tool</span>
+            <span class="name draft">${icon("plus")}New detector</span>
           </button>
         </li>
         ${tools.map((t) => this.#row(t, open))}
       </ul>
       ${tools.length
-        ? html`<p class="hint">Only tools with a tick are used when judging.</p>`
-        : html`<p class="empty">No tools yet. Use New tool to write the questions Jev should answer.</p>`}
+        ? html`<p class="hint">Only detectors with a tick are used when judging.</p>`
+        : html`<p class="empty">No detectors yet. Use New detector to write the questions Jev should answer.</p>`}
     `;
   }
 
@@ -199,11 +199,11 @@ class RubricList extends LitElement {
         <input
           type="checkbox"
           .checked=${t.on}
-          aria-label="Use ${name || "Untitled tool"} when judging"
+          aria-label="Use ${name || "Untitled detector"} when judging"
           @change=${(e) => this.#actor.send({ type: "_switch", id: t.id, on: e.target.checked })}
         />
         <button class="open" type="button" aria-current=${t.id === open ? "true" : nothing}>
-          <span class="name ${name ? (t.on ? "" : "off") : "untitled"}">${name || "Untitled tool"}</span>
+          <span class="name ${name ? (t.on ? "" : "off") : "untitled"}">${name || "Untitled detector"}</span>
           <span class="sub">${subtitle(t)}</span>
         </button>
       </li>

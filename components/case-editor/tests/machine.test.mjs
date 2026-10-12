@@ -56,7 +56,7 @@ test("the right-answer menus are the questions of the tools that are on, grouped
       value: "", // the answer's option is being removed, so it shows as no right answer
     },
     { tool: "Goal or value", question: "Is it a goal?", id: YES, choices: [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }], value: "yes" },
-    { tool: "Untitled tool", question: "Untitled question", id: id("Q", 5), choices: [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }], value: "" },
+    { tool: "Untitled detector", question: "Untitled question", id: id("Q", 5), choices: [{ value: "yes", label: "Yes" }, { value: "no", label: "No" }], value: "" },
   ]);
 });
 
@@ -134,9 +134,9 @@ test("the reasons Judge cannot run, signed out and no key among them", () => {
   assert.equal(blocked(ok), null);
   assert.equal(blocked({ ...ok, signedIn: false }), "Sign in to judge.");
   assert.equal(blocked({ ...ok, keySet: false }), "Add your Jev key in Settings.");
-  assert.equal(blocked({ ...ok, rubrics: [rubric(1, B)] }), "Make a tool in Tools to judge.");
-  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { on: false })] }), "Switch on a tool in Tools to judge.");
-  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [yesno({ text: " " })] })] }), "Add a question to a tool to judge.");
+  assert.equal(blocked({ ...ok, rubrics: [rubric(1, B)] }), "Make a detector in Detectors to judge.");
+  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { on: false })] }), "Switch on a detector in Detectors to judge.");
+  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [yesno({ text: " " })] })] }), "Add a question to a detector to judge.");
   assert.equal(blocked({ ...ok, draft: { ...draft, text: "  " } }), "Write the text to judge.");
   const run = { project: A, cases: [draft.id], done: 0, running: true, error: null };
   assert.equal(blocked({ ...ok, run }), "Judging this case…");
@@ -148,7 +148,7 @@ test("the reasons Judge cannot run, signed out and no key among them", () => {
 test("the line names the tools that judge, the judging state and a stopped run belong to this case", () => {
   assert.equal(uses([rubric(1, A, { name: "Goal or value" })], A), "Judges this case with Goal or value.");
   assert.equal(uses([rubric(1, A, { name: "A" }), rubric(2, A, { name: "B" }), rubric(3, A, { name: "C" })], A), "Judges this case with A, B and C.");
-  assert.equal(uses([1, 2, 3, 4].map((n) => rubric(n, A)), A), "Judges this case with 4 tools that are on.");
+  assert.equal(uses([1, 2, 3, 4].map((n) => rubric(n, A)), A), "Judges this case with 4 detectors that are on.");
   const run = { project: A, cases: [id("C", 1), id("C", 2)], done: 1, running: true, error: null };
   assert.equal(judging(run, A, id("C", 1)), false, "already judged");
   assert.equal(judging(run, A, id("C", 2)), true);

@@ -21,13 +21,13 @@ test("the bar counts the seeds, and a new project becomes current", async () => 
     await until(() => bar.getSnapshot().matches("ready"));
     const { projects, current, rubrics, cases } = bar.getSnapshot().context;
     assert.deepEqual(projects.map((p) => p.name), ["Goals and values", "Replies", "Cognitive Distortion"]);
-    assert.equal(summary(current, rubrics, cases), "2 tools · 18 cases");
+    assert.equal(summary(current, rubrics, cases), "2 detectors · 18 cases");
 
     bar.send({ type: "_new" });
     await until(() => bar.getSnapshot().context.current === NEW);
     bar.send({ type: "_rename", name: "Habits" });
     await until(() => bar.getSnapshot().context.projects.some((p) => p.id === NEW && p.name === "Habits"));
-    assert.equal(summary(NEW, bar.getSnapshot().context.rubrics, bar.getSnapshot().context.cases), "0 tools · 0 cases");
+    assert.equal(summary(NEW, bar.getSnapshot().context.rubrics, bar.getSnapshot().context.cases), "0 detectors · 0 cases");
 
     bar.send({ type: "_delete" });
     await until(() => bar.getSnapshot().context.projects.find((p) => p.id === NEW)?.removing);

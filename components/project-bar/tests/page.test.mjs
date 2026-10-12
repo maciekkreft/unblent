@@ -61,7 +61,7 @@ for (const engine of ENGINES) {
 
         await page.locator("project-bar button.open").click();
         await until(async () => (await rows(page)).length === 3);
-        assert.deepEqual((await rows(page))[0], { name: "Goals and values", sub: "2 tools · 18 cases", ticked: true });
+        assert.deepEqual((await rows(page))[0], { name: "Goals and values", sub: "2 detectors · 18 cases", ticked: true });
         assert.equal((await rows(page))[1].ticked, false);
         await pause(page);
 

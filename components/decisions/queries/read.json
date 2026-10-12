@@ -8,14 +8,14 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The latest answers for every case and tool, and the latest run.",
+    "description": "The latest answers for every case and detector, and the latest run.",
     "type": "object",
     "properties": {
       "decisions": {
         "type": "array",
         "items": {
           "type": "object",
-          "description": "The latest answers for one case and one tool.",
+          "description": "The latest answers for one case and one detector.",
           "properties": {
             "case": {
               "type": "string",
@@ -161,7 +161,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "The latest answers for one piece and one tool.",
+              "description": "The latest answers for one piece and one detector.",
               "properties": {
                 "text": {
                   "type": "string",

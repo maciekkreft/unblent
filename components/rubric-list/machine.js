@@ -37,11 +37,11 @@ export const machine = setup({
   id: "rubric-list",
   meta: {
     description:
-      "Lists the tools of the current project and lets the user pick one to edit; it is the list " +
-      "of a list-then-item pair in the Tools dock. New tool is always the first row and opens an " +
-      "empty editor; the tool appears in the list once something is written in it. Each row has " +
-      "a tick box that switches the tool on or off for judging, its name, greyed when off, and " +
-      "how many questions it has. A line says only ticked tools are used when judging.",
+      "Lists the detectors of the current project and lets the user pick one to edit; it is the list " +
+      "of a list-then-item pair in the Detectors dock. New detector is always the first row and opens an " +
+      "empty editor; the detector appears in the list once something is written in it. Each row has " +
+      "a tick box that switches the detector on or off for judging, its name, greyed when off, and " +
+      "how many questions it has. A line says only ticked detectors are used when judging.",
     kind: "view",
     emits: ["rubric.selected", "rubric.switched"],
     attributes: [],

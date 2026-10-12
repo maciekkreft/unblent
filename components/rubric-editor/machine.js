@@ -187,15 +187,15 @@ export const machine = setup({
   id: "rubric-editor",
   meta: {
     description:
-      "Edits one tool, the item list-then-item shows under its Back bar: its name and its " +
+      "Edits one detector, the item list-then-item shows under its Back bar: its name and its " +
       "questions. Each question chooses its kind, Yes / no or Pick one. A yes / no question has " +
       "optional words for what yes means and what no means; a pick-one question has options, " +
       "each a name and an optional description, starting with two empty ones. Every edit is " +
-      "saved as the whole tool a short time into typing, when a field loses focus and before " +
-      "another tool opens, and a new tool with nothing written in it is never saved. Two options " +
+      "saved as the whole detector a short time into typing, when a field loses focus and before " +
+      "another detector opens, and a new detector with nothing written in it is never saved. Two options " +
       "of one question with the same name get a short note, because Jev tells options apart by " +
       "name. Removing a question or an option, and deleting " +
-      "the tool, wait out the undo window, with Undo in a notice.",
+      "the detector, wait out the undo window, with Undo in a notice.",
     kind: "view",
     emits: ["rubric.saved", "removal.started"],
     attributes: [],

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user pressed Judge or Judge all: the cases to judge, in order, and the tools that are on, as they were at that moment. Questions and options being removed are left out.",
+  "description": "The user pressed Judge or Judge all: the cases to judge, in order, and the detectors that are on, as they were at that moment. Questions and options being removed are left out.",
   "type": "object",
   "properties": {
     "project": {
@@ -46,7 +46,7 @@
             "minItems": 1,
             "items": {
               "type": "object",
-              "description": "One question of the tool.",
+              "description": "One question of the detector.",
               "properties": {
                 "id": {
                   "type": "string",

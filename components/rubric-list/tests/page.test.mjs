@@ -46,7 +46,7 @@ for (const engine of ENGINES) {
           { name: "Goal or value", sub: "1 question", ticked: true },
           { name: "Goal or value (yes / no)", sub: "2 questions · off", ticked: false },
         ]);
-        assert.equal(await page.locator("rubric-list .hint").textContent(), "Only tools with a tick are used when judging.");
+        assert.equal(await page.locator("rubric-list .hint").textContent(), "Only detectors with a tick are used when judging.");
 
         await page.getByRole("checkbox", { name: "Use Goal or value (yes / no) when judging" }).check();
         await until(async () => (await tools(page))[1].sub === "2 questions");

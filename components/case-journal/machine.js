@@ -87,10 +87,10 @@ const askable = (q) => q.text.trim() !== "" && (q.kind !== "pick" || live(q.opti
 export const blocked = ({ draft, rubrics, current, signedIn, keySet }) => {
   if (!signedIn) return "Sign in to judge.";
   if (!keySet) return "Add your Jev key in Settings.";
-  if (!live(rubrics).some((r) => r.project === current)) return "Make a tool in Tools to judge.";
+  if (!live(rubrics).some((r) => r.project === current)) return "Make a detector in Detectors to judge.";
   const on = onTools(rubrics, current);
-  if (!on.length) return "Switch on a tool in Tools to judge.";
-  if (!on.some((t) => t.questions.some(askable))) return "Add a question to a tool to judge.";
+  if (!on.length) return "Switch on a detector in Detectors to judge.";
+  if (!on.some((t) => t.questions.some(askable))) return "Add a question to a detector to judge.";
   if (!draft?.text.trim()) return "Write the text to judge.";
   return null;
 };
@@ -139,7 +139,7 @@ export const rows = (list, on, passages) =>
         const n = pct(a.p);
         return [{ id: q.id, kind: "yesno", text: q.text.trim() || "Untitled question", pct: n, tone: n >= 60 ? "yes" : n <= 40 ? "no" : "" }];
       });
-      return { id: t.id, name: t.name.trim() || "Untitled tool", entries };
+      return { id: t.id, name: t.name.trim() || "Untitled detector", entries };
     });
     return { text: p.text, finished: true, waiting: false, judged: lines.some((l) => l.entries.length > 0), tools: lines };
   });
@@ -237,19 +237,19 @@ export const machine = setup({
   meta: {
     description:
       "The Journal tab: the open case's text, split into pieces, each judged by Jev on its own " +
-      "with every tool that is on. A switch at the top chooses Sentences or Paragraphs and is " +
+      "with every detector that is on. A switch at the top chooses Sentences or Paragraphs and is " +
       "remembered on this device. The text box edits the same case text as the Case tab and is " +
       "saved the same way; with no case open, a large New case button starts one, as in the " +
       "Case tab. Under the box, one row per piece in order, with the piece's text and one line " +
-      "per tool that is on: a pick-one question shows the pick and how sure Jev is, a yes / no " +
+      "per detector that is on: a pick-one question shows the pick and how sure Jev is, a yes / no " +
       "question the chance of yes in the Case tab's colours, a piece waiting for Jev says " +
       "\"Judging…\", and a piece not finished yet is dimmed and not judged. A sentence is " +
       "finished at . ! ? or … (closing quotes or brackets allowed) or a line break; a paragraph " +
       "at a line break; and every non-empty piece when a case is opened or the box loses focus. " +
       "Finished pieces are sent to be judged after each save, on blur and when a case is " +
-      "opened; a piece already judged with the same tools is never sent again, so editing one " +
+      "opened; a piece already judged with the same detectors is never sent again, so editing one " +
       "sentence re-judges only that one. One line says why nothing is judged (signed out, no " +
-      "Jev key, no tool on, no text) in the Case tab's words, or why judging stopped. There are " +
+      "Jev key, no detector on, no text) in the Case tab's words, or why judging stopped. There are " +
       "no ticks or crosses: right answers belong to the whole case.",
     kind: "view",
     emits: ["case.saved", "case.selected", "passages.requested"],

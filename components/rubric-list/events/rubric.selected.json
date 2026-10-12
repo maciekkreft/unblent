@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user picked a tool in the list, or New tool (a fresh id no tool has yet): the editor that follows opens it.",
+  "description": "The user picked a detector in the list, or New detector (a fresh id no detector has yet): the editor that follows opens it.",
   "type": "object",
   "properties": {
     "id": {

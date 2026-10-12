@@ -142,7 +142,7 @@ test("nothing is asked while signed out, without a key, with no tool on, or with
   assert.deepEqual(emitted, []);
   actor.send({ type: "llm.changed", ...LLM });
   actor.send({ type: "rubric.changed", rubrics: [rubric(1, A, { on: false })] });
-  assert.equal(blocked(ctx()), "Switch on a tool in Tools to judge.");
+  assert.equal(blocked(ctx()), "Switch on a detector in Detectors to judge.");
   actor.send({ type: "_blur" });
   assert.deepEqual(emitted, []);
   actor.send({ type: "rubric.changed", rubrics: [rubric(1, A)] });

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user edited a tool: the whole tool as written. A new id adds it to its project, switched on.",
+  "description": "The user edited a detector: the whole detector as written. A new id adds it to its project, switched on.",
   "type": "object",
   "properties": {
     "id": {
@@ -18,7 +18,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "description": "One question of the tool.",
+        "description": "One question of the detector.",
         "properties": {
           "id": {
             "type": "string",

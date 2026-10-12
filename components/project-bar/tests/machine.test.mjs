@@ -41,9 +41,9 @@ const valid = (emitted) => {
 test("the counts leave out tools and cases being removed, and say one or many", () => {
   const rubrics = [rubric(1, A), rubric(2, A), rubric(3, A, true), rubric(4, B)];
   const cases = [kase(1, A), kase(2, A, true), kase(3, B), kase(4, B)];
-  assert.equal(summary(A, rubrics, cases), "2 tools · 1 case");
-  assert.equal(summary(B, rubrics, cases), "1 tool · 2 cases");
-  assert.equal(summary(C, rubrics, cases), "0 tools · 0 cases");
+  assert.equal(summary(A, rubrics, cases), "2 detectors · 1 case");
+  assert.equal(summary(B, rubrics, cases), "1 detector · 2 cases");
+  assert.equal(summary(C, rubrics, cases), "0 detectors · 0 cases");
 });
 
 test("a project being removed is hidden and does not count toward Delete", () => {
@@ -63,11 +63,11 @@ test("the starting picture and later changes fill the counts", async () => {
   const { actor } = await start({ rubrics: [rubric(1, A)], cases: [kase(1, A)] });
   assert.ok(actor.getSnapshot().matches("ready"));
   let { rubrics, cases } = actor.getSnapshot().context;
-  assert.equal(summary(A, rubrics, cases), "1 tool · 1 case");
+  assert.equal(summary(A, rubrics, cases), "1 detector · 1 case");
   actor.send({ type: "rubric.changed", rubrics: [rubric(1, A), rubric(2, A)] });
   actor.send({ type: "case.changed", cases: [], open: {} });
   ({ rubrics, cases } = actor.getSnapshot().context);
-  assert.equal(summary(A, rubrics, cases), "2 tools · 0 cases");
+  assert.equal(summary(A, rubrics, cases), "2 detectors · 0 cases");
   actor.send({ type: "project.changed", projects: [project(A, "Goals"), project(B, "Replies")], current: B });
   assert.equal(actor.getSnapshot().context.current, B);
 });

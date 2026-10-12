@@ -388,7 +388,7 @@ class ProjectBar extends LitElement {
           ${icon("trash-simple")}<span class="text">Delete this project</span>
         </button>
         <hr />
-        <p class="foot">Projects are kept on this device. Each project has its own tools, cases and results.</p>
+        <p class="foot">Projects are kept on this device. Each project has its own detectors, cases and results.</p>
       </div>
     `;
   }

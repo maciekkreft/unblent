@@ -113,15 +113,15 @@ export const blocked = ({ cases, rubrics, run, current, signedIn, keySet, usedUp
   if (!signedIn) return "Sign in to judge.";
   if (!keySet) return usedUp ? USED_UP : "Add your Jev key in Settings.";
   const tools = onTools(rubrics, current);
-  if (!tools.length) return "Switch on a tool to judge.";
-  if (!tools.some((t) => t.questions.some(askable))) return "Add a question to a tool to judge.";
+  if (!tools.length) return "Switch on a detector to judge.";
+  if (!tools.some((t) => t.questions.some(askable))) return "Add a question to a detector to judge.";
   if (!rows(cases, current).some((c) => c.text.trim() !== "")) return "Add a case to judge.";
   return null;
 };
 
 // The line beside Judge all when it can run: how much a Judge all judges.
 export const counts = ({ cases, rubrics, current }) =>
-  `${plural(rows(cases, current).length, "case", "cases")}, ${plural(onTools(rubrics, current).length, "tool", "tools")} on`;
+  `${plural(rows(cases, current).length, "case", "cases")}, ${plural(onTools(rubrics, current).length, "detector", "detectors")} on`;
 
 // The progress of this project's run while it is going, as "Judging N of M…" and the
 // share done, or null.
@@ -182,10 +182,10 @@ export const machine = setup({
     description:
       "Lists the cases of the current project, in the Cases dock. New case is always the first " +
       "row and opens an empty case. Each row shows the case's first line and its right answers " +
-      "for the tools that are on, with a tick or a cross once Jev's answers are in: a tick when " +
-      "every right answer matches. Judge all, above the list, judges every case with the tools " +
+      "for the detectors that are on, with a tick or a cross once Jev's answers are in: a tick when " +
+      "every right answer matches. Judge all, above the list, judges every case with the detectors " +
       "that are on and shows the Results tab, and a line under it says \"Judging 3 of 18…\" " +
-      "while it runs; it is greyed out while a run is going, when no tool is on, and when the user " +
+      "while it runs; it is greyed out while a run is going, when no detector is on, and when the user " +
       "is signed out or has no Jev key, and the line beside " +
       "it says why. A line says cases are kept on this device.",
     kind: "view",

@@ -278,10 +278,10 @@ class RubricEditor extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
-    if (snapshot.matches("failed")) return html`<p class="note">Tools unavailable.</p>`;
-    if (snapshot.matches({ ready: "choosing" })) return html`<p class="note">Pick a tool, or New tool.</p>`;
+    if (snapshot.matches("failed")) return html`<p class="note">Detectors unavailable.</p>`;
+    if (snapshot.matches({ ready: "choosing" })) return html`<p class="note">Pick a detector, or New detector.</p>`;
     const { draft, rubrics } = snapshot.context;
-    if (draft.removing) return html`<p class="note">This tool was deleted.</p>`;
+    if (draft.removing) return html`<p class="note">This detector was deleted.</p>`;
     const stored = rubrics.some((r) => r.id === draft.id);
     const questions = draft.questions.filter((q) => !q.removing);
     return html`
@@ -292,7 +292,7 @@ class RubricEditor extends LitElement {
             <input
               class="title"
               type="text"
-              placeholder="Name the tool"
+              placeholder="Name the detector"
               .value=${draft.name}
               @input=${(e) => this.#send({ type: "_edit", patch: { name: e.target.value } })}
             />
@@ -306,7 +306,7 @@ class RubricEditor extends LitElement {
           </div>
           ${stored
             ? html`<div class="actions">
-                <button type="button" class="quiet" @click=${() => this.#send({ type: "_delete" })}>Delete tool</button>
+                <button type="button" class="quiet" @click=${() => this.#send({ type: "_delete" })}>Delete detector</button>
               </div>`
             : nothing}
         </form>

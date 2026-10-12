@@ -455,7 +455,7 @@ test("a case picked stages the case, and Judge all stages the results (6.4)", as
 test("on a narrow desk, a case picked in the Cases drawer folds the drawers and shows the case (6.4)", async () => {
   const docks = { left: { open: true, views: ["case-list"] }, right: { open: true, views: ["rubrics"] } };
   const { actor, emitted } = await settle(stored({ stage: "case-editor", docks }), {
-    views: [...JUDGE, { name: "rubrics", label: "Tools", side: "right" }],
+    views: [...JUDGE, { name: "rubrics", label: "Detectors", side: "right" }],
     narrow: () => true,
   });
   actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });

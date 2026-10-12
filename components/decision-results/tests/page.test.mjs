@@ -119,7 +119,7 @@ for (const engine of ENGINES) {
       await judgeable(context);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await page.locator('rubric-list input[aria-label="Use Goal or value (yes / no) when judging"]').check();
-      await until(async () => (await page.locator("case-list .run .hint").textContent()) === "18 cases, 2 tools on");
+      await until(async () => (await page.locator("case-list .run .hint").textContent()) === "18 cases, 2 detectors on");
       await page.locator("case-list .judge").click();
       await until(async () => (await results(page).locator(".summary").count()) === 3 && !(await results(page).locator(".progress").count()));
       assert.deepEqual(await results(page).locator(".summary").allTextContents(), ["16 of 18 right", "17 of 18 right", "16 of 18 right"]);

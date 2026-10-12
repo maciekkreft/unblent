@@ -111,7 +111,7 @@ for (const engine of ENGINES) {
         const page = await context.newPage();
         const problems = watch(page);
         await open(page);
-        await until(async () => (await page.locator("case-list .run .hint").textContent()) === "18 cases, 1 tool on");
+        await until(async () => (await page.locator("case-list .run .hint").textContent()) === "18 cases, 1 detector on");
         await page.locator("case-list .judge").click();
         await page.locator("case-list .progress").waitFor();
         assert.match(await page.locator("case-list .progress span").textContent(), /^Judging \d+ of 18…$/);

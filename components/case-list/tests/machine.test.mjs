@@ -135,10 +135,10 @@ test("the reasons Judge all cannot run", () => {
   assert.equal(blocked(ok), null);
   assert.equal(blocked({ ...ok, signedIn: false }), "Sign in to judge.");
   assert.equal(blocked({ ...ok, keySet: false }), "Add your Jev key in Settings.");
-  assert.equal(counts(ok), "1 case, 1 tool on");
-  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { on: false })] }), "Switch on a tool to judge.");
-  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [yesno({ text: " " })] })] }), "Add a question to a tool to judge.");
-  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [pick({ options: [option(GOAL, "Goal")] })] })] }), "Add a question to a tool to judge.");
+  assert.equal(counts(ok), "1 case, 1 detector on");
+  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { on: false })] }), "Switch on a detector to judge.");
+  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [yesno({ text: " " })] })] }), "Add a question to a detector to judge.");
+  assert.equal(blocked({ ...ok, rubrics: [rubric(1, A, { questions: [pick({ options: [option(GOAL, "Goal")] })] })] }), "Add a question to a detector to judge.");
   assert.equal(blocked({ ...ok, cases: [] }), "Add a case to judge.");
   assert.equal(blocked({ ...ok, cases: [kase(1, A, { text: "" })] }), "Add a case to judge.");
   const going = { project: A, cases: [id("C", 1)], done: 0, running: true, error: null };

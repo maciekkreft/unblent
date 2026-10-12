@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The tools changed: every tool of every project, every time anything changed.",
+  "description": "The detectors changed: every detector of every project, every time anything changed.",
   "type": "object",
   "properties": {
     "rubrics": {
       "type": "array",
       "items": {
         "type": "object",
-        "description": "One tool (a rubric): a name and its questions.",
+        "description": "One detector (a rubric): a name and its questions.",
         "properties": {
           "id": {
             "type": "string",
@@ -22,13 +22,13 @@
           },
           "on": {
             "type": "boolean",
-            "description": "Whether Judge uses this tool."
+            "description": "Whether Judge uses this detector."
           },
           "questions": {
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One question of the tool.",
+              "description": "One question of the detector.",
               "properties": {
                 "id": {
                   "type": "string",

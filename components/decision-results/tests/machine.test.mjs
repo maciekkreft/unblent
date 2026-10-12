@@ -125,9 +125,9 @@ test("a block per question of the tools that are on, in order; none for a questi
 test("the empty states say what to do first", () => {
   const line = (extra) => emptyLine(context(extra), blocks(context(extra)));
   assert.equal(line({}), null);
-  assert.equal(line({ cases: [] }), "Results appear here after the first Judge all. Add a tool and some cases with right answers first.");
-  assert.equal(line({ rubrics: [] }), "Results appear here after the first Judge all. Add a tool and some cases with right answers first.");
-  assert.equal(line({ rubrics: RUBRICS.map((r) => ({ ...r, on: false })) }), "Switch on a tool in Tools to see its results.");
+  assert.equal(line({ cases: [] }), "Results appear here after the first Judge all. Add a detector and some cases with right answers first.");
+  assert.equal(line({ rubrics: [] }), "Results appear here after the first Judge all. Add a detector and some cases with right answers first.");
+  assert.equal(line({ rubrics: RUBRICS.map((r) => ({ ...r, on: false })) }), "Switch on a detector in Detectors to see its results.");
   assert.equal(line({ decisions: [] }), "Results appear here after the first Judge all, for every question where a case has a right answer.");
 });
 

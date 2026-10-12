@@ -48,7 +48,7 @@ export const choices = (q) =>
 export const menus = (tools, answers) =>
   tools.flatMap((t) =>
     t.questions.map((q) => ({
-      tool: t.name.trim() || "Untitled tool",
+      tool: t.name.trim() || "Untitled detector",
       question: q.text.trim() || "Untitled question",
       id: q.id,
       choices: choices(q),
@@ -105,7 +105,7 @@ export const cards = (tools, decisions, c) => {
     const answerOf = (q) => found[i]?.answers.find((a) => a.id === q.id);
     return {
       id: t.id,
-      name: t.name.trim() || "Untitled tool",
+      name: t.name.trim() || "Untitled detector",
       picks: t.questions
         .filter((q) => q.kind === "pick")
         .map((q) => ({ id: q.id, text: q.text, block: answerOf(q) ? pickBlock(q, answerOf(q), c.answers[q.id]) : null })),
@@ -155,10 +155,10 @@ export const blocked = ({ draft, rubrics, run, current, signedIn, keySet, usedUp
   if (run?.running) return run.project === current ? "Judge all is running." : "Judge all is running in another project.";
   if (!signedIn) return "Sign in to judge.";
   if (!keySet) return usedUp ? USED_UP : "Add your Jev key in Settings.";
-  if (!live(rubrics).some((r) => r.project === current)) return "Make a tool in Tools to judge.";
+  if (!live(rubrics).some((r) => r.project === current)) return "Make a detector in Detectors to judge.";
   const tools = onTools(rubrics, current);
-  if (!tools.length) return "Switch on a tool in Tools to judge.";
-  if (!tools.some((t) => t.questions.some(askable))) return "Add a question to a tool to judge.";
+  if (!tools.length) return "Switch on a detector in Detectors to judge.";
+  if (!tools.some((t) => t.questions.some(askable))) return "Add a question to a detector to judge.";
   if (!draft.text.trim()) return "Write the text to judge.";
   return null;
 };
@@ -167,8 +167,8 @@ const listed = (names) => (names.length < 2 ? names.join("") : `${names.slice(0,
 
 // The line beside Judge when it can run: which tools judge the case.
 export const uses = (rubrics, project) => {
-  const names = onTools(rubrics, project).map((t) => t.name.trim() || "Untitled tool");
-  return `Judges this case with ${names.length > 3 ? plural(names.length, "tool", "tools") + " that are on" : listed(names)}.`;
+  const names = onTools(rubrics, project).map((t) => t.name.trim() || "Untitled detector");
+  return `Judges this case with ${names.length > 3 ? plural(names.length, "detector", "detectors") + " that are on" : listed(names)}.`;
 };
 
 // What a run that stopped early says, by its reason, in the user's words.
@@ -267,13 +267,13 @@ export const machine = setup({
   meta: {
     description:
       "The Case tab: the open case's text, and its right answers, one menu per question of the " +
-      "tools that are on, grouped by tool, each starting at \"No right answer\"; the answers of " +
-      "tools that are off are kept. Every edit is saved as the whole case a short time into " +
+      "detectors that are on, grouped by detector, each starting at \"No right answer\"; the answers of " +
+      "detectors that are off are kept. Every edit is saved as the whole case a short time into " +
       "typing, when a field loses focus and when a right answer is chosen, and a new case is " +
-      "kept once something is written in it. Judge judges this case with the tools that are " +
+      "kept once something is written in it. Judge judges this case with the detectors that are " +
       "on; a line beside it names them, or says why it cannot run (signed out, no Jev key, no " +
-      "tool on, no text), and says \"Judging this case…\" while it runs. Below, one card per " +
-      "tool shows Jev's answers: for a pick-one question the pick, large, how sure Jev is, and " +
+      "detector on, no text), and says \"Judging this case…\" while it runs. Below, one card per " +
+      "detector shows Jev's answers: for a pick-one question the pick, large, how sure Jev is, and " +
       "a bar per other option; for yes / no questions a bar each with the chance of yes, green " +
       "at 60% or more and red at 40% or less; and a tick, or a cross with the right answer, " +
       "wherever a right answer is set. Delete case waits out the undo window. With no case " +
