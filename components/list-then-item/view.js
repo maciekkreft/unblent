@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount } from "bus";
 import { icon } from "icons";
-import { machine } from "./machine.js";
+import { machine, drawsBar } from "./machine.js";
 
 // A child's address (4.1): its role or tag name, with `#id` when the page gave it one,
 // so a composer swap (3.6) keeps the shown state (the chosen member carries data-role)
@@ -41,10 +41,17 @@ class ActorController {
 
   hostConnected() {
     const children = this.host.children_();
+    // A container nested as an outer one's item hears its own `shows-on` too (6.4), so
+    // a fresh pick in the outer list opens it at its list.
+    const nested = this.host.parentElement?.localName === "list-then-item";
     // 4.1: a container can be on a page more than once (Books and Notes), so it mounts
     // and asks under its tag `id`; a page without a second instance gives none.
     this.actor = mount(machine, {
-      input: { ...children, shown: memory.recall(this.host.id) },
+      input: {
+        ...children,
+        shown: memory.recall(this.host.id),
+        opensOn: nested ? this.host.getAttribute("shows-on") : null,
+      },
       instance: this.host.id || undefined,
     });
     this.subscription = this.actor.subscribe(() => {
@@ -58,11 +65,17 @@ class ActorController {
       this.actor.send({ type: "_children", list: c.list, items: c.items });
     });
     this.observer.observe(this.host, { childList: true });
+    // The Back bar reads two things off its children that can change after load: the
+    // list's `label`, which a list may set to what it shows (a project's name), and
+    // whether a nested container shows an item (`showing-item`), which hides this bar.
+    this.labels = new MutationObserver(() => this.host.requestUpdate());
+    this.labels.observe(this.host, { subtree: true, attributes: true, attributeFilter: ["label", "showing-item"] });
   }
 
   hostDisconnected() {
     this.subscription?.unsubscribe();
     this.observer?.disconnect();
+    this.labels?.disconnect();
     unmount(this.actor);
   }
 
@@ -193,8 +206,10 @@ class ListThenItem extends LitElement {
     const { shown } = snapshot.context;
     const list = this.children[0];
     const label = list?.getAttribute("label") ?? list?.localName ?? "";
+    const item = this.#child(shown);
+    const nestedShowsItem = item?.localName === "list-then-item" && item.hasAttribute("showing-item");
     return html`
-      ${shown
+      ${drawsBar(shown, nestedShowsItem)
         ? html`
             <div class="bar">
               <button aria-label="Back to ${label}" @click=${() => this.#back()}>
@@ -220,6 +235,9 @@ class ListThenItem extends LitElement {
     const follow = this.#shownWas !== undefined && shown !== this.#shownWas && this.#hadFocus;
     this.#shownWas = shown;
     slot?.assign(...(child ? [child] : []));
+    // An outer container reads this to leave the Back bar to this one (drawsBar). It is
+    // written on this element only, never on a child.
+    this.toggleAttribute("showing-item", Boolean(shown));
     // The keyboard follows a pick made inside this panel (Enter on a row lands in the
     // editor, Escape lands back on the row); a pick made elsewhere never steals focus.
     if (follow) {

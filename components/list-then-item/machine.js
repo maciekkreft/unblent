@@ -18,12 +18,27 @@ const shownFor = (items, type) => {
 // the list is shown, so a stored name from an item since removed loses nothing (3.1).
 const kept = (items, shown) => (items.some((item) => item.name === shown) ? shown : null);
 
-const select = {
-  // 6.4: an event no item declares is not this container's business, so the guard
-  // leaves it unhandled and the trace records it honestly as ignored.
-  guard: ({ context, event }) => context.items.some((item) => item.showsOn === event.type),
-  actions: assign({ shown: ({ context, event }) => shownFor(context.items, event.type) }),
-};
+// A selection gesture: it shows the item that declares it. A container that is itself
+// the item of an outer list-then-item also hears the gesture that brings it up (its own
+// `shows-on`, `opensOn`): that pick names something new, a project say, so the container
+// opens at its list rather than at an item picked under the previous one. 6.4: an event
+// neither declares is not this container's business, so it stays unhandled and the trace
+// records it honestly as ignored.
+const select = [
+  {
+    guard: ({ context, event }) => context.items.some((item) => item.showsOn === event.type),
+    actions: assign({ shown: ({ context, event }) => shownFor(context.items, event.type) }),
+  },
+  {
+    guard: ({ context, event }) => context.opensOn === event.type,
+    actions: assign({ shown: null }),
+  },
+];
+
+// Whether the container draws its Back bar: only while it shows an item, and not while
+// that item is a nested list-then-item showing an item of its own. The panel then has one
+// Back bar, the inner one, so Back always goes one level up.
+export const drawsBar = (shown, nestedShowsItem) => Boolean(shown) && !nestedShowsItem;
 
 export const machine = setup({}).createMachine({
   id: "list-then-item",
@@ -42,13 +57,17 @@ export const machine = setup({}).createMachine({
       "only one more consumed gesture here. On a desk it is one tab, with its own `label`, " +
       "`side`, `height` and `shows-on`, and a page holds one per pair, each with its own `id` " +
       "(4.1). An item may itself be a list-then-item, so one panel can go two levels deep, as " +
-      "the journal's Detectors dock does: projects, then a project's detectors, then one detector.",
+      "the journal's Detectors dock does: projects, then a project's detectors, then one detector. " +
+      "The panel shows one Back bar at a time, naming the level above, and the inner container " +
+      "opens at its list each time it is brought up; a list may name itself after what it shows, " +
+      "as the detector list names itself after its project.",
     kind: "view", emits: [], asks: [], attributes: ["height"],
   },
   context: ({ input }) => ({
     list: input.list,
     items: input.items,
     shown: kept(input.items, input.shown),
+    opensOn: input.opensOn ?? null,
   }),
   initial: "ready",
   states: {
