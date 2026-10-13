@@ -22,6 +22,7 @@ assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data dir
 const SAMPLE = readFileSync(new URL("./fixtures/sample.epub", import.meta.url));
 const BROKEN = readFileSync(new URL("./fixtures/broken.epub", import.meta.url));
 const GAPS = readFileSync(new URL("./fixtures/gaps.epub", import.meta.url));
+const ONEPIECE = readFileSync(new URL("./fixtures/onepiece.epub", import.meta.url));
 
 const cookieFor = (userId) =>
   `unblent_session=${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
@@ -129,6 +130,23 @@ test("import tolerates a publisher's gaps: SVG covers, unlisted pieces, empty sp
     row.toc.map((e) => [e.title, e.chapter]),
     [["Cover", 0], ["Chapter A", 1], ["Chapter B", 4]],
   );
+});
+
+test("a book in one file is cut where its contents begin each chapter", async () => {
+  const cookie = cookieFor(freshUser());
+  const row = await (await importBook(ID, ONEPIECE, cookie)).json();
+  // The title page before the first entry stays a chapter, named by its opening line;
+  // a part heading alone is the part's page, as in print.
+  assert.deepEqual(row.chapters.map((c) => c.title), ["One Piece Book", "Part One", "Chapter One", "Chapter Two"]);
+  assert.deepEqual(
+    row.toc.map((e) => [e.title, e.chapter, e.block]),
+    [["Part One", 1, 0], ["Chapter One", 2, 0], ["Chapter Two", 3, 0]],
+  );
+  // A deeper entry is a section of its chapter, not a cut.
+  const section = row.toc[2].children[0];
+  assert.equal(section.chapter, 3);
+  assert.ok(section.block > 0, "the section stays inside Chapter Two");
+  assert.match(await (await getChapter(ID, 1, 2, cookie)).text(), /data-chapter="3"/, "a link follows its target into its new chapter");
 });
 
 test("a second import of the same id is idempotent, returning the row unchanged", async () => {

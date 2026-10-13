@@ -1,6 +1,6 @@
-"""Build the two epub fixtures the api and page tests use, run once by hand and the
-output (sample.epub, broken.epub) committed. Never built at check time, so a test
-never depends on this running. Stdlib only.
+"""Build the epub fixtures the api and page tests use, run once by hand and the
+output (sample.epub, broken.epub, gaps.epub, onepiece.epub) committed. Never built at
+check time, so a test never depends on this running. Stdlib only.
 
     python3 components/books/tests/fixtures/make_sample.py
 
@@ -359,8 +359,76 @@ def build_gaps(path: Path) -> None:
         zf.writestr("OEBPS/images/fig.png", PNG_1x1)
 
 
+# onepiece.epub is a whole book in one file (step 6b), the way some publishers ship it:
+# a title page, a part heading and two chapters, and a nav whose top-level entries all
+# point inside that one file, with a section nested under the second chapter. The
+# importer cuts the file where each top-level entry begins; the section stays inside
+# its chapter.
+ONEPIECE_OPF = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="bookid">urn:uuid:onepiece-0001</dc:identifier>
+    <dc:title>One Piece Book</dc:title>
+    <dc:creator>A. Writer</dc:creator>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="text" href="text.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="text"/>
+  </spine>
+</package>
+"""
+
+ONEPIECE_NAV = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Contents</title></head>
+  <body>
+    <nav epub:type="toc" id="toc">
+      <ol>
+        <li><a href="text.xhtml#p1">Part One</a></li>
+        <li><a href="text.xhtml#c1">Chapter One</a></li>
+        <li><a href="text.xhtml#c2">Chapter Two</a>
+          <ol><li><a href="text.xhtml#s">Section</a></li></ol>
+        </li>
+      </ol>
+    </nav>
+  </body>
+</html>
+"""
+
+ONEPIECE_TEXT = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>One Piece Book</title></head>
+  <body>
+    <p>One Piece Book</p>
+    <p>Copyright and the other small print a title page carries, long enough not to be a name.</p>
+    <h1 id="p1">Part One</h1>
+    <h2 id="c1">Chapter One</h2>
+    <p>The first chapter, which points on to <a href="#c2">the second</a>.</p>
+    <h2 id="c2">Chapter Two</h2>
+    <p>The second chapter opens.</p>
+    <h3 id="s">Section</h3>
+    <p>A section inside the second chapter.</p>
+  </body>
+</html>
+"""
+
+
+def build_onepiece(path: Path) -> None:
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", CONTAINER)
+        zf.writestr("OEBPS/content.opf", ONEPIECE_OPF)
+        zf.writestr("OEBPS/nav.xhtml", ONEPIECE_NAV)
+        zf.writestr("OEBPS/text.xhtml", ONEPIECE_TEXT)
+
+
 if __name__ == "__main__":
     build_sample(HERE / "sample.epub")
     build_broken(HERE / "broken.epub")
     build_gaps(HERE / "gaps.epub")
-    print("wrote sample.epub, broken.epub and gaps.epub")
+    build_onepiece(HERE / "onepiece.epub")
+    print("wrote sample.epub, broken.epub, gaps.epub and onepiece.epub")

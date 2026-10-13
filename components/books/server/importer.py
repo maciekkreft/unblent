@@ -6,6 +6,8 @@ chapter renders in the app's type and tokens (Decision 3), and only a whitelist 
 elements and attributes survives (step 4 below). Stdlib only (Decision 8): zipfile
 for the container, ElementTree for the container/OPF/NCX XML, and html.parser for the
 XHTML bodies, which tolerates the entities and minor malformations real books carry.
+A served chapter is a piece of the book's reading order, cut where its contents begin
+a chapter inside it (step 6b), because one file may hold the whole book.
 """
 
 import posixpath
@@ -455,6 +457,19 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
         idmaps = [raw_idmaps[old] for old in kept]
         spine_index = {chapter_paths[old]: served_of[old] for old in range(len(spine))}
 
+        # Table of contents (step 6): the nav document, else toc.ncx, else one entry per
+        # chapter. Read before the cut (step 6b), in the coordinates of the pieces.
+        toc = _read_nav(zf, manifest, opf_dir, resolve, spine_index, idmaps, names)
+        if toc is None:
+            toc = _read_ncx(zf, opf, manifest, opf_dir, resolve, spine_index, idmaps, names)
+        toc = toc or []
+
+        # Step 6b: a publisher may put several chapters, or the whole book, in one file.
+        # A piece is cut where its contents' shallowest entries begin, so each chapter
+        # the contents name is a chapter to open and turn through; deeper entries stay
+        # sections inside it. Every place found so far is mapped through `where`.
+        chapter_blocks, origin, where = _split(chapter_blocks, _cuts(toc, len(chapter_blocks)))
+
         # Resolve internal links to data-chapter/data-block (step 4); external links keep
         # their URL; unresolved internal links become inert (#). Targets are served
         # indices, so a link into a dropped piece lands on the piece that replaced it.
@@ -470,17 +485,15 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
                 node["attrs"]["href"] = "#"
                 if target is None:
                     continue
-                node["attrs"]["data-chapter"] = str(target)
+                chapter, block = where(target, idmaps[target].get(frag, 0) if frag else 0)
+                node["attrs"]["data-chapter"] = str(chapter)
                 if frag:
-                    node["attrs"]["data-block"] = str(idmaps[target].get(frag, 0))
+                    node["attrs"]["data-block"] = str(block)
 
-        # Table of contents (step 6): the nav document, else toc.ncx, else one entry per
-        # chapter. Entries collapsing onto one served (chapter, block) after the drop are
+        # Entries collapsing onto one served (chapter, block) after the drop are
         # deduplicated, first kept, so the outline does not gain twin rows.
-        toc = _read_nav(zf, manifest, opf_dir, resolve, spine_index, idmaps, names)
-        if toc is None:
-            toc = _read_ncx(zf, opf, manifest, opf_dir, resolve, spine_index, idmaps, names)
-        toc = _dedupe(toc or [], set())
+        _relocate(toc, where)
+        toc = _dedupe(toc, set())
 
         # Chapter titles (step 7): the first that truly names the piece — a TOC entry at
         # its start, its own first heading, the title on its wrapping <section>, its
@@ -492,19 +505,20 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
                 toc_titles.setdefault(entry["chapter"], entry["title"])
         titles = []
         inherited = ""
-        for n in range(len(kept)):
+        for n in range(len(chapter_blocks)):
             if n in toc_titles:
                 inherited = toc_titles[n]
+            piece, first = origin[n]
             titles.append(
                 toc_titles.get(n)
                 or _first_heading(chapter_blocks[n])
-                or section_titles[kept[n]]
+                or (section_titles[kept[piece]] if first else "")
                 or _lead_line(chapter_blocks[n])
                 or inherited
             )
 
         if not toc:
-            toc = [{"title": titles[n], "chapter": n, "block": 0, "children": []} for n in range(len(kept))]
+            toc = [{"title": titles[n], "chapter": n, "block": 0, "children": []} for n in range(len(chapter_blocks))]
 
         # Write the fragments (step 8): the fragment only, no html/body wrapper.
         for n, blocks in enumerate(chapter_blocks):
@@ -530,6 +544,53 @@ def _rewrite_images(nodes, base_dir, resolve, img_map, image_prefix):
             else:
                 node["attrs"].pop("src", None)
         _rewrite_images(node["children"], base_dir, resolve, img_map, image_prefix)
+
+
+def _cuts(toc, count):
+    """Per piece, the blocks it is cut at (step 6b): the blocks past 0 of the
+    shallowest contents entries pointing into it. A deeper entry is a section of the
+    chapter it sits in, not a chapter, so it never cuts."""
+    found = {}  # piece -> (depth, set of blocks)
+
+    def walk(entries, depth):
+        for entry in entries:
+            piece = entry["chapter"]
+            have = found.get(piece)
+            if have is None or depth < have[0]:
+                found[piece] = (depth, {entry["block"]})
+            elif depth == have[0]:
+                have[1].add(entry["block"])
+            walk(entry.get("children", []), depth + 1)
+
+    walk(toc, 0)
+    return [sorted(b for b in found.get(n, (0, set()))[1] if b > 0) for n in range(count)]
+
+
+def _split(pieces, cuts):
+    """Cut each piece at its cuts (step 6b). Returns the chapters' blocks, each
+    chapter's origin (its piece, and whether it is the piece's first
+    slice), and where(piece, block), the (chapter, block) a piece's block lands on."""
+    chapters, origin, starts = [], [], []
+    for piece, blocks in enumerate(pieces):
+        bounds = [0] + cuts[piece] + [len(blocks)]
+        starts.append((len(chapters), bounds[:-1]))
+        for i in range(len(bounds) - 1):
+            lo, hi = bounds[i], bounds[i + 1]
+            chapters.append(blocks[lo:hi])
+            origin.append((piece, i == 0))
+
+    def where(piece, block):
+        first, begins = starts[piece]
+        i = max(k for k, lo in enumerate(begins) if lo <= block)
+        return first + i, block - begins[i]
+
+    return chapters, origin, where
+
+
+def _relocate(entries, where):
+    for entry in entries:
+        entry["chapter"], entry["block"] = where(entry["chapter"], entry["block"])
+        _relocate(entry.get("children", []), where)
 
 
 def _flatten(entries):
