@@ -215,6 +215,15 @@ class SettingsSheet extends LitElement {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
+    .keys-fold summary {
+      width: fit-content;
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+      cursor: pointer;
+      /* A click opens the list; it must not select the words as a side effect. */
+      user-select: none;
+      -webkit-user-select: none;
+    }
     .keys-title {
       margin: var(--space-xs) 0 0;
       font-size: var(--text-sm);
@@ -358,6 +367,8 @@ class SettingsSheet extends LitElement {
 
   // The key sheet (plan Revision 1, item 3): every key "Vim keys" turns on, in plain
   // words, written once here where the switch is, including where a key does not work.
+  // It sits in a fold that starts closed, so the long list never crowds the switches,
+  // and it is there with the switch off too, to read the keys before turning them on.
   #vimSheet() {
     const group = (title, rows) => html`
       <p class="keys-title">${title}</p>
@@ -482,7 +493,11 @@ class SettingsSheet extends LitElement {
             )
           : nothing}
         ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
-        ${settings.vimKeys ? this.#vimSheet() : html`<p class="hint">Move around the desk, the lists and the Reader with the keyboard.</p>`}
+        <p class="hint">Move around the desk, the lists and the Reader with the keyboard.</p>
+        <details class="keys-fold">
+          <summary>Show the keys</summary>
+          ${this.#vimSheet()}
+        </details>
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}

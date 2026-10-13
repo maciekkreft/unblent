@@ -37,7 +37,7 @@ const judging = (page) =>
   });
 
 for (const engine of ENGINES) {
-  describe(`the starter Jev key in Settings in ${engine.name}`, () => {
+  describe(`Settings in ${engine.name}`, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -73,6 +73,36 @@ for (const engine of ENGINES) {
         await until(async () => (await judging(page))?.text.includes("Key saved"));
         assert.deepEqual(saved, [{ jevKey: "jev-not-a-real-key" }]);
         assert.ok(!(await judging(page)).text.includes("Starter"), "the own key replaces the count");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    test("the Vim keys list is folded away until asked for, with the switch on or off", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/settings`, { waitUntil: "domcontentloaded" });
+        const fold = page.locator("settings-sheet details.keys-fold");
+        const list = fold.locator("dl.keys").first();
+
+        await fold.waitFor();
+        assert.equal(await fold.getAttribute("open"), null, "the fold starts closed");
+        assert.equal(await list.isVisible(), false, "the keys are hidden while it is closed");
+
+        await fold.locator("summary", { hasText: "Show the keys" }).click();
+        await until(() => list.isVisible());
+        assert.ok((await fold.textContent()).includes("Ctrl+h, Ctrl+l"));
+
+        await page.locator("settings-sheet .switches label", { hasText: "Vim keys" }).locator("input").click();
+        await until(async () =>
+          page.evaluate(() => JSON.parse(localStorage.getItem("settings") || "null")?.vimKeys === true),
+        );
+        assert.notEqual(await fold.getAttribute("open"), null, "turning Vim keys on leaves the fold open");
+        assert.equal(await list.isVisible(), true);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
