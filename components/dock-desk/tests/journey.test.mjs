@@ -917,22 +917,6 @@ for (const engine of ENGINES) {
       clean(problems);
     });
 
-    test(`zh folds the left dock from the Reader; Ctrl+Shift+h unfolds it in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("z h", keys(page, "z", "h"), (s) =>
-        all(want(s.leftFolded === true, "the left dock is open"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(s.cursor?.at.startsWith("Chapter One"), `the cursor moved: ${JSON.stringify(s.cursor)}`)));
-      await step("Ctrl+Shift+h", keys(page, "Control+Shift+h"), (s) =>
-        all(want(s.leftFolded === false, "the left dock is folded"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)));
-      clean(problems);
-    });
-
-    test(`zh from the Books list folds it and hands the keyboard to the Reader in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("Ctrl+h then z h", keys(page, "Control+h", "z", "h"), (s) =>
-        all(want(s.leftFolded === true, "the left dock is open"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)), SETTLE);
-      clean(problems);
-    });
-
     // --- S1: a list scrolls to the row the keyboard moved to ------------------------------
 
     // The row or tile with the keyboard is the first or last of its list, and in view.
@@ -1036,7 +1020,7 @@ for (const engine of ENGINES) {
 
     for (const [what, list] of [
       ["the panel and fold keys", ["Control+l", "Control+.", "Control+Shift+l", "Control+Shift+h"]],
-      ["the tab and fold letters", ["g", "t", "z", "h"]],
+      ["the tab letters", ["g", "t"]],
       ["the Reader's highlight letters", ["w", "v", "w", "Enter", "Control+v"]],
       ["the Reader's cursor and page letters", ["l", "}", "Control+f", "Control+d", "G"]],
     ]) {

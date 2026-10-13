@@ -31,7 +31,7 @@ const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).font
 
 // The keys that move between groups and tabs while "Vim keys" is on (12), held with Ctrl.
 const PANEL_KEYS = new Set(["h", "j", "k", "l", ".", ","]);
-// The side Ctrl+Shift+<key>, or z then <key>, folds or unfolds.
+// The side Ctrl+Shift+<key> folds or unfolds.
 const FOLD_KEYS = { h: "left", l: "right", j: "bottom" };
 
 // A child's address (4.1): its role or tag name, with `#id` when the page gave it
@@ -638,7 +638,7 @@ class DockDesk extends LitElement {
 
   // The group that last held the focus, where a focus dropped on the bare page goes back.
   #lastGroup = "stage";
-  // The first key of a two-key Vim command (gt, gT, zh, zl, zj) and when it was pressed.
+  // The first key of a two-key Vim command (gt, gT) and when it was pressed.
   #prefix = null;
 
   constructor() {
@@ -703,7 +703,7 @@ class DockDesk extends LitElement {
   // The desk's keyboard model for "Vim keys" (12): Ctrl+h/j/k/l between the groups,
   // Ctrl+. and Ctrl+, between the tabs of the group that has focus, Ctrl+Shift+h/l/j
   // fold or unfold the left, right and bottom dock; outside an editor also gt and gT for
-  // the tabs and zh, zl and zj for the folds. Off without the preference, so nothing
+  // the tabs. Off without the preference, so nothing
   // changes for anyone who leaves it off, and off on a narrow desk (the phone), where
   // the docks are drawers over the stage, not neighbours.
   #panelKey(event) {
@@ -732,28 +732,24 @@ class DockDesk extends LitElement {
     this.requestUpdate();
   }
 
-  // gt / gT and zh / zl / zj: two letters, the second within a second of the first, and
-  // never inside an editor or a field, where they are text (or CodeMirror's Vim's own).
-  // The first letter is left to the view (g is half of a list's gg); a z, which no view
-  // uses, is spent so it is never typed.
+  // gt / gT: two letters, the second within a second of the first, and never inside an
+  // editor or a field, where they are text (or CodeMirror's Vim's own). The g is left to
+  // the view, where it is half of a list's gg.
   #letter(event, context) {
     const target = event.composedPath()[0];
     const prefix = this.#prefix;
     this.#prefix = null;
     if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
-    if ((event.key === "g" && prefix?.key !== "g") || event.key === "z") {
-      if (event.key === "z") event.preventDefault();
+    if (event.key === "g" && prefix?.key !== "g") {
       this.#prefix = { key: event.key, at: Date.now() };
       return;
     }
     if (!prefix || Date.now() - prefix.at > 1000) return;
-    const tabStep = prefix.key === "g" ? { t: 1, T: -1 }[event.key] : undefined;
-    const side = prefix.key === "z" ? FOLD_KEYS[event.key] : undefined;
-    if (!tabStep && !side) return;
+    const tabStep = { t: 1, T: -1 }[event.key];
+    if (!tabStep) return;
     event.preventDefault();
     event.stopPropagation();
-    if (tabStep) this.#cycle(context, this.#focusedGroup(context.docks), tabStep);
-    else this.#toggleFold(context, side);
+    this.#cycle(context, this.#focusedGroup(context.docks), tabStep);
   }
 
   // Fold an open side or unfold a folded one; a side the page does not have is passed

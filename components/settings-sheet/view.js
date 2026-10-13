@@ -383,7 +383,6 @@ class SettingsSheet extends LitElement {
       ])}
       ${group("In a list and in the Reader, not while typing (there, use the Ctrl keys above)", [
         ["gt, gT", "show the next or the previous tab"],
-        ["zh, zl, zj", "fold or unfold the left, right or bottom panel"],
       ])}
       ${group("In a list (books, contents, notes, chats)", [
         ["j, k", "next or previous row"],
