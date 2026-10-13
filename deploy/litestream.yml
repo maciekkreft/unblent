@@ -12,6 +12,17 @@
 # The books files (chapters, images, source) are not databases; rclone copies
 # them (deploy/unblent-books-backup.*) and restores them:
 #   rclone copy r2:unblent-data/<user>/books /opt/unblent/data/<user>/books
+#
+# Litestream checks the bucket for every database on a timer, changed or not, and
+# each check is a paid R2 list request: at its defaults (L0 clean-up every 15 s,
+# L1 merge every 30 s) about 80k a day for seven files. Hourly keeps the bill in
+# R2's free tier while saves still leave every 10 s; a restore is to the minute
+# for the last two hours and to the hour before that.
+l0-retention: 2h
+l0-retention-check-interval: 1h
+levels:
+  - interval: 1h
+  - interval: 24h
 dbs:
   - dir: /opt/unblent/data
     pattern: "*.db"
