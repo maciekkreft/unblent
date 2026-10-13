@@ -22,7 +22,8 @@
     "contentVersion": { "type": "integer", "minimum": 1 },
     "pending": { "type": "boolean" },
     "addedAt": { "type": "integer" },
-    "updatedAt": { "type": "integer" }
+    "updatedAt": { "type": "integer" },
+    "written": { "type": "boolean", "description": "True only for the journal, the book the user writes, owned by journal; absent for an imported book." }
   },
   "required": ["id", "title", "author", "cover", "chapters", "toc", "position", "version", "contentVersion", "pending", "addedAt", "updatedAt"],
   "additionalProperties": false,

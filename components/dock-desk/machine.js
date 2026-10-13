@@ -186,11 +186,6 @@ export const machine = setup({
   actors: {
     read: fromPromise(({ input }) => input.ask("dock", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
-    // The subject starting picture, asked as its own concern (3.5) so its reply never
-    // overwrites a subject.changed that arrived first while the layout was still
-    // loading. subject.changed is held for this ask until its reply lands (subject:
-    // read supersededBy).
-    readSubject: fromPromise(({ input }) => input.ask("subject", "read", {})),
   },
 }).createMachine({
   id: "dock-desk",
@@ -210,9 +205,7 @@ export const machine = setup({
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
       "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
-      "the shown tab one place earlier or later; the stage keeps the page's order. The tab of " +
-      "the view that shows the subject carries a mark with the subject's title as its hover " +
-      "text; the mark is an indicator, not a control, and no mark means there is no subject. " +
+      "the shown tab one place earlier or later; the stage keeps the page's order. " +
       "While the \"Vim keys\" preference is on, on the desk and not on the phone, Ctrl+h and " +
       "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +
       "Ctrl+j to the bottom dock and Ctrl+k back up to the stage, passing over an empty side " +
@@ -228,7 +221,7 @@ export const machine = setup({
     kind: "view",
     emits: ["dock.arranged"],
     attributes: [],
-    asks: ["dock: read", "settings: read", "subject: read"],
+    asks: ["dock: read", "settings: read"],
   },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
@@ -244,25 +237,11 @@ export const machine = setup({
     // The "Vim keys" preference (12): while on, the view moves focus between the
     // groups with Ctrl+h/j/k/l and between tabs with Ctrl+. and Ctrl+,.
     vimKeys: false,
-    // The subject, learned from subject: read then subject.changed, as
-    // { kind, id, title, view } or null. The view marks the tab whose name is `view`.
-    subject: null,
     // The address of the child shown from a header button (6.4), or null for the
     // stage. It is a detour the user leaves, so it rides no fact and is never in
     // dock.arranged; a reload starts on the stage.
     pressed: null,
   }),
-  // The subject read runs for the machine's whole life (3.5), so the layout-load
-  // transitions never cancel it: its reply lands on its own, and no layout reply ever
-  // writes the subject, so a slow layout reply cannot re-apply a stale null over a
-  // subject.changed that arrived first. A page without `subject` (no-answerer) leaves
-  // it null and shows no mark, exactly as a page without `settings` stays arrangeable.
-  invoke: {
-    src: "readSubject",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ subject: ({ event }) => event.output.subject ?? null }) },
-    onError: { actions: [] },
-  },
   initial: "loading",
   states: {
     loading: {
@@ -417,12 +396,6 @@ export const machine = setup({
     // control still does nothing (the guards read context.arranging).
     "settings.changed": {
       actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
-    },
-    // The subject changed (4.3): mark a different tab, or none. Held for us until the
-    // starting subject: read reply lands, so it is never lost and never applied before
-    // the picture it supersedes.
-    "subject.changed": {
-      actions: assign({ subject: ({ event }) => event.subject }),
     },
   },
 });

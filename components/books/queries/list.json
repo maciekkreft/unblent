@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Every book as the little a shelf needs to draw a tile: cover, title, author, where the reader is, and how many chapters. Tombstones are excluded; newest first.",
+    "description": "Every book as the little a shelf needs to draw a tile: cover, title, author, where the reader is, and how many chapters. Tombstones are excluded; the journal first when there is one, then newest first.",
     "type": "object",
     "properties": {
       "books": {
@@ -31,7 +31,8 @@
             },
             "chapterCount": { "type": "integer", "minimum": 0 },
             "pending": { "type": "boolean" },
-            "addedAt": { "type": "integer" }
+            "addedAt": { "type": "integer" },
+            "written": { "type": "boolean", "description": "True only for the journal, the book the user writes, owned by journal; absent for an imported book." }
           },
           "required": ["id", "title", "author", "cover", "position", "chapterCount", "pending", "addedAt"],
           "additionalProperties": false

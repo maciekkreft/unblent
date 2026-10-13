@@ -126,15 +126,18 @@ async function openProduct(browser, engineName, name) {
   assert.ok((await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}/opened`)).ok(), "the sample book is the open one");
   const page = await context.newPage();
   const problems = watch(page);
+  // The trace's console lines (10), read for the subject reaching chat-input below.
+  page.subjectLines = [];
+  page.on("console", (msg) => / event subject\.changed subject → .*chat-input/.test(msg.text()) && page.subjectLines.push(msg.text()));
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
   await inputReady(page);
   return { context, page, problems };
 }
 
-// The subject has settled on the open book: dock-desk marks the tab of the view showing
-// the subject (12), so a mark means the book is the subject and chat-input has learned it.
-const bookIsSubject = (page) =>
-  page.evaluate(() => Boolean(document.querySelector("dock-desk").shadowRoot.querySelector(".mark")));
+// The subject has settled on the open book: the product's only views that show a thing
+// show a book, so a subject.changed delivered to chat-input since the last check means it
+// has learned the book. Cleared on each check so a reload waits for its own.
+const bookIsSubject = async (page) => page.subjectLines.splice(0).length > 0;
 
 // The chat box is a CodeMirror document. Reach its EditorView through the handle CM6
 // hangs on the content node, as the note tests do. Set the draft with a dispatch, then

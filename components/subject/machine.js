@@ -11,10 +11,12 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // exist, and a new kind of thing changes only this component. Everything with a side
 // effect — the asks — arrives through `input`, so this stays importable in Node.
 
-// The one view → kind table (D3): the views that show a thing. Today one row: the
-// reader shows a book, whose id comes from `books: open` and whose title from
-// `books: read`. A view with no row is about the subject and never changes it.
-const STAGE_KINDS = { "book-reader": "book" };
+// The one view → kind table (D3): the views that show a thing. Today both show a book,
+// whose id comes from `books: open` and whose title from `books: read`: the book stage,
+// which holds the reader and the journal's page, and the reader on its own. A view with
+// no row is about the subject and never changes it. The first row is the shower before
+// any view has been in front (a desk never arranged), so it names the product's stage.
+const STAGE_KINDS = { "book-stage": "book", "book-reader": "book" };
 
 // A stage is a view address, `book-reader` or `book-reader#2` when a page holds more
 // than one (4.1); the kind is keyed on the base name.
@@ -76,7 +78,8 @@ export const machine = setup({
     description:
       "Owns what the user is working on, as a kind, an id, a title and the view that shows it, " +
       "or nothing; it stores nothing and combines what `dock` and `books` announce. Some views " +
-      "show a thing, today `book-reader`, which shows the open book; the subject is the thing " +
+      "show a thing, today `book-stage` and `book-reader`, which show the open book; the subject " +
+      "is the thing " +
       "shown by the one of those last in front on the stage, and it stays while any other view " +
       "is in front, because those views are about the subject. After a reload, before any such " +
       "view has been in front, the subject is the open item of the first view in its table. The " +

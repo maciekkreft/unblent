@@ -278,8 +278,10 @@ function chatBox() {
   const r = el.getBoundingClientRect();
   return { x: r.left + 10, y: r.top + r.height / 2 };
 }
+// The first imported book's tile: the journal, which books presents first, has no
+// "Chapter Two" in its Contents.
 function tile() {
-  const el = document.querySelector("book-shelf")?.shadowRoot?.querySelector(".tile");
+  const el = document.querySelector("book-shelf")?.shadowRoot?.querySelector('.tile:not([data-id="00000000000000000000000JRN"])');
   if (!el) return null;
   const r = el.getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
@@ -567,7 +569,7 @@ for (const engine of ENGINES) {
 
     test(`a click on bare desk keeps Ctrl+l working in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
-      await step("click bare desk space", clickAt(page, blankHeader), (s) => want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`));
+      await step("click bare desk space", clickAt(page, blankHeader), (s) => want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`));
       await step("Ctrl+l", keys(page, "Control+l"), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
       clean(problems);
     });
@@ -583,7 +585,7 @@ for (const engine of ENGINES) {
 
     test(`with the focus dropped Safari style on the Reader Ctrl+l still works in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
-      await step("the focus dropped on the Reader", () => safari(page), (s) => want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`));
+      await step("the focus dropped on the Reader", () => safari(page), (s) => want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`));
       await step("Ctrl+l", keys(page, "Control+l"), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
       clean(problems);
     });
@@ -610,7 +612,7 @@ for (const engine of ENGINES) {
       const { page, problems, step, reach } = await open();
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
       await step("Ctrl+h", keys(page, "Control+h"), (s) =>
-        all(want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`), want(JSON.stringify(s.framed) === '["stage"]', `framed: ${JSON.stringify(s.framed)}`)), SETTLE);
+        all(want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(JSON.stringify(s.framed) === '["stage"]', `framed: ${JSON.stringify(s.framed)}`)), SETTLE);
       clean(problems);
     });
 
@@ -745,7 +747,7 @@ for (const engine of ENGINES) {
     test(`a click on the text puts the Reader's cursor there in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
       await step("click on 'page long'", clickAt(page, word, "page long"), (s) =>
-        all(want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`), want(s.cursor?.at.startsWith("age long"), `the cursor is at ${JSON.stringify(s.cursor)}`), want(s.pageNo === "Page 1 of 1", s.pageNo)));
+        all(want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(s.cursor?.at.startsWith("age long"), `the cursor is at ${JSON.stringify(s.cursor)}`), want(s.pageNo === "Page 1 of 1", s.pageNo)));
       await step("v e... b", keys(page, "v", "b"), (s) => want(s.pending?.text === "pa", `pending ${JSON.stringify(s.pending)}`));
       clean(problems);
     });
@@ -880,7 +882,7 @@ for (const engine of ENGINES) {
     test(`gt in the Reader, alone on the stage, does nothing in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
       await step("g t in the Reader", keys(page, "g", "t"), (s) =>
-        all(want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`), want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(!s.pending, "a passage is pending")));
+        all(want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(!s.pending, "a passage is pending")));
       clean(problems);
     });
 
@@ -900,16 +902,16 @@ for (const engine of ENGINES) {
       const { page, problems, step, reach } = await open();
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
       await step("Ctrl+Shift+l", keys(page, "Control+Shift+l"), (s) =>
-        all(want(s.rightFolded === true, "the right dock is open"), want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`)), SETTLE);
+        all(want(s.rightFolded === true, "the right dock is open"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)), SETTLE);
       await step("Ctrl+Shift+l again", keys(page, "Control+Shift+l"), (s) =>
-        all(want(s.rightFolded === false, "the right dock is folded"), want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`)));
+        all(want(s.rightFolded === false, "the right dock is folded"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)));
       clean(problems);
     });
 
     test(`Ctrl+l reaches Notes again after a fold and an unfold in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await reach(quick(page, "Control+Shift+l"), (s) => s.rightFolded === true && panel(s) === "book-reader");
+      await reach(quick(page, "Control+Shift+l"), (s) => s.rightFolded === true && panel(s) === "book-stage");
       await reach(quick(page, "Control+Shift+l"), (s) => s.rightFolded === false);
       await step("Ctrl+l", keys(page, "Control+l"), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
       clean(problems);
@@ -918,16 +920,16 @@ for (const engine of ENGINES) {
     test(`zh folds the left dock from the Reader; Ctrl+Shift+h unfolds it in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
       await step("z h", keys(page, "z", "h"), (s) =>
-        all(want(s.leftFolded === true, "the left dock is open"), want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`), want(s.cursor?.at.startsWith("Chapter One"), `the cursor moved: ${JSON.stringify(s.cursor)}`)));
+        all(want(s.leftFolded === true, "the left dock is open"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(s.cursor?.at.startsWith("Chapter One"), `the cursor moved: ${JSON.stringify(s.cursor)}`)));
       await step("Ctrl+Shift+h", keys(page, "Control+Shift+h"), (s) =>
-        all(want(s.leftFolded === false, "the left dock is folded"), want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`)));
+        all(want(s.leftFolded === false, "the left dock is folded"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)));
       clean(problems);
     });
 
     test(`zh from the Books list folds it and hands the keyboard to the Reader in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
       await step("Ctrl+h then z h", keys(page, "Control+h", "z", "h"), (s) =>
-        all(want(s.leftFolded === true, "the left dock is open"), want(panel(s) === "book-reader", `the keyboard is in ${s.focus}`)), SETTLE);
+        all(want(s.leftFolded === true, "the left dock is open"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)), SETTLE);
       clean(problems);
     });
 
@@ -941,7 +943,8 @@ for (const engine of ENGINES) {
 
     test(`G and gg in a long Books shelf keep the book with the keyboard in view in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open(true, { books: 12 });
-      await reach(quick(page, "Control+h"), (s) => panel(s) === "list-then-item#books" && s.place?.endsWith("of 13"));
+      // Twelve books, the journal (books presents it first) and the add tile.
+      await reach(quick(page, "Control+h"), (s) => panel(s) === "list-then-item#books" && s.place?.endsWith("of 14"));
       await step("G", keys(page, "G"), (s) => at(s, "last"));
       await step("g g", keys(page, "g", "g"), (s) => at(s, "first"));
       clean(problems);
@@ -1039,7 +1042,7 @@ for (const engine of ENGINES) {
     ]) {
       test(`with Vim keys off, ${what} do nothing in ${engine.name}`, async () => {
         const { page, problems, step, reach } = await open(false);
-        await reach(() => page.evaluate(() => document.querySelector("book-reader").focus()), (s) => panel(s) === "book-reader");
+        await reach(() => page.evaluate(() => document.querySelector("book-reader").focus()), (s) => panel(s) === "book-stage");
         const before = await look(page);
         const same = (s) =>
           all(...["panel", "rightTab", "leftFolded", "rightFolded", "editor", "chatBox", "chapter", "pageNo", "marks", "rows", "framed"].map((k) => unchanged(s, before, k)), want(!s.cursor && !s.pending, "a cursor shows"));

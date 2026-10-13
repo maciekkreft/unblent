@@ -66,7 +66,7 @@ for (const engine of ENGINES) {
     const { browser, context, page, problems } = await open(engine, true);
     try {
       await page.evaluate(() => document.querySelector("book-reader").focus());
-      assert.equal((await focused(page)).panel, "book-reader");
+      assert.equal((await focused(page)).panel, "book-stage");
 
       await page.keyboard.press("Control+l");
       await until(async () => (await focused(page)).panel === "list-then-item#notes");
@@ -79,7 +79,7 @@ for (const engine of ENGINES) {
       assert.equal(await rightTab(page), "Chat", "the next tab is shown");
 
       await page.keyboard.press("Control+h");
-      await until(async () => (await focused(page)).panel === "book-reader");
+      await until(async () => (await focused(page)).panel === "book-stage");
       await page.keyboard.press("Control+h");
       await until(async () => (await focused(page)).panel === "list-then-item#books");
 
@@ -93,7 +93,7 @@ for (const engine of ENGINES) {
   test(`with Vim keys on the keyboard starts on the stage, so Ctrl+l works at once on / in ${engine.name}`, async () => {
     const { browser, context, page, problems } = await open(engine, true);
     try {
-      await until(async () => (await focused(page)).panel === "book-reader");
+      await until(async () => (await focused(page)).panel === "book-stage");
       await page.keyboard.press("Control+l");
       await until(async () => (await focused(page)).panel === "list-then-item#notes");
       assert.ok((await focused(page)).row, "on the Notes row");
@@ -122,7 +122,7 @@ for (const engine of ENGINES) {
       await page.evaluate(() => document.querySelector("book-reader").focus());
       await page.keyboard.press("Control+l");
       await new Promise((r) => setTimeout(r, 150));
-      assert.equal((await focused(page)).panel, "book-reader");
+      assert.equal((await focused(page)).panel, "book-stage");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();

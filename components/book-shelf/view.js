@@ -531,7 +531,10 @@ class BookShelf extends LitElement {
     const { importing, selected, discarding, signedIn } = snapshot.context;
     const tiles = this.#tiles(snapshot);
     const focusId = this.#focusTile(tiles, selected);
-    const empty = !tiles.length && !importing.length;
+    // The invite stands while the library holds no imported book, beside the journal
+    // when there is one, so adding a book stays discoverable.
+    const empty = !tiles.some((t) => !t.written) && !importing.length;
+    const grid = tiles.length || importing.length;
 
     return html`
       <input type="file" accept=".epub,application/epub+zip" multiple hidden @change=${(e) => this.#onInput(e)} />
@@ -546,6 +549,14 @@ class BookShelf extends LitElement {
             ${icon("upload-simple")}<span>Add a book</span>
           </button>
         </div>
+        ${grid
+          ? html`
+              <ul class="grid" role="listbox" aria-label="Books" @keydown=${(e) => this.#keydown(e, tiles)}>
+                ${importing.map((p) => this.#adding(p))}
+                ${tiles.map((t) => this.#tile(t, selected, focusId, discarding))}
+              </ul>
+            `
+          : nothing}
         ${empty
           ? html`<div class="empty">
               <p>
@@ -554,12 +565,7 @@ class BookShelf extends LitElement {
                   : "Drop an epub here or Add a book"}
               </p>
             </div>`
-          : html`
-              <ul class="grid" role="listbox" aria-label="Books" @keydown=${(e) => this.#keydown(e, tiles)}>
-                ${importing.map((p) => this.#adding(p))}
-                ${tiles.map((t) => this.#tile(t, selected, focusId, discarding))}
-              </ul>
-            `}
+          : nothing}
       </div>
     `;
   }
@@ -574,6 +580,27 @@ class BookShelf extends LitElement {
         <span class="title">${p.name}</span>
       </li>
     `;
+  }
+
+  // The per-tile tools. The journal gets none: it is owned by `journal`, and a book the
+  // user writes is neither renamed nor removed from the shelf.
+  #actions(t) {
+    return html`<div class="actions">
+      ${this.renames
+        ? html`<button
+            class="tool edit"
+            type="button"
+            tabindex="-1"
+            aria-label="Rename book"
+            @click=${(e) => this.#startEdit(e, t.id)}
+          >
+            ${icon("pencil-simple")}
+          </button>`
+        : nothing}
+      <button class="tool bin" type="button" tabindex="-1" aria-label="Delete book" @click=${(e) => this.#discard(e, t.id)}>
+        ${icon("trash-simple")}
+      </button>
+    </div>`;
   }
 
   #tile(t, selected, focusId, discarding) {
@@ -592,22 +619,7 @@ class BookShelf extends LitElement {
       >
         <div class="cover">
           ${cover}
-          <div class="actions">
-            ${this.renames
-              ? html`<button
-                  class="tool edit"
-                  type="button"
-                  tabindex="-1"
-                  aria-label="Rename book"
-                  @click=${(e) => this.#startEdit(e, t.id)}
-                >
-                  ${icon("pencil-simple")}
-                </button>`
-              : nothing}
-            <button class="tool bin" type="button" tabindex="-1" aria-label="Delete book" @click=${(e) => this.#discard(e, t.id)}>
-              ${icon("trash-simple")}
-            </button>
-          </div>
+          ${t.written ? nothing : this.#actions(t)}
           ${isDiscarding
             ? html`<div class="over">
                   <span>Deleted</span>
@@ -626,8 +638,10 @@ class BookShelf extends LitElement {
               @blur=${(e) => this.#commitEdit(t.id, e.target.value)}
             />`
           : html`<span class="title">${t.title}</span>`}
-        <span class="author">${t.author || " "}</span>
-        <span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>
+        ${t.written
+          ? html`<span class="author">Written by you</span>`
+          : html`<span class="author">${t.author || " "}</span>
+              <span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>`}
       </li>
     `;
   }

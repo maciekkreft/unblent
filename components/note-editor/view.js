@@ -121,17 +121,19 @@ function levelsOf(state) {
   return levels;
 }
 
-// Vim normal-mode level maps, registered once at import. The leader is "\" (Vim's
+// Vim normal-mode level maps, registered at import. The leader is "\" (Vim's
 // default), mapped literally — more reliably honoured than the <leader> token.
 // defineAction (not Vim.map, which is key->key only) lets a mapped key reach the live
-// EditorView through cm.cm6 and dispatch a StateEffect. The Vim plugin keeps one map
-// for the whole page, so in another Vim editor these keys dispatch an effect no field
-// of its handles, and nothing happens; accepted rather than a map per editor.
-Vim.defineAction("noteSetLevel", (cm, args) => {
-  cm.cm6?.dispatch({ effects: setLevel.of(args.level) });
+// EditorView through cm.cm6. The Vim plugin keeps one map for the whole page, so the
+// keys have one meaning for every editor on it: the action sends a "level" event to the
+// focused editor's own element, and each editor applies it to its own levels.
+// journal-entry registers the identical action and maps; registering again replaces
+// the action with the same one.
+Vim.defineAction("setLineLevel", (cm, args) => {
+  cm.cm6?.contentDOM.dispatchEvent(new CustomEvent("level", { detail: args.level }));
 });
 for (const [key, level] of [["\\1", "title"], ["\\2", "heading"], ["\\3", "subheading"], ["\\0", "body"]]) {
-  Vim.mapCommand(key, "action", "noteSetLevel", { level }, { context: "normal" });
+  Vim.mapCommand(key, "action", "setLineLevel", { level }, { context: "normal" });
 }
 
 const levelTheme = EditorView.theme({
@@ -341,10 +343,6 @@ class NoteEditor extends LitElement {
       flex: 1;
       min-height: 0;
     }
-    .region:focus-within {
-      outline: none;
-      box-shadow: var(--focus-ring);
-    }
     .footer {
       flex: none;
       display: flex;
@@ -464,6 +462,11 @@ class NoteEditor extends LitElement {
         blur: () => {
           document.getSelection()?.removeAllRanges();
           this.#actor.send({ type: "_blurred" });
+        },
+        // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
+        level: (e, view) => {
+          view.dispatch({ effects: setLevel.of(e.detail) });
+          return true;
         },
       }),
     ];

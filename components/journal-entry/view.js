@@ -1,11 +1,11 @@
 import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
-import { EditorState, StateField, StateEffect, Prec, Compartment } from "@codemirror/state";
+import { EditorState, StateField, StateEffect, RangeSetBuilder, Prec, Compartment } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, keymap, drawSelection, placeholder } from "@codemirror/view";
 import { history, historyKeymap, insertNewline } from "@codemirror/commands";
-import { vim } from "@replit/codemirror-vim";
-import { machine, shown, margins, banner, toJudge, reasonLine, canJudge, conflictOn, longDate } from "./machine.js";
+import { vim, Vim } from "@replit/codemirror-vim";
+import { machine, shown, selectedOf, margins, banner, toJudge, reasonLine, canJudge, conflictOn, longDate, parseBody, serialize } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import judging from "./events/day.judging.requested.json" with { type: "json" };
 
@@ -14,6 +14,8 @@ import judging from "./events/day.judging.requested.json" with { type: "json" };
 // stage, as block widgets under each paragraph on a narrow one. Vim sits in a compartment
 // that the "Vim keys" preference (12) turns on and off in place. The theme and the Vim
 // setup are copied from note-editor, because components never import each other (11.2).
+// So are the four line levels: a StateField holds each line's level, the document stays
+// marker-free, and parseBody/serialize (machine.js) turn it into the wire text.
 
 const theme = EditorView.theme({
   "&": { color: "var(--color-ink)", backgroundColor: "transparent" },
@@ -47,6 +49,88 @@ const fatCursorTheme = Prec.highest(
 );
 
 const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
+
+// Only Title/Heading/Subheading lines get a line decoration; a Body line carries none.
+const LEVEL_CLASS = { title: "cm-level-title", heading: "cm-level-heading", subheading: "cm-level-subheading" };
+const lineDeco = (level) => Decoration.line({ class: LEVEL_CLASS[level], attributes: { "data-level": level } });
+
+// setLevel re-levels every line the selection spans; setAllLevels rebuilds the whole set
+// from a per-line array (a load).
+const setLevel = StateEffect.define();
+const setAllLevels = StateEffect.define();
+
+const levelField = StateField.define({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setAllLevels)) {
+        const b = new RangeSetBuilder();
+        e.value.forEach((level, i) => {
+          if (level && level !== "body" && i < tr.state.doc.lines) {
+            const line = tr.state.doc.line(i + 1);
+            b.add(line.from, line.from, lineDeco(level));
+          }
+        });
+        deco = b.finish();
+      } else if (e.is(setLevel)) {
+        const first = tr.state.doc.lineAt(tr.state.selection.main.from);
+        const last = tr.state.doc.lineAt(tr.state.selection.main.to);
+        const add = [];
+        for (let n = first.number; n <= last.number; n++) {
+          if (e.value !== "body") add.push(lineDeco(e.value).range(tr.state.doc.line(n).from));
+        }
+        deco = deco.update({ filterFrom: first.from, filterTo: last.to, filter: () => false, add });
+      }
+    }
+    return deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// The line levels of a state, in document order, for serialize().
+function levelsOf(state) {
+  const levels = new Array(state.doc.lines).fill("body");
+  for (const it = state.field(levelField).iter(); it.value; it.next()) {
+    const level = it.value.spec?.attributes?.["data-level"];
+    if (level) levels[state.doc.lineAt(it.from).number - 1] = level;
+  }
+  return levels;
+}
+
+// Vim's maps are one per page, so the level keys have one meaning for every editor on
+// it: the action sends a "level" event to the focused editor's own element, and each
+// editor applies it to its own levels. note-editor registers the identical action and
+// maps; registering again replaces the action with the same one.
+Vim.defineAction("setLineLevel", (cm, args) => {
+  cm.cm6?.contentDOM.dispatchEvent(new CustomEvent("level", { detail: args.level }));
+});
+for (const [key, level] of [["\\1", "title"], ["\\2", "heading"], ["\\3", "subheading"], ["\\0", "body"]]) {
+  Vim.mapCommand(key, "action", "setLineLevel", { level }, { context: "normal" });
+}
+
+// The level ladder of note-editor's levelTheme: padding, never margin, because CodeMirror
+// measures a line's box for its height map and Vim's j/k move by pixels through it.
+const levelTheme = EditorView.theme({
+  ".cm-line.cm-level-title": {
+    fontSize: "var(--text-heading)",
+    fontWeight: "var(--weight-semibold)",
+    lineHeight: "var(--leading-tight)",
+    paddingBottom: "var(--space-xs)",
+  },
+  ".cm-line.cm-level-heading": {
+    fontSize: "var(--text-subtitle)",
+    fontWeight: "var(--weight-semibold)",
+    lineHeight: "var(--leading-tight)",
+    paddingTop: "var(--space-sm)",
+  },
+  ".cm-line.cm-level-subheading": {
+    fontSize: "var(--text-body)",
+    fontWeight: "var(--weight-semibold)",
+    lineHeight: "var(--leading-tight)",
+    paddingTop: "var(--space-xs)",
+  },
+});
 
 // What the editable compartment holds: the open day takes typing, an earlier day (or a
 // day in conflict) is read only and offers no placeholder.
@@ -175,7 +259,11 @@ const midnightAfter = (now) => {
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 class JournalEntry extends LitElement {
-  static properties = { height: { type: String, reflect: true } };
+  static properties = {
+    height: { type: String, reflect: true },
+    // Jev's margin, the status lines and Judge this day: the Journal app's, not the product's.
+    judging: { type: Boolean, reflect: true },
+  };
 
   // A panel's focus lands in what it shows (dock-desk): delegating it puts the keyboard
   // in the writing box.
@@ -190,13 +278,23 @@ class JournalEntry extends LitElement {
     :host([height="fill"]) {
       flex: 1;
     }
+    /* The stage's width, which the text and the level bar below it both answer to. */
+    .frame {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      container-type: inline-size;
+    }
     .scroll {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
-      container-type: inline-size;
+      display: flex;
+      flex-direction: column;
     }
     .page {
+      flex: 1 0 auto;
       box-sizing: border-box;
       padding: var(--space-md) var(--space-lg);
       display: flex;
@@ -362,6 +460,86 @@ class JournalEntry extends LitElement {
       gap: var(--space-lg);
       align-items: start;
     }
+    /* Without judging there is no margin column: the text takes the whole width. */
+    .sheet.plain {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    /* On a stage that fills, the open day reaches the bottom, like a page, and a
+       click anywhere in it lands in the text. */
+    :host([height="fill"]) .sheet.plain {
+      flex: 1 0 auto;
+      align-items: stretch;
+    }
+    :host([height="fill"]) .sheet.plain .region.open {
+      display: flex;
+      flex-direction: column;
+    }
+    /* Without judging the open day reads like note-editor: no box and no ring; the
+       desk's frame shows where the keyboard is. */
+    .sheet.plain .region.open {
+      background: none;
+      border-color: transparent;
+      padding: 0;
+    }
+    .sheet.plain .region.open:focus-within {
+      box-shadow: none;
+    }
+    :host([height="fill"]) .sheet.plain .region.open .cm-editor {
+      flex: 1;
+    }
+    /* The level bar under the text, as in note-editor. */
+    .footer {
+      flex: none;
+      padding: var(--space-sm) var(--space-lg);
+      font-size: var(--text-caption);
+      color: var(--color-mute);
+    }
+    .levels {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-sm);
+    }
+    button.level {
+      white-space: nowrap;
+      margin: 0;
+      padding: 0 var(--space-2xs);
+      /* A faint outline marks each name as a control where no hover can (a phone). */
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--color-mute);
+    }
+    button.level:hover:not([aria-pressed="true"]):not(:disabled) {
+      background: transparent;
+      color: var(--color-ink);
+    }
+    button.level[aria-pressed="true"] {
+      color: var(--color-ink);
+      font-weight: var(--weight-semibold);
+    }
+    /* Feedback that a level change landed, however it was made (a click or a Vim key). */
+    button.level.flash {
+      animation: level-flash var(--duration-slide) var(--ease);
+    }
+    @keyframes level-flash {
+      from {
+        background: var(--color-accent-subtle);
+      }
+      to {
+        background: transparent;
+      }
+    }
+    /* Without motion the tint holds still for the same time, then goes; the animation
+       still runs so animationend clears the flash. */
+    @media (prefers-reduced-motion: reduce) {
+      button.level.flash {
+        animation-timing-function: step-end;
+      }
+    }
+    kbd {
+      font: inherit;
+      color: var(--color-body);
+    }
     /* Each block is placed level with its paragraph's first line by the view. */
     .margins {
       position: relative;
@@ -470,6 +648,9 @@ class JournalEntry extends LitElement {
       .page {
         padding: var(--space-md);
       }
+      .footer {
+        padding-inline: var(--space-md);
+      }
       .sheet {
         --margin-place: under;
         grid-template-columns: minmax(0, 1fr);
@@ -500,6 +681,10 @@ class JournalEntry extends LitElement {
   #underKey = "";
   #resize = new ResizeObserver(() => this.#arrange());
   #measureKey = {};
+  // The level of the line the cursor is on, marked in the level bar, and the level a
+  // transaction just set, whose button flashes until animationend.
+  #level = "body";
+  #flashed = null;
 
   #send(event) {
     this.#actor.send(event);
@@ -534,6 +719,8 @@ class JournalEntry extends LitElement {
       drawSelection(),
       this.#editable.of(editability(editable)),
       theme,
+      levelField,
+      levelTheme,
       padField,
       underField,
       history(),
@@ -542,8 +729,17 @@ class JournalEntry extends LitElement {
       keymap.of([{ key: "Enter", run: insertNewline }]),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
-          const text = update.state.doc.toString();
+        const leveled = update.transactions.some((t) => t.effects.some((e) => e.is(setLevel) || e.is(setAllLevels)));
+        for (const t of update.transactions) {
+          for (const e of t.effects) {
+            if (!e.is(setLevel)) continue;
+            this.#flashed = e.value;
+            this.requestUpdate();
+          }
+        }
+        if (update.selectionSet || update.docChanged || leveled) this.#syncLevel(update.state);
+        if (update.docChanged || leveled) {
+          const text = serialize(update.state.doc.toString(), levelsOf(update.state));
           if (text !== this.#shown) {
             this.#shown = text;
             this.#send({ type: "_edit", text });
@@ -557,6 +753,12 @@ class JournalEntry extends LitElement {
         blur: () => {
           document.getSelection()?.removeAllRanges();
           this.#send({ type: "_blur" });
+        },
+        // The page-wide Vim level keys arrive here as a "level" event (setLineLevel); an
+        // earlier day takes no level, as it takes no typing.
+        level: (e, view) => {
+          if (this.#editableOn) view.dispatch({ effects: setLevel.of(e.detail) });
+          return true;
         },
       }),
     ];
@@ -574,13 +776,16 @@ class JournalEntry extends LitElement {
       this.#vimOn = vimKeys;
       this.#editableOn = editable;
       this.#underKey = "";
+      const { doc, levels } = parseBody(text);
       this.#view = new EditorView({
         parent: region,
         // Shadow DOM: CodeMirror reads the selection through the root and mounts its
         // stylesheet there (7.5), so it must know the shadow root.
         root: this.renderRoot,
-        state: EditorState.create({ doc: text, extensions: this.#extensions(editable, vimKeys) }),
+        state: EditorState.create({ doc, extensions: this.#extensions(editable, vimKeys) }),
       });
+      this.#view.dispatch({ effects: setAllLevels.of(levels) });
+      this.#syncLevel(this.#view.state);
     }
     const effects = [];
     if (vimKeys !== this.#vimOn) {
@@ -591,7 +796,12 @@ class JournalEntry extends LitElement {
       this.#editableOn = editable;
       effects.push(this.#editable.reconfigure(editability(editable)));
     }
-    const changes = text === this.#view.state.doc.toString() ? undefined : { from: 0, to: this.#view.state.doc.length, insert: text };
+    let changes;
+    if (text !== serialize(this.#view.state.doc.toString(), levelsOf(this.#view.state))) {
+      const { doc, levels } = parseBody(text);
+      changes = { from: 0, to: this.#view.state.doc.length, insert: doc };
+      effects.push(setAllLevels.of(levels));
+    }
     this.#shown = text;
     if (changes || effects.length) this.#view.dispatch({ changes, effects });
     this.#arrange();
@@ -663,7 +873,7 @@ class JournalEntry extends LitElement {
   // typing only on the open day and not while two copies wait to be settled.
   get #content() {
     const { context } = this.#actor.snapshot;
-    const { day, editable } = shown(context.picture, context.selected, context.fresh, Date.now());
+    const { day, editable } = shown(context.picture, selectedOf(context), context.fresh, Date.now());
     const conflict = conflictOn(context.conflict, day, editable);
     return { text: editable && context.draft ? context.draft.text : day.text, editable: editable && !conflict };
   }
@@ -673,51 +883,109 @@ class JournalEntry extends LitElement {
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="empty page">The journal is unavailable.</p>`;
     const { context } = snapshot;
-    const { picture, selected, fresh, draft, editing, usedUp } = context;
+    const { picture, fresh, draft, editing, usedUp, vimKeys } = context;
+    const judging = this.judging;
     const now = Date.now();
     // Nobody acts at midnight, so a timer redraws the page when the banner is due.
     clearTimeout(this.#timer);
     this.#timer = setTimeout(() => this.requestUpdate(), midnightAfter(now) - now + 1000);
-    const { day, editable } = shown(picture, selected, fresh, now);
+    const { day, editable } = shown(picture, selectedOf(context), fresh, now);
     const text = editable && draft ? draft.text : day.text;
-    const rows = margins(text, editable && editing, day, picture);
+    const rows = judging ? margins(text, editable && editing, day, picture) : [];
     this.#rows = rows;
     const conflict = conflictOn(context.conflict, day, editable);
-    const late = banner(day, editable, now);
-    const why = reasonLine(picture, usedUp);
-    const missing = toJudge(day, editable);
+    const late = judging ? banner(day, editable, now) : null;
+    const why = judging ? reasonLine(picture, usedUp) : null;
+    const missing = judging ? toJudge(day, editable) : 0;
     return html`
-      <div class="scroll">
-        <div class="page">
-          <header>
-            <h2>${longDate(day.day)}</h2>
-            <p class="status">
-              ${editable
-                ? html`<b>Open</b> · closes at midnight, or an hour after your last edit`
-                : html`<b class="closed">Read only</b>`}
-            </p>
-          </header>
-          ${late ? html`<p class="banner" role="status">${late}</p>` : nothing}
-          ${conflict ? this.#conflict(conflict) : nothing}
-          ${why ? html`<p class="line reason">${why}</p>` : nothing}
-          ${missing
-            ? html`<div class="judge">
-                <button type="button" class="dark judge-day" ?disabled=${!canJudge(picture)} @click=${() => this.#send({ type: "_judge" })}>
-                  Judge this day · ${missing} ¶
-                </button>
-                <span class="line">${plural(missing, "paragraph is", "paragraphs are")} not read by every detector that is on now.</span>
-              </div>`
-            : nothing}
-          <div class="sheet">
-            <div class="region ${editable && !conflict ? "open" : ""}"></div>
-            <div class="margins">
-              ${this.#under ? nothing : rows.map((r) => html`<div class="margin ${r.state}" data-line=${r.line}>${this.#margin(r)}</div>`)}
+      <div class="frame">
+        <div class="scroll">
+          <div class="page">
+            <header>
+              <h2>${longDate(day.day)}</h2>
+              ${judging
+                ? html`<p class="status">
+                    ${editable
+                      ? html`<b>Open</b> · closes at midnight, or an hour after your last edit`
+                      : html`<b class="closed">Read only</b>`}
+                  </p>`
+                : nothing}
+            </header>
+            ${late ? html`<p class="banner" role="status">${late}</p>` : nothing}
+            ${conflict ? this.#conflict(conflict) : nothing}
+            ${why ? html`<p class="line reason">${why}</p>` : nothing}
+            ${missing
+              ? html`<div class="judge">
+                  <button type="button" class="dark judge-day" ?disabled=${!canJudge(picture)} @click=${() => this.#send({ type: "_judge" })}>
+                    Judge this day · ${missing} ¶
+                  </button>
+                  <span class="line">${plural(missing, "paragraph is", "paragraphs are")} not read by every detector that is on now.</span>
+                </div>`
+              : nothing}
+            <div class="sheet ${judging ? "" : "plain"}">
+              <div class="region ${editable && !conflict ? "open" : ""}"></div>
+              ${judging
+                ? html`<div class="margins">
+                    ${this.#under ? nothing : rows.map((r) => html`<div class="margin ${r.state}" data-line=${r.line}>${this.#margin(r)}</div>`)}
+                  </div>`
+                : nothing}
             </div>
           </div>
         </div>
+        ${editable && !conflict ? html`<div class="footer">${this.#levelBar(vimKeys)}</div>` : nothing}
       </div>
     `;
   }
+
+  // The cursor line's level, so the level bar marks where the cursor is.
+  #syncLevel(state) {
+    const line = state.doc.lineAt(state.selection.main.head).number;
+    const level = levelsOf(state)[line - 1] ?? "body";
+    if (level === this.#level) return;
+    this.#level = level;
+    this.requestUpdate();
+  }
+
+  // note-editor's level bar: the level names are buttons, so a level can be set without
+  // Vim and on a phone; the cursor's own level is marked, and the Vim key stays beside
+  // each name while Vim is on, so a hidden map is visible.
+  #levelBar(vimKeys) {
+    const keys = [
+      ["\\1", "title", "Title"],
+      ["\\2", "heading", "Heading"],
+      ["\\3", "subheading", "Subheading"],
+      ["\\0", "body", "Body"],
+    ];
+    return html`<span class="levels" role="group" aria-label="Line level">
+      ${keys.map(
+        ([key, level, label]) =>
+          html`<button
+            type="button"
+            class=${level === this.#flashed ? "level flash" : "level"}
+            data-level=${level}
+            aria-pressed=${level === this.#level}
+            @mousedown=${(e) => e.preventDefault()}
+            @click=${() => this.#setLevel(level)}
+            @animationend=${this.#unflash}
+          >
+            ${vimKeys ? html`<kbd>${key}</kbd> ` : nothing}${label}
+          </button>`,
+      )}
+    </span>`;
+  }
+
+  // The same effect the Vim key sends, so a click re-levels every line the selection
+  // spans; the keyboard goes back to the text so typing continues.
+  #setLevel(level) {
+    if (!this.#view || !this.#editableOn) return;
+    this.#view.dispatch({ effects: setLevel.of(level) });
+    this.#view.focus();
+  }
+
+  #unflash = () => {
+    this.#flashed = null;
+    this.requestUpdate();
+  };
 
   // Both copies, each kept in one step. A closed day can no longer be saved, so only the
   // other copy can stay, and the user's own is shown to copy from.

@@ -12,8 +12,9 @@ import chapter from "./queries/chapter.json" with { type: "json" };
 import open from "./queries/open.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store,
-// the clock, the passkey-gated api, the session ask, and the object-URL revoke — and
-// mounts it, so machine.js stays importable in Node. An import is an upload of the
+// the clock, the passkey-gated api, the asks (the session, and the journal it presents
+// as a book), and the object-URL revoke — and mounts it, so machine.js stays importable
+// in Node. An import is an upload of the
 // picked file's bytes (Decision 2); a position and a delete are small JSON writes; a
 // chapter is a plain fetch the browser's HTTP cache answers on repeat.
 const store = openBooks();

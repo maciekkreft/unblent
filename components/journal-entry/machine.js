@@ -6,7 +6,8 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 // conflict the user has not settled — and points at three facts: it asks journal: read,
 // llm: read and settings: read for the starting picture and follows journal.changed,
 // llm.changed and settings.changed after (4.3, fourth rule); settings only for the "Vim
-// keys" preference (12). Writing leaves as day.saved, at a throttle while typing and at once
+// keys" preference (12), and books: read only to learn whether an opened book is the
+// journal (written). Writing leaves as day.saved, at a throttle while typing and at once
 // on blur with `left`, so the paragraph being written counts as finished (4.3, third
 // rule); whether a save lands is the journal's to decide, because the "today only" rule
 // lives there. The ask, the id minting, the clock and the throttle arrive through input,
@@ -134,6 +135,42 @@ export const margins = (text, editing, day, picture) => {
   });
 };
 
+// The wire form of a day's text is the note's (note-editor/machine.js, copied because
+// components never import each other, 11.2): a line prefixed "# ", "## " or "### " is a
+// Title, Heading or Subheading, an unprefixed line is Body. The document the user edits
+// is marker-free, and parseBody/serialize are the one place the two forms meet. Jev and
+// the margin read the wire text, so a paragraph keeps the same key in both.
+const PREFIX = { title: "# ", heading: "## ", subheading: "### ", body: "" };
+
+export function parseBody(md) {
+  if (md === "") return { doc: "", levels: ["body"] };
+  const doc = [];
+  const levels = [];
+  for (const line of md.split("\n")) {
+    if (line.startsWith("### ")) { levels.push("subheading"); doc.push(line.slice(4)); }
+    else if (line.startsWith("## ")) { levels.push("heading"); doc.push(line.slice(3)); }
+    else if (line.startsWith("# ")) { levels.push("title"); doc.push(line.slice(2)); }
+    else { levels.push("body"); doc.push(line); }
+  }
+  return { doc: doc.join("\n"), levels };
+}
+
+export function serialize(doc, levels) {
+  if (doc === "") return "";
+  return doc
+    .split("\n")
+    .map((text, i) => (PREFIX[levels[i]] ?? "") + text)
+    .join("\n");
+}
+
+// The journal as `books` presents it (books' journalBook): chapter i is the i-th day
+// of journal: read, oldest first, and one chapter past the last day is today's empty
+// page when no day is open. So a chapter maps to its day's id, and the last chapter to
+// the open day or to null, today's page. The followed chapter wins over the Days list's
+// pick while it is set.
+export const selectedOf = (context) =>
+  context.chapter === null ? context.selected : (context.picture.days[context.chapter]?.id ?? null);
+
 // The day the entry shows: the earlier day picked in the Days list, read only; else the
 // open day; else a new page for today under a fresh id, which becomes a day at its
 // first character.
@@ -216,7 +253,7 @@ const isPicture = (r) => Array.isArray(r?.days) && Array.isArray(r?.answers);
 // that has become a day is replaced, so the next new page is a new day.
 const settle = (context, next, dirty) => {
   const fresh = next.days.some((d) => d.id === context.fresh) ? context.mint() : context.fresh;
-  const view = shown(next, context.selected, fresh, context.now());
+  const view = shown(next, selectedOf(context), fresh, context.now());
   const editable = view.editable ? view.day : null;
   const same = Boolean(editable) && context.draft?.id === editable.id;
   return {
@@ -243,16 +280,42 @@ const edit = assign(({ context, event }) => ({ draft: { ...context.draft, text: 
 
 const follow = (dirty) => assign(({ context, event }) => settle(context, picture(event), dirty));
 
+// What a pick asks the entry to show: a day from the Days list, or a chapter of the
+// journal book (null is today's page).
+const pickOf = (event) => (event.type === "day.selected" ? { selected: event.id, chapter: null } : { selected: null, chapter: event.chapter });
+
 // Another day picked: what is being typed is saved first, then the entry follows.
 const select = (dirty) => ({
   target: "clean",
   actions: [
     ...(dirty ? [save(false)] : []),
-    assign(({ context, event }) => ({ ...settle({ ...context, selected: event.id }, context.picture, false), selected: event.id })),
+    assign(({ context, event }) => {
+      const pick = pickOf(event);
+      return { ...settle({ ...context, ...pick }, context.picture, false), ...pick };
+    }),
   ],
 });
 
-const view = (context) => shown(context.picture, context.selected, context.fresh, context.now());
+const view = (context) => shown(context.picture, selectedOf(context), context.fresh, context.now());
+
+// A book opened or a chapter picked in the contents: followed only for a book whose
+// books: read reply says it is written, the journal. Whether a book is written is
+// cached by id and kept current by book.changed and book.deleted (4.3, fourth rule); an
+// unknown book is asked about once, and the answer applies to the latest pick, if that
+// pick is still in this book. book.opened shows today's page, the last chapter.
+const followBook = enqueueActions(({ context, event, enqueue, self }) => {
+  if (event.id == null) return;
+  const want = { id: event.id, chapter: event.type === "chapter.selected" ? event.chapter : null };
+  enqueue.assign({ want });
+  const known = context.written[event.id];
+  if (known === true) enqueue.raise({ type: "_show", chapter: want.chapter });
+  if (known !== undefined || context.asking.includes(event.id)) return;
+  const { id } = want;
+  enqueue.assign({ asking: [...context.asking, id] });
+  Promise.resolve(context.ask("books", "read", { id }))
+    .then((r) => self.send({ type: "_book", id, written: r?.book?.written === true, known: Boolean(r?.book) }))
+    .catch(() => self.send({ type: "_book", id, written: false, known: false }));
+});
 
 export const machine = setup({
   actors: {
@@ -267,27 +330,35 @@ export const machine = setup({
   id: "journal-entry",
   meta: {
     description:
-      "The journal's page: the day picked in the Days list, or the day that can still be " +
-      "edited, or an empty page for today. The day's text is shown once, in one editor, read only " +
-      "on an earlier day, with Vim when the Vim keys setting is on. Each paragraph has Jev's " +
-      "answers in a margin beside it, level with its first line, or under it on a phone, grouped under each project's name when more than one project " +
-      "is on. A pick-one question shows the pick and \"sure n%\", or \"unsure\" below 40%; a yes / " +
-      "no question shows the chance of yes in Judge's colours. A paragraph waiting for Jev says " +
+      "The journal's page: the day picked in the Days list or in the journal book's contents, " +
+      "or the day that can still be edited, or an empty page for today. It follows the open book " +
+      "only while that book is the journal: opening the journal, or its last chapter, shows " +
+      "today's page, and an earlier chapter shows that day; other books are ignored. The day's " +
+      "text is shown once, in one editor, read only on an earlier day, with Vim when the Vim " +
+      "keys setting is on. Each line is Title, Heading, Subheading or Body, like a note: the four " +
+      "buttons under the text set the level of the lines the cursor spans, show the cursor " +
+      "line's level, and name the Vim keys \\1, \\2, \\3 and \\0 while Vim is on; an earlier " +
+      "day shows its levels but offers no buttons. Without the judging attribute (the product " +
+      "page) that is all: the date, the text and the buttons. With judging (the Journal app), " +
+      "each paragraph has Jev's answers in a margin beside it, level with its first line, or " +
+      "under it on a phone, grouped under each project's name when more than one project is on. " +
+      "A pick-one question shows the pick and \"sure n%\", or \"unsure\" below 40%; a yes / no " +
+      "question shows the chance of yes in Judge's colours. A paragraph waiting for Jev says " +
       "\"Judging…\", and the paragraph being written says \"Not finished yet\": a paragraph is " +
       "finished at a line break, and every paragraph is finished when the box loses focus or the " +
       "entry closes. An answer to a question whose wording has changed since is tagged " +
       "\"earlier wording\", and hovering shows the old wording. The status line says the entry " +
       "is open until midnight or an hour after the last edit, and past midnight a banner says " +
-      "when it closes. Earlier days are read only, with Judge this day when something is not " +
-      "answered with the current wording. One line says why Jev is not reading, in Judge's " +
-      "words. The text is saved a short time into typing and when the box loses focus, and that " +
-      "last save says the box was left, so the paragraph being written counts as finished. When " +
-      "a day was saved on two devices at once, the entry shows both copies and the user keeps " +
-      "one.",
+      "when it closes. Earlier days say they are read only, with Judge this day when something " +
+      "is not answered with the current wording. One line says why Jev is not reading, in " +
+      "Judge's words. The text is saved a short time into typing and when the box loses focus, " +
+      "and that last save says the box was left, so the paragraph being written counts as " +
+      "finished. When a day was saved on two devices at once, the entry shows both copies and " +
+      "the user keeps one.",
     kind: "view",
     emits: ["day.saved", "day.judging.requested"],
-    attributes: [],
-    asks: ["journal: read", "llm: read", "settings: read"],
+    attributes: ["judging", "height"],
+    asks: ["journal: read", "llm: read", "settings: read", "books: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -299,6 +370,13 @@ export const machine = setup({
     fresh: input.mint(),
     // The day picked in the Days list; null follows the open day.
     selected: null,
+    // The journal book's chapter being followed (selectedOf); null follows the Days list.
+    chapter: null,
+    // Whether each book seen is written (the journal), by id, from books.
+    written: {},
+    // The latest book pick, {id, chapter}, and the books being asked about.
+    want: null,
+    asking: [],
     draft: null,
     editing: false,
     usedUp: false,
@@ -348,6 +426,7 @@ export const machine = setup({
             _blur: { guard: ({ context }) => context.editing, actions: [save(true), assign({ editing: false })] },
             "journal.changed": { actions: follow(false) },
             "day.selected": select(false),
+            _show: select(false),
           },
         },
         // Typing within the window joins the one save at its end: a throttle, not a
@@ -358,6 +437,7 @@ export const machine = setup({
             _blur: { target: "clean", actions: [save(true), assign({ editing: false })] },
             "journal.changed": { actions: follow(true) },
             "day.selected": select(true),
+            _show: select(true),
           },
           after: { throttle: { target: "clean", actions: save(false) } },
         },
@@ -393,6 +473,23 @@ export const machine = setup({
     "journal.conflicted": { actions: assign(({ event }) => ({ conflict: { id: event.id, mine: event.mine, theirs: event.theirs } })) },
     "llm.changed": { actions: assign(({ event }) => ({ usedUp: event.jev?.starterLeft === 0 })) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "day.selected": { actions: assign(({ event }) => ({ selected: event.id })) },
+    "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null })) },
+    _show: { actions: assign(({ event }) => ({ selected: null, chapter: event.chapter })) },
+    "book.opened": { actions: followBook },
+    "chapter.selected": { actions: followBook },
+    _book: {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        enqueue.assign({ asking: context.asking.filter((x) => x !== event.id) });
+        if (event.known) enqueue.assign({ written: { ...context.written, [event.id]: event.written } });
+        if (event.written && context.want?.id === event.id) enqueue.raise({ type: "_show", chapter: context.want.chapter });
+      }),
+    },
+    "book.changed": { actions: assign(({ context, event }) => ({ written: { ...context.written, [event.id]: event.written === true } })) },
+    "book.deleted": {
+      actions: assign(({ context, event }) => {
+        const { [event.id]: _gone, ...written } = context.written;
+        return { written };
+      }),
+    },
   },
 });

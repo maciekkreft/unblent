@@ -59,11 +59,12 @@ test("no open book means no subject, and nothing is announced", async () => {
 
 test("a view about the subject in front, with a book open, is still the subject (reload)", async () => {
   // No view that shows a thing has been in front this session, so the showing view
-  // falls back to the first row of the table (3.1): the open book is the subject.
+  // falls back to the first row of the table (3.1), the product's book stage: the
+  // open book is the subject.
   const { actor, changed } = start({ stage: "note-list", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } });
   await flush();
-  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune", view: "book-reader" });
-  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" } });
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune", view: "book-stage" });
+  assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-stage" } });
 });
 
 test("read is answered null before the first asks land", async () => {

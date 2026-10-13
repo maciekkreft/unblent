@@ -13,14 +13,14 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 // being imported shows as a placeholder tile until book.changed brings its real row
 // or book.refused says why it could not be added.
 
-// Newest first: addedAt descending, id as the tiebreak, the same order books uses in
-// its list reply, so a tile keeps its place across a re-sort.
-const order = (a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id);
+// The journal first, then newest first: addedAt descending, id as the tiebreak, the
+// same order books uses in its list reply, so a tile keeps its place across a re-sort.
+const order = (a, b) => Number(Boolean(b.written)) - Number(Boolean(a.written)) || b.addedAt - a.addedAt || a.id.localeCompare(b.id);
 const sorted = (books) => [...books].sort(order);
 
 // Only the fields a tile shows are kept from a book.changed (which carries the whole
 // book, 4.3, third rule); chapterCount is the chapter titles' length, as list gives.
-const tile = ({ id, title, author, cover, position, chapters, pending, addedAt }) => ({
+const tile = ({ id, title, author, cover, position, chapters, pending, addedAt, written }) => ({
   id,
   title,
   author,
@@ -29,6 +29,9 @@ const tile = ({ id, title, author, cover, position, chapters, pending, addedAt }
   chapterCount: chapters.length,
   pending,
   addedAt,
+  // The journal: owned by `journal`, not the library, so it cannot be renamed or
+  // removed here, and it stays on the shelf while no one is signed in.
+  written: written === true,
 });
 
 // Fold one changed book into the tiles: replace the tile with its id if present, else
@@ -64,10 +67,12 @@ export const machine = setup({
   id: "book-shelf",
   meta: {
     description:
-      "Shows the library as tiles, newest first, and lets the user add a book from an epub " +
-      "file, open one, or remove one. A book being added shows as a placeholder tile until the " +
-      "book arrives or the import is refused with a reason. Removing a book waits out the undo " +
-      "window before it becomes a deletion, so it can be taken back in one step.",
+      "Shows the library as tiles, the journal first and then newest first, and lets the user " +
+      "add a book from an epub file, open one, or remove one. A book being added shows as a " +
+      "placeholder tile until the book arrives or the import is refused with a reason. Removing " +
+      "a book waits out the undo window before it becomes a deletion, so it can be taken back in " +
+      "one step. The journal, the book the user writes, reads \"Written by you\" under its title, " +
+      "shows no chapter count, and has no rename or delete, so it is always on the shelf.",
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
     attributes: ["renames"],
@@ -139,7 +144,11 @@ export const machine = setup({
         actions: assign({ signedIn: true }),
       },
       {
-        actions: assign({ signedIn: false, books: [], importing: [] }),
+        actions: assign({
+          signedIn: false,
+          books: ({ context }) => context.books.filter((b) => b.written),
+          importing: [],
+        }),
       },
     ],
     // The fact's news (4.3, fourth rule): a changed book replaces or adds its tile and
@@ -200,14 +209,15 @@ export const machine = setup({
     _rename: {
       guard: ({ context, event }) => {
         const tile = context.books.find((b) => b.id === event.id);
-        return Boolean(tile) && event.title.trim() !== tile.title;
+        return Boolean(tile) && !tile.written && event.title.trim() !== tile.title;
       },
       actions: emit(({ event }) => ({ type: "book.renamed", id: event.id, title: event.title.trim() })),
     },
     // The trash on a tile: begin the undo window. Nothing is emitted yet; only its
     // elapse makes the delete a fact.
     _discard: {
-      guard: ({ context, event }) => context.books.some((b) => b.id === event.id) && !context.discarding.has(event.id),
+      guard: ({ context, event }) =>
+        context.books.some((b) => b.id === event.id && !b.written) && !context.discarding.has(event.id),
       actions: enqueueActions(({ event, enqueue }) => {
         enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
         enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });

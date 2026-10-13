@@ -130,6 +130,7 @@ for (const engine of ENGINES) {
       assert.equal(await editor(page).getAttribute("contenteditable"), "false", "nothing to type in");
       assert.equal(await times(page, "Nobody likes me."), 1, "the text is shown once");
       assert.equal((await entry(page).locator(".status").textContent()).trim(), "Read only");
+      assert.equal(await entry(page).locator("button.level").count(), 0, "no level buttons on a day that cannot change");
       const judge = entry(page).locator("button.judge-day");
       assert.equal((await judge.textContent()).trim(), "Judge this day · 2 ¶");
       assert.ok(await judge.isDisabled(), "signed out, Jev cannot be asked");
@@ -176,6 +177,49 @@ for (const engine of ENGINES) {
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
       await editor(page).click();
       await until(async () => (await entry(page).locator(".cm-fat-cursor").count()) === 1);
+    });
+
+    run("the level buttons and Vim's \\1 \\2 \\0 set each line's level, saved as the note's prefixes", async (page) => {
+      await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await editor(page).click();
+      await until(async () => (await entry(page).locator(".cm-fat-cursor").count()) === 1);
+      await page.keyboard.press("i");
+      await page.keyboard.type("Monday");
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("Run");
+      await page.keyboard.press("Escape");
+      const levels = () => entry(page).evaluate((el) => [...el.shadowRoot.querySelectorAll(".cm-line")].map((l) => [l.textContent, l.dataset.level ?? "body"]));
+      await page.keyboard.type("\\2");
+      await until(async () => (await levels())[1]?.[1] === "heading");
+      await page.keyboard.type("k\\1");
+      await until(async () => (await levels())[0]?.[1] === "title");
+      assert.deepEqual(await levels(), [["Monday", "title"], ["Run", "heading"]], "the text holds no markers");
+      const bar = entry(page).locator("button.level");
+      assert.deepEqual(await bar.allTextContents().then((t) => t.map((x) => x.replace(/\s+/g, " ").trim())), ["\\1 Title", "\\2 Heading", "\\3 Subheading", "\\0 Body"]);
+      assert.equal(await entry(page).locator('button.level[aria-pressed="true"]').getAttribute("data-level"), "title", "the cursor line's level is marked");
+      // A click sets the cursor line's level too, and leaves the keyboard in the text.
+      await page.keyboard.type("j");
+      await entry(page).locator('button.level[data-level="subheading"]').click();
+      await until(async () => (await levels())[1]?.[1] === "subheading");
+      await page.keyboard.type("\\0");
+      await until(async () => (await levels())[1]?.[1] === "body");
+      await editor(page).blur();
+      const stored = () =>
+        page.evaluate(async () => {
+          const db = await new Promise((ok, no) => {
+            const r = indexedDB.open("journal");
+            r.onsuccess = () => ok(r.result);
+            r.onerror = () => no(r.error);
+          });
+          const all = await new Promise((ok) => {
+            const q = db.transaction("days").objectStore("days").getAll();
+            q.onsuccess = () => ok(q.result);
+          });
+          db.close();
+          return all.map((d) => d.text);
+        });
+      await until(async () => (await stored())[0] === "# Monday\nRun");
     });
 
     run("on a phone the answers sit under each paragraph, and the text is shown once", async (page) => {

@@ -499,33 +499,6 @@ test("in failed, _open switches the stage locally", async () => {
   assert.deepEqual(emitted, []);
 });
 
-// The subject mark (12): the desk asks `subject: read` and
-// follows `subject.changed`, so it knows which tab to mark.
-const SUBJECT = { kind: "book", id: "b1", title: "Dune", view: "book-reader" };
-const withSubject =
-  (subject) =>
-  (target, name) => {
-    if (target === "subject" && name === "read") return Promise.resolve({ subject });
-    if (target === "settings")
-      return Promise.resolve({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true });
-    return Promise.resolve({ stage: "book-reader", docks: {} });
-  };
-
-test("the context follows subject: read then subject.changed", async () => {
-  const { actor } = await settle(withSubject(SUBJECT));
-  // Give the lifelong subject read a tick to land.
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(actor.getSnapshot().context.subject, SUBJECT);
-  actor.send({ type: "subject.changed", subject: null });
-  assert.equal(actor.getSnapshot().context.subject, null);
-});
-
-test("with no subject answerer the context stays null", async () => {
-  const { actor } = await settle(withSubject(null));
-  await new Promise((r) => setTimeout(r, 0));
-  assert.equal(actor.getSnapshot().context.subject, null);
-});
-
 // A header button (6.4): pressing shows its child on the stage, pressing again or
 // choosing something else returns to the stage. `pressed` is the desk's own state,
 // never emitted, so a reload starts on the stage.

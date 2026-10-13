@@ -15,6 +15,94 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // deleted flag never rides book.changed or a reply (all additionalProperties:false).
 const visible = (record) => record && !record.deleted;
 
+// The journal, owned by `journal`, presented as one more book under a fixed id. This
+// fact stores nothing for it: the record is derived from journal: read and followed
+// through journal.changed, the way `subject` derives what it shows (3.1). Its chapters
+// are the days oldest first, so a chapter's number never shifts as days are added, and
+// one more empty chapter at the end is today's page while no day is open. It is the
+// same whether signed in or out, so a sign-out never takes it away.
+export const JOURNAL = "00000000000000000000000JRN";
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const pad = (n) => String(n).padStart(2, "0");
+
+// The device's local date at `ms`, as YYYY-MM-DD, the form a journal day carries.
+const dateOf = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// A day as a chapter title, "Tuesday 13 October", with the year only when it is not
+// this year's.
+export const dayTitle = (day, now) => {
+  const [y, m, d] = day.split("-").map(Number);
+  const title = `${WEEKDAYS[new Date(y, m - 1, d).getDay()]} ${d} ${MONTHS[m - 1]}`;
+  return y === new Date(now).getFullYear() ? title : `${title} ${y}`;
+};
+
+const escape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+// A day's text as the chapter's HTML, so the chat reads the journal like any book. The
+// levels ride the text as `# `, `## ` and `### ` line prefixes, the wire format of a note
+// body; every other line that holds something is a paragraph.
+export const htmlOf = (text) =>
+  text
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const level = /^(#{1,3}) /.exec(line);
+      return level ? `<h${level[1].length}>${escape(line.slice(level[0].length))}</h${level[1].length}>` : `<p>${escape(line)}</p>`;
+    })
+    .join("");
+
+// The journal book from journal: read's picture, or null when there is no journal to
+// show (no `journal` on the page answers no-answerer). texts holds each chapter's day
+// text for chapter?; it never rides book.changed or a reply. Versions are added by
+// applyJournal, which alone knows whether anything changed.
+function journalBook(picture, now) {
+  if (!picture || !Array.isArray(picture.days)) return null;
+  const days = picture.days.map((d) => ({ day: d.day, text: d.text }));
+  if (picture.open == null) days.push({ day: dateOf(now), text: "" });
+  const chapters = days.map((d) => ({ title: dayTitle(d.day, now) }));
+  return {
+    id: JOURNAL,
+    title: "Journal",
+    author: "You",
+    cover: null,
+    chapters,
+    toc: chapters.map((c, i) => ({ title: c.title, chapter: i, block: 0, children: [] })).reverse(),
+    position: { chapter: chapters.length - 1, block: 0 },
+    addedAt: 0,
+    updatedAt: picture.days.reduce((latest, d) => Math.max(latest, d.editedAt), 0),
+    written: true,
+    texts: days.map((d) => d.text),
+  };
+}
+
+// The journal now looks like `picture`: announce the book only when what it shows
+// changed, with a version one higher so a view following versions takes it. A journal
+// that appears for the first time while it is the open book is announced open too, since
+// an open? answered before it arrived said nothing was open.
+function applyJournal(context, picture, enqueue) {
+  const next = journalBook(picture, context.now());
+  if (!next) return;
+  const held = context.journal;
+  if (held) {
+    const { version: _v, contentVersion: _c, ...base } = held;
+    if (JSON.stringify(base) === JSON.stringify(next)) return;
+  }
+  const version = (held?.version ?? 0) + 1;
+  const record = { ...next, version, contentVersion: version };
+  context.journal = record;
+  enqueue.assign({ journal: record });
+  enqueue.emit(changed(record, false));
+  if (!held && context.open.id === JOURNAL) enqueue.emit({ type: "book.opened", id: JOURNAL });
+}
+
+// The book a reader can open under `id`: the journal, or a visible imported book.
+const bookFor = (context, id) => (id === JOURNAL ? context.journal : visible(context.books.get(id)) ? context.books.get(id) : null);
+
 // The record kept in the cache, from a server row: the book.changed shape plus the
 // tombstone flag, built field by field so nothing stray is stored or later emitted.
 // title is the display title (the user's when set, else the file's); fileTitle is the
@@ -51,6 +139,7 @@ const bookOf = (record, pending) => ({
   pending,
   addedAt: record.addedAt,
   updatedAt: record.updatedAt,
+  ...(record.written ? { written: true } : {}),
 });
 
 const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, pending) });
@@ -60,45 +149,54 @@ const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, 
 // apart so a rename never overwrites a pending page turn, D11).
 const pendingFor = (context, id) => context.outbox.has(id) || context.outbox.has(`title:${id}`);
 
+const tile = (context, r) => ({
+  id: r.id,
+  title: r.title,
+  author: r.author,
+  cover: r.cover,
+  position: r.position,
+  chapterCount: r.chapters.length,
+  pending: pendingFor(context, r.id),
+  addedAt: r.addedAt,
+  ...(r.written ? { written: true } : {}),
+});
+
+// The journal first, then the imported books newest first.
 function replyList(context, reply) {
   const books = [...context.books.values()]
     .filter(visible)
-    .map((r) => ({
-      id: r.id,
-      title: r.title,
-      author: r.author,
-      cover: r.cover,
-      position: r.position,
-      chapterCount: r.chapters.length,
-      pending: pendingFor(context, r.id),
-      addedAt: r.addedAt,
-    }))
+    .map((r) => tile(context, r))
     .sort((a, b) => b.addedAt - a.addedAt || a.id.localeCompare(b.id));
-  reply({ books });
+  reply({ books: context.journal ? [tile(context, context.journal), ...books] : books });
 }
 
 function replyRead(context, id, reply) {
-  const stored = context.books.get(id);
-  reply(visible(stored) ? { book: bookOf(stored, pendingFor(context, id)) } : { error: "not-found" });
+  const record = bookFor(context, id);
+  reply(record ? { book: bookOf(record, pendingFor(context, id)) } : { error: "not-found" });
 }
 
 // The open book (4.3): the id only when that book is still one this device can read, so
 // a tombstoned or pulled-away book never opens; null otherwise.
 function replyOpen(context, reply) {
   const id = context.open.id;
-  reply({ id: visible(context.books.get(id)) ? id : null });
+  reply({ id: bookFor(context, id) ? id : null });
 }
 
-// A chapter is a file, so answering is a fetch. The reply is a callback, so the fetch
+// A chapter is a file, so answering is a fetch; only the journal's chapters are
+// answered here, from the day's text, without the network. The reply is a callback, so the fetch
 // runs fire-and-forget alongside the machine rather than in a state: two chapters in
 // flight never wait on each other, and the machine's own flow is untouched. The
 // browser's HTTP cache answers a repeat fetch (Decision 2). A missing book or an
 // index past the end is not-found without a round trip.
 function answerChapter(context, event, self) {
   const { id, chapter } = event.payload;
-  const record = context.books.get(id);
-  if (!visible(record) || chapter < 0 || chapter >= record.chapters.length) {
+  const record = bookFor(context, id);
+  if (!record || chapter < 0 || chapter >= record.chapters.length) {
     event.reply({ error: "not-found" });
+    return;
+  }
+  if (record.written) {
+    event.reply({ title: record.chapters[chapter].title, html: htmlOf(record.texts[chapter]) });
     return;
   }
   if (context.api == null) {
@@ -122,6 +220,11 @@ function answerChapter(context, event, self) {
     })
     .catch(() => event.reply({ error: "unavailable" }));
 }
+
+// A chapter asked for while the cache could not load: the journal still answers, an
+// imported book's chapter is honestly unavailable.
+const answerUnloaded = (context, event) =>
+  event.payload.id === JOURNAL ? answerChapter(context, event) : event.reply({ error: "unavailable" });
 
 // The user picked a file (book-shelf emits book.picked, 4.3 fifth rule). Signed out
 // it is refused and the object URL revoked (Decision 5); nothing is minted anonymously.
@@ -164,7 +267,8 @@ function applyUploaded(context, event, enqueue) {
 // The user turned to a new place (book-reader emits book.progressed). The position
 // changes locally at the held version, queues coalesced by id, is announced pending,
 // and a drain is asked for; the server never refuses it (Decision 4). A missing or
-// tombstoned book, or an unchanged place, is ignored.
+// tombstoned book, or an unchanged place, is ignored; so is the journal, whose place is
+// always today.
 function applyProgress(context, event, enqueue) {
   const { id, chapter, block } = event;
   const current = context.books.get(id);
@@ -186,7 +290,8 @@ function applyProgress(context, event, enqueue) {
 // title, which the cache keeps as fileTitle so the change shows without a round trip.
 // The row is keyed under `title:<id>`, apart from a pending position or delete, so a
 // rename and a page turn for the same book both reach the server. A missing or
-// tombstoned book, or a title that changes nothing, is ignored.
+// tombstoned book, or a title that changes nothing, is ignored, and so is the journal,
+// which is never in the cache.
 function applyRename(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
@@ -207,10 +312,11 @@ function applyRename(context, event, enqueue) {
 // The user opened a book (book-shelf emits book.selected, 4.3 fifth rule): record it
 // as the open book, announce it (book.opened), and queue the single last-write-wins
 // outbox row so a reload or another device opens it too (5). An unknown or tombstoned
-// id, or the already-open one, is ignored. The book's own version is untouched.
+// id, or the already-open one, is ignored. The book's own version is untouched. The
+// journal opens like any book and is kept open the same way.
 function applySelect(context, event, enqueue) {
   const { id } = event;
-  if (!visible(context.books.get(id)) || context.open.id === id) return;
+  if (!bookFor(context, id) || context.open.id === id) return;
   const open = { id, at: context.now() };
   context.open = open;
   enqueue(() => context.store.metaPut("open", open).catch(() => {}));
@@ -223,7 +329,8 @@ function applySelect(context, event, enqueue) {
 
 // The user let a book's undo window run out (book-shelf emits book.discarded, 4.3
 // fifth rule): tombstone it, queue a delete (which replaces any pending position,
-// Decision 6), announce it gone, and drain. The server purges the directory.
+// Decision 6), announce it gone, and drain. The server purges the directory. The
+// journal is never in the cache, so it is never discarded here.
 function applyDiscard(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
@@ -265,18 +372,19 @@ function forgetOpen(context, enqueue) {
 // sawReject is set when the server rejected our cookie (a 401): session.rejected tells
 // `session` to re-check and flip the auth control at once (3.4), rather than at the next
 // focus. A deliberate sign-out or a cold-load reconcile does not set it — session
-// already knows who is signed in in those cases.
+// already knows who is signed in in those cases. The journal is there signed out too,
+// so it stays, and stays open if it was.
 function endSession(context, enqueue, { notifyId, sawReject } = {}) {
   for (const record of context.books.values())
     if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
   context.books.clear();
   context.outbox.clear();
-  context.open = { id: null, at: 0 };
+  context.open = context.open.id === JOURNAL ? context.open : { id: null, at: 0 };
   context.userId = null;
   enqueue.assign({ userId: null });
   enqueue(() => context.store.clear().catch(() => {}));
   enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
-  enqueue(() => context.store.metaPut("open", { id: null, at: 0 }).catch(() => {}));
+  enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
   if (notifyId) enqueue.emit({ type: "book.refused", id: notifyId, reason: "signed-out" });
   if (sawReject) enqueue.emit({ type: "session.rejected" });
 }
@@ -321,6 +429,7 @@ export const machine = setup({
       return { books, outbox, cursor: cursor ?? 0, userId: userId ?? null, open: open ?? { id: null, at: 0 } };
     }),
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
+    journal: fromPromise(({ input }) => (input.ask ? input.ask("journal", "read", {}) : Promise.resolve(null))),
     // One sync: drain the outbox in id order, then pull what changed since the
     // cursor. Positions and deletes never conflict (Decision 4, 6), so a drained row
     // is simply acknowledged; a network error stops with what it had, a 401 reports
@@ -369,12 +478,16 @@ export const machine = setup({
       "position, a title the user gives a book, and which book is open are last write wins: " +
       "they are never refused, " +
       "and a pull brings them to every device. An empty title restores the title read from the " +
-      "file, and a re-import refreshes the file's title without touching the user's.",
+      "file, and a re-import refreshes the file's title without touching the user's. It also " +
+      "presents the journal as the first book, signed in or out: its chapters are the days, " +
+      "oldest first, with today's empty page last while no day has been started today, and " +
+      "the contents list them newest first. It stores nothing for the journal, which can be " +
+      "opened but never renamed or deleted here.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
     owns: "the books",
-    asks: ["session: read"],
+    asks: ["session: read", "journal: read"],
   },
   context: ({ input }) => ({
     books: new Map(),
@@ -390,10 +503,22 @@ export const machine = setup({
     // beside the rows because it is one more last-write-wins value (5). id null when
     // none is open; at 0 so any server open wins on a fresh device.
     open: { id: null, at: 0 },
+    // The journal as a book (journalBook), or null while there is none to show.
+    journal: null,
     queued: [],
     resync: false,
     pull: false,
   }),
+  // The journal is asked for at once and followed in every state, apart from the
+  // library's own load, since it lives in another fact.
+  invoke: {
+    src: "journal",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: enqueueActions(({ context, event, enqueue }) => applyJournal(context, event.output, enqueue)) },
+  },
+  on: {
+    "journal.changed": { actions: enqueueActions(({ context, event, enqueue }) => applyJournal(context, event, enqueue)) },
+  },
   initial: "loading",
   states: {
     loading: {
@@ -413,11 +538,12 @@ export const machine = setup({
         onError: {
           target: "failed",
           actions: enqueueActions(({ context, enqueue }) => {
+            // The cache is empty, so only the journal can still be answered.
             for (const message of context.queued) {
-              if (message.type === "list?") message.reply({ books: [] });
-              else if (message.type === "read?") message.reply({ error: "not-found" });
+              if (message.type === "list?") replyList(context, message.reply);
+              else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
               else if (message.type === "open?") message.reply({ id: null });
-              else if (message.type === "chapter?") message.reply({ error: "unavailable" });
+              else if (message.type === "chapter?") answerUnloaded(context, message);
             }
             enqueue.assign({ queued: [] });
           }),
@@ -577,10 +703,10 @@ export const machine = setup({
     },
     failed: {
       on: {
-        "list?": { actions: ({ event }) => event.reply({ books: [] }) },
-        "read?": { actions: ({ event }) => event.reply({ error: "not-found" }) },
+        "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
+        "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
         "open?": { actions: ({ event }) => event.reply({ id: null }) },
-        "chapter?": { actions: ({ event }) => event.reply({ error: "unavailable" }) },
+        "chapter?": { actions: ({ context, event }) => answerUnloaded(context, event) },
       },
     },
   },
@@ -684,10 +810,10 @@ function applySync(context, output, enqueue) {
   // and only as an id this device can actually read (null otherwise, folded above).
   const pulledOpen = output.pulledOpen;
   if (pulledOpen && !context.outbox.has("open") && pulledOpen.at > context.open.at) {
-    const wasVisible = visible(context.books.get(context.open.id)) ? context.open.id : null;
+    const wasVisible = bookFor(context, context.open.id) ? context.open.id : null;
     context.open = { id: pulledOpen.id, at: pulledOpen.at };
     enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
-    const id = visible(context.books.get(pulledOpen.id)) ? pulledOpen.id : null;
+    const id = bookFor(context, pulledOpen.id) ? pulledOpen.id : null;
     if (id !== wasVisible) enqueue.emit({ type: "book.opened", id });
   }
 

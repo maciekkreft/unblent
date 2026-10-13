@@ -331,16 +331,6 @@ const showHighlights = async (page) => {
   await until(async () => (await assignedNotes(page)).includes("highlight-notes"));
 };
 
-// The tab that carries the subject mark (12): its label and the mark's hover title, or
-// null when no tab is marked. The mark is a span.mark inside a [role="tab"] button.
-const markedTab = (page) =>
-  page.evaluate(() => {
-    const mark = document.querySelector("dock-desk").shadowRoot.querySelector('[role="tab"] .mark');
-    if (!mark) return null;
-    const tab = mark.closest('[role="tab"]');
-    return { label: tab.textContent.trim(), title: mark.getAttribute("title") };
-  });
-
 // Bring the docked Notes container to the stage: click the desk's "Return Notes to the
 // stage" action (shown while the desk is being arranged; workshop arranges by default).
 // The Highlights document lives inside Notes now, so staging Notes stages the document.
@@ -864,25 +854,21 @@ for (const engine of ENGINES) {
 
     // The Highlights row opens the document inside the Notes pair (Decision 1, 2, 5, 7):
     // it stands in the list showing the count, picking it shows the document under the
-    // Notes Back bar, the book stays the subject (the Reader tab keeps the mark), the
-    // highlight is never a plain note, and Back returns to the list with the row selected.
+    // Notes Back bar, the highlight is never a plain note, and Back returns to the list with the row selected.
     test("the Highlights row opens the document in the Notes pair and keeps the book the subject", async () => {
       const { page, problems } = await openPage(browser, await withHighlight());
 
-      // The Highlights row stands in the list showing one highlight, not yet selected; the
-      // book is the subject (the Reader tab is marked) and no plain note is listed for it.
+      // The Highlights row stands in the list showing one highlight, not yet selected, and
+      // no plain note is listed for it.
       await until(async () => (await highlightsRow(page))?.subtitle === "1 highlight", 8000);
-      await until(async () => (await markedTab(page))?.label === "Reader");
-      assert.match((await markedTab(page)).title, /^Working on: .+/);
       assert.deepEqual(await shownTitles(page), [], "the highlight is not among the plain notes");
       assert.equal((await highlightsRow(page)).selected, "false", "the row is not selected before it is picked");
 
       // Pick it: the document shows under the "Notes" Back bar, its quote the book's
-      // highlight, and the Reader tab keeps the mark (the book is still the subject).
+      // highlight.
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);
       assert.equal(await notesBarLabel(page), "Notes", "the document opens under the Notes Back bar");
-      assert.equal((await markedTab(page))?.label, "Reader", "the mark stays on the Reader tab");
       assert.deepEqual(await shownTitles(page), [], "still no plain note for the highlight");
 
       // Back returns to the list, and the Highlights row reads as the open one.
@@ -900,21 +886,20 @@ for (const engine of ENGINES) {
     });
 
     // The document stays inside the Notes pair even when Notes is brought to the stage (12):
-    // the book remains the subject (the Reader tab keeps its mark) and the highlight is never
+    // the book remains the subject and the highlight is never
     // listed as a plain note, whether the pair is docked or staged.
-    test("the highlights document holds the Notes pair when it is staged, the mark on Reader", async () => {
+    test("the highlights document holds the Notes pair when it is staged", async () => {
       const { page, problems } = await openPage(browser, await withHighlight());
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0, 8000);
 
       // Bring the Notes container to the stage: the document still shows there, Notes still
-      // does not list the highlight, and the mark stays on the Reader tab (the book is the
-      // subject; the highlights document is a view about it, not a thing of its own).
+      // does not list the highlight (the book is the subject; the highlights document is a
+      // view about it, not a thing of its own).
       await stageNotes(page);
       await until(async () => (await stagedTab(page)) === "Notes");
       await until(async () => (await hnQuotes(page)).length > 0);
       assert.deepEqual(await shownTitles(page), [], "Notes does not list the highlight with the document staged");
-      assert.equal((await markedTab(page))?.label, "Reader", "the mark stays on the Reader tab");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();

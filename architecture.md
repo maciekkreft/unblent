@@ -188,7 +188,7 @@ On the server, each replicated fact component has **one SQLite file per user**: 
 
 While anonymous, `notes` mints versions in the browser and the server adopts the client's number on first upload, so the anonymous note carries its history into the account. `session` keeps no outbox but a localStorage cache plus an owed sign-out, because identity has no records to version, and it closes registration once `MAX_USERS` accounts exist.
 
-`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, fetched by URL, and copied to the same bucket by `deploy/`; the source file is kept only for a re-import, which `deploy/` runs on the host under the next content version, so every URL changes. A reading position, a title the user gives a book, and which book is open are last write wins: they carry no base version and are never refused.
+`books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, fetched by URL, and copied to the same bucket by `deploy/`; the source file is kept only for a re-import, which `deploy/` runs on the host under the next content version, so every URL changes. A reading position, a title the user gives a book, and which book is open are last write wins: they carry no base version and are never refused. `books` also presents the journal, whose days are owned by `journal`, as one book with a fixed id; it stores nothing for it.
 
 `conversations` is remote-only: chats live in `data/<user>/conversations.db` and the browser holds only the open chat, in memory. A finished turn never changes, so the server adds turns by id and ignores one it already has; the chat row and a delete are last write wins, and which chat is open is kept in the browser only, per device.
 
@@ -603,6 +603,7 @@ The architecture document describes the rules; the checks are what make them rea
 - **Detector**: a name and a list of questions Jev answers about a text, switched on or off, kept per project. In Judge it is stored as a *rubric*, owned by `rubrics`; it is not a tool, which names a chat lookup (7.7).
 - **Case**: a text kept in a Judge project for Jev to judge, with the right answers the user expects, one per question at most: yes or no for a yes / no question, or one option for a pick-one question. It is owned by `cases`.
 - **Project**: a named set of Judge detectors, cases and results, kept on this device. One project is the current one, and there is always at least one. It is owned by `projects`.
+- **Journal**: the one book the user writes, one chapter per day, only today's page editable. Its days are owned by `journal`, and `books` presents them as a book.
 
 ---
 
@@ -617,7 +618,8 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Chats linked to books, so a book shows its notes and its chats.
 - One note linked to many books at once.
 - Unlinking a note.
-- A journal: the one book the user writes, a chapter per day, only the current day's chapter editable, with notes, highlights and chats beside it like any other book (sketch: `~/.claude/plans/journal-book.md`).
+- Highlights in the journal, made and listed the same way as in any other book (sketch: `~/.claude/plans/journal-book.md`).
+- Jev's answers shown beside a journal day on the product page, as the Journal app in the workshop shows them.
 - A jump from a highlight to its passage, with one step back to the reading place.
 - Making highlights from the keyboard, Vim style.
 - Making highlights on a phone.

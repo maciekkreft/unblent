@@ -53,6 +53,7 @@
     <script type="module" src="/static/components/book-shelf/view.js"></script>
     <script type="module" src="/static/components/book-toc/view.js"></script>
     <script type="module" src="/static/components/book-reader/view.js"></script>
+    <script type="module" src="/static/components/book-stage/view.js"></script>
     <script type="module" src="/static/components/note-list/view.js"></script>
     <script type="module" src="/static/components/note-editor/view.js"></script>
     <script type="module" src="/static/components/highlight-notes/view.js"></script>
@@ -62,7 +63,7 @@
   <body>
     <page-nav></page-nav>
     <dock-desk>
-      <book-reader label="Reader" height="fill" highlights></book-reader>
+      <book-stage label="Reader" height="fill"><book-reader highlights height="fill"></book-reader></book-stage>
       <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
         <book-shelf label="Books" renames></book-shelf>
         <book-toc shows-on="book.selected"></book-toc>

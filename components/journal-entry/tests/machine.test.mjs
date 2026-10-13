@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, margins, entry, banner, reasonLine, toJudge, canJudge, conflictOn, shown, paragraphs, longDate } from "../machine.js";
+import { machine, margins, entry, banner, reasonLine, toJudge, canJudge, conflictOn, shown, paragraphs, longDate, parseBody, serialize, selectedOf } from "../machine.js";
 
 // The entry's decisions (3.2): what each paragraph's margin says, when the banner shows,
 // which reason line fits, what Judge this day counts, and what is saved when. Times are
@@ -167,12 +167,18 @@ const flush = async () => {
   for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 0));
 };
 
-async function start(p, { now = at(12, 21), llm = { signedIn: true, jev: { keySet: true } } } = {}) {
+async function start(p, { now = at(12, 21), llm = { signedIn: true, jev: { keySet: true } }, books = {}, asked = [] } = {}) {
   const clock = new SimulatedClock();
   let n = 0;
   const actor = createActor(machine, {
     input: {
-      ask: (target) => Promise.resolve(target === "journal" ? p : llm),
+      ask: (target, name, payload) => {
+        if (target === "books") {
+          asked.push(payload.id);
+          return Promise.resolve(books[payload.id] ? { book: books[payload.id] } : { error: "not-found" });
+        }
+        return Promise.resolve(target === "journal" ? p : llm);
+      },
       mint: () => (n++ === 0 ? FRESH : id("F", n)),
       now: () => now,
       throttleMs: 200,
@@ -296,4 +302,97 @@ test("the starter requests used up are read from llm", async () => {
 test("a journal that cannot answer is an honest failure", async () => {
   const { actor } = await start({ error: "no-answerer" });
   assert.ok(actor.getSnapshot().matches("failed"));
+});
+
+// --- Levels ----------------------------------------------------------------------------
+
+test("a day's text carries its levels as line prefixes, and the edited document has none", () => {
+  const wire = "# Monday\n## Run\n### Plan\nTen km.";
+  const { doc, levels } = parseBody(wire);
+  assert.equal(doc, "Monday\nRun\nPlan\nTen km.");
+  assert.deepEqual(levels, ["title", "heading", "subheading", "body"]);
+  assert.equal(serialize(doc, levels), wire);
+  assert.deepEqual(parseBody(""), { doc: "", levels: ["body"] });
+  assert.equal(serialize("", ["title"]), "", "a blank page is empty, never a lone marker");
+});
+
+// --- Following the journal book ----------------------------------------------------------
+
+const JOURNAL = "00000000000000000000000JRN";
+const OTHER = id("B", 1);
+const journalBook = { id: JOURNAL, title: "Journal", author: "You", cover: null, chapters: [], toc: [], position: { chapter: 0, block: 0 }, version: 1, written: true };
+const otherBook = { ...journalBook, id: OTHER, title: "A novel", author: "Someone", written: undefined };
+const BOOKS = { [JOURNAL]: journalBook, [OTHER]: otherBook };
+const showing = (actor) => {
+  const { context } = actor.getSnapshot();
+  const v = shown(context.picture, selectedOf(context), context.fresh, context.now());
+  return [v.day.id, v.editable];
+};
+
+test("with no day open, an earlier chapter shows its day read only, and the last is today's page", async () => {
+  const [d1, d2] = [day(SUNDAY, "2026-10-10", "One."), day(TODAY, "2026-10-11", "Two.")];
+  const { actor } = await start(picture({ days: [d1, d2], open: null }), { books: BOOKS });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  await flush();
+  assert.deepEqual(showing(actor), [SUNDAY, false]);
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 1 });
+  assert.deepEqual(showing(actor), [TODAY, false], "the answer is cached: no second ask needed");
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 2 });
+  assert.deepEqual(showing(actor), [FRESH, true], "one chapter past the days is today's page");
+});
+
+test("with a day open, the last chapter is that day, editable, and opening the journal shows it", async () => {
+  const [d1, d2] = [day(SUNDAY, "2026-10-11", "One."), day(TODAY, "2026-10-12", "Two.")];
+  const { actor } = await start(picture({ days: [d1, d2], open: TODAY }), { books: BOOKS });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  await flush();
+  assert.deepEqual(showing(actor), [SUNDAY, false]);
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 1 });
+  assert.deepEqual(showing(actor), [TODAY, true]);
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  assert.deepEqual(showing(actor), [TODAY, true]);
+});
+
+test("another book's opening and chapters are ignored, and each book is asked about once", async () => {
+  const asked = [];
+  const sunday = day(SUNDAY, "2026-10-11", "One.");
+  const { actor } = await start(picture({ days: [sunday], open: null }), { books: BOOKS, asked });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  await flush();
+  actor.send({ type: "book.opened", id: OTHER });
+  actor.send({ type: "chapter.selected", id: OTHER, chapter: 3 });
+  await flush();
+  actor.send({ type: "chapter.selected", id: OTHER, chapter: 1 });
+  actor.send({ type: "book.opened", id: null });
+  await flush();
+  assert.deepEqual(showing(actor), [SUNDAY, false]);
+  assert.deepEqual(asked, [JOURNAL, OTHER]);
+});
+
+test("book.changed and book.deleted keep whether a book is written current", async () => {
+  const asked = [];
+  const sunday = day(SUNDAY, "2026-10-11", "One.");
+  const { actor } = await start(picture({ days: [sunday], open: null }), { books: BOOKS, asked });
+  actor.send({ type: "book.changed", ...journalBook });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  assert.deepEqual(showing(actor), [SUNDAY, false], "known from book.changed, so shown at once");
+  assert.deepEqual(asked, []);
+  actor.send({ type: "book.deleted", id: JOURNAL });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  await flush();
+  assert.deepEqual(asked, [JOURNAL], "forgotten on delete, so asked again");
+});
+
+test("the Days list's pick still works after following a chapter, and a pick while typing saves first", async () => {
+  const [d1, d2] = [day(SUNDAY, "2026-10-11", "One."), day(TODAY, "2026-10-12", "Two.")];
+  const { actor, emitted } = await start(picture({ days: [d1, d2], open: TODAY }), { books: BOOKS });
+  actor.send({ type: "book.changed", ...journalBook });
+  actor.send({ type: "_edit", text: "Two and more." });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  assert.deepEqual(emitted, [{ type: "day.saved", id: TODAY, text: "Two and more." }]);
+  assert.deepEqual(showing(actor), [SUNDAY, false]);
+  actor.send({ type: "day.selected", id: null });
+  assert.deepEqual(showing(actor), [TODAY, true]);
+  valid(emitted);
 });

@@ -103,3 +103,21 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
   }
 });
+
+// The journal (written: true) is owned by `journal`: the shelf puts it first, never
+// renames or discards it, and keeps it when the user signs out.
+const JRN = "00000000000000000000000JRN";
+
+test("the journal sits first, cannot be renamed or discarded, and survives a sign-out", async () => {
+  const { actor, renamed } = start();
+  await flush();
+  actor.send(changed(ID, "Imported"));
+  actor.send({ ...changed(JRN, "Journal"), addedAt: 0, written: true });
+  assert.deepEqual(actor.getSnapshot().context.books.map((b) => b.id), [JRN, ID]);
+  actor.send({ type: "_rename", id: JRN, title: "Diary" });
+  actor.send({ type: "_discard", id: JRN });
+  assert.deepEqual(renamed, []);
+  assert.equal(actor.getSnapshot().context.discarding.size, 0);
+  actor.send({ type: "session.changed", userId: null });
+  assert.deepEqual(actor.getSnapshot().context.books.map((b) => b.id), [JRN]);
+});
