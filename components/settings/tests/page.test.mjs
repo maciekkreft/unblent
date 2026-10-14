@@ -96,6 +96,13 @@ async function open(engine, { phone = false } = {}) {
   return { browser, page, problems };
 }
 
+// Every page the server lists, in its order: the same answer the sheet starts from.
+async function listedPages() {
+  const res = await fetch(`${BASE_URL}/api/pages`);
+  assert.equal(res.status, 200);
+  return (await res.json()).pages.map((p) => p.path);
+}
+
 const clean = (page) => page.evaluate(() => localStorage.clear());
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
@@ -103,14 +110,17 @@ for (const engine of ENGINES) {
   test(`the settings sheet reorders, hides, and its choices survive a reload in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine);
     try {
-      // Starting picture: every page listed, in pages: list order, all shown; the
-      // sheet's own page (/workshop/design/settings) keeps no Shown control (the way back).
+      // Starting picture: every page the server lists (pages: list, 8), in its order,
+      // all shown; the sheet's own page (/workshop/design/settings) keeps no Shown
+      // control (the way back). The expected list is read from the server, so adding or
+      // removing a page elsewhere never touches this test.
+      const pages = await listedPages();
       const rows = await sheetRows(page);
-      assert.deepEqual(
-        rows.map((r) => r.path),
-        ["/workshop/design/tokens", "/workshop/design/contracts", "/workshop/design/components", "/workshop/design/books", "/workshop/design/conversations", "/workshop/design/dock", "/workshop/design/evaluators", "/workshop/design/journal",
-         "/workshop/design/list-then-item", "/workshop/design/llm", "/workshop/design/notes", "/workshop/design/redline", "/workshop/design/session", "/workshop/design/settings", "/workshop/design/subject", "/workshop/design/trace", "/workshop/design/work-desk", "/", "/workshop/apps/redline"],
-      );
+      assert.deepEqual(rows.map((r) => r.path), pages);
+      assert.equal(rows[0].path, "/workshop/design/tokens", "the tokens page leads (8)");
+      assert.equal(rows[1].path, "/workshop/design/contracts", "then the contracts page (8)");
+      // Any page other than this one will do for hiding; the last listed is an app.
+      const hide = pages.findLast((p) => p !== "/workshop/design/settings");
       assert.equal(rows.find((r) => r.path === "/workshop/design/settings").shown, null, "the current page has no hide control");
       const startNav = await navLinks(page);
 
@@ -121,16 +131,16 @@ for (const engine of ENGINES) {
       const s = await stored(page);
       assert.equal(s.nav[0].path, "/workshop/design/contracts");
       assert.equal(s.nav[1].path, "/workshop/design/tokens");
-      assert.equal(s.nav.length, 19, "reordering materialises every page's position");
+      assert.equal(s.nav.length, pages.length, "reordering materialises every page's position");
       await until(async () => (await navLinks(page))[0] === "/workshop/design/contracts");
       assert.notDeepEqual(await navLinks(page), startNav);
 
-      // Hide /workshop/design/notes: it leaves page-nav (still reachable by URL) but stays a
+      // Hide a page: it leaves page-nav (still reachable by URL) but stays a
       // row in the sheet, now unshown.
-      await clickRow(page, "/workshop/design/notes", "shown");
-      await until(async () => (await stored(page)).nav.find((r) => r.path === "/workshop/design/notes")?.hidden === true);
-      await until(async () => !(await navLinks(page)).includes("/workshop/design/notes"));
-      assert.equal((await sheetRows(page)).find((r) => r.path === "/workshop/design/notes").shown, false);
+      await clickRow(page, hide, "shown");
+      await until(async () => (await stored(page)).nav.find((r) => r.path === hide)?.hidden === true);
+      await until(async () => !(await navLinks(page)).includes(hide));
+      assert.equal((await sheetRows(page)).find((r) => r.path === hide).shown, false);
 
       // Hide the viewport switch: stored, and the switch leaves the page.
       await clickSwitch(page, "Viewport switch");
@@ -144,8 +154,8 @@ for (const engine of ENGINES) {
       await page.reload();
       await ready(page);
       assert.equal((await sheetRows(page))[0].path, "/workshop/design/contracts", "order survives a reload");
-      assert.equal((await sheetRows(page)).find((r) => r.path === "/workshop/design/notes").shown, false);
-      assert.equal(await navLinks(page).then((l) => l.includes("/workshop/design/notes")), false);
+      assert.equal((await sheetRows(page)).find((r) => r.path === hide).shown, false);
+      assert.equal(await navLinks(page).then((l) => l.includes(hide)), false);
       assert.ok(await switchGone(page), "the viewport switch stays hidden across a reload");
       // No view declares a role, so the sheet offers no editor choice (the one "Vim keys"
       // switch replaced them); by now the catalog has answered.
@@ -159,7 +169,7 @@ for (const engine of ENGINES) {
       await clickReset(page);
       await until(async () => (await stored(page)).nav.length === 0);
       await until(async () => (await sheetRows(page))[0].path === "/workshop/design/tokens");
-      await until(async () => (await navLinks(page)).includes("/workshop/design/notes"));
+      await until(async () => (await navLinks(page)).includes(hide));
       await until(async () => !(await switchGone(page)));
 
       await clean(page);

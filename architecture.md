@@ -619,7 +619,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - One note linked to many books at once.
 - Unlinking a note.
 - Highlights in the journal, made and listed the same way as in any other book (sketch: `~/.claude/plans/journal-book.md`).
-- Evaluators reading the journal, with Jev's answers shown beside a day.
+- Evaluators reading the journal, with Jev's answers shown beside a day, as a component of its own: a fact that owns those answers, not something added back into `journal`, which owns only the days (3.1).
 - A jump from a highlight to its passage, with one step back to the reading place.
 - Making highlights from the keyboard, Vim style.
 - Making highlights on a phone.

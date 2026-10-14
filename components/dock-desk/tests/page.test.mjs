@@ -198,13 +198,16 @@ for (const engine of ENGINES) {
         return t && t.textContent.trim() === "Notes";
       });
 
-      // Settings left the right dock for the header gear (settings-gear plan): the
-      // dock holds Notes, Chat and Evaluators, and the gear sits directly before the account
+      // Settings left the right dock for the header gear (settings-gear plan): it is no
+      // right-dock tab, whatever else the product docks there, and the gear sits directly before the account
       // button (session-switch), the last control in page order (6.4, Decision 8).
       await page.waitForFunction(() =>
         document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
       );
-      assert.deepEqual(await rightTabs(page), ["Notes", "Chat", "Evaluators"], "Settings is not a right-dock tab");
+      const right = await rightTabs(page);
+      assert.ok(!right.includes("Settings"), "Settings is not a right-dock tab");
+      const other = right.find((t) => t !== "Notes");
+      assert.ok(other, "the right dock holds a tab besides Notes");
       assert.deepEqual(
         await page.locator("dock-desk").evaluate((el) =>
           [...el.shadowRoot.querySelector(".controls").children].map((c) =>
@@ -216,15 +219,15 @@ for (const engine of ENGINES) {
       );
 
       // Show another right tab, so the Notes pair sits behind it.
-      await page.evaluate(() =>
+      await page.evaluate((other) =>
         [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock.right .panel [role="tab"]')]
-          .find((t) => t.textContent.trim() === "Chat")
+          .find((t) => t.textContent.trim() === other)
           ?.click(),
-      );
-      await page.waitForFunction(() => {
+      other);
+      await page.waitForFunction((other) => {
         const t = document.querySelector("dock-desk").shadowRoot.querySelector('.dock.right [role="tab"][aria-selected="true"]');
-        return t && t.textContent.trim() === "Chat";
-      });
+        return t && t.textContent.trim() === other;
+      }, other);
 
       // Pick the next-note row in the Notes list: note-list emits note.selected, which
       // the Notes pair follows with shows-on (6.4), so the desk brings its tab forward.
