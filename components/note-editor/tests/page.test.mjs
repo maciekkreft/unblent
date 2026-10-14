@@ -352,6 +352,32 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    test("undo stops at the note as it was opened", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await vimReady(page);
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.type("iAlpha");
+      await page.keyboard.press("Escape");
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+
+      await page.reload();
+      await vimReady(page);
+      await until(async () => (await lines(page))[0]?.text === "Alpha");
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.type("u");
+      await page.keyboard.press("Control+z");
+      await page.waitForTimeout(300);
+      assert.deepEqual((await lines(page)).map((l) => l.text), ["Alpha"], "undo did not take back the opening");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
     test("the editor mounts on the phone", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

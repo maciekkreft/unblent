@@ -437,6 +437,10 @@ class NoteEditor extends LitElement {
   // in place, keeping the text and the undo history. #vimOn is what it holds now.
   #vim = new Compartment();
   #vimOn = false;
+  // Undo reaches only what was typed since this text arrived: a note loaded from
+  // outside empties the history, or "u" would walk back into the notes shown before
+  // it and save each of them over this one.
+  #history = new Compartment();
 
   #extensions() {
     this.#vimOn = this.#actor.snapshot?.context.vimKeys === true;
@@ -449,7 +453,7 @@ class NoteEditor extends LitElement {
       drawSelection(),
       levelField,
       levelTheme,
-      history(),
+      this.#history.of(history()),
       keymap.of(historyKeymap),
       // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
       keymap.of([{ key: "Enter", run: insertNewline }]),
@@ -527,8 +531,9 @@ class NoteEditor extends LitElement {
     this.#shown = body;
     this.#view.dispatch({
       changes: { from: 0, to: this.#view.state.doc.length, insert: doc },
-      effects: setAllLevels.of(levels),
+      effects: [setAllLevels.of(levels), this.#history.reconfigure([])],
     });
+    this.#view.dispatch({ effects: this.#history.reconfigure(history()) });
   }
 
   focusEditor() {
