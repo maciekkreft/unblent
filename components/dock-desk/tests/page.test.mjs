@@ -199,12 +199,12 @@ for (const engine of ENGINES) {
       });
 
       // Settings left the right dock for the header gear (settings-gear plan): the
-      // dock holds Notes and Chat, and the gear sits directly before the account
+      // dock holds Notes, Chat and Evaluators, and the gear sits directly before the account
       // button (session-switch), the last control in page order (6.4, Decision 8).
       await page.waitForFunction(() =>
         document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
       );
-      assert.deepEqual(await rightTabs(page), ["Notes", "Chat"], "Settings is not a right-dock tab");
+      assert.deepEqual(await rightTabs(page), ["Notes", "Chat", "Evaluators"], "Settings is not a right-dock tab");
       assert.deepEqual(
         await page.locator("dock-desk").evaluate((el) =>
           [...el.shadowRoot.querySelector(".controls").children].map((c) =>

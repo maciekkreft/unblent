@@ -13,3 +13,9 @@ CREATE TABLE IF NOT EXISTS days (
     deleted   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS days_seq ON days(seq);
+-- The highest seq of the tables an older file held for the journal's detectors, kept
+-- when they were dropped so seq never goes back below it. One row at most.
+CREATE TABLE IF NOT EXISTS seq_floor (
+    id  INTEGER PRIMARY KEY CHECK (id = 1),
+    seq INTEGER NOT NULL
+);

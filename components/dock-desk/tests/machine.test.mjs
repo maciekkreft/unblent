@@ -146,6 +146,29 @@ test("a stored layout wins over declared sides", async () => {
   assert.deepEqual(layout(snapshot.context), { stage: "trace-list", docks: {} });
 });
 
+test("a view the stored layout never named joins its side at load while that side holds a tab", async () => {
+  // The page gained a tab after the user's desk was stored: it joins the end of its
+  // side, not the stage. A side the user emptied keeps such a view on the stage, since
+  // the user may have moved it there.
+  const views = [
+    { name: "book-stage", label: "Reader" },
+    { name: "notes", label: "Notes", side: "right" },
+    { name: "evaluators", label: "Evaluators", side: "right" },
+    { name: "outline", label: "Outline", side: "left" },
+  ];
+  const { actor, snapshot } = await settle(
+    stored({ stage: "book-stage", docks: { right: { open: true, views: ["notes"], active: "notes" } } }),
+    { views, narrow: () => true },
+  );
+  assert.deepEqual(layout(snapshot.context), {
+    stage: "book-stage",
+    docks: { right: { open: true, views: ["notes", "evaluators"], active: "notes" } },
+  });
+  // Moved to the stage tabs since: a layout from the fact that no longer names it keeps it there.
+  actor.send({ type: "dock.changed", stage: "book-stage", docks: { right: { open: true, views: ["notes"] } } });
+  assert.deepEqual(actor.getSnapshot().context.docks, { right: { open: true, views: ["notes"] } });
+});
+
 test("an error reply fails the view", async () => {
   const { snapshot } = await settle(stored({ error: "unavailable" }));
   assert.equal(snapshot.value, "failed");
@@ -430,6 +453,18 @@ test("a chat picked shows its tab on its side (6.4)", async () => {
       stage: "reader",
       docks: { right: { open: true, views: ["note-editor", "chats"], active: "chats" } },
     },
+  ]);
+});
+
+test("an evaluator picked shows its tab on its side (6.4)", async () => {
+  const views = [...FOLLOWERS, { name: "evaluators", label: "Evaluators", showsOn: "evaluator.selected" }];
+  const { actor, emitted } = await settle(
+    stored({ stage: "reader", docks: { right: { open: true, views: ["chats", "evaluators"] } } }),
+    { views },
+  );
+  actor.send({ type: "evaluator.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", book: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
+  assert.deepEqual(emitted, [
+    { type: "dock.arranged", stage: "reader", docks: { right: { open: true, views: ["chats", "evaluators"], active: "evaluators" } } },
   ]);
 });
 

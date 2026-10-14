@@ -1,15 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user pressed Judge this day on an earlier day: ask Jev what the detectors that are on now have not answered with their current wording.",
+  "description": "The user ticked or unticked an evaluator: switched on or off.",
   "type": "object",
   "properties": {
     "id": {
       "type": "string",
       "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "on": {
+      "type": "boolean"
     }
   },
   "required": [
-    "id"
+    "id",
+    "on"
   ],
   "additionalProperties": false
 }

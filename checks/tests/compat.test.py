@@ -135,5 +135,33 @@ class QueryFixture(unittest.TestCase):
         self.assertTrue(any(b.startswith("payload/required") for b in found))
 
 
+class Removal(unittest.TestCase):
+    """removal_breaks decides a deleted schema file (7.1): the parties are what the
+    working tree's manifests say."""
+
+    removal = staticmethod(check.removal_breaks)
+
+    def parties(self, consumers=()):
+        return {"events": {"x.done": {"emitters": set(), "consumers": set(consumers)}},
+                "queries": {}, "commands": {}}
+
+    def test_event_nobody_consumes_may_go(self):
+        self.assertFalse(self.removal("a", "events", "x.done", {"a", "b"}, self.parties()))
+
+    def test_event_never_mentioned_may_go(self):
+        self.assertFalse(self.removal("a", "events", "y.done", {"a"}, self.parties()))
+
+    def test_event_still_consumed_breaks(self):
+        self.assertTrue(self.removal("a", "events", "x.done", {"a", "b"}, self.parties(["b"])))
+
+    def test_query_or_command_breaks_while_component_remains(self):
+        self.assertTrue(self.removal("a", "queries", "list", {"a"}, self.parties()))
+        self.assertTrue(self.removal("a", "commands", "focus", {"a"}, self.parties()))
+
+    def test_deleted_component_takes_its_schemas(self):
+        self.assertFalse(self.removal("gone", "queries", "list", {"a"}, self.parties()))
+        self.assertFalse(self.removal("gone", "events", "x.done", {"a"}, self.parties(["a"])))
+
+
 if __name__ == "__main__":
     unittest.main()

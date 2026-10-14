@@ -596,12 +596,24 @@ def _affected_line(kind: str, name: str, parties: dict) -> str:
     return f"affected: accepted by {acc} (senders are not recorded)"
 
 
+def removal_breaks(comp: str, kind: str, name: str, known: set, parties: dict) -> bool:
+    """Section 7.1, 11.2: whether deleting a schema file can break anyone. Deleting a
+    component deletes its contracts with it. Otherwise only an event's schema may go,
+    and only while no component of the working tree consumes the event, because then
+    nothing reads it."""
+    if comp not in known:
+        return False
+    if kind == "events" and not parties["events"].get(name, {}).get("consumers"):
+        return False
+    return True
+
+
 def check_schema_compat(manifests: dict) -> None:
     """Section 7.1, 11.2: a contract only grows. Every changed events/, queries/ or
     commands/ schema is compared against HEAD; a removed or renamed field, a new
     required field, a narrowed type, a lost enum/const value, a dropped oneOf branch,
-    additionalProperties closing, or a schema deleted while its component remains,
-    each fails, naming the path inside the schema and the components affected."""
+    additionalProperties closing, or a schema deleted while its component remains
+    (except an event's that no component consumes), each fails, naming the path inside the schema and the components affected."""
     parties = _contract_parties(manifests)
     known = {Path(p).parent.name for p in manifests}
     for status, path in _schema_changes():
@@ -611,7 +623,7 @@ def check_schema_compat(manifests: dict) -> None:
         _, comp, kind, filename = parts
         name = filename[:-5] if filename.endswith(".json") else filename
         if status == "D":
-            if comp in known:
+            if removal_breaks(comp, kind, name, known, parties):
                 fail(path, "schema compatibility (11.2)",
                      f"schema removed while component {comp!r} remains; a contract only grows. "
                      f"{_affected_line(kind, name, parties)}")

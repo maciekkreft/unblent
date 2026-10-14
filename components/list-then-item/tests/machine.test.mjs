@@ -66,6 +66,12 @@ test("two items sharing a gesture: the last one wins", () => {
   assert.equal(a.getSnapshot().context.shown, "editor");
 });
 
+test("an evaluator pick shows the evaluator editor", () => {
+  const a = start([{ name: "evaluator-editor", showsOn: "evaluator.selected" }]);
+  a.send({ type: "evaluator.selected", id: "01K7TEST00000000000000EV01", book: "01K7TEST00000000000000BK01" });
+  assert.equal(a.getSnapshot().context.shown, "evaluator-editor");
+});
+
 test("_children keeps a still-present shown and drops one that is gone (3.6)", () => {
   const a = start(NOTES, "note-editor");
   a.send({ type: "_children", list: "the-list", items: [{ name: "note-editor", showsOn: "note.selected" }] });

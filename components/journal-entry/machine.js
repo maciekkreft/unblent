@@ -178,9 +178,7 @@ export const machine = setup({
       "typing and when the box loses focus. When a day was saved on two devices at once, the " +
       "entry shows both copies and the user keeps one.",
     kind: "view",
-    // day.judging.requested stays declared with its schema, because a contract only
-    // grows (7.1); nothing on the entry sends it.
-    emits: ["day.saved", "day.judging.requested"],
+    emits: ["day.saved"],
     attributes: ["height"],
     asks: ["journal: read", "settings: read", "books: read"],
   },

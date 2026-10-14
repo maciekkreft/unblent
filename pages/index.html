@@ -48,6 +48,7 @@
     <script type="module" src="/static/components/subject/fact.js"></script>
     <script type="module" src="/static/components/llm/fact.js"></script>
     <script type="module" src="/static/components/conversations/fact.js"></script>
+    <script type="module" src="/static/components/evaluators/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
@@ -68,6 +69,8 @@
     <script type="module" src="/static/components/chat-thread/view.js"></script>
     <script type="module" src="/static/components/chat-input/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
+    <script type="module" src="/static/components/evaluator-list/view.js"></script>
+    <script type="module" src="/static/components/evaluator-editor/view.js"></script>
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
   <body>
@@ -86,6 +89,10 @@
       <list-then-item id="chats" label="Chat" side="right" height="fill" shows-on="conversation.selected">
         <conversation-list subject label="Chats"></conversation-list>
         <chat-thread shows-on="conversation.selected" height="fill" markdown><chat-input></chat-input></chat-thread>
+      </list-then-item>
+      <list-then-item id="evaluators" label="Evaluators" side="right" height="fill" shows-on="evaluator.selected">
+        <evaluator-list subject label="Evaluators"></evaluator-list>
+        <evaluator-editor shows-on="evaluator.selected" height="fill"></evaluator-editor>
       </list-then-item>
       <profile-switch control></profile-switch>
       <layout-switch control></layout-switch>

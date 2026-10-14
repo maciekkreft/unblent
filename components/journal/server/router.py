@@ -38,6 +38,7 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "journal.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    _drop_old_tables(connection)
     try:
         with connection:
             yield connection
@@ -95,18 +96,34 @@ def _full(kind: _Kind, row: sqlite3.Row) -> dict:
     return {**kind.record(row), "version": row["version"], "deleted": bool(row["deleted"])}
 
 
-# Tables an older journal file may still hold, from the journal's detectors. They are
-# left as they are, and a new seq continues past theirs, so a device whose cursor
+# Tables an older journal file may still hold, from the journal's detectors, which
+# nothing reads any more. Before they are dropped their highest seq is kept in
+# seq_floor, so a new seq still continues past theirs and a device whose cursor
 # already passed them still pulls the next day.
 _OLD_TABLES = ("projects", "detectors", "answers")
 
 
-def _next_seq(connection: sqlite3.Connection) -> int:
-    # One order across every table, so a single cursor covers the whole journal.
+def _drop_old_tables(connection: sqlite3.Connection) -> None:
     present = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    tables = [*_KINDS, *(t for t in _OLD_TABLES if t in present)]
-    union = " UNION ALL ".join(f"SELECT MAX(seq) AS s FROM {table}" for table in tables)
-    return (connection.execute(f"SELECT COALESCE(MAX(s), 0) FROM ({union})").fetchone()[0]) + 1
+    old = [t for t in _OLD_TABLES if t in present]
+    if not old:
+        return
+    union = " UNION ALL ".join(f"SELECT MAX(seq) AS s FROM {table}" for table in old)
+    with connection:
+        highest = connection.execute(f"SELECT COALESCE(MAX(s), 0) FROM ({union})").fetchone()[0]
+        connection.execute(
+            "INSERT INTO seq_floor (id, seq) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET seq = MAX(seq, excluded.seq)",
+            (highest,),
+        )
+        for table in old:
+            connection.execute(f"DROP TABLE {table}")
+
+
+def _next_seq(connection: sqlite3.Connection) -> int:
+    # One order across the journal, so a single cursor covers it, never below the floor.
+    return connection.execute(
+        "SELECT MAX(COALESCE((SELECT MAX(seq) FROM days), 0), COALESCE((SELECT seq FROM seq_floor WHERE id = 1), 0))"
+    ).fetchone()[0] + 1
 
 
 def _where(kind: _Kind) -> str:

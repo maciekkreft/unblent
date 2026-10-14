@@ -70,8 +70,13 @@ const arranged = (stage, docks) => ({ type: "dock.arranged", stage, docks });
 // Fit a stored layout to the children actually on the desk: within each side drop
 // docked names the page no longer holds, remove a now-empty side, and let a stale
 // `active` fall back to the first; land the stage on a real, undocked view (the
-// stored one if it still qualifies, else the first candidate).
-const reconcile = (layout, views) => {
+// stored one if it still qualifies, else the first candidate). With `placing`, the
+// starting picture of a page load, a child with a `side` that the layout does not name
+// at all, most likely one added to the page since the layout was stored, joins the end
+// of its side when that side still holds a tab, rather than turning up on the stage.
+// The layout does not list stage tabs, so a side the user emptied keeps a child the
+// user moved to the stage there.
+const reconcile = (layout, views, placing) => {
   const known = names(views);
   const docks = {};
   for (const s of SIDES) {
@@ -79,6 +84,11 @@ const reconcile = (layout, views) => {
     if (!dock) continue;
     const kept = dock.views.filter((n) => known.includes(n));
     if (kept.length) docks[s] = side(dock.open, kept, dock.active);
+  }
+  const named = [layout.stage, ...SIDES.flatMap((s) => layout.docks?.[s]?.views ?? [])];
+  for (const v of views) {
+    if (!placing || !docks[v.side] || named.includes(v.name)) continue;
+    docks[v.side] = { ...docks[v.side], views: [...docks[v.side].views, v.name] };
   }
   const candidates = known.filter((n) => !dockedNames(docks).includes(n));
   const stage = candidates.includes(layout.stage) ? layout.stage : candidates[0] ?? null;
@@ -103,7 +113,8 @@ const seed = (views, narrow) => {
 };
 
 // Adopt the fact's layout, or the page's declared default when it has none.
-const adopt = (layout, views, narrow) => (isEmpty(layout) ? seed(views, narrow) : reconcile(layout, views));
+const adopt = (layout, views, narrow, placing = false) =>
+  isEmpty(layout) ? seed(views, narrow) : reconcile(layout, views, placing);
 
 // The layout with every view that declared `shows-on` this event (6.4) brought
 // forward where it sits: a docked view shown on its side, unfolded, as _activate
@@ -200,7 +211,7 @@ export const machine = setup({
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
       "arrives, and is never saved (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
-      "`note.selected`, `conversation.selected`), which " +
+      "`note.selected`, `conversation.selected`, `evaluator.selected`), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
       "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
@@ -252,7 +263,7 @@ export const machine = setup({
           { guard: ({ event }) => Boolean(event.output.error), target: "failed" },
           {
             target: "loadingSettings",
-            actions: assign(({ context, event }) => adopt(event.output, context.views, context.narrow())),
+            actions: assign(({ context, event }) => adopt(event.output, context.views, context.narrow(), true)),
           },
         ],
         onError: { target: "failed" },
@@ -358,6 +369,7 @@ export const machine = setup({
         "book.selected": show,
         "note.selected": show,
         "conversation.selected": show,
+        "evaluator.selected": show,
       },
     },
     // No dock fact on the page: the desk still works as a plain tab switcher, so
@@ -379,6 +391,7 @@ export const machine = setup({
         "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "evaluator.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },
     },
   },

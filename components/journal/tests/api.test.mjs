@@ -120,20 +120,38 @@ test("the pull returns the days changed since a cursor, tombstones included", as
 });
 
 // A journal file written while the journal kept detectors holds their tables, and a
-// device's cursor may already be past their writes; the next day must still be pulled.
-test("a day written into a file with older tables is numbered past them", async () => {
+// device's cursor may already be past their writes. Opening the file drops the tables
+// but keeps their highest seq as a floor, so every next day is still pulled.
+test("the older detector tables are dropped, and a day written after is numbered past them", async () => {
   const { DatabaseSync } = await import("node:sqlite");
   const user = newUser();
   const dir = join(process.env.UNBLENT_DATA, user);
   mkdirSync(dir, { recursive: true });
-  const db = new DatabaseSync(join(dir, "journal.db"));
+  const file = join(dir, "journal.db");
+  const db = new DatabaseSync(file);
   db.exec(`CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, "on" INTEGER NOT NULL,
     version INTEGER NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);
-    INSERT INTO projects VALUES ('${P1}', 'Goals and values', 1, 1, 50, 0);`);
+    INSERT INTO projects VALUES ('${P1}', 'Goals and values', 1, 1, 50, 0);
+    CREATE TABLE detectors (id TEXT PRIMARY KEY, version INTEGER NOT NULL, seq INTEGER NOT NULL);
+    INSERT INTO detectors VALUES ('${P1}', 1, 70);
+    CREATE TABLE answers (key TEXT PRIMARY KEY, seq INTEGER NOT NULL);`);
   db.close();
   const cookie = cookieFor(user);
   await put("days", { record: day("a"), baseVersion: null }, cookie);
-  const after = await (await pull(50, cookie)).json();
+  const after = await (await pull(70, cookie)).json();
   assert.deepEqual(after.days.map((d) => d.id), [D1]);
-  assert.ok(after.cursor > 50);
+  assert.equal(after.cursor, 71);
+  const tables = () => {
+    const look = new DatabaseSync(file);
+    try {
+      return look.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((r) => r.name);
+    } finally {
+      look.close();
+    }
+  };
+  assert.deepEqual(tables(), ["days", "seq_floor"]);
+  // The floor holds without the tables: the next write still climbs.
+  await put("days", { record: day("b", 2000), baseVersion: 1 }, cookie);
+  const next = await (await pull(71, cookie)).json();
+  assert.deepEqual([next.days.map((d) => d.text), next.cursor], [["b"], 72]);
 });

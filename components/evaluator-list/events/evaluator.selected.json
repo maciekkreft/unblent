@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user picked an evaluator of the named book, or New evaluator (a fresh id no evaluator has yet): the editor that follows opens it.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "book": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "The book the evaluator is kept with."
+    }
+  },
+  "required": [
+    "id",
+    "book"
+  ],
+  "additionalProperties": false
+}

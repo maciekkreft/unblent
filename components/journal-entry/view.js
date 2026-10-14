@@ -7,7 +7,6 @@ import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim } from "@replit/codemirror-vim";
 import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
-import judging from "./events/day.judging.requested.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // Vim sits in a compartment that the "Vim keys" preference (12) turns on and off in
@@ -150,7 +149,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
-      events: { "day.saved": saved, "day.judging.requested": judging },
+      events: { "day.saved": saved },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
