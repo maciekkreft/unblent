@@ -1,0 +1,17 @@
+-- evaluators' per-user store on the server (architecture.md 5): one file per user, the
+-- router resolving it from the session, so neither schema nor browser names users.
+-- version is server-assigned; seq orders writes so a client can pull what changed
+-- since its cursor without a clock. deleted marks a tombstone, kept and pulled like a
+-- change, never purged. questions is the evaluator's questions as a JSON array. book is
+-- set when the row is born and never changes.
+CREATE TABLE IF NOT EXISTS evaluators (
+    id        TEXT PRIMARY KEY,
+    book      TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    "on"      INTEGER NOT NULL,
+    questions TEXT NOT NULL,
+    version   INTEGER NOT NULL,
+    seq       INTEGER NOT NULL,
+    deleted   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS evaluators_seq ON evaluators(seq);

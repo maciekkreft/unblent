@@ -18,11 +18,12 @@ const toMs = (text, fallback = 3000) => {
 // The words for a notice live here, not in the machine (a view owns its own text).
 // One case per source; a future refusal or event adds one line, nothing else.
 // A removal names the thing the way the user sees it: a rubric is a Detector, and
-// a question or an option is removed from its detector rather than deleted outright.
+// a question or an option is removed from its evaluator rather than deleted outright.
 const REMOVED = {
   project: ["Project", "deleted"],
   rubric: ["Detector", "deleted"],
   case: ["Case", "deleted"],
+  evaluator: ["Evaluator", "deleted"],
   question: ["Question", "removed"],
   option: ["Option", "removed"],
 };

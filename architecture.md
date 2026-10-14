@@ -190,6 +190,8 @@ While anonymous, `notes` mints versions in the browser and the server adopts the
 
 `books` is the other exception: its rows replicate as above, but its chapters and images are extracted once at import into `data/<user>/books/<id>/`, fetched by URL, and copied to the same bucket by `deploy/`; the source file is kept only for a re-import, which `deploy/` runs on the host under the next content version, so every URL changes. A reading position, a title the user gives a book, and which book is open are last write wins: they carry no base version and are never refused. `books` also presents the journal, whose days are owned by `journal`, as one book with a fixed id; it stores nothing for it.
 
+`evaluators` replicates as above, but the last write wins: a write is never refused for a stale version, so it never conflicts, and a delete is still a tombstone that always wins.
+
 `conversations` is remote-only: chats live in `data/<user>/conversations.db` and the browser holds only the open chat, in memory. A finished turn never changes, so the server adds turns by id and ignores one it already has; the chat row and a delete are last write wins, and which chat is open is kept in the browser only, per device.
 
 ---

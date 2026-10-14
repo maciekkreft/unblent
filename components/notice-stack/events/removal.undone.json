@@ -9,7 +9,8 @@
         "rubric",
         "question",
         "option",
-        "case"
+        "case",
+        "evaluator"
       ]
     },
     "id": {

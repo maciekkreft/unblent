@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "An evaluator now looks like this: the whole evaluator (4, third rule), pending until the server acknowledges it (5), and with what of it waits out an undo window marked removing.",
+  "type": "object",
+  "properties": {
+    "evaluator": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        },
+        "book": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "The book the evaluator is kept with."
+        },
+        "name": {
+          "type": "string"
+        },
+        "on": {
+          "type": "boolean",
+          "description": "Switched on or off."
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "One question of the evaluator.",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+              },
+              "kind": {
+                "enum": [
+                  "yesno",
+                  "pick"
+                ],
+                "description": "yesno: a yes / no question. pick: one of the options is picked."
+              },
+              "text": {
+                "type": "string",
+                "description": "The question."
+              },
+              "yes": {
+                "type": "string",
+                "description": "What yes means, for a yesno question; empty for none."
+              },
+              "no": {
+                "type": "string",
+                "description": "What no means, for a yesno question; empty for none."
+              },
+              "options": {
+                "type": "array",
+                "description": "The options of a pick question; kept while the question is yesno, so switching back loses nothing.",
+                "items": {
+                  "type": "object",
+                  "description": "One option of a pick question.",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The option as the user sees it."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "What the option means; empty for none."
+                    },
+                    "removing": {
+                      "type": "boolean",
+                      "description": "The option waits out its undo window (removal.started)."
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "description"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "removing": {
+                "type": "boolean",
+                "description": "The question waits out its undo window (removal.started)."
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "text",
+              "yes",
+              "no",
+              "options"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pending": {
+          "type": "boolean",
+          "description": "A change the server has not acknowledged yet (5)."
+        },
+        "removing": {
+          "type": "boolean",
+          "description": "The evaluator waits out its undo window (removal.started)."
+        }
+      },
+      "required": [
+        "id",
+        "book",
+        "name",
+        "on",
+        "questions",
+        "version",
+        "pending",
+        "removing"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "evaluator"
+  ],
+  "additionalProperties": false
+}
