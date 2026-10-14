@@ -23,6 +23,7 @@ const SAMPLE = readFileSync(new URL("./fixtures/sample.epub", import.meta.url));
 const BROKEN = readFileSync(new URL("./fixtures/broken.epub", import.meta.url));
 const GAPS = readFileSync(new URL("./fixtures/gaps.epub", import.meta.url));
 const ONEPIECE = readFileSync(new URL("./fixtures/onepiece.epub", import.meta.url));
+const STYLED = readFileSync(new URL("./fixtures/styled.epub", import.meta.url));
 
 const cookieFor = (userId) =>
   `unblent_session=${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
@@ -147,6 +148,17 @@ test("a book in one file is cut where its contents begin each chapter", async ()
   assert.equal(section.chapter, 3);
   assert.ok(section.block > 0, "the section stays inside Chapter Two");
   assert.match(await (await getChapter(ID, 1, 2, cookie)).text(), /data-chapter="3"/, "a link follows its target into its new chapter");
+});
+
+test("a paragraph the book's stylesheet makes large becomes a heading", async () => {
+  const cookie = cookieFor(freshUser());
+  await importBook(ID, STYLED, cookie);
+  const html = await (await getChapter(ID, 1, 0, cookie)).text();
+  assert.match(html, /<h1>Chapter 6: What is the Problem\?<\/h1>/, "2x body is a title");
+  assert.match(html, /<h2>Looking with Eyes<\/h2>/, "1.5x body is a section heading");
+  assert.match(html, /<h3>A small heading<\/h3>/, "1.2x and bold is a subheading");
+  assert.match(html, /<p>Body text\.<\/p>/, "body stays a paragraph");
+  assert.match(html, /<p>Large but not bold/, "large without bold stays a paragraph");
 });
 
 test("a second import of the same id is idempotent, returning the row unchanged", async () => {

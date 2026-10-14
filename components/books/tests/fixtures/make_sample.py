@@ -426,9 +426,52 @@ def build_onepiece(path: Path) -> None:
         zf.writestr("OEBPS/text.xhtml", ONEPIECE_TEXT)
 
 
+STYLED_CSS = """/* publisher type */
+.cn { font-size: 2rem; font-weight: normal; }
+.ah { font-size: 1.5rem; font-weight: bold; }
+.sbh { font-size: 1.2rem; font-weight: bold; }
+.note { font-size: 1.2rem; }
+.body { font-size: 1rem; }
+"""
+
+STYLED_NAV = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <head><title>Contents</title></head>
+  <body><nav epub:type="toc" id="toc"><ol><li><a href="text.xhtml">Styled</a></li></ol></nav></body>
+</html>
+"""
+
+STYLED_TEXT = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head><title>Styled</title><link rel="stylesheet" href="s.css"/></head>
+  <body>
+    <p class="cn">Chapter 6: What is the Problem?</p>
+    <p class="ah">Looking with Eyes</p>
+    <p class="body">Body text.</p>
+    <p class="sbh">A small heading</p>
+    <p class="note">Large but not bold, so body.</p>
+  </body>
+</html>
+"""
+
+
+def build_styled(path: Path) -> None:
+    opf = ONEPIECE_OPF.replace(
+        "</manifest>", '<item id="css" href="s.css" media-type="text/css"/></manifest>'
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", CONTAINER)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/nav.xhtml", STYLED_NAV)
+        zf.writestr("OEBPS/text.xhtml", STYLED_TEXT)
+        zf.writestr("OEBPS/s.css", STYLED_CSS)
+
+
 if __name__ == "__main__":
     build_sample(HERE / "sample.epub")
     build_broken(HERE / "broken.epub")
     build_gaps(HERE / "gaps.epub")
     build_onepiece(HERE / "onepiece.epub")
-    print("wrote sample.epub, broken.epub, gaps.epub and onepiece.epub")
+    build_styled(HERE / "styled.epub")
+    print("wrote sample.epub, broken.epub, gaps.epub, onepiece.epub and styled.epub")

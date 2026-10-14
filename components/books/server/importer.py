@@ -11,6 +11,7 @@ a chapter inside it (step 6b), because one file may hold the whole book.
 """
 
 import posixpath
+import re
 import shutil
 import zipfile
 from html.parser import HTMLParser
@@ -126,18 +127,20 @@ def _has_content(nodes) -> bool:
     return any(isinstance(n, dict) or (isinstance(n, str) and n.strip()) for n in nodes)
 
 
-def _convert(el, links: list):
+def _convert(el, links: list, heads: dict | None = None):
     """Return a list of output nodes for one input element, applying the whitelist.
     A removed element yields nothing; an unwrapped one yields its children, carrying
     its id onto the first so a fragment anchor is not lost."""
     if isinstance(el, str):
         return [el]
     tag = el.tag
+    if tag == "p" and heads:
+        tag = _styled_heading(el, heads) or tag
     if tag == "svg":
         return _svg_images(el)
     if tag in _REMOVE:
         return []
-    child_nodes = _flow(el, links)
+    child_nodes = _flow(el, links, heads)
     eid = el.attrs.get("id")
     if tag in _WHITELIST:
         kept = {k: v for k, v in el.attrs.items() if k in _ATTRS.get(tag, set())}
@@ -164,11 +167,68 @@ def _convert(el, links: list):
     return child_nodes
 
 
-def _flow(el, links) -> list:
+def _flow(el, links, heads: dict | None = None) -> list:
     nodes = []
     for child in el.children:
-        nodes.extend(_convert(child, links))
+        nodes.extend(_convert(child, links, heads))
     return nodes
+
+
+# A publisher often sets a heading as <p class="ah"> and makes it big in its own CSS,
+# which the import drops; reading that CSS keeps the heading a heading.
+_RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+_CLASS_SELECTOR = re.compile(r"^(?:p)?\.([A-Za-z0-9_-]+)$")
+_HEADING_TEXT_MAX = 200
+
+
+def _font_scale(value: str) -> float | None:
+    m = re.fullmatch(r"([\d.]+)(rem|em|%)", value.strip())
+    if not m:
+        return None
+    number = float(m.group(1))
+    return number / 100 if m.group(2) == "%" else number
+
+
+def _heading_levels(css_texts) -> dict:
+    """Paragraph class -> heading level 1-3, from the stylesheets: 2x body or larger is
+    h1, 1.5x h2, 1.2x and bold h3. Later declarations of a class override earlier ones."""
+    declared = {}
+    for css in css_texts:
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        for selectors, body in _RULE.findall(css):
+            props = {}
+            for part in body.split(";"):
+                name, _, value = part.partition(":")
+                props[name.strip().lower()] = value.strip().lower()
+            for selector in selectors.split(","):
+                m = _CLASS_SELECTOR.match(selector.strip())
+                if m:
+                    declared.setdefault(m.group(1), {}).update(props)
+    levels = {}
+    for name, props in declared.items():
+        scale = _font_scale(props.get("font-size", ""))
+        bold = props.get("font-weight", "") in ("bold", "600", "700", "800", "900")
+        if scale is None:
+            continue
+        if scale >= 2:
+            levels[name] = 1
+        elif scale >= 1.5:
+            levels[name] = 2
+        elif scale >= 1.2 and bold:
+            levels[name] = 3
+    return levels
+
+
+def _el_text(el) -> str:
+    return el if isinstance(el, str) else "".join(_el_text(c) for c in el.children)
+
+
+def _styled_heading(el, heads: dict) -> str | None:
+    """"h<level>" when a short paragraph carries a class the stylesheet makes a heading."""
+    for name in el.attrs.get("class", "").split():
+        if name in heads and len(_el_text(el)) <= _HEADING_TEXT_MAX:
+            return f"h{heads[name]}"
+    return None
 
 
 def _sole_anchor(children):
@@ -209,12 +269,12 @@ def _only_image(children):
     return image
 
 
-def _blocks_of(body, links):
+def _blocks_of(body, links, heads: dict | None = None):
     """The body's top-level blocks (step 4): consecutive inline nodes are wrapped in a
     <p>, empty paragraphs dropped, a paragraph that is only an image made a <figure>.
     Returns (blocks, idmap) where idmap maps every fragment id to the index of the block
     it ends up in (step 5)."""
-    raw = _flow(body, links)
+    raw = _flow(body, links, heads)
     blocks = []
     buf = []
 
@@ -418,6 +478,12 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
 
         chapter_paths = [resolve(opf_dir, manifest[idref][0]) for idref in spine]
 
+        heads = _heading_levels(
+            zf.read(resolve(opf_dir, href)).decode("utf-8", "replace")
+            for href, media, _props in manifest.values()
+            if media == "text/css" and resolve(opf_dir, href) in names
+        )
+
         # Convert each chapter (step 4, 5), deferring link resolution until every
         # chapter's idmap exists (a link may point forward into a later chapter). The
         # source's own name for a piece (a <section title=…>) is kept for step 7.
@@ -429,7 +495,7 @@ def import_book(source_path: Path, book_dir: Path, book_id: str, content_version
             root = _parse_html(zf.read(path).decode("utf-8", "replace"))
             body = _find(root, "body") or root
             links = []
-            blocks, idmap = _blocks_of(body, links)
+            blocks, idmap = _blocks_of(body, links, heads)
             base_dir = posixpath.dirname(path)
             _rewrite_images(blocks, base_dir, resolve, img_map, image_prefix)
             raw_blocks.append(blocks)
