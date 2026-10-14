@@ -3,9 +3,10 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // The view component that edits one evaluator (6.4): the item the Evaluators tab's
 // list-then-item shows under its Back bar when evaluator.selected arrives. It owns only
 // UI state — the evaluator being edited as a draft, the book it is kept with, and
-// whether typing is waiting to be saved — and points at one fact: it asks
+// whether typing is waiting to be saved — and points at two facts: it asks
 // evaluators: list for the book evaluator.selected names and follows evaluator.changed /
-// evaluator.deleted after (4.3, fourth rule). Every edit leaves as the whole evaluator,
+// evaluator.deleted after, and asks settings: read for the "Vim keys" preference (12)
+// and follows settings.changed (4.3, fourth rule). Every edit leaves as the whole evaluator,
 // evaluator.saved, at a throttle while typing and at once on blur (4.3, third rule). A
 // removal leaves as removal.started; `evaluators` marks the item until notice-stack
 // settles or undoes it, and the draft follows those marks, so the item disappears at
@@ -200,6 +201,9 @@ const isPick = (event) => typeof event.id === "string" && typeof event.book === 
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
+    // The "Vim keys" device preference (12); on a page without a settings fact the ask
+    // replies no-answerer and the boxes stay plain.
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -214,11 +218,15 @@ export const machine = setup({
       "whole evaluator a short time into typing and when a field loses focus, and a new " +
       "evaluator with nothing written in it is never saved. Removing a question or an option, " +
       "and deleting the evaluator, wait out the undo window, with Undo in a notice. The " +
-      "evaluator open before a reload opens again while it is still kept.",
+      "evaluator open before a reload opens again while it is still kept. The question, what yes " +
+      "and no mean and each option's description are text boxes that grow with what is written " +
+      "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
+      "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
+      "back to the field last used, never jumping to the name.",
     kind: "view",
     emits: ["evaluator.saved", "removal.started"],
     attributes: [],
-    asks: ["evaluators: list"],
+    asks: ["evaluators: list", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -233,7 +241,20 @@ export const machine = setup({
     // is reopened only while that evaluator still exists.
     want: isPick(input.open ?? {}) ? { id: input.open.id, book: input.open.book, restore: true } : null,
     remember: input.remember ?? (() => {}),
+    vimKeys: false,
   }),
+  // Beside the states, so the preference arrives whatever the editor is doing; a
+  // settings.changed that races it is held until the reply lands (settings: read
+  // supersededBy).
+  invoke: {
+    src: "settings",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    onError: { actions: [] },
+  },
+  on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+  },
   initial: "starting",
   states: {
     starting: {

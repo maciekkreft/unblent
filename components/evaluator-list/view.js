@@ -145,11 +145,20 @@ class EvaluatorList extends LitElement {
 
   #actor = new ActorController(this);
 
-  // A panel's focus lands in what it shows (list-then-item, dock-desk): the first row,
-  // so Up and Down walk the evaluators.
+  // Which row holds the roving tab stop: the one the keyboard moved to, else the open
+  // one, else New evaluator. Ephemeral UI focus, not a fact.
+  #focusId = null;
+
+  #focusRow(ids, open) {
+    if (this.#focusId && ids.includes(this.#focusId)) return this.#focusId;
+    if (open && ids.includes(open)) return open;
+    return ids[0] ?? null;
+  }
+
+  // A panel's focus lands in what it shows (list-then-item, dock-desk): the roving row.
   focus(options) {
-    const first = this.renderRoot.querySelector(".open");
-    if (first) first.focus(options);
+    const target = this.renderRoot?.querySelector('.open[tabindex="0"]') ?? this.renderRoot?.querySelector(".open");
+    if (target) target.focus(options);
     else super.focus(options);
   }
 
@@ -159,16 +168,61 @@ class EvaluatorList extends LitElement {
     this.#actor.send({ type: "_pick", id });
   }
 
-  // Up and Down move between the rows' open buttons, as in the other lists.
-  #keydown(event) {
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-    if (!step) return;
-    const buttons = [...this.renderRoot.querySelectorAll(".open")];
-    const at = buttons.findIndex((b) => b === this.renderRoot.activeElement || b.parentElement.contains(this.renderRoot.activeElement));
-    const next = buttons[at + step];
-    if (!next) return;
+  // Vim letters (12, "Vim keys"), as in the other lists: only while the preference is on,
+  // never with a modifier held (those belong to the browser and the desk), and never in a
+  // field, where a letter is typed text. gg is two presses, so a first g waits a moment.
+  #gAt = 0;
+  #vim(event) {
+    if (this.#actor.snapshot?.context.vimKeys !== true) return null;
+    if (event.ctrlKey || event.metaKey || event.altKey) return null;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || target?.tagName === "TEXTAREA" || (target?.tagName === "INPUT" && target.type !== "checkbox")) return null;
+    const second = event.key === "g" && Date.now() - this.#gAt < 1000;
+    this.#gAt = event.key === "g" && !second ? Date.now() : 0;
+    if (second) return "first";
+    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
+  }
+
+  #keydown(event, ids) {
+    const vim = this.#vim(event);
+    // Every Vim letter the list owns is spent here, even with nowhere to move: an
+    // uncancelled letter is typed wherever WebKit still keeps a selection.
+    if (vim) event.preventDefault();
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
+    if (!step && vim !== "first" && vim !== "last") return;
+    const current = this.#focusRow(ids, this.#actor.snapshot.context.open);
+    const at = ids.indexOf(current);
+    const to = vim === "first" ? 0 : vim === "last" ? ids.length - 1 : at + step;
+    const next = ids[Math.min(ids.length - 1, Math.max(0, to))];
+    if (!next || next === current) return;
     event.preventDefault();
-    next.focus();
+    this.#focusId = next;
+    this.requestUpdate();
+    // The row moved to is scrolled into view by whichever box scrolls around the list.
+    this.updateComplete.then(() => {
+      const el = this.renderRoot.querySelector(`.row[data-id="${next}"] .open`);
+      el?.focus({ preventScroll: true });
+      el?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    });
+  }
+
+  // Rows are drawn by position (lit-core has no keyed repeat), so a row removed above the
+  // focused one would leave the focus on whatever now fills its element: the keyboard
+  // follows the roving row, which is keyed by id, instead.
+  updated() {
+    const active = this.renderRoot.activeElement;
+    if (!active?.matches(".open")) return;
+    const roving = this.renderRoot.querySelector('.open[tabindex="0"]');
+    if (roving && roving !== active) roving.focus({ preventScroll: true });
+  }
+
+  // A row reached by a click or Tab becomes the keyboard's row.
+  #focusin(event) {
+    const id = event.composedPath()[0]?.closest?.(".row")?.dataset.id;
+    if (id && id !== this.#focusId) {
+      this.#focusId = id;
+      this.requestUpdate();
+    }
   }
 
   render() {
@@ -177,29 +231,34 @@ class EvaluatorList extends LitElement {
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
     const { draft, open, evaluators } = snapshot.context;
+    const shown = rows(evaluators);
+    const ids = [draft, ...shown.map((e) => e.id)];
+    const focusId = this.#focusRow(ids, open);
     return html`
-      <ul class="list" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e)}>
-        <li class="row new" @click=${(e) => this.#rowClick(e, draft)}>
-          <button class="open" type="button">
+      <ul class="list" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e, ids)} @focusin=${(e) => this.#focusin(e)}>
+        <li class="row new" data-id=${draft} @click=${(e) => this.#rowClick(e, draft)}>
+          <button class="open" type="button" tabindex=${draft === focusId ? 0 : -1}>
             <span class="name draft">${icon("plus")}New evaluator</span>
           </button>
         </li>
-        ${rows(evaluators).map((e) => this.#row(e, open))}
+        ${shown.map((e) => this.#row(e, open, focusId))}
       </ul>
     `;
   }
 
-  #row(e, open) {
+  #row(e, open, focusId) {
+    const tab = e.id === focusId ? 0 : -1;
     const name = e.name.trim();
     return html`
       <li class="row ${e.id === open ? "current" : ""}" data-id=${e.id} @click=${(event) => this.#rowClick(event, e.id)}>
         <input
           type="checkbox"
+          tabindex=${tab}
           .checked=${e.on}
           aria-label="${name || UNTITLED} is on"
           @change=${(event) => this.#actor.send({ type: "_switch", id: e.id, on: event.target.checked })}
         />
-        <button class="open" type="button" aria-current=${e.id === open ? "true" : nothing}>
+        <button class="open" type="button" tabindex=${tab} aria-current=${e.id === open ? "true" : nothing}>
           <span class="name ${name ? (e.on ? "" : "off") : "untitled"}">${name || UNTITLED}</span>
           <span class="sub">${subtitle(e)}</span>
         </button>

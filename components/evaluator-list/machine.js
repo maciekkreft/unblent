@@ -2,10 +2,11 @@ import { setup, assign, emit, fromPromise } from "xstate";
 
 // The view component that lists the open book's evaluators (6.4), the list of the
 // Evaluators tab's list-then-item. It owns only UI state — the book it shows, the rows,
-// the row last opened, and a draft id for New evaluator — and points at two facts: it
-// asks subject: read for what is open and follows subject.changed, and asks
-// evaluators: list for the open book and follows evaluator.changed / evaluator.deleted
-// after (4.3, fourth rule). A pick and a tick leave as gestures (4.3, fifth rule). The
+// the row last opened, and a draft id for New evaluator — and points at three facts: it
+// asks subject: read for what is open and follows subject.changed, asks evaluators: list
+// for the open book and follows evaluator.changed / evaluator.deleted, and asks
+// settings: read for the "Vim keys" preference (12) and follows settings.changed (4.3,
+// fourth rule). A pick and a tick leave as gestures (4.3, fifth rule). The
 // ask and the id minting arrive through input, so this stays importable in Node.
 //
 // New evaluator is always the first row and always names a minted id no evaluator has
@@ -62,6 +63,9 @@ export const machine = setup({
     // The book's evaluators; evaluator.changed / evaluator.deleted are held for this ask
     // until its reply lands, so a change that races it is applied after it.
     load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
+    // The "Vim keys" device preference (12); on a page without a settings fact the ask
+    // replies no-answerer and the letters stay off.
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
 }).createMachine({
   id: "evaluator-list",
@@ -72,11 +76,12 @@ export const machine = setup({
       "row has a tick box that switches the evaluator on or off, its name, greyed when off, and " +
       "how many questions it has. With `subject` it follows the book open on the stage, and " +
       "another book shows that book's evaluators; while no book is open, or without `subject`, " +
-      "it says to open a book.",
+      "it says to open a book. The arrow keys move between the rows, and with Vim keys on so " +
+      "do j, k, gg and G; Enter opens the row.",
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "subject: read"],
+    asks: ["evaluators: list", "subject: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -88,14 +93,24 @@ export const machine = setup({
     // The row last opened; UI state, so the list marks what the editor was opened on.
     open: null,
     draft: input.mint(),
+    vimKeys: false,
   }),
-  // The subject read runs for the machine's whole life, so a book's load never cancels it.
-  invoke: {
-    src: "readSubject",
-    input: ({ context }) => ({ ask: context.ask, following: context.following }),
-    onDone: follow(({ output }) => output?.subject ?? null),
-    onError: { actions: [] },
-  },
+  // The subject and settings reads run for the machine's whole life, so a book's load
+  // never cancels them.
+  invoke: [
+    {
+      src: "readSubject",
+      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      onDone: follow(({ output }) => output?.subject ?? null),
+      onError: { actions: [] },
+    },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+  ],
   initial: "idle",
   states: {
     idle: {},
@@ -139,6 +154,7 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "subject.changed": follow(({ subject }) => subject ?? null),
     // The fact's news (4.3, fourth rule), for the book shown only.
     "evaluator.changed": {

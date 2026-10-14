@@ -24,7 +24,7 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT } = {}) => {
+const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
@@ -33,6 +33,7 @@ const start = async ({ subject = book(A), following = true, fail, kept = KEPT } 
       ask: (target, name, payload) => {
         asked.push([target, name, payload]);
         if (target === "subject") return Promise.resolve({ subject });
+        if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
         return Promise.resolve(fail ?? { evaluators: kept[payload.book] ?? [] });
       },
       mint: () => drafts.shift(),
@@ -100,7 +101,15 @@ test("a book picked while another is still loading is the one shown", async () =
 test("without `subject` nothing is asked and it says to open a book", async () => {
   const { actor, asked } = await start({ following: false });
   assert.ok(actor.getSnapshot().matches("idle"));
-  assert.deepEqual(asked, []);
+  assert.deepEqual(asked.filter(([t]) => t !== "settings"), []);
+});
+
+test("the Vim keys preference is read at start and followed after; without settings it is off", async () => {
+  assert.equal((await start()).ctx().vimKeys, false);
+  const { actor, ctx } = await start({ vimKeys: true });
+  assert.equal(ctx().vimKeys, true);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(ctx().vimKeys, false);
 });
 
 test("a pick of a shown evaluator or New evaluator emits evaluator.selected with the book; others are refused", async () => {

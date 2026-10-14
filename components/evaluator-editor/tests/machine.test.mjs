@@ -36,13 +36,16 @@ const EVALUATOR = {
 const OTHER = { ...EVALUATOR, id: R2, name: "Other evaluator", questions: [] };
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async (evaluators = [EVALUATOR, OTHER]) => {
+const start = async (evaluators = [EVALUATOR, OTHER], vimKeys) => {
   let n = 0;
   const clock = new SimulatedClock();
   const actor = createActor(machine, {
     clock,
     input: {
-      ask: (target, name, payload) => Promise.resolve({ evaluators: payload.book === P ? evaluators : [] }),
+      ask: (target, name, payload) =>
+        Promise.resolve(
+          target === "settings" ? (vimKeys == null ? { error: "no-answerer" } : { vimKeys }) : { evaluators: payload.book === P ? evaluators : [] },
+        ),
       mint: () => `01K6TEST000000000000000M${String(++n).padStart(2, "0")}`,
       throttleMs: 200,
     },
@@ -306,6 +309,7 @@ test("an evaluator of another book is fetched with that book; a change to anothe
   const actor = createActor(machine, {
     input: {
       ask: (target, name, payload) => {
+        if (target === "settings") return Promise.resolve({ vimKeys: false });
         asked.push([target, name, payload]);
         return Promise.resolve({ evaluators: payload.book === P ? [EVALUATOR] : [theirs] });
       },
@@ -328,4 +332,14 @@ test("a fact that cannot answer is an honest failure", async () => {
   actor.start();
   await select(actor, { id: R, book: P });
   assert.ok(actor.getSnapshot().matches("failed"));
+});
+
+test("the Vim keys preference is read at start and followed after; without settings it is off", async () => {
+  assert.equal((await start()).ctx().vimKeys, false);
+  const { actor, ctx } = await start(undefined, true);
+  assert.equal(ctx().vimKeys, true);
+  await select(actor, { id: R, book: P });
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(ctx().vimKeys, false);
+  assert.equal(ctx().draft.id, R);
 });

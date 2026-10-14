@@ -2,9 +2,61 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
+import { EditorState, Compartment, Prec, Annotation } from "@codemirror/state";
+import { EditorView, keymap, drawSelection, placeholder } from "@codemirror/view";
+import { history, historyKeymap, insertNewline } from "@codemirror/commands";
+import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { machine, duplicateNames } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
+
+// The multi-line fields are CodeMirror boxes, one editor each, so they take Vim's keys
+// when the "Vim keys" preference (12) is on: Vim sits in a compartment turned on and off
+// in place. The theme and the Vim cursor are copied from chat-input and journal-entry,
+// because components never import each other (11.2).
+
+// The box grows with what is written, from two lines; its frame is drawn around it by
+// .box, so the theme draws none. Line spacing is padding, never margin.
+const boxTheme = (fontSize, minHeight) =>
+  EditorView.theme({
+    "&": { color: "var(--color-ink)", backgroundColor: "transparent" },
+    "&.cm-focused": { outline: "none" },
+    ".cm-scroller": { fontFamily: "var(--font-sans)", lineHeight: "var(--leading-normal)" },
+    ".cm-content": {
+      caretColor: "var(--color-accent)",
+      padding: "var(--space-xs) var(--space-sm)",
+      minHeight,
+    },
+    ".cm-line": { fontSize, padding: "0" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
+    ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
+    ".cm-placeholder": { color: "var(--color-mute)" },
+  });
+const bodyTheme = boxTheme("var(--text-body)", "calc(var(--text-body) * var(--leading-normal) * 2)");
+const smallTheme = boxTheme("var(--text-sm)", "calc(var(--text-sm) * var(--leading-normal) * 2)");
+
+// The Vim plugin ships its own Prec.highest theme for the block cursor in colours that
+// are not tokens; this one outranks it. Unfocused, the cursor is hollowed with an inset
+// shadow, because Safari clips the outline the plugin draws.
+const fatCursorTheme = Prec.highest(
+  EditorView.theme({
+    ".cm-fat-cursor": {
+      background: "var(--color-accent) !important",
+      color: "var(--color-accent-text) !important",
+    },
+    "&:not(.cm-focused) .cm-fat-cursor": {
+      background: "none !important",
+      outline: "none !important",
+      color: "var(--color-ink) !important",
+      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
+    },
+  }),
+);
+
+const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
+
+// A box's text set from the draft rather than typed, which is not sent back as an edit.
+const fromDraft = Annotation.define();
 
 // Which evaluator was open, and its book, kept per browser under the view's name (3.1);
 // losing it loses nothing but the place.
@@ -103,30 +155,34 @@ class EvaluatorEditor extends LitElement {
       color: var(--color-mute);
     }
     input[type="text"],
-    textarea {
+    .box {
       box-sizing: border-box;
       width: 100%;
+      min-width: 0;
       font: inherit;
       color: var(--color-ink);
       background: var(--color-canvas-soft);
       border: var(--border-width) solid var(--color-border);
       border-radius: var(--radius-sm);
+    }
+    input[type="text"] {
       padding: var(--space-xs) var(--space-sm);
     }
-    textarea {
-      resize: vertical;
-      field-sizing: content;
-      min-height: calc(var(--text-body) * var(--leading-normal) * 2 + var(--space-xs) * 2);
-      line-height: var(--leading-normal);
+    /* CodeMirror owns everything inside .box; the frame is drawn here, around it. */
+    .box {
+      overflow: hidden;
+      cursor: text;
     }
-    input::placeholder,
-    textarea::placeholder {
+    input::placeholder {
       color: var(--color-mute);
     }
     input:focus-visible,
-    textarea:focus-visible {
+    .box:focus-within {
       outline: none;
       box-shadow: var(--focus-ring);
+    }
+    ::selection {
+      background: var(--color-accent-selection);
     }
     input.title {
       font-size: var(--text-subtitle);
@@ -206,9 +262,8 @@ class EvaluatorEditor extends LitElement {
       grid-area: name;
       font-weight: var(--weight-semibold);
     }
-    .option textarea {
+    .option .box {
       grid-area: desc;
-      font-size: var(--text-sm);
     }
     .option button {
       grid-area: rm;
@@ -260,26 +315,133 @@ class EvaluatorEditor extends LitElement {
 
   #actor = new ActorController(this);
 
-  // A panel's focus lands in what it shows (list-then-item, dock-desk): the evaluator's
-  // name. The shadow root does not delegate focus, because Safari does not focus a
-  // pressed button, so a delegating root would hand a press on any button to the name,
-  // scroll it into view and lose the click.
+  // The field that last held the keyboard in this editor.
+  #last = null;
+  // The CodeMirror boxes by key ("<question>:text", "<question>:<option>:description"),
+  // each with the region it is drawn in; and what the last render asked of each box.
+  #boxes = new Map();
+  #wanted = new Map();
+
+  // A panel's focus lands in what it shows (list-then-item, dock-desk): back in the field
+  // last used, else the evaluator's name. The shadow root does not delegate focus,
+  // because Safari does not focus a pressed button, so a delegating root would hand a
+  // press on any button to the name, scroll it into view and lose the click.
   focus(options) {
-    const name = this.renderRoot.querySelector("input.title");
-    if (name) name.focus(options);
+    const target = this.#last?.isConnected && this.renderRoot.contains(this.#last) ? this.#last : this.renderRoot.querySelector("input.title");
+    if (target) target.focus(options);
     else super.focus(options);
+  }
+
+  // Safari does not focus a pressed button or choice, so the press would drop the
+  // keyboard on the page, and with Vim keys on the desk would hand it back to this
+  // panel far from where the user pressed. The press focuses what it pressed instead,
+  // without scrolling, and the click still lands on it.
+  #pressed(event) {
+    const control = event.composedPath()[0]?.closest?.("button, input[type=radio]");
+    if (!control || !this.renderRoot.contains(control)) return;
+    event.preventDefault();
+    control.focus({ preventScroll: true });
   }
 
   #send(event) {
     this.#actor.send(event);
   }
 
-  // Adding a question or an option puts the keyboard in its first field.
+  // Adding a question or an option puts the keyboard in its first field, in Vim's insert
+  // mode when Vim keys is on, so the first key typed is text.
   async #add(event, selector) {
     this.#send(event);
     await this.updateComplete;
     const fields = this.renderRoot.querySelectorAll(selector);
-    fields[fields.length - 1]?.focus();
+    const field = fields[fields.length - 1];
+    if (!field) return;
+    const box = [...this.#boxes.values()].find((b) => b.region === field);
+    if (!box) return field.focus();
+    box.view.focus();
+    const cm = box.vimOn ? getCM(box.view) : null;
+    if (cm && cm.state?.vim?.insertMode !== true) Vim.handleKey(cm, "i", "user");
+  }
+
+  // One box as the render wants it: its text, label, placeholder, size and where its
+  // edits go. The element is drawn here; the editor inside it is made in updated().
+  #box(key, field, { text, label, hint = "", small = false, edit }) {
+    this.#wanted.set(key, { text, label, hint, small, edit });
+    return html`<div class="box" data-key=${key} data-field=${field}></div>`;
+  }
+
+  #extensions(key, spec, vimOn, labelled) {
+    return [
+      // First: the Vim plugin must see a key before any other keymap does.
+      this.#boxes.get(key).vim.of(vimExtensions(vimOn)),
+      // Vim hides the native selection, so its visual-mode range shows only through
+      // CodeMirror's own selection layer.
+      drawSelection(),
+      history(),
+      keymap.of(historyKeymap),
+      // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
+      keymap.of([{ key: "Enter", run: insertNewline }]),
+      EditorView.lineWrapping,
+      spec.small ? smallTheme : bodyTheme,
+      spec.hint ? placeholder(spec.hint) : [],
+      labelled.of(EditorView.contentAttributes.of({ "aria-label": spec.label })),
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged || update.transactions.every((t) => t.annotation(fromDraft))) return;
+        this.#boxes.get(key)?.edit(update.state.doc.toString());
+      }),
+      // WebKit keeps the document's selection inside a blurred editor, and a later key
+      // nobody cancels is typed there; dropping it on blur leaves nothing to type into.
+      EditorView.domEventHandlers({ blur: () => void document.getSelection()?.removeAllRanges() }),
+    ];
+  }
+
+  // Lit draws the boxes by position, so a region can come to stand for another key (a
+  // question removed above it): an editor whose region no longer carries its key is
+  // dropped and made again, and every editor follows its draft text, label and Vim.
+  updated() {
+    const vimOn = this.#actor.snapshot?.context.vimKeys === true;
+    const regions = new Map([...this.renderRoot.querySelectorAll(".box[data-key]")].map((r) => [r.dataset.key, r]));
+    for (const [key, box] of this.#boxes) {
+      if (regions.get(key) === box.region && box.view.dom.parentNode === box.region) continue;
+      box.view.destroy();
+      this.#boxes.delete(key);
+    }
+    for (const [key, region] of regions) {
+      const spec = this.#wanted.get(key);
+      if (!spec) continue;
+      let box = this.#boxes.get(key);
+      if (!box) {
+        region.replaceChildren();
+        box = { region, vim: new Compartment(), labelled: new Compartment(), vimOn, label: spec.label, edit: spec.edit };
+        this.#boxes.set(key, box);
+        box.view = new EditorView({
+          parent: region,
+          // Shadow DOM: CodeMirror reads the selection through the root and mounts its
+          // stylesheet there (7.5), so it must know the shadow root.
+          root: this.renderRoot,
+          state: EditorState.create({ doc: spec.text, extensions: this.#extensions(key, spec, vimOn, box.labelled) }),
+        });
+        continue;
+      }
+      box.edit = spec.edit;
+      const effects = [];
+      if (box.vimOn !== vimOn) {
+        box.vimOn = vimOn;
+        effects.push(box.vim.reconfigure(vimExtensions(vimOn)));
+      }
+      if (box.label !== spec.label) {
+        box.label = spec.label;
+        effects.push(box.labelled.reconfigure(EditorView.contentAttributes.of({ "aria-label": spec.label })));
+      }
+      const doc = box.view.state.doc.toString();
+      const changes = doc === spec.text ? undefined : { from: 0, to: doc.length, insert: spec.text };
+      if (changes || effects.length) box.view.dispatch({ changes, effects, annotations: changes ? fromDraft.of(true) : undefined });
+    }
+  }
+
+  disconnectedCallback() {
+    for (const box of this.#boxes.values()) box.view.destroy();
+    this.#boxes.clear();
+    super.disconnectedCallback();
   }
 
   render() {
@@ -291,9 +453,15 @@ class EvaluatorEditor extends LitElement {
     if (draft.removing) return html`<p class="note">This evaluator was deleted.</p>`;
     const stored = evaluators.some((r) => r.id === draft.id);
     const questions = draft.questions.filter((q) => !q.removing);
+    this.#wanted.clear();
     return html`
       <div class="page">
-        <form @submit=${(e) => e.preventDefault()} @focusout=${() => this.#send({ type: "_blur" })}>
+        <form
+          @submit=${(e) => e.preventDefault()}
+          @mousedown=${(e) => this.#pressed(e)}
+          @focusin=${(e) => (this.#last = e.composedPath()[0])}
+          @focusout=${() => this.#send({ type: "_blur" })}
+        >
           <label class="field">
             <span class="caption">Name</span>
             <input
@@ -309,7 +477,7 @@ class EvaluatorEditor extends LitElement {
             <div class="questions">${questions.map((q, i) => this.#question(q, i))}</div>
           </fieldset>
           <div class="actions">
-            <button type="button" @click=${() => this.#add({ type: "_addQuestion" }, ".question .text")}>Add a question</button>
+            <button type="button" @click=${() => this.#add({ type: "_addQuestion" }, '.question [data-field="text"]')}>Add a question</button>
           </div>
           ${stored
             ? html`<div class="actions">
@@ -337,13 +505,7 @@ class EvaluatorEditor extends LitElement {
           <label><input type="radio" name="kind-${q.id}" value="yesno" .checked=${q.kind === "yesno"} @change=${() => kind("yesno")} />Yes / no</label>
           <label><input type="radio" name="kind-${q.id}" value="pick" .checked=${q.kind === "pick"} @change=${() => kind("pick")} />Pick one</label>
         </div>
-        <textarea
-          class="text"
-          aria-label="Question ${n}"
-          placeholder="Write the question"
-          .value=${q.text}
-          @input=${(e) => edit({ text: e.target.value })}
-        ></textarea>
+        ${this.#box(`${q.id}:text`, "text", { text: q.text, label: `Question ${n}`, hint: "Write the question", edit: (text) => edit({ text }) })}
         ${q.kind === "yesno" ? this.#yesno(q, edit) : this.#options(q)}
       </div>
     `;
@@ -351,14 +513,14 @@ class EvaluatorEditor extends LitElement {
 
   #yesno(q, edit) {
     return html`
-      <label class="field">
-        <span class="caption">Yes means <span class="mute">(optional)</span></span>
-        <textarea class="yes" .value=${q.yes} @input=${(e) => edit({ yes: e.target.value })}></textarea>
-      </label>
-      <label class="field">
-        <span class="caption">No means <span class="mute">(optional)</span></span>
-        <textarea class="no" .value=${q.no} @input=${(e) => edit({ no: e.target.value })}></textarea>
-      </label>
+      <div class="field">
+        <span class="caption" aria-hidden="true">Yes means <span class="mute">(optional)</span></span>
+        ${this.#box(`${q.id}:yes`, "yes", { text: q.yes, label: "Yes means (optional)", edit: (yes) => edit({ yes }) })}
+      </div>
+      <div class="field">
+        <span class="caption" aria-hidden="true">No means <span class="mute">(optional)</span></span>
+        ${this.#box(`${q.id}:no`, "no", { text: q.no, label: "No means (optional)", edit: (no) => edit({ no }) })}
+      </div>
     `;
   }
 
@@ -379,12 +541,13 @@ class EvaluatorEditor extends LitElement {
                   .value=${o.name}
                   @input=${(e) => edit(o, { name: e.target.value })}
                 />
-                <textarea
-                  aria-label="What ${o.name.trim() || "this option"} means"
-                  placeholder="What it means (optional)"
-                  .value=${o.description}
-                  @input=${(e) => edit(o, { description: e.target.value })}
-                ></textarea>
+                ${this.#box(`${q.id}:${o.id}:description`, "description", {
+                  text: o.description,
+                  label: `What ${o.name.trim() || "this option"} means`,
+                  hint: "What it means (optional)",
+                  small: true,
+                  edit: (description) => edit(o, { description }),
+                })}
                 <button
                   type="button"
                   class="quiet icon"
