@@ -26,10 +26,10 @@ const probe = {
 const query = (name, payload = {}) => ask(probe, "books", name, payload);
 
 function journalStore(days) {
-  const tables = { days: new Map(days.map((r) => [r.id, r])), projects: new Map(), detectors: new Map(), answers: new Map() };
+  const tables = { days: new Map(days.map((r) => [r.id, r])) };
   return {
     all: (t) => Promise.resolve([...tables[t].values()]),
-    put: (t, r) => (tables[t].set(r.key ?? r.id, r), Promise.resolve()),
+    put: (t, r) => (tables[t].set(r.id, r), Promise.resolve()),
     outboxAll: () => Promise.resolve([]),
     outboxPut: () => Promise.resolve(),
     outboxDelete: () => Promise.resolve(),

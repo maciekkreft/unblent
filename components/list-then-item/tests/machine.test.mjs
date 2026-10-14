@@ -79,46 +79,39 @@ test("the container emits nothing and asks nothing (6.4)", () => {
   assert.deepEqual(machine.config.meta.asks, []);
 });
 
-test("a detector pick shows the detector editor, and without one the list stays", () => {
-  const a = start([{ name: "detector-editor", showsOn: "detector.selected" }]);
-  a.send({ type: "detector.selected", id: "01K6SEED00000000000000RB01" });
-  assert.equal(a.getSnapshot().context.shown, "detector-editor");
-  const bare = start([]);
-  assert.equal(bare.getSnapshot().can({ type: "detector.selected", id: "01K6SEED00000000000000RB01" }), false);
-});
+// Two levels: an outer container whose item is an inner one, each its own actor with its
+// own remembered child. A book pick brings up the inner container, which lists the book's
+// notes; a note pick shows its editor.
+const OUTER = [{ name: "list-then-item#book-notes", showsOn: "book.selected" }];
+const INNER = [{ name: "note-editor", showsOn: "note.selected" }];
+const BOOK = { id: "01K7TEST00000000000000BK01" };
+const NOTE = { id: "01K7TEST00000000000000NT01" };
 
-// Two levels (the journal's Detectors dock): an outer container whose item is an inner
-// one, each its own actor with its own remembered child.
-const OUTER = [{ name: "list-then-item#project-detectors", showsOn: "detector-project.selected" }];
-const INNER = [{ name: "detector-editor", showsOn: "detector.selected" }];
-const PROJECT = { id: "01K7SEED00000000000000JP01" };
-const DETECTOR = { id: "01K7SEED00000000000000JD01", project: PROJECT.id };
-
-test("a project pick shows the inner container, and a detector pick shows its editor", () => {
-  const outer = start(OUTER, null, "detector-projects");
-  const inner = start(INNER, null, "detector-list", "detector-project.selected");
-  for (const event of [{ type: "detector-project.selected", ...PROJECT }, { type: "detector.selected", ...DETECTOR }]) {
+test("a book pick shows the inner container, and a note pick shows its editor", () => {
+  const outer = start(OUTER, null, "book-shelf");
+  const inner = start(INNER, null, "note-list", "book.selected");
+  for (const event of [{ type: "book.selected", ...BOOK }, { type: "note.selected", ...NOTE }]) {
     outer.send(event);
     inner.send(event);
   }
-  assert.equal(outer.getSnapshot().context.shown, "list-then-item#project-detectors", "the outer level stays on the inner container");
-  assert.equal(inner.getSnapshot().context.shown, "detector-editor");
+  assert.equal(outer.getSnapshot().context.shown, "list-then-item#book-notes", "the outer level stays on the inner container");
+  assert.equal(inner.getSnapshot().context.shown, "note-editor");
   inner.send({ type: "_back" });
-  assert.equal(inner.getSnapshot().context.shown, null, "Back from the editor shows the project's detectors");
+  assert.equal(inner.getSnapshot().context.shown, null, "Back from the editor shows the book's notes");
   outer.send({ type: "_back" });
-  assert.equal(outer.getSnapshot().context.shown, null, "Back from the detectors shows the projects");
+  assert.equal(outer.getSnapshot().context.shown, null, "Back from the notes shows the books");
 });
 
-test("picking a project again opens the inner container at its list, not at the detector left open", () => {
-  const inner = start(INNER, "detector-editor", "detector-list", "detector-project.selected");
-  assert.equal(inner.getSnapshot().context.shown, "detector-editor", "a reload keeps the editor shown");
-  inner.send({ type: "detector-project.selected", ...PROJECT });
+test("picking a book again opens the inner container at its list, not at the note left open", () => {
+  const inner = start(INNER, "note-editor", "note-list", "book.selected");
+  assert.equal(inner.getSnapshot().context.shown, "note-editor", "a reload keeps the editor shown");
+  inner.send({ type: "book.selected", ...BOOK });
   assert.equal(inner.getSnapshot().context.shown, null);
 });
 
 test("a container's own gesture opens it at its list only when it is nested (opensOn)", () => {
-  const top = start(INNER, "detector-editor", "detector-list");
-  assert.equal(top.getSnapshot().can({ type: "detector-project.selected", ...PROJECT }), false);
+  const top = start(INNER, "note-editor", "note-list");
+  assert.equal(top.getSnapshot().can({ type: "book.selected", ...BOOK }), false);
   const item = start([{ name: "book-reader", showsOn: "book.selected" }], null, "book-shelf", "book.selected");
   item.send({ type: "book.selected", id: "x" });
   assert.equal(item.getSnapshot().context.shown, "book-reader", "an item declaring the gesture still wins");
@@ -126,7 +119,7 @@ test("a container's own gesture opens it at its list only when it is nested (ope
 
 test("one Back bar at a time: none on the list, and none while a nested container shows an item", () => {
   assert.equal(drawsBar(null, false), false);
-  assert.equal(drawsBar("detector-editor", false), true);
-  assert.equal(drawsBar("list-then-item#project-detectors", false), true);
-  assert.equal(drawsBar("list-then-item#project-detectors", true), false);
+  assert.equal(drawsBar("note-editor", false), true);
+  assert.equal(drawsBar("list-then-item#book-notes", false), true);
+  assert.equal(drawsBar("list-then-item#book-notes", true), false);
 });

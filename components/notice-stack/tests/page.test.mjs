@@ -88,12 +88,19 @@ const REMOVED_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SETTLED_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
 // Stands in for the views that delete and the facts that listen, which this page does
-// not hold: a throwaway component that emits removal.started with its real schema and
+// not hold: a throwaway component that emits removal.started with its schema and
 // keeps every removal.undone and removal.settled it hears in window.removals.
 const removalHarness = (page) =>
   page.evaluate(async () => {
     const [{ mount }, { setup, emit }] = await Promise.all([import("/static/bus/bus.js"), import("xstate")]);
-    const schema = await (await fetch("/static/components/detector-list/events/removal.started.json")).json();
+    // No component emits removal.started, so no copy of its schema is served; its shape
+    // is removal.undone's with the thing's name added.
+    const undone = await (await fetch("/static/components/notice-stack/events/removal.undone.json")).json();
+    const schema = {
+      ...undone,
+      properties: { ...undone.properties, name: { type: "string" } },
+      required: [...undone.required, "name"],
+    };
     window.removals = [];
     const keep = ({ event }) => window.removals.push({ type: event.type, kind: event.kind, id: event.id });
     const harness = setup({}).createMachine({

@@ -7,8 +7,7 @@ import { setup, assign } from "xstate";
 
 // The item to show for a selection gesture: the last child whose `shows-on` names this
 // event (6.4). The selection gestures are the closed set the container consumes:
-// book.selected, note.selected, conversation.selected, highlights.selected,
-// detector-project.selected and detector.selected.
+// book.selected, note.selected, conversation.selected and highlights.selected.
 const shownFor = (items, type) => {
   const matching = items.filter((item) => item.showsOn === type);
   return matching.length ? matching[matching.length - 1].name : null;
@@ -20,7 +19,7 @@ const kept = (items, shown) => (items.some((item) => item.name === shown) ? show
 
 // A selection gesture: it shows the item that declares it. A container that is itself
 // the item of an outer list-then-item also hears the gesture that brings it up (its own
-// `shows-on`, `opensOn`): that pick names something new, a project say, so the container
+// `shows-on`, `opensOn`): that pick names something new, a book say, so the container
 // opens at its list rather than at an item picked under the previous one. 6.4: an event
 // neither declares is not this container's business, so it stays unhandled and the trace
 // records it honestly as ignored.
@@ -47,8 +46,7 @@ export const machine = setup({}).createMachine({
       "A container for a list and the thing picked from it, shown in one panel. The first child " +
       "is the list, and each later child is an item whose `shows-on` names the selection " +
       "gesture that brings it up (`book.selected`, `note.selected`, `conversation.selected`, " +
-      "`highlights.selected`, `detector-project.selected`, " +
-      "`detector.selected`); the item is shown under a Back bar naming the " +
+      "`highlights.selected`); the item is shown under a Back bar naming the " +
       "list's `label`, and Back shows the list again; so does Escape pressed inside the item when " +
       "the item does not use it itself (an editor in Vim's insert mode leaves insert mode first). " +
       "When the shown child changes while the keyboard is inside the container, the keyboard " +
@@ -56,11 +54,9 @@ export const machine = setup({}).createMachine({
       "device under the container's id. It emits and asks nothing, so a new kind of list needs " +
       "only one more consumed gesture here. On a desk it is one tab, with its own `label`, " +
       "`side`, `height` and `shows-on`, and a page holds one per pair, each with its own `id` " +
-      "(4.1). An item may itself be a list-then-item, so one panel can go two levels deep, as " +
-      "the journal's Detectors dock does: projects, then a project's detectors, then one detector. " +
+      "(4.1). An item may itself be a list-then-item, so one panel can go two levels deep. " +
       "The panel shows one Back bar at a time, naming the level above, and the inner container " +
-      "opens at its list each time it is brought up; a list may name itself after what it shows, " +
-      "as the detector list names itself after its project.",
+      "opens at its list each time it is brought up; a list may name itself after what it shows.",
     kind: "view", emits: [], asks: [], attributes: ["height"],
   },
   context: ({ input }) => ({
@@ -77,8 +73,6 @@ export const machine = setup({}).createMachine({
         "note.selected": select,
         "conversation.selected": select,
         "highlights.selected": select,
-        "detector-project.selected": select,
-        "detector.selected": select,
         // Leading underscore (7.2): a user gesture forwarded by the view, an internal
         // message the bus never routes.
         _back: { actions: assign({ shown: null }) },

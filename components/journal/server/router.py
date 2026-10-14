@@ -1,14 +1,10 @@
 """journal's server module (architecture.md 5): the far end of the replicated journal
 fact. Every route needs a signed-in user (require_user) and resolves that user's own
 SQLite file, so isolation holds by construction and the code reads as if for a single
-user. version is assigned here. Only a day's text can conflict between devices: a
-stale base for a day is rejected as a conflict carrying the server's copy. Projects,
-detectors and answers are last write wins, so a write to them is never refused; a
-delete still always wins (5), so a write onto one of their tombstones comes back as the
-tombstone rather than reviving it.
+user. version is assigned here. A day's text can conflict between devices: a stale
+base is rejected as a conflict carrying the server's copy.
 """
 
-import json
 import re
 import sqlite3
 import time
@@ -58,7 +54,7 @@ def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-# --- The four kinds ------------------------------------------------------------------
+# --- The kinds ----------------------------------------------------------------------
 # Each kind names its table, the columns that key a record, the columns a write may
 # change, a parser from the browser's record to those columns (None when invalid) and
 # the record the browser is sent back.
@@ -76,42 +72,6 @@ def _day_record(row: sqlite3.Row) -> dict:
     return {"id": row["id"], "day": row["day"], "text": row["text"], "editedAt": row["edited_at"]}
 
 
-def _project_columns(r: dict) -> dict | None:
-    if not (_is_id(r.get("id")) and isinstance(r.get("name"), str) and isinstance(r.get("on"), bool)):
-        return None
-    return {"id": r["id"], "name": r["name"], "on": int(r["on"])}
-
-
-def _project_record(row: sqlite3.Row) -> dict:
-    return {"id": row["id"], "name": row["name"], "on": bool(row["on"])}
-
-
-def _detector_columns(r: dict) -> dict | None:
-    if not (_is_id(r.get("id")) and _is_id(r.get("project")) and isinstance(r.get("name"), str)):
-        return None
-    questions = r.get("questions")
-    if not (isinstance(r.get("on"), bool) and isinstance(questions, list) and all(isinstance(q, dict) for q in questions)):
-        return None
-    return {"id": r["id"], "project": r["project"], "name": r["name"], "on": int(r["on"]), "questions": json.dumps(questions)}
-
-
-def _detector_record(row: sqlite3.Row) -> dict:
-    return {"id": row["id"], "project": row["project"], "name": row["name"], "on": bool(row["on"]), "questions": json.loads(row["questions"])}
-
-
-def _answer_columns(r: dict) -> dict | None:
-    answer, wording = r.get("answer"), r.get("wording")
-    if not (isinstance(answer, dict) and _is_id(answer.get("id")) and isinstance(wording, dict)):
-        return None
-    if not (isinstance(r.get("text"), str) and _is_int(r.get("at"))):
-        return None
-    return {"question": answer["id"], "text": r["text"], "wording": json.dumps(wording), "answer": json.dumps(answer), "at": r["at"]}
-
-
-def _answer_record(row: sqlite3.Row) -> dict:
-    return {"text": row["text"], "wording": json.loads(row["wording"]), "answer": json.loads(row["answer"]), "at": row["at"]}
-
-
 class _Kind(NamedTuple):
     keys: tuple
     fields: tuple
@@ -124,9 +84,6 @@ class _Kind(NamedTuple):
 # only when the row is born and is not among the fields a later write may change.
 _KINDS = {
     "days": _Kind(("id",), ("text", "edited_at"), _day_columns, _day_record, conflicts=True),
-    "projects": _Kind(("id",), ("name", "on"), _project_columns, _project_record, conflicts=False),
-    "detectors": _Kind(("id",), ("project", "name", "on", "questions"), _detector_columns, _detector_record, conflicts=False),
-    "answers": _Kind(("question", "text"), ("wording", "answer", "at"), _answer_columns, _answer_record, conflicts=False),
 }
 
 
@@ -138,9 +95,17 @@ def _full(kind: _Kind, row: sqlite3.Row) -> dict:
     return {**kind.record(row), "version": row["version"], "deleted": bool(row["deleted"])}
 
 
+# Tables an older journal file may still hold, from the journal's detectors. They are
+# left as they are, and a new seq continues past theirs, so a device whose cursor
+# already passed them still pulls the next day.
+_OLD_TABLES = ("projects", "detectors", "answers")
+
+
 def _next_seq(connection: sqlite3.Connection) -> int:
-    # One order across the four tables, so a single cursor covers the whole journal.
-    union = " UNION ALL ".join(f"SELECT MAX(seq) AS s FROM {table}" for table in _KINDS)
+    # One order across every table, so a single cursor covers the whole journal.
+    present = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    tables = [*_KINDS, *(t for t in _OLD_TABLES if t in present)]
+    union = " UNION ALL ".join(f"SELECT MAX(seq) AS s FROM {table}" for table in tables)
     return (connection.execute(f"SELECT COALESCE(MAX(s), 0) FROM ({union})").fetchone()[0]) + 1
 
 
@@ -179,7 +144,7 @@ def _write(name: str, kind: _Kind, columns: dict, base: int | None, deleted: boo
     if deleted:
         return (_full(kind, row), 200) if row["deleted"] else (update(row["version"] + 1, True), 200)
     # A write onto a tombstone loses to the delete, the newer fact: a day's edit comes
-    # back as a conflict, and the other kinds simply learn the record is gone.
+    # back as a conflict.
     if row["deleted"]:
         return _full(kind, row), (409 if kind.conflicts else 200)
     # What the server already holds is not a change: no new version and no new seq. It

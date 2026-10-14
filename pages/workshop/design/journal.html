@@ -40,30 +40,16 @@
     <script type="module" src="/static/components/viewport/fact.js"></script>
     <script type="module" src="/static/components/settings/fact.js"></script>
     <script type="module" src="/static/components/session/fact.js"></script>
-    <script type="module" src="/static/components/llm/fact.js"></script>
     <script type="module" src="/static/components/journal/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/journal-days/view.js"></script>
     <script type="module" src="/static/components/journal-entry/view.js"></script>
-    <script type="module" src="/static/components/list-then-item/view.js"></script>
-    <script type="module" src="/static/components/detector-projects/view.js"></script>
-    <script type="module" src="/static/components/detector-list/view.js"></script>
-    <script type="module" src="/static/components/detector-editor/view.js"></script>
-    <script type="module" src="/static/components/notice-stack/view.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
     <journal-days></journal-days>
-    <journal-entry judging></journal-entry>
-    <list-then-item id="detectors" label="Detectors" height="fill">
-      <detector-projects label="Projects"></detector-projects>
-      <list-then-item id="project-detectors" shows-on="detector-project.selected" height="fill">
-        <detector-list></detector-list>
-        <detector-editor shows-on="detector.selected" height="fill"></detector-editor>
-      </list-then-item>
-    </list-then-item>
+    <journal-entry></journal-entry>
     <viewport-switch></viewport-switch>
-    <notice-stack></notice-stack>
   </body>
 </html>
