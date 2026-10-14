@@ -793,6 +793,8 @@ class PageChecker(HTMLParser):
         self._script_data = ""
         self.kinds = []
         self.custom = []
+        self.shows_on = []
+        self._open = []
 
     def _fail(self, detail: str) -> None:
         fail(self.path, "page check (8)", detail)
@@ -805,6 +807,10 @@ class PageChecker(HTMLParser):
         attrs = dict(attrs)
         if "-" in tag:
             self.custom.append((tag, attrs.get("id")))
+            if "shows-on" in attrs:
+                parent = self._open[-1] if self._open else None
+                self.shows_on.append((tag, attrs["shows-on"], parent))
+            self._open.append((tag, attrs.get("id")))
             return
         if tag in ("html", "head", "body", "meta", "title"):
             if tag == "meta" and attrs.get("name") == "kind":
@@ -840,6 +846,10 @@ class PageChecker(HTMLParser):
             self._script_data += data
 
     def handle_endtag(self, tag):
+        if "-" in tag:
+            while self._open and self._open.pop()[0] != tag:
+                pass
+            return
         if tag != "script":
             return
         if self._script_type == "importmap":
@@ -875,9 +885,33 @@ def duplicate_id_problems(custom: list) -> list:
     return problems
 
 
-def check_pages() -> None:
+def shows_on_problems(shows_on: list, consumes: dict) -> list:
+    """A `shows-on` names the gesture on which the tag's container shows it, and
+    the bus delivers to the container only the events its machine handles (7.3), so
+    a name the container does not consume would leave the tag silently never shown.
+    `shows_on` is (tag, event, (container tag, container id) or None) per tag;
+    `consumes` maps a component name to the events its manifest consumes."""
+    problems = []
+    for tag, event, parent in shows_on:
+        if parent is None:
+            problems.append(f'<{tag}> has shows-on="{event}" but sits in no container to show it')
+            continue
+        container, cid = parent
+        if event not in consumes.get(container, ()):
+            where = f"<{container} id=\"{cid}\">" if cid else f"<{container}>"
+            problems.append(
+                f'<{tag}> has shows-on="{event}", but its container {where} does not consume '
+                f"{event}, so the tag would never be shown; add {event} to the gestures "
+                f"components/{container}/machine.js handles, or fix the name")
+    return problems
+
+
+def check_pages() -> dict:
+    """Returns each page's parsed checker, for the checks that also need manifests."""
+    parsed = {}
     for path in sorted(glob.glob("pages/**/*.html", root_dir=ROOT, recursive=True)):
         checker = PageChecker(path)
+        parsed[path] = checker
         checker.feed((ROOT / path).read_text())
         if len(checker.kinds) != 1 or checker.kinds[0] not in PAGE_KINDS:
             fail(path, "page check (8)",
@@ -885,6 +919,14 @@ def check_pages() -> None:
                  f"{PAGE_KINDS}, got {checker.kinds}")
         for detail in duplicate_id_problems(checker.custom):
             fail(path, "page check (8)", detail)
+    return parsed
+
+
+def check_shows_on(manifests: dict, pages: dict) -> None:
+    consumes = {Path(p).parent.name: set(m.get("consumes") or []) for p, m in manifests.items()}
+    for path, checker in pages.items():
+        for detail in shows_on_problems(checker.shows_on, consumes):
+            fail(path, "shows-on check (8)", detail)
 
 
 # --- Page composition check (architecture.md 8) ----------------------------------
@@ -1847,7 +1889,8 @@ def main() -> None:
     _timed(timings, "composer", check_composer)
     _timed(timings, "python imports", check_python_imports)
     _timed(timings, "store check", check_store, manifests)
-    _timed(timings, "pages", check_pages)
+    parsed_pages = _timed(timings, "pages", check_pages)
+    _timed(timings, "shows-on", check_shows_on, manifests, parsed_pages)
     _timed(timings, "page components", check_page_components, manifests)
     _timed(timings, "document", check_document_writes)
     _timed(timings, "styles", check_styles)
