@@ -108,8 +108,8 @@ for (const engine of ENGINES) {
       const rows = await sheetRows(page);
       assert.deepEqual(
         rows.map((r) => r.path),
-        ["/workshop/design/tokens", "/workshop/design/contracts", "/workshop/design/components", "/workshop/design/books", "/workshop/design/conversations", "/workshop/design/dock", "/workshop/design/journal", "/workshop/design/judge",
-         "/workshop/design/list-then-item", "/workshop/design/llm", "/workshop/design/notes", "/workshop/design/redline", "/workshop/design/session", "/workshop/design/settings", "/workshop/design/subject", "/workshop/design/trace", "/workshop/design/work-desk", "/", "/workshop/apps/journal", "/workshop/apps/judge", "/workshop/apps/redline"],
+        ["/workshop/design/tokens", "/workshop/design/contracts", "/workshop/design/components", "/workshop/design/books", "/workshop/design/conversations", "/workshop/design/dock", "/workshop/design/journal",
+         "/workshop/design/list-then-item", "/workshop/design/llm", "/workshop/design/notes", "/workshop/design/redline", "/workshop/design/session", "/workshop/design/settings", "/workshop/design/subject", "/workshop/design/trace", "/workshop/design/work-desk", "/", "/workshop/apps/journal", "/workshop/apps/redline"],
       );
       assert.equal(rows.find((r) => r.path === "/workshop/design/settings").shown, null, "the current page has no hide control");
       const startNav = await navLinks(page);
@@ -121,7 +121,7 @@ for (const engine of ENGINES) {
       const s = await stored(page);
       assert.equal(s.nav[0].path, "/workshop/design/contracts");
       assert.equal(s.nav[1].path, "/workshop/design/tokens");
-      assert.equal(s.nav.length, 21, "reordering materialises every page's position");
+      assert.equal(s.nav.length, 19, "reordering materialises every page's position");
       await until(async () => (await navLinks(page))[0] === "/workshop/design/contracts");
       assert.notDeepEqual(await navLinks(page), startNav);
 

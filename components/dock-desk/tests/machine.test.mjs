@@ -433,46 +433,45 @@ test("a chat picked shows its tab on its side (6.4)", async () => {
   ]);
 });
 
-// The Judge page: a case picked in Cases brings the Case tab forward, and Judge all the
-// Results tab.
-const JUDGE = [
-  { name: "case-list", label: "Cases", side: "left" },
-  { name: "case-editor", label: "Case", showsOn: "case.selected" },
-  { name: "decision-results", label: "Results", showsOn: "results.selected" },
+// A list docked on the left whose pick shows its item on the stage, beside another stage
+// tab: the item's tab comes forward when the list picks.
+const PICKER = [
+  { name: "reader", label: "Reader" },
+  { name: "note-list", label: "Notes", side: "left" },
+  { name: "note-editor", label: "Note", showsOn: "note.selected" },
 ];
+const N = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
-test("a case picked stages the case, and Judge all stages the results (6.4)", async () => {
+test("a pick in a docked list stages its item (6.4)", async () => {
   const { actor, emitted } = await settle(
-    stored({ stage: "decision-results", docks: { left: { open: true, views: ["case-list"] } } }),
-    { views: JUDGE },
+    stored({ stage: "reader", docks: { left: { open: true, views: ["note-list"] } } }),
+    { views: PICKER },
   );
-  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
-  actor.send({ type: "dock.changed", stage: "case-editor", docks: { left: { open: true, views: ["case-list"] } } });
-  actor.send({ type: "results.selected" });
-  assert.deepEqual(emitted.map((e) => e.stage), ["case-editor", "decision-results"]);
+  actor.send({ type: "note.selected", id: N });
+  assert.deepEqual(emitted.map((e) => e.stage), ["note-editor"]);
 });
 
-test("on a narrow desk, a case picked in the Cases drawer folds the drawers and shows the case (6.4)", async () => {
-  const docks = { left: { open: true, views: ["case-list"] }, right: { open: true, views: ["rubrics"] } };
-  const { actor, emitted } = await settle(stored({ stage: "case-editor", docks }), {
-    views: [...JUDGE, { name: "rubrics", label: "Detectors", side: "right" }],
+test("on a narrow desk, a pick in the left drawer folds the drawers and shows the item (6.4)", async () => {
+  const docks = { left: { open: true, views: ["note-list"] }, right: { open: true, views: ["chats"] } };
+  const { actor, emitted } = await settle(stored({ stage: "note-editor", docks }), {
+    views: [...PICKER, { name: "chats", label: "Chat", side: "right" }],
     narrow: () => true,
   });
-  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
+  actor.send({ type: "note.selected", id: N });
   assert.deepEqual(emitted, [
     {
       type: "dock.arranged",
-      stage: "case-editor",
-      docks: { left: { open: false, views: ["case-list"] }, right: { open: false, views: ["rubrics"] } },
+      stage: "note-editor",
+      docks: { left: { open: false, views: ["note-list"] }, right: { open: false, views: ["chats"] } },
     },
   ]);
 });
 
-test("on a wide desk, a case picked leaves the docks open (6.4)", async () => {
-  const docks = { left: { open: true, views: ["case-list"] } };
-  const { actor, emitted } = await settle(stored({ stage: "case-editor", docks }), { views: JUDGE, narrow: () => false });
-  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
-  assert.deepEqual(emitted, [], "the case is already staged and the dock stays");
+test("on a wide desk, a pick leaves the docks open (6.4)", async () => {
+  const docks = { left: { open: true, views: ["note-list"] } };
+  const { actor, emitted } = await settle(stored({ stage: "note-editor", docks }), { views: PICKER, narrow: () => false });
+  actor.send({ type: "note.selected", id: N });
+  assert.deepEqual(emitted, [], "the item is already staged and the dock stays");
 });
 
 test("on a narrow desk, a gesture that shows a docked view keeps its own side open (6.4)", async () => {
@@ -484,12 +483,10 @@ test("on a narrow desk, a gesture that shows a docked view keeps its own side op
   assert.deepEqual(emitted.at(-1).docks.left, { open: true, views: ["book-toc"], active: "book-toc" });
 });
 
-test("in failed, a case picked and Judge all stage their views (6.4)", async () => {
-  const { actor } = await settle(stored({ error: "unavailable" }), { views: JUDGE });
-  actor.send({ type: "case.selected", id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", project: "01ARZ3NDEKTSV4RRFFQ69G5FAW" });
-  assert.equal(actor.getSnapshot().context.stage, "case-editor");
-  actor.send({ type: "results.selected" });
-  assert.equal(actor.getSnapshot().context.stage, "decision-results");
+test("in failed, a pick stages its view (6.4)", async () => {
+  const { actor } = await settle(stored({ error: "unavailable" }), { views: PICKER });
+  actor.send({ type: "note.selected", id: N });
+  assert.equal(actor.getSnapshot().context.stage, "note-editor");
 });
 
 test("in failed, _open switches the stage locally", async () => {

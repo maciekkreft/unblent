@@ -79,12 +79,12 @@ test("the container emits nothing and asks nothing (6.4)", () => {
   assert.deepEqual(machine.config.meta.asks, []);
 });
 
-test("a tool pick shows the tool editor, and without one the list stays", () => {
-  const a = start([{ name: "rubric-editor", showsOn: "rubric.selected" }]);
-  a.send({ type: "rubric.selected", id: "01K6SEED00000000000000RB01" });
-  assert.equal(a.getSnapshot().context.shown, "rubric-editor");
+test("a detector pick shows the detector editor, and without one the list stays", () => {
+  const a = start([{ name: "detector-editor", showsOn: "detector.selected" }]);
+  a.send({ type: "detector.selected", id: "01K6SEED00000000000000RB01" });
+  assert.equal(a.getSnapshot().context.shown, "detector-editor");
   const bare = start([]);
-  assert.equal(bare.getSnapshot().can({ type: "rubric.selected", id: "01K6SEED00000000000000RB01" }), false);
+  assert.equal(bare.getSnapshot().can({ type: "detector.selected", id: "01K6SEED00000000000000RB01" }), false);
 });
 
 // Two levels (the journal's Detectors dock): an outer container whose item is an inner

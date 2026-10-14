@@ -290,8 +290,8 @@ export const machine = setup({
               actions: [
                 ({ context, event }) => context.decided(event.output),
                 assign({ decided: null }),
-                // A starter-key answer carries the count left, so Settings and Judge
-                // show it without a reload (architecture.md 12, "Starter keys").
+                // A starter-key answer carries the count left, so Settings and the
+                // journal show it without a reload (architecture.md 12, "Starter keys").
                 enqueueActions(({ context, event, enqueue }) => {
                   const left = event.output?.starterLeft;
                   if (left === undefined) return;

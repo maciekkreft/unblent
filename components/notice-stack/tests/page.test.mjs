@@ -93,7 +93,7 @@ const SETTLED_ID = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 const removalHarness = (page) =>
   page.evaluate(async () => {
     const [{ mount }, { setup, emit }] = await Promise.all([import("/static/bus/bus.js"), import("xstate")]);
-    const schema = await (await fetch("/static/components/project-bar/events/removal.started.json")).json();
+    const schema = await (await fetch("/static/components/detector-list/events/removal.started.json")).json();
     window.removals = [];
     const keep = ({ event }) => window.removals.push({ type: event.type, kind: event.kind, id: event.id });
     const harness = setup({}).createMachine({

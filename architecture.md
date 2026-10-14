@@ -600,9 +600,8 @@ The architecture document describes the rules; the checks are what make them rea
 - **Turn**: one message in a chat, immutable once finished — a user turn (text, and any results answering the tool calls before it) or an assistant turn (text, a status, and any tool calls).
 - **Start**: the general instructions a chat begins with, written once when it is created and never changed (see `conversations`).
 - **Tool**: one of the system's own queries, opted in by its owner, that the model may ask during a chat; it only reads, never acts (7.7).
-- **Detector**: a name and a list of questions Jev answers about a text, switched on or off, kept per project. In Judge it is stored as a *rubric*, owned by `rubrics`; it is not a tool, which names a chat lookup (7.7).
-- **Case**: a text kept in a Judge project for Jev to judge, with the right answers the user expects, one per question at most: yes or no for a yes / no question, or one option for a pick-one question. It is owned by `cases`.
-- **Project**: a named set of Judge detectors, cases and results, kept on this device. One project is the current one, and there is always at least one. It is owned by `projects`.
+- **Detector**: a name and a list of questions Jev answers about a text, switched on or off, kept per project of the journal and owned by `journal`; it is not a tool, which names a chat lookup (7.7).
+- **Project**: a named set of the journal's detectors, ticked on or off. It is owned by `journal`.
 - **Journal**: the one book the user writes, one chapter per day, only today's page editable. Its days are owned by `journal`, and `books` presents them as a book.
 
 ---
@@ -612,7 +611,7 @@ The architecture document describes the rules; the checks are what make them rea
 Where the product is heading. Nothing here is designed or built; each line is one sentence, and a proposal says how it leaves every line open.
 
 - Detectors that trigger tools, where a detector notices something in what the user writes (a yes / no or pick-one judgment by Jev), a tool does something, and a tool can be set to run when a detector fires; these tools act, unlike the chat's tools of 7.7, which only look things up.
-- Using the journal and Judge signed out, on the owner's Jev key for up to 100 requests and then asking for a key, leaving open how a signed-out visitor is counted and how all signed-out use together is capped, how a signed-out visitor gives a key, whether signing up keeps the count, and whether the count is shared between apps.
+- Using the journal signed out, on the owner's Jev key for up to 100 requests and then asking for a key, leaving open how a signed-out visitor is counted and how all signed-out use together is capped, how a signed-out visitor gives a key, and whether signing up keeps the count.
 - The side-dock chat, now being built, knowing more of what the reader is looking at: the open book and the chapter being read.
 - Every chat able to draw on the whole library — every book, note and highlight — so that what the reader marked and wrote shapes the answers.
 - Chats linked to books, so a book shows its notes and its chats.

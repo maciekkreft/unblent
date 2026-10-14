@@ -9,7 +9,7 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // memory arrive through input, so this stays a pure definition importable in Node.
 //
 // New detector is always the first row and always names a minted id no detector has yet,
-// as rubric-list's New detector does: picking it opens an empty editor under that id;
+// so picking it opens an empty editor under that id;
 // once the editor saves, journal.changed brings the real row and a fresh draft is minted.
 
 export const UNTITLED = "Untitled project";

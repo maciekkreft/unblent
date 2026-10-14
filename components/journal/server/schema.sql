@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS projects_seq ON projects(seq);
 
--- questions is the detector's questions as a JSON array, the shape rubrics stores.
+-- questions is the detector's questions as a JSON array.
 CREATE TABLE IF NOT EXISTS detectors (
     id        TEXT PRIMARY KEY,
     project   TEXT NOT NULL,

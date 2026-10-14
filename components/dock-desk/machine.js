@@ -109,7 +109,7 @@ const adopt = (layout, views, narrow) => (isEmpty(layout) ? seed(views, narrow) 
 // forward where it sits: a docked view shown on its side, unfolded, as _activate
 // does; a stage tab staged. On a narrow desk an open left or right side is a drawer
 // over the stage, so staging a view folds the drawers this gesture did not open: a
-// case picked in the Cases drawer shows the case.
+// note picked in the Notes drawer shows the note.
 const shown = (context, type) => {
   let { stage, docks } = context;
   let staged = false;
@@ -200,7 +200,7 @@ export const machine = setup({
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
       "arrives, and is never saved (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
-      "`note.selected`, `conversation.selected`, `case.selected`, `results.selected`), which " +
+      "`note.selected`, `conversation.selected`), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
       "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
@@ -358,8 +358,6 @@ export const machine = setup({
         "book.selected": show,
         "note.selected": show,
         "conversation.selected": show,
-        "case.selected": show,
-        "results.selected": show,
       },
     },
     // No dock fact on the page: the desk still works as a plain tab switcher, so
@@ -381,8 +379,6 @@ export const machine = setup({
         "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
-        "case.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
-        "results.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },
     },
   },

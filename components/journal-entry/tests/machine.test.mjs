@@ -85,7 +85,7 @@ test("with more than one project on, answers are grouped under each project's na
   assert.deepEqual(margins("A.", false, day(TODAY, "2026-10-12", "A."), off)[0].projects.map((g) => g.name), [null]);
 });
 
-test("a pick shows sure n%, or unsure below 40%; a yes / no its chance in Judge's colours", () => {
+test("a pick shows sure n%, or unsure below 40%; a yes / no its chance, coloured", () => {
   assert.equal(entry(pickQ(), answer("A.", pickQ(), { p: 0.4, choice: GOAL })).sure, "sure 40%");
   assert.equal(entry(pickQ(), answer("A.", pickQ(), { p: 0.39, choice: GOAL })).sure, "unsure");
   const tone = (p) => entry(yesQ(), answer("A.", yesQ(), { p })).tone;
@@ -140,7 +140,7 @@ test("Judge this day counts what an earlier day lacks, and the open day never of
   assert.equal(canJudge(picture({ reason: "signed-out" })), false);
 });
 
-test("the reason line uses Judge's words", () => {
+test("the reason line says why Jev is not reading", () => {
   const line = (reason, over = {}, usedUp = false) => reasonLine(picture({ reason, ...over }), usedUp);
   assert.equal(line(null), null);
   assert.equal(line("signed-out"), "Sign in to judge.");

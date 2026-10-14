@@ -37,7 +37,7 @@ class ActorController {
 }
 
 const HINT =
-  "Ticked projects read your writing, with the detectors ticked inside them. These are the journal's own; Judge's projects are separate.";
+  "Ticked projects read your writing, with the detectors ticked inside them.";
 
 class DetectorProjects extends LitElement {
   // A panel's focus lands in what it shows (list-then-item, dock-desk): delegating it

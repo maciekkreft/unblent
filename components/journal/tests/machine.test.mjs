@@ -258,8 +258,6 @@ test("a first visit starts with the two example projects and their detectors, st
   assert.equal(s.emitted.length, 0, "loading announces nothing");
   const ids = [...SEED.projects, ...SEED.detectors].flatMap((r) => [r.id, ...(r.questions ?? []).flatMap((q) => [q.id, ...q.options.map((o) => o.id)])]);
   assert.equal(new Set(ids).size, ids.length, "seed ids are unique");
-  const judge = readFileSync(resolve(HERE, "..", "..", "rubrics", "machine.js"), "utf8");
-  assert.ok(ids.every((id) => !judge.includes(id)), "and none is one of Judge's");
 });
 
 test("the catch-up never brings back a deleted example", async () => {
@@ -289,7 +287,7 @@ test("projects: new, renamed, switched; unticking a project keeps each detector'
   const n = s.emitted.length;
   s.send({ type: "detector.switched", id: IDS.goalOrValueYesNo, on: true }, DETECTOR_SWITCHED);
   s.send({ type: "detector-project.switched", id: "01K6SEED00000000000000PJ01", on: false }, PROJECT_SWITCHED);
-  assert.equal(s.emitted.length, n, "a repeat, or a project that is Judge's, changes nothing");
+  assert.equal(s.emitted.length, n, "a repeat, or a project the journal does not have, changes nothing");
 });
 
 test("a detector is saved into a journal project, switched on, keeping what is in its undo window", async () => {

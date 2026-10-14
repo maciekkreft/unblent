@@ -95,8 +95,8 @@ export const asked = (kind, w) => {
 };
 
 // One answer as the margin shows it: a pick and "sure n%", or "unsure" below 40%; a yes /
-// no question with the chance of yes, toned yes at 60% or more and no at 40% or less, as
-// Judge colours it. `earlier` is the wording it was asked with, when that has changed.
+// no question with the chance of yes, toned yes at 60% or more and no at 40% or less.
+// `earlier` is the wording it was asked with, when that has changed.
 export const entry = (q, a) => {
   const earlier = a.earlier ? asked(q.kind, a.wording) : null;
   const n = pct(a.answer.p);
@@ -192,12 +192,11 @@ export const banner = (day, editable, now) =>
 // which is asked about as it is written.
 export const toJudge = (day, editable) => (editable ? 0 : day.unanswered.length);
 
-// The line beside Judge once a new account has used its starter requests (12): case-editor's sentence.
+// The line beside Judge this day once a new account has used its starter requests (12).
 const USED_UP = "The 100 starter requests are used up. Add your Jev key in Settings.";
 
-// Why Jev is not reading the writing, in Judge's words (case-editor's lines), or null.
-// The journal reports one reason for no detector on; the picture tells which of Judge's
-// three lines fits.
+// Why Jev is not reading the writing, or null. The journal reports one reason for no
+// detector on; the picture tells which of three lines fits.
 export const reasonLine = (picture, usedUp) => {
   switch (picture.reason) {
     case null:
@@ -343,15 +342,15 @@ export const machine = setup({
       "each paragraph has Jev's answers in a margin beside it, level with its first line, or " +
       "under it on a phone, grouped under each project's name when more than one project is on. " +
       "A pick-one question shows the pick and \"sure n%\", or \"unsure\" below 40%; a yes / no " +
-      "question shows the chance of yes in Judge's colours. A paragraph waiting for Jev says " +
+      "question shows the chance of yes, coloured yes at 60% or more and no at 40% or less. A paragraph waiting for Jev says " +
       "\"Judging…\", and the paragraph being written says \"Not finished yet\": a paragraph is " +
       "finished at a line break, and every paragraph is finished when the box loses focus or the " +
       "entry closes. An answer to a question whose wording has changed since is tagged " +
       "\"earlier wording\", and hovering shows the old wording. The status line says the entry " +
       "is open until midnight or an hour after the last edit, and past midnight a banner says " +
       "when it closes. Earlier days say they are read only, with Judge this day when something " +
-      "is not answered with the current wording. One line says why Jev is not reading, in " +
-      "Judge's words. The text is saved a short time into typing and when the box loses focus, " +
+      "is not answered with the current wording. One line says why Jev is not reading. " +
+      "The text is saved a short time into typing and when the box loses focus, " +
       "and that last save says the box was left, so the paragraph being written counts as " +
       "finished. When a day was saved on two devices at once, the entry shows both copies and " +
       "the user keeps one.",

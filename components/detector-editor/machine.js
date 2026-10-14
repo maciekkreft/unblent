@@ -2,8 +2,7 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 
 // The view component that edits one of the journal's detectors (6.4): the item the
 // Detectors dock's inner list-then-item shows under its Back bar when detector.selected
-// arrives. It works as rubric-editor does for Judge, copied rather than imported because
-// components never import each other. It owns only UI state — the detector being edited
+// arrives. It owns only UI state — the detector being edited
 // as a draft, and whether typing is waiting to be saved — and points at one fact: it asks
 // journal: read for the starting picture and follows journal.changed after (4.3, fourth
 // rule). Every edit leaves as the whole detector, detector.saved, at a throttle while
@@ -192,7 +191,7 @@ export const machine = setup({
   meta: {
     description:
       "Edits one of the journal's detectors, the third level of the Detectors dock: its name and " +
-      "its questions, the same way Judge's detector editor does. Each question is Yes / no, with " +
+      "its questions. Each question is Yes / no, with " +
       "optional words for what yes and no mean, or Pick one, with options that each have a name " +
       "and an optional description. Every edit is saved as the whole detector a short time into " +
       "typing and when a field loses focus, and a new detector with nothing written in it is " +

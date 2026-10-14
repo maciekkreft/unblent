@@ -8,7 +8,7 @@ import { setup, assign } from "xstate";
 // The item to show for a selection gesture: the last child whose `shows-on` names this
 // event (6.4). The selection gestures are the closed set the container consumes:
 // book.selected, note.selected, conversation.selected, highlights.selected,
-// rubric.selected, detector-project.selected and detector.selected.
+// detector-project.selected and detector.selected.
 const shownFor = (items, type) => {
   const matching = items.filter((item) => item.showsOn === type);
   return matching.length ? matching[matching.length - 1].name : null;
@@ -47,7 +47,7 @@ export const machine = setup({}).createMachine({
       "A container for a list and the thing picked from it, shown in one panel. The first child " +
       "is the list, and each later child is an item whose `shows-on` names the selection " +
       "gesture that brings it up (`book.selected`, `note.selected`, `conversation.selected`, " +
-      "`highlights.selected`, `rubric.selected`, `detector-project.selected`, " +
+      "`highlights.selected`, `detector-project.selected`, " +
       "`detector.selected`); the item is shown under a Back bar naming the " +
       "list's `label`, and Back shows the list again; so does Escape pressed inside the item when " +
       "the item does not use it itself (an editor in Vim's insert mode leaves insert mode first). " +
@@ -77,7 +77,6 @@ export const machine = setup({}).createMachine({
         "note.selected": select,
         "conversation.selected": select,
         "highlights.selected": select,
-        "rubric.selected": select,
         "detector-project.selected": select,
         "detector.selected": select,
         // Leading underscore (7.2): a user gesture forwarded by the view, an internal

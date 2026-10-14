@@ -49,8 +49,7 @@ const closesAt = (day) => Math.max(endOf(day.day), day.editedAt + HOUR);
 
 // The paragraphs of a day's text, in order, trimmed. A line break ends a paragraph; while
 // the box is being typed in, the line at the end is unfinished, otherwise every paragraph
-// is finished. Copied from the paragraph mode of case-journal's pieces, because
-// components never import each other (11.2).
+// is finished.
 export const paragraphs = (text, editing) => {
   const lines = text.split("\n");
   const out = [];
@@ -140,9 +139,9 @@ const answerRecord = (a) =>
 
 // --- Seeds ----------------------------------------------------------------------------
 
-// The example projects a first visit starts with, copied from rubrics' examples with ids
-// of their own: a removal names only an id, and each fact recognises only its own, so
-// the journal's detectors never share an id with Judge's. The ids are fixed, so two
+// The example projects a first visit starts with, with ids of their own: a removal names
+// only an id, and each fact recognises only its own, so no other fact's removal can reach
+// the journal's detectors. The ids are fixed, so two
 // devices seeding the same journal make the same records. `since` is the seed version
 // that added a record; it stays in this file and the catch-up.
 export const SEED_VERSION = 1;
@@ -245,7 +244,6 @@ export const catchUp = (table, list, version) => {
 // The incoming list with every flagged item of the old list that it left out put back
 // after the nearest item before it that is still there, so a save never drops what is
 // still in its undo window. An incoming item flagged in the old list stays flagged.
-// Copied from rubrics (11.2).
 const keepFlagged = (old, incoming) => {
   const flagged = new Set(old.filter((x) => x.removing).map((x) => x.id));
   const out = incoming.map((x) => (flagged.has(x.id) ? { ...x, removing: true } : x));
@@ -326,8 +324,8 @@ const detectorSaved = (c, event) => {
 };
 
 // Sets `removing` on the one item of `kind` named by `id`, wherever it sits. A detector
-// is a "rubric" in the removal vocabulary, Judge's name for the same thing. An id that
-// is not one of the journal's own matches nothing, so Judge's removals pass by.
+// is a "rubric" in the removal vocabulary. An id that is not one of the journal's own
+// matches nothing, so other facts' removals pass by.
 const mark = (removing) => (c, { kind, id }) => {
   const set = (x) => (x.id === id && !x.deleted ? { ...x, removing } : x);
   if (kind === "project") return { projects: c.projects.map(set) };
@@ -381,15 +379,14 @@ const ERRORS = ["signed-out", "no-key", "bad-key", "rate-limited", "overloaded",
 // not be asked, which is "unavailable".
 const failure = (error) => (ERRORS.includes(error) ? error : "unavailable");
 
-// llm answers busy while another asker's decide is open (Judge's runs share it); the
-// queue tries again after this long rather than stopping.
+// llm answers busy while another asker's decide is open; the queue tries again after
+// this long rather than stopping.
 export const BUSY_RETRY_MS = 1000;
 
 const unit = (v) => typeof v === "number" && v >= 0 && v <= 1;
 
 // The one llm: decide payload for one paragraph: every question that is on, each under
-// its own id, which is how its answer is kept. Copied from decisions (11.2); an option
-// in its undo window is not offered, as wordingOf leaves it out.
+// its own id, which is how its answer is kept. An option in its undo window is not offered, as wordingOf leaves it out.
 export const payload = (text, questions) => ({
   state: { text },
   questions: questions.map((q) =>
@@ -404,7 +401,7 @@ export const payload = (text, questions) => ({
   ),
 });
 
-// One answer in the shape decisions stores: p always, and for a pick question the choice,
+// One answer: p always, and for a pick question the choice,
 // every option's probability and how sure Jev is.
 const answerOf = (a, id) => {
   const out = { id, p: a.p };
@@ -898,8 +895,8 @@ export const machine = setup({
       "date is the local date when its first character was typed and never changes. Only one " +
       "day can be edited: the one whose date is today, or that was edited less than an hour ago, " +
       "so writing past midnight keeps going in the same entry; a save to any other day is " +
-      "refused. When no day can be edited, the journal opens an empty page for today. The " +
-      "projects and detectors are separate from Judge's: a detector reads the writing only when " +
+      "refused. When no day can be edited, the journal opens an empty page for today. A " +
+      "detector reads the writing only when " +
       "it and its project are both ticked, and unticking a project keeps each detector's own " +
       "tick. A first visit starts with two example projects, \"Cognitive Distortion\" and " +
       "\"Goals and values\". Deleting a project or a detector, or removing a question or an " +
@@ -910,8 +907,8 @@ export const machine = setup({
       "today's paragraphs; earlier days keep their answers, marked as an earlier wording, and " +
       "are asked only when the user presses Judge this day. A failed request stops the queue " +
       "and keeps the reason; the next save, Judge this day, change to the detectors, sign-in " +
-      "or change in Settings starts it again. While Judge is asking Jev, the journal waits " +
-      "its turn.",
+      "or change in Settings starts it again. While another request to Jev is open, the " +
+      "journal waits its turn.",
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days, its projects and detectors, and Jev's answers",
