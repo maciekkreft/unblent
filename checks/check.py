@@ -3,6 +3,7 @@
 
 import ast
 import contextlib
+import fnmatch
 import fcntl
 import glob
 import hashlib
@@ -1033,9 +1034,16 @@ def check_icons() -> None:
 # --- Backup check (architecture.md 11.2) -----------------------------------------
 
 BACKUP_UNIT = "unblent-litestream"
-# Litestream logs a sync of every database every 10 seconds, changed or not, so a
-# short window says whether it runs now without depending on the owner's activity.
-BACKUP_WINDOW = "-2min"
+BACKUP_CONFIG = ROOT / "deploy" / "litestream.yml"
+# One read of the log covers every judgement below. A database stays judged for this
+# long after its last change; a change older than the log read is not judged.
+BACKUP_WINDOW_S = 15 * 60
+# Litestream retries a failing database with waits that double up to about five
+# minutes, so a failure that is still going on has logged an error within this time.
+BACKUP_ERROR_S = 10 * 60
+# Litestream logs a sync of every database every 10 seconds, changed or not, so this
+# window says whether it runs now without depending on the owner's activity.
+BACKUP_SYNC_S = 2 * 60
 # The sync line is written at the start of a round, before that round uploads, so the
 # latest line reads behind whenever something was saved in the last ten seconds. Only a
 # change older than this many seconds and still not online is a failure.
@@ -1043,65 +1051,141 @@ BACKUP_GRACE = 30
 # deploy/litestream.yml's sync-interval, and how far a file's beat may wander from it.
 BACKUP_BEAT = 10
 BACKUP_BEAT_SLACK = 0.02
-_LOG_LEVEL = re.compile(r"\blevel=(\w+)")
-_LOG_MSG = re.compile(r'\bmsg="([^"]*)"')
-_LOG_SYNC = re.compile(r'\btime=(\S+) .*?msg="replica sync".*?\bdb=(\S+).*?\btxid\.replica=(\w+) txid\.db=(\w+)')
+_LOG_TIME = re.compile(r"^time=(\S+) level=(\w+) msg=(?:\"([^\"]*)\"|(\S+))")
+_LOG_DB = re.compile(r"\bdb=(\S+)")
+_LOG_MAX_TXID = re.compile(r"\bmaxTXID=(\w+)")
+_LOG_TXIDS = re.compile(r"\btxid\.replica=(\w+) txid\.db=(\w+)")
 
 
-def backup_problems(lines: list) -> list:
-    """What is wrong with the backup, judged from its recent log lines; [] when healthy."""
+def _log_seconds(stamp: str) -> float:
+    return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
+def _ago(seconds: float) -> str:
+    minutes = round(seconds / 60)
+    return f"{round(seconds)} seconds" if minutes < 2 else f"{minutes} minutes"
+
+
+def backup_problems(lines: list, changed: dict, now: float) -> list:
+    """What is wrong with the backup, judged from its log lines since now - BACKUP_WINDOW_S
+    and from `changed`, each database file's last change on disk (its path under data/ →
+    seconds since the epoch); [] when healthy."""
     problems = []
-    errors = [line for line in lines if (m := _LOG_LEVEL.search(line)) and m.group(1) == "ERROR"]
-    if errors:
-        msg = _LOG_MSG.search(errors[-1])
-        problems.append(f"{len(errors)} errors, the latest: {msg.group(1) if msg else errors[-1][:200]}")
+    errors = []
     # The log names a file without its folder, and every account has its own notes.db.
     # Each file keeps its own 10-second beat from when it was opened, so its lines land at
     # the same fraction of the interval: that tells same-named files apart.
-    syncs = []
+    syncs = {}
+    uploaded = {}
     for line in lines:
-        if not (m := _LOG_SYNC.search(line)):
+        if not (m := _LOG_TIME.match(line)):
             continue
-        when = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
-        line_round = (when, int(m.group(3), 16), int(m.group(4), 16))
-        for db, rounds in syncs:
-            apart = (when - rounds[-1][0]).total_seconds()
-            if db == m.group(2) and apart > BACKUP_BEAT / 2 \
-                    and abs((apart + BACKUP_BEAT / 2) % BACKUP_BEAT - BACKUP_BEAT / 2) <= BACKUP_BEAT_SLACK:
-                rounds.append(line_round)
-                break
-        else:
-            syncs.append((m.group(2), [line_round]))
-    if not syncs:
-        problems.append("no database was synced")
-    for db, rounds in sorted(syncs, key=lambda s: s[0]):
+        when = _log_seconds(m.group(1))
+        msg = m.group(3) or m.group(4)
+        if m.group(2) == "ERROR":
+            if now - when <= BACKUP_ERROR_S:
+                errors.append(f"{msg} ({d.group(1)})" if (d := _LOG_DB.search(line)) else msg)
+            continue
+        if msg == "replica sync" and (t := _LOG_TXIDS.search(line)) and (d := _LOG_DB.search(line)):
+            line_round = (when, int(t.group(1), 16), int(t.group(2), 16))
+            same = syncs.setdefault(d.group(1), [])
+            for rounds in same:
+                apart = when - rounds[-1][0]
+                if apart > BACKUP_BEAT / 2 \
+                        and abs((apart + BACKUP_BEAT / 2) % BACKUP_BEAT - BACKUP_BEAT / 2) <= BACKUP_BEAT_SLACK:
+                    rounds.append(line_round)
+                    break
+            else:
+                same.append([line_round])
+        elif msg == "ltx file uploaded" and (d := _LOG_DB.search(line)):
+            # An upload belongs to the round that started it: the file of that name whose
+            # last sync line was behind by this upload, else the one whose came last.
+            same = syncs.get(d.group(1), [])
+            top = int(x.group(1), 16) if (x := _LOG_MAX_TXID.search(line)) else -1
+            key = max(range(len(same)), key=lambda i: (same[i][-1][1] < top <= same[i][-1][2], same[i][-1][0]),
+                      default=-1)
+            uploaded.setdefault(d.group(1), {})[key] = when
+    if errors:
+        problems.append(f"{len(errors)} errors in the last {BACKUP_ERROR_S // 60} minutes, the latest: {errors[-1]}")
+    recent = [(db, [r for r in rounds if now - r[0] <= BACKUP_SYNC_S]) for db, same in syncs.items() for rounds in same]
+    recent = [(db, rounds) for db, rounds in recent if rounds]
+    if not recent:
+        problems.append(f"no database was synced in the last {BACKUP_SYNC_S // 60} minutes")
+    for db, rounds in sorted(recent, key=lambda s: s[0]):
         newest_when, online, _ = rounds[-1]
-        settled = [r for r in rounds if (newest_when - r[0]).total_seconds() >= BACKUP_GRACE]
+        settled = [r for r in rounds if newest_when - r[0] >= BACKUP_GRACE]
         # Without a round that old (the service just started) there is nothing to judge yet.
         if settled and online < settled[-1][2]:
             problems.append(f"{db} has a change older than {BACKUP_GRACE} seconds that is not online "
                             f"(online {online:x}, needed {settled[-1][2]:x})")
+    # Litestream's own count of what is on disk can freeze while the file keeps changing
+    # (11.2): only the file's own change time against the last upload shows that. Files of
+    # one name are told apart only by their beats, so the latest change is matched to the
+    # latest upload, the next to the next.
+    by_name = {}
+    for path, when in changed.items():
+        if BACKUP_GRACE < now - when <= BACKUP_WINDOW_S:
+            by_name.setdefault(Path(path).name, []).append((when, path))
+    for name, files in sorted(by_name.items()):
+        uploads = sorted(uploaded.get(name, {}).values(), reverse=True)
+        for i, (when, path) in enumerate(sorted(files, reverse=True)):
+            if i >= len(uploads):
+                problems.append(f"{path} changed {_ago(now - when)} ago and has not been copied online since")
+            elif uploads[i] < when:
+                problems.append(f"{path} changed {_ago(now - when)} ago and has not been copied online since; "
+                                f"its last copy is {_ago(now - uploads[i])} old")
     return problems
+
+
+def backup_files() -> dict:
+    """Every database deploy/litestream.yml replicates, its path under its data directory →
+    when it last changed. A write lands in the -wal file; the main file also changes when
+    Litestream checkpoints, which adds nothing to copy, so the main file counts only
+    without a -wal."""
+    config = BACKUP_CONFIG.read_text()
+    base = Path(re.search(r"^\s*-\s*dir:\s*(\S+)", config, re.M).group(1))
+    pattern = re.search(r'^\s*pattern:\s*"?([^"\s]+)', config, re.M).group(1)
+    recursive = re.search(r"^\s*recursive:\s*true\b", config, re.M) is not None
+    files = {}
+    for folder, dirs, names in os.walk(base):
+        # Litestream's own folders beside each database hold no database.
+        dirs[:] = [d for d in dirs if recursive and not d.startswith(".")]
+        for name in fnmatch.filter(names, pattern):
+            path = os.path.join(folder, name)
+            when = None
+            for candidate in (f"{path}-wal", path):
+                try:
+                    when = os.stat(candidate).st_mtime
+                    break
+                except FileNotFoundError:
+                    continue
+            if when is not None:
+                files[os.path.relpath(path, base)] = when
+    return files
 
 
 def check_backup() -> None:
     # Only the production host runs the backup; elsewhere there is nothing to check.
-    load = subprocess.run(["systemctl", "show", "-p", "LoadState", "--value", BACKUP_UNIT],
-                          capture_output=True, text=True)
-    if load.returncode != 0 or load.stdout.strip() != "loaded":
+    state = subprocess.run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", BACKUP_UNIT],
+                           capture_output=True, text=True)
+    fields = dict(line.partition("=")[::2] for line in state.stdout.splitlines())
+    if state.returncode != 0 or fields.get("LoadState") != "loaded":
         return
     where = f"deploy/systemd/{BACKUP_UNIT}.service"
-    active = subprocess.run(["systemctl", "is-active", BACKUP_UNIT], capture_output=True, text=True)
-    if active.stdout.strip() != "active":
-        fail(where, "backup check (11.2)", f"the backup is {active.stdout.strip()}: sudo systemctl start {BACKUP_UNIT}")
-    log = subprocess.run(["journalctl", "-u", BACKUP_UNIT, "--since", BACKUP_WINDOW, "--no-pager", "-o", "cat"],
-                         capture_output=True, text=True)
+    if fields.get("ActiveState") != "active":
+        fail(where, "backup check (11.2)", f"the backup is {fields.get('ActiveState')}: sudo systemctl start {BACKUP_UNIT}")
+    since = f"-{BACKUP_WINDOW_S // 60}min"
+    # The journal is read while the files are listed.
+    log = subprocess.Popen(["journalctl", "-u", BACKUP_UNIT, "--since", since, "--no-pager", "-o", "cat"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    files = backup_files()
+    out, err = log.communicate()
     if log.returncode != 0:
-        fail(where, "backup check (11.2)", f"cannot read the backup's log: {log.stderr.strip()}")
-    problems = backup_problems(log.stdout.splitlines())
+        fail(where, "backup check (11.2)", f"cannot read the backup's log: {err.strip()}")
+    problems = backup_problems(out.splitlines(), files, time.time())
     if problems:
         fail(where, "backup check (11.2)",
-             "the backup is failing: " + "; ".join(problems) + f". Read: journalctl -u {BACKUP_UNIT} --since {BACKUP_WINDOW}")
+             "the backup is failing: " + "; ".join(problems) + f". Read: journalctl -u {BACKUP_UNIT} --since {since}")
 
 
 # --- Unused tokens (architecture.md 7.4) -----------------------------------------
