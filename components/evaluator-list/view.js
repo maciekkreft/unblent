@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, rows, subtitle, UNTITLED } from "./machine.js";
+import { machine, rows, subtitle, askable, UNTITLED } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 
@@ -38,6 +38,13 @@ class ActorController {
     this.actor?.send(event);
   }
 }
+
+const ERRORS = {
+  "signed-out": "Sign in to run evaluators.",
+  key: "Add a Jev key in Settings.",
+  busy: "Jev is busy. Try again in a moment.",
+  failed: "Jev could not answer. Try again.",
+};
 
 class EvaluatorList extends LitElement {
   // Follow the book open on the stage. Reflected so a page's bare `subject` reads as true.
@@ -135,6 +142,154 @@ class EvaluatorList extends LitElement {
       line-height: var(--leading-tight);
       color: var(--color-body-mid);
     }
+    /* The Run box sits above the list, outside it, so its keys never reach the list's. */
+    .run {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      padding: var(--space-md) var(--space-md) var(--space-sm);
+      border-bottom: var(--border-width) solid var(--color-border);
+    }
+    .run label {
+      font-size: var(--text-sm);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    textarea {
+      box-sizing: border-box;
+      width: 100%;
+      font: inherit;
+      font-size: var(--text-body);
+      color: var(--color-ink);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-sm);
+      resize: vertical;
+    }
+    textarea::placeholder {
+      color: var(--color-body-mid);
+    }
+    textarea:focus {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    .cost {
+      flex: 1;
+      min-width: 0;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
+    .actions button {
+      flex: none;
+      font: inherit;
+      font-size: var(--text-sm);
+      min-height: var(--space-xl);
+      padding: var(--space-sm) var(--space-md);
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+    .actions button:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .clear {
+      color: var(--color-body);
+      background: none;
+      border: var(--border-width) solid var(--color-border);
+    }
+    .clear:hover {
+      background: var(--color-surface-hover);
+    }
+    .go {
+      font-weight: var(--weight-semibold);
+      color: var(--color-accent-text);
+      background: var(--color-accent);
+      border: 0;
+    }
+    .go:hover:not(:disabled) {
+      background: var(--color-accent-hover);
+    }
+    .go:disabled {
+      color: var(--color-mute);
+      background: var(--color-border);
+      cursor: default;
+    }
+    .error {
+      margin: 0;
+      font-size: var(--text-sm);
+      color: var(--color-danger);
+    }
+    /* A row with results stacks its answers under its name. */
+    .item {
+      display: flex;
+      flex-direction: column;
+    }
+    .score {
+      flex: none;
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+      background: var(--color-surface-hover);
+      border-radius: var(--radius-full);
+      padding: var(--space-2xs) var(--space-sm);
+    }
+    .not-run {
+      flex: none;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
+    /* Indented past the tick box, so the answers sit under the name. */
+    .answers {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      margin: 0;
+      padding: var(--space-2xs) var(--space-sm) var(--space-sm) calc(var(--space-md) + var(--space-2xs) + var(--space-sm) * 2);
+      list-style: none;
+    }
+    .answer {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+    }
+    .question {
+      font-size: var(--text-sm);
+      line-height: var(--leading-tight);
+      color: var(--color-body);
+    }
+    .meter {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    .track {
+      flex: 1;
+      height: calc(var(--space-xs) + var(--space-2xs));
+      background: var(--color-surface-active);
+      border-radius: var(--radius-full);
+      overflow: hidden;
+    }
+    .fill {
+      display: block;
+      height: 100%;
+      border-radius: var(--radius-full);
+      background: var(--color-success);
+    }
+    .fill.low {
+      background: var(--color-warning);
+    }
+    .label {
+      flex: none;
+      min-width: calc(var(--space-2xl) + var(--space-lg));
+      text-align: right;
+      font-size: var(--text-caption);
+      color: var(--color-ink);
+    }
     .empty {
       margin: 0;
       padding: var(--space-sm);
@@ -230,38 +385,92 @@ class EvaluatorList extends LitElement {
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
-    const { draft, open, evaluators } = snapshot.context;
+    const { draft, open, evaluators, results } = snapshot.context;
     const shown = rows(evaluators);
     const ids = [draft, ...shown.map((e) => e.id)];
     const focusId = this.#focusRow(ids, open);
+    const ran = Object.keys(results).length > 0;
     return html`
+      ${this.#runBox(snapshot, ran)}
       <ul class="list" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e, ids)} @focusin=${(e) => this.#focusin(e)}>
         <li class="row new" data-id=${draft} @click=${(e) => this.#rowClick(e, draft)}>
           <button class="open" type="button" tabindex=${draft === focusId ? 0 : -1}>
             <span class="name draft">${icon("plus")}New evaluator</span>
           </button>
         </li>
-        ${shown.map((e) => this.#row(e, open, focusId))}
+        ${shown.map((e) => this.#row(e, open, focusId, ran ? (results[e.id] ?? "not run") : null))}
       </ul>
     `;
   }
 
-  #row(e, open, focusId) {
+  #runBox(snapshot, ran) {
+    const { text, evaluators, error, running } = snapshot.context;
+    const n = askable(evaluators).length;
+    const cost =
+      n > 0
+        ? `Runs the ${n} switched-on evaluator${n === 1 ? "" : "s"} · 1 request`
+        : rows(evaluators).some((e) => e.on)
+          ? "Write a question in a switched-on evaluator to run it."
+          : "Switch an evaluator on to run it.";
+    return html`
+      <div class="run">
+        <label for="text">Try on a text</label>
+        <textarea
+          id="text"
+          rows="3"
+          placeholder="Type or paste a text to judge…"
+          .value=${text}
+          @input=${(event) => this.#actor.send({ type: "_type", text: event.target.value })}
+        ></textarea>
+        <div class="actions">
+          <span class="cost">${cost}</span>
+          ${ran ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
+          <button class="go" type="button" ?disabled=${running || n === 0 || text.trim() === ""} @click=${() => this.#actor.send({ type: "_run" })}>
+            ${running ? "Running…" : "Run"}
+          </button>
+        </div>
+        ${error ? html`<p class="error" role="alert">${ERRORS[error]}</p>` : nothing}
+      </div>
+    `;
+  }
+
+  // result: null before any run, "not run", or the evaluator's answers and score.
+  #row(e, open, focusId, result) {
     const tab = e.id === focusId ? 0 : -1;
     const name = e.name.trim();
     return html`
-      <li class="row ${e.id === open ? "current" : ""}" data-id=${e.id} @click=${(event) => this.#rowClick(event, e.id)}>
-        <input
-          type="checkbox"
-          tabindex=${tab}
-          .checked=${e.on}
-          aria-label="${name || UNTITLED} is on"
-          @change=${(event) => this.#actor.send({ type: "_switch", id: e.id, on: event.target.checked })}
-        />
-        <button class="open" type="button" tabindex=${tab} aria-current=${e.id === open ? "true" : nothing}>
-          <span class="name ${name ? (e.on ? "" : "off") : "untitled"}">${name || UNTITLED}</span>
-          <span class="sub">${subtitle(e)}</span>
-        </button>
+      <li class="item">
+        <div class="row ${e.id === open ? "current" : ""}" data-id=${e.id} @click=${(event) => this.#rowClick(event, e.id)}>
+          <input
+            type="checkbox"
+            tabindex=${tab}
+            .checked=${e.on}
+            aria-label="${name || UNTITLED} is on"
+            @change=${(event) => this.#actor.send({ type: "_switch", id: e.id, on: event.target.checked })}
+          />
+          <button class="open" type="button" tabindex=${tab} aria-current=${e.id === open ? "true" : nothing}>
+            <span class="name ${name ? (e.on ? "" : "off") : "untitled"}">${name || UNTITLED}</span>
+            <span class="sub">${subtitle(e)}</span>
+          </button>
+          ${result === "not run"
+            ? html`<span class="not-run">not run</span>`
+            : result?.score != null
+              ? html`<span class="score">${result.score.toFixed(2)}</span>`
+              : nothing}
+        </div>
+        ${result && result !== "not run"
+          ? html`<ul class="answers" aria-label="Answers">
+              ${result.questions.map(
+                (q) => html`<li class="answer">
+                  <span class="question">${q.text}</span>
+                  <span class="meter">
+                    <span class="track"><span class="fill ${q.p < 0.5 ? "low" : ""}" style="width: ${Math.round(q.p * 100)}%"></span></span>
+                    <span class="label">${q.label} ${q.p.toFixed(2)}</span>
+                  </span>
+                </li>`,
+              )}
+            </ul>`
+          : nothing}
       </li>
     `;
   }
