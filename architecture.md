@@ -639,3 +639,11 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - A written tool run on a passage the user selects, not only on typed text (sketch: `~/.claude/plans/book-tools.md`).
 - A built-in tool that fills a new tool's page from the passage being read, and another that scores how well a tool's questions and criteria match what the book says (sketch: `~/.claude/plans/book-tools.md`).
 - Optional questions and weights in a written tool's score, only if a real tool asks for them (sketch: `~/.claude/plans/book-tools.md`).
+
+---
+
+## 15. To do
+
+Work that is decided but not done yet. Remove a line when its work is done.
+
+- Remove the starter keys (section 12): a new account no longer gets 100 free requests on the owner's keys. The `SEED_API_KEYS` entry is already gone from `.env`; what remains is the code in `llm`'s server module that reads it and counts the requests, its tests, the entry in `check.py`, the "Starter keys" line in section 12 and the mention in section 11.1.
