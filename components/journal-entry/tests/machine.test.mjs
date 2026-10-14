@@ -270,3 +270,80 @@ test("the Days list's pick still works after following a chapter, and a pick whi
   assert.deepEqual(showing(actor), [TODAY, true]);
   valid(emitted);
 });
+
+// --- Announcing the shown day ------------------------------------------------------------
+
+const DAY_SHOWN = schema("day.shown");
+
+// The day.shown dates an actor emits, in order, each checked against its schema.
+const announced = (actor) => {
+  const days = [];
+  actor.on("day.shown", ({ type, ...rest }) => {
+    assert.ok(new Validator(DAY_SHOWN, "2020-12").validate(rest).valid, "day.shown");
+    days.push(rest.day);
+  });
+  return days;
+};
+
+async function startShowing(p, now = () => at(12, 21)) {
+  const clock = new SimulatedClock();
+  const actor = createActor(machine, {
+    input: {
+      ask: (target, name, payload) =>
+        Promise.resolve(target === "journal" ? p : target === "books" ? (BOOKS[payload.id] ? { book: BOOKS[payload.id] } : { error: "not-found" }) : {}),
+      mint: () => FRESH,
+      now,
+    },
+    clock,
+  });
+  const days = announced(actor);
+  actor.start();
+  assert.deepEqual(days, [], "nothing before the page has loaded");
+  await flush();
+  return { actor, days, clock };
+}
+
+test("the shown day is announced once the page has loaded, and again only when it moves", async () => {
+  const [d1, d2] = [day(SUNDAY, "2026-10-11", "One."), day(TODAY, "2026-10-12", "Two.")];
+  const p = picture({ days: [d1, d2], open: TODAY });
+  const { actor, days } = await startShowing(p);
+  assert.deepEqual(days, ["2026-10-12"]);
+  actor.send({ type: "day.selected", id: SUNDAY });
+  actor.send({ type: "day.selected", id: SUNDAY });
+  actor.send(changed(p));
+  assert.deepEqual(days, ["2026-10-12", "2026-10-11"], "the same day again is not announced");
+  actor.send({ type: "_edit", text: "x" });
+  actor.send({ type: "day.selected", id: null });
+  assert.deepEqual(days, ["2026-10-12", "2026-10-11", "2026-10-12"]);
+});
+
+test("following the journal book announces each chapter's day, and the last chapter today's", async () => {
+  const [d1, d2] = [day(SUNDAY, "2026-10-10", "One."), day(TODAY, "2026-10-11", "Two.")];
+  const { actor, days } = await startShowing(picture({ days: [d1, d2], open: null }));
+  assert.deepEqual(days, ["2026-10-12"], "no day open: today's empty page");
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  await flush();
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 1 });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 2 });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  assert.deepEqual(days, ["2026-10-12", "2026-10-10", "2026-10-11", "2026-10-12"]);
+});
+
+test("at midnight today's empty page announces the new day, and an earlier day stays put", async () => {
+  let now = at(12, 23, 59);
+  const { actor, days, clock } = await startShowing(picture(), () => now);
+  assert.deepEqual(days, ["2026-10-12"]);
+  now = at(13, 0, 0) + 1000;
+  clock.increment(at(13) - at(12, 23, 59) + 1000);
+  assert.deepEqual(days, ["2026-10-12", "2026-10-13"]);
+  // The next midnight is set again from the new day.
+  now = at(14, 0, 0) + 1000;
+  clock.increment(at(14) - at(13));
+  assert.deepEqual(days, ["2026-10-12", "2026-10-13", "2026-10-14"]);
+  // A day written yesterday, picked in the Days list, does not move at midnight.
+  actor.send(changed(picture({ days: [day(SUNDAY, "2026-10-11", "One.")], open: null })));
+  actor.send({ type: "day.selected", id: SUNDAY });
+  now = at(15, 0, 0) + 1000;
+  clock.increment(at(15) - at(14));
+  assert.deepEqual(days, ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-11"]);
+});

@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, markedChapter } from "./machine.js";
+import { machine, markedChapter, chapterCounts, choiceLabel } from "./machine.js";
 import selected from "./events/chapter.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -96,6 +96,13 @@ class BookToc extends LitElement {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
       border-inline-start-color: var(--color-accent);
+    }
+    /* A day's count of choice points, the journal only: quieter than the date, so the
+       title stays what the row is, the way the Days list shows it. */
+    .choices {
+      font-size: var(--text-caption);
+      font-weight: var(--weight-normal);
+      color: var(--color-body-mid);
     }
     .empty {
       display: flex;
@@ -199,6 +206,7 @@ class BookToc extends LitElement {
 
     const marked = markedChapter(book.toc, snapshot.context.jump ?? book.chapter);
     const focusAt = this.#focusRow(rows, marked);
+    const perChapter = chapterCounts(book, snapshot.context.choicePoints);
     return html`
       <div class="toc">
         <ul role="tree" aria-label="Contents" @keydown=${(e) => this.#keydown(e, rows, marked)}>
@@ -214,6 +222,7 @@ class BookToc extends LitElement {
                   @click=${() => this.#select(r, at)}
                 >
                   ${r.title}
+                  ${perChapter[r.chapter] ? html`<span class="choices">· ${choiceLabel(perChapter[r.chapter])}</span>` : nothing}
                 </button>
               </li>
             `,

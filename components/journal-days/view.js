@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, rows, kept } from "./machine.js";
+import { machine, rows, kept, counts, choiceLabel } from "./machine.js";
 import selected from "./events/day.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -99,6 +99,12 @@ class JournalDays extends LitElement {
       font-size: var(--text-sm);
       font-weight: var(--weight-semibold);
     }
+    .end {
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-2xs);
+      white-space: nowrap;
+    }
     .count {
       font-size: var(--text-caption);
       color: var(--color-body-mid);
@@ -160,7 +166,7 @@ class JournalDays extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="empty">The journal is unavailable.</p>`;
-    const { days, open, signedIn, current } = snapshot.context;
+    const { days, open, signedIn, current, choicePoints } = snapshot.context;
     const now = Date.now();
     // Nobody acts at midnight, so a timer redraws the pills when "today" moves on.
     clearTimeout(this.#timer);
@@ -168,7 +174,7 @@ class JournalDays extends LitElement {
     return html`
       <div class="scroll">
         <ul class="list" aria-label="Days" @keydown=${(e) => this.#keydown(e)}>
-          ${rows(days, open, now).map(
+          ${rows(days, open, now, counts(choicePoints)).map(
             (r) => html`<li>
               <button
                 type="button"
@@ -179,7 +185,10 @@ class JournalDays extends LitElement {
               >
                 <span class="top">
                   <span class="date">${r.date}</span>
-                  ${r.pill ? html`<span class="pill">${r.pill}</span>` : html`<span class="count">${r.count} ¶</span>`}
+                  <span class="end">
+                    ${r.pill ? html`<span class="pill">${r.pill}</span>` : html`<span class="count">${r.count} ¶</span>`}
+                    ${r.choices ? html`<span class="count choices">· ${choiceLabel(r.choices)}</span>` : nothing}
+                  </span>
                 </span>
                 <span class="first ${r.first ? "" : "none"}">${r.first || "Nothing written yet"}</span>
               </button>

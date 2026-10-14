@@ -49,6 +49,7 @@
     <script type="module" src="/static/components/llm/fact.js"></script>
     <script type="module" src="/static/components/conversations/fact.js"></script>
     <script type="module" src="/static/components/evaluators/fact.js"></script>
+    <script type="module" src="/static/components/choice-points/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
@@ -64,6 +65,7 @@
     <script type="module" src="/static/components/book-toc/view.js"></script>
     <script type="module" src="/static/components/book-reader/view.js"></script>
     <script type="module" src="/static/components/journal-entry/view.js"></script>
+    <script type="module" src="/static/components/choice-point-cards/view.js"></script>
     <script type="module" src="/static/components/book-stage/view.js"></script>
     <script type="module" src="/static/components/conversation-list/view.js"></script>
     <script type="module" src="/static/components/chat-thread/view.js"></script>
@@ -76,7 +78,7 @@
   <body>
     <page-nav></page-nav>
     <dock-desk>
-      <book-stage label="Reader" height="fill"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"></journal-entry></book-stage>
+      <book-stage label="Reader" height="fill"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"><choice-point-cards></choice-point-cards></journal-entry></book-stage>
       <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
         <book-shelf label="Books" renames></book-shelf>
         <book-toc shows-on="book.selected"></book-toc>

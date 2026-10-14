@@ -10,7 +10,8 @@
         "question",
         "option",
         "case",
-        "evaluator"
+        "evaluator",
+        "choice-point"
       ]
     },
     "id": {

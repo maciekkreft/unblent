@@ -7,6 +7,7 @@ import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim } from "@replit/codemirror-vim";
 import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
+import dayShown from "./events/day.shown.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // Vim sits in a compartment that the "Vim keys" preference (12) turns on and off in
@@ -149,7 +150,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
-      events: { "day.saved": saved },
+      events: { "day.saved": saved, "day.shown": dayShown },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -167,12 +168,6 @@ class ActorController {
     this.actor?.send(event);
   }
 }
-
-// The next local midnight after `now`, when a new page's date changes.
-const midnightAfter = (now) => {
-  const d = new Date(now);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
-};
 
 class JournalEntry extends LitElement {
   static properties = {
@@ -314,13 +309,14 @@ class JournalEntry extends LitElement {
       align-self: flex-start;
     }
     /* On a stage that fills, the open day reaches the bottom, like a page, and a
-       click anywhere in it lands in the text. */
-    :host([height="fill"]) .region.open {
+       click anywhere in it lands in the text. A page that nests a view under the text
+       keeps the text its own height instead, so the nested view sits right under it. */
+    :host([height="fill"]) .page:not(.holds) .region.open {
       flex: 1 0 auto;
       display: flex;
       flex-direction: column;
     }
-    :host([height="fill"]) .region.open .cm-editor {
+    :host([height="fill"]) .page:not(.holds) .region.open .cm-editor {
       flex: 1;
     }
     /* The level bar under the text, as in note-editor. */
@@ -396,8 +392,15 @@ class JournalEntry extends LitElement {
   `;
 
   #actor = new ActorController(this);
-  #timer = null;
   #view = null;
+  // Whether a view is nested under the text (the slot holds an element).
+  #holds = false;
+  #slotted = (e) => {
+    const holds = e.target.assignedElements().length > 0;
+    if (holds === this.#holds) return;
+    this.#holds = holds;
+    this.requestUpdate();
+  };
   // The text last written into or read out of the editor, so an echo of the user's own
   // typing never rewrites the document and moves the caret.
   #shown = "";
@@ -416,7 +419,6 @@ class JournalEntry extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    clearTimeout(this.#timer);
     this.#view?.destroy();
     this.#view = null;
   }
@@ -535,22 +537,21 @@ class JournalEntry extends LitElement {
     if (snapshot.matches("failed")) return html`<p class="empty page">The journal is unavailable.</p>`;
     const { context } = snapshot;
     const { picture, fresh, vimKeys } = context;
-    const now = Date.now();
-    // Nobody acts at midnight, so a timer redraws the page then: a new page takes the
-    // new day's date.
-    clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => this.requestUpdate(), midnightAfter(now) - now + 1000);
-    const { day, editable } = shown(picture, selectedOf(context), fresh, now);
+    // The actor's midnight announcement (shownDay) is what redraws a new page then.
+    const { day, editable } = shown(picture, selectedOf(context), fresh, Date.now());
     const conflict = conflictOn(context.conflict, day, editable);
+    // The slot under the text takes the view a page nests in the entry, as chat-thread
+    // holds chat-input; it sits in the page so it scrolls with the day it is about.
     return html`
       <div class="frame">
         <div class="scroll">
-          <div class="page">
+          <div class="page ${this.#holds ? "holds" : ""}">
             <header>
               <h2>${longDate(day.day)}</h2>
             </header>
             ${conflict ? this.#conflict(conflict) : nothing}
             <div class="region ${editable && !conflict ? "open" : ""}"></div>
+            <slot @slotchange=${this.#slotted}></slot>
           </div>
         </div>
         ${editable && !conflict ? html`<div class="footer">${this.#levelBar(vimKeys)}</div>` : nothing}

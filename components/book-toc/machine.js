@@ -10,12 +10,46 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // book.changed (a re-import changes the tree; a page turn moves the current chapter,
 // which rides book.changed's position, 4.3, fourth rule) and book.deleted after. It
 // never decides what a chapter is; it learns the tree from the fact and announces the
-// user's jump as chapter.selected (4.3, fifth rule).
+// user's jump as chapter.selected (4.3, fifth rule). For the journal it also asks
+// choice-points: list and follows its two events, to count each day's choice points.
 
 // Only the fields the contents needs are kept from a read reply or a book.changed (both
 // carry the whole book, 4.3, third rule): the id to address a jump at, the tree to
-// draw, and the current chapter to mark, which rides the book's saved position.
-const pickToc = (b) => ({ id: b.id, toc: b.toc, chapter: b.position.chapter });
+// draw, and the current chapter to mark, which rides the book's saved position. For the
+// written book, each chapter's day too, so its rows can be joined to the choice points,
+// which name their day; null for any other book, which shows no counts.
+const pickToc = (b) => ({
+  id: b.id,
+  toc: b.toc,
+  chapter: b.position.chapter,
+  days: b.written === true ? (b.chapters ?? []).map((c) => c.day ?? null) : null,
+});
+
+// What a count needs of a choice point: its day, and its version, so an event older
+// than what is held is ignored (4.3, fourth rule).
+const held = (c) => ({ day: c.day, version: c.version, removing: c.removing === true });
+
+// How many choice points each day has, by date. One waiting out its undo window is not
+// counted: to the user it is already gone, and an undo counts it again.
+export const counts = (choicePoints) => {
+  const out = {};
+  for (const c of Object.values(choicePoints)) if (!c.removing) out[c.day] = (out[c.day] ?? 0) + 1;
+  return out;
+};
+
+export const choiceLabel = (n) => (n === 1 ? "1 choice point" : `${n} choice points`);
+
+// The count for each chapter of the shown book, by chapter number: only the written
+// book's days have choice points, so any other book gets none.
+export const chapterCounts = (book, choicePoints) => {
+  if (!book?.days) return {};
+  const perDay = counts(choicePoints);
+  const out = {};
+  book.days.forEach((day, chapter) => {
+    if (day && perDay[day]) out[chapter] = perDay[day];
+  });
+  return out;
+};
 
 // A publisher's contents rarely lists every piece of the book (a praise page, a
 // dedication, an illustration before a chapter), so the chapter being read may have no
@@ -48,6 +82,9 @@ export const machine = setup({
     // The selected book's tree from books. book.changed is held for this ask until the
     // reply lands (supersededBy), so a move that races the read is applied after it.
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
+    // Every choice point, for the journal's counts. The two choice-point events are held
+    // until the reply lands (supersededBy).
+    choicePoints: fromPromise(({ input }) => input.ask("choice-points", "list", {})),
   },
   guards: {
     found: ({ event }) => "book" in event.output,
@@ -60,11 +97,15 @@ export const machine = setup({
       "Shows the open book's table of contents and lets the user jump to a chapter. The current " +
       "chapter is marked: the one just clicked, until the book's saved position moves, and then " +
       "the position. A part of the book the contents does not list, such as a dedication page, " +
-      "counts as part of the entry before it.",
+      "counts as part of the entry before it. While the book is the journal, a day with choice " +
+      "points says how many under its date, \"· 1 choice point\" or \"· 3 choice points\"; one " +
+      "being deleted is not counted while its Undo is offered, and counts again after an undo. " +
+      "Any other book shows no counts, and when the choice points cannot be read the journal's " +
+      "contents show none and work as before.",
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],
-    asks: ["books: open", "books: read", "settings: read"],
+    asks: ["books: open", "books: read", "settings: read", "choice-points: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -78,17 +119,42 @@ export const machine = setup({
     // The chapter the user chose that the fact has not confirmed yet: marked at once,
     // because the position only arrives after the reader settles and announces.
     jump: null,
+    // Every choice point by id, as held(): only the journal's counts are drawn from them.
+    choicePoints: {},
   }),
   // Beside the states, so the preference arrives whatever the view is doing.
-  invoke: {
-    src: "settings",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
-    onError: { actions: [] },
-  },
+  invoke: [
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+    // An error reply (no choice-points on the page) leaves the contents without counts.
+    {
+      src: "choicePoints",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        guard: ({ event }) => Array.isArray(event.output?.choicePoints),
+        actions: assign(({ event }) => ({ choicePoints: Object.fromEntries(event.output.choicePoints.map((c) => [c.id, held(c)])) })),
+      },
+      onError: {},
+    },
+  ],
   initial: "starting",
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    // An equal version is taken: the removing flag changes without a new version.
+    "choice-point.changed": {
+      guard: ({ context, event }) => !(context.choicePoints[event.choicePoint.id]?.version > event.choicePoint.version),
+      actions: assign(({ context, event }) => ({ choicePoints: { ...context.choicePoints, [event.choicePoint.id]: held(event.choicePoint) } })),
+    },
+    "choice-point.deleted": {
+      actions: assign(({ context, event }) => {
+        const { [event.id]: _gone, ...rest } = context.choicePoints;
+        return { choicePoints: rest };
+      }),
+    },
     // The open book changed (4.3, fourth rule), opened here or on another device and
     // pulled: read its contents. A switch drops the old tree at once, so the panel never
     // shows stale contents while the new ones load; null empties it.

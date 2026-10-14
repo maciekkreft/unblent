@@ -75,6 +75,12 @@ export const shown = (picture, selected, fresh, now) => {
   return { day: { id: fresh, day: dateOf(now), text: "", editedAt: now, version: 1, waiting: [], unanswered: [] }, editable: true };
 };
 
+// The next local midnight after `now`, when a new page's date changes.
+const midnightAfter = (now) => {
+  const d = new Date(now);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+};
+
 // A conflict on the shown day, or null. Keeping one's own copy saves it over the other,
 // which the journal accepts only while the day is open; a closed day keeps the other.
 export const conflictOn = (conflict, day, editable) =>
@@ -108,6 +114,23 @@ const settle = (context, next, dirty) => {
 const savable = (context) =>
   Boolean(context.draft) && (context.picture.days.some((d) => d.id === context.draft.id) || context.draft.text !== "");
 
+// The shown day's date leaves as day.shown, once when the page has loaded and again only
+// when it moves, so a view about one day (nested under the text) needs no copy of the
+// rule above. Every transition that can move it ends with this.
+const announce = enqueueActions(({ context, enqueue }) => {
+  const { day } = shown(context.picture, selectedOf(context), context.fresh, context.now()).day;
+  if (day === context.shownDay) return;
+  enqueue.assign({ shownDay: day });
+  enqueue.emit({ type: "day.shown", day });
+});
+
+// Nobody acts at midnight, yet a new page then takes the new day's date. The second past
+// it keeps the clock safely on the new day.
+const atMidnight = enqueueActions(({ context, enqueue }) => {
+  const now = context.now();
+  enqueue.raise({ type: "_midnight" }, { id: "midnight", delay: midnightAfter(now) - now + 1000 });
+});
+
 const save = (left) =>
   enqueueActions(({ context, enqueue }) => {
     if (!savable(context)) return;
@@ -117,7 +140,7 @@ const save = (left) =>
 
 const edit = assign(({ context, event }) => ({ draft: { ...context.draft, text: event.text }, editing: true }));
 
-const follow = (dirty) => assign(({ context, event }) => settle(context, picture(event), dirty));
+const follow = (dirty) => [assign(({ context, event }) => settle(context, picture(event), dirty)), announce];
 
 // What a pick asks the entry to show: a day from the Days list, or a chapter of the
 // journal book (null is today's page).
@@ -132,6 +155,7 @@ const select = (dirty) => ({
       const pick = pickOf(event);
       return { ...settle({ ...context, ...pick }, context.picture, false), ...pick };
     }),
+    announce,
   ],
 });
 
@@ -176,9 +200,12 @@ export const machine = setup({
       "line's level, and name the Vim keys \\1, \\2, \\3 and \\0 while Vim is on; an earlier " +
       "day shows its levels but offers no buttons. The text is saved a short time into " +
       "typing and when the box loses focus. When a day was saved on two devices at once, the " +
-      "entry shows both copies and the user keeps one.",
+      "entry shows both copies and the user keeps one. It announces which day it shows, when " +
+      "the page has loaded and whenever that day changes, also at midnight on today's empty " +
+      "page, and it holds a view a page nests in it under the day's text, which scrolls with " +
+      "the text and follows the announced day.",
     kind: "view",
-    emits: ["day.saved"],
+    emits: ["day.saved", "day.shown"],
     attributes: ["height"],
     asks: ["journal: read", "settings: read", "books: read"],
   },
@@ -199,6 +226,8 @@ export const machine = setup({
     // The latest book pick, {id, chapter}, and the books being asked about.
     want: null,
     asking: [],
+    // The date last announced as day.shown; null until the page has loaded.
+    shownDay: null,
     draft: null,
     editing: false,
     conflict: null,
@@ -223,7 +252,7 @@ export const machine = setup({
           {
             guard: ({ event }) => isPicture(event.output),
             target: "ready",
-            actions: assign(({ context, event }) => settle(context, picture(event.output), false)),
+            actions: [assign(({ context, event }) => settle(context, picture(event.output), false)), announce],
           },
           // The journal could not answer: an honest failure rather than an empty page.
           { target: "failed" },
@@ -232,6 +261,7 @@ export const machine = setup({
       },
     },
     ready: {
+      entry: atMidnight,
       initial: "clean",
       states: {
         clean: {
@@ -269,6 +299,7 @@ export const machine = setup({
           ],
         },
         _keepTheirs: { actions: assign({ conflict: null }) },
+        _midnight: { actions: [announce, atMidnight] },
       },
     },
     failed: {},

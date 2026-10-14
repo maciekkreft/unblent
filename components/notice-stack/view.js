@@ -24,6 +24,7 @@ const REMOVED = {
   rubric: ["Detector", "deleted"],
   case: ["Case", "deleted"],
   evaluator: ["Evaluator", "deleted"],
+  "choice-point": ["Choice point", "deleted"],
   question: ["Question", "removed"],
   option: ["Option", "removed"],
 };

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user wrote in a choice point: its four texts as they now stand. A new id starts a new choice point on the given day; for one already kept the day is ignored.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "day": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "situation": {
+      "type": "string",
+      "description": "The situation: what happened, where and with whom."
+    },
+    "thoughts": {
+      "type": "string",
+      "description": "The thoughts and feelings the situation brought."
+    },
+    "away": {
+      "type": "string",
+      "description": "What the user did or would do when hooked: a move away from what matters."
+    },
+    "towards": {
+      "type": "string",
+      "description": "What the user did or would do when unhooked: a move towards what matters."
+    }
+  },
+  "required": [
+    "id",
+    "day",
+    "situation",
+    "thoughts",
+    "away",
+    "towards"
+  ],
+  "additionalProperties": false
+}

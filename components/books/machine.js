@@ -20,7 +20,8 @@ const visible = (record) => record && !record.deleted;
 // through journal.changed, the way `subject` derives what it shows (3.1). Its chapters
 // are the days oldest first, so a chapter's number never shifts as days are added, and
 // one more empty chapter at the end is today's page while no day is open. It is the
-// same whether signed in or out, so a sign-out never takes it away.
+// same whether signed in or out, so a sign-out never takes it away. Each chapter names
+// its day, so a view can join what other facts keep by day to the contents.
 export const JOURNAL = "00000000000000000000000JRN";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -64,7 +65,7 @@ function journalBook(picture, now) {
   if (!picture || !Array.isArray(picture.days)) return null;
   const days = picture.days.map((d) => ({ day: d.day, text: d.text }));
   if (picture.open == null) days.push({ day: dateOf(now), text: "" });
-  const chapters = days.map((d) => ({ title: dayTitle(d.day, now) }));
+  const chapters = days.map((d) => ({ title: dayTitle(d.day, now), day: d.day }));
   return {
     id: JOURNAL,
     title: "Journal",
@@ -481,7 +482,7 @@ export const machine = setup({
       "file, and a re-import refreshes the file's title without touching the user's. It also " +
       "presents the journal as the first book, signed in or out: its chapters are the days, " +
       "oldest first, with today's empty page last while no day has been started today, and " +
-      "the contents list them newest first. It stores nothing for the journal, which can be " +
+      "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
       "opened but never renamed or deleted here.",
     kind: "fact",
     shape: "replicated",

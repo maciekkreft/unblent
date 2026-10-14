@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, kept, shortDate, KEPT_SIGNED_IN, KEPT_SIGNED_OUT } from "../machine.js";
+import { machine, rows, kept, shortDate, counts, choiceLabel, KEPT_SIGNED_IN, KEPT_SIGNED_OUT } from "../machine.js";
 
 // The Days list's decisions (3.2): the rows, newest first, with the open day's pill, the
 // line saying where the journal is kept, and what a pick emits. Times are built with the
@@ -33,7 +33,7 @@ test("rows are newest first, with the short date, the first line and the paragra
 });
 
 test("the open day shows a pill instead of its count: today, or past midnight when it closes", () => {
-  assert.deepEqual(rows(DAYS, MON, at(12, 22))[0], { id: null, day: MON, date: "Mon 12 Oct", first: "Woke up tired.", count: 1, pill: "today" });
+  assert.deepEqual(rows(DAYS, MON, at(12, 22))[0], { id: null, day: MON, date: "Mon 12 Oct", first: "Woke up tired.", count: 1, pill: "today", choices: 0 });
   const late = [...DAYS.slice(0, 2), day(MON, "2026-10-12", "Woke up tired.", at(13, 0, 12))];
   assert.equal(rows(late, MON, at(13, 0, 25))[0].pill, "open till 01:12");
   assert.equal(rows(DAYS, MON, at(12, 22)).length, 3, "no new page while a day is open");
@@ -85,4 +85,68 @@ test("a picked day that is gone falls back to the open day", async () => {
   actor.send({ type: "_pick", id: SAT });
   actor.send({ type: "journal.changed", days: DAYS.slice(1), projects: [], detectors: [], answers: [], open: MON, reason: null });
   assert.equal(actor.getSnapshot().context.current, null);
+});
+
+// --- Choice points: how many a day has ----------------------------------------------
+
+const CP1 = "01K7TEST0000000000000CP001";
+const CP2 = "01K7TEST0000000000000CP002";
+const CP3 = "01K7TEST0000000000000CP003";
+const cp = (id, date, version = 1, removing = false) => ({
+  id,
+  day: date,
+  situation: "",
+  thoughts: "",
+  away: "",
+  towards: "",
+  createdAt: "2026-10-12T08:00:00.000Z",
+  version,
+  pending: false,
+  removing,
+});
+
+async function withChoices(reply) {
+  const picture = { days: DAYS, projects: [], detectors: [], answers: [], open: MON, reason: null };
+  const answers = { journal: picture, session: { userId: null, registrationOpen: true }, "choice-points": reply };
+  const actor = createActor(machine, { input: { ask: (target) => Promise.resolve(answers[target]) } });
+  actor.start();
+  await flush();
+  const perDay = () => Object.fromEntries(rows(actor.getSnapshot().context.days, MON, at(12, 22), counts(actor.getSnapshot().context.choicePoints)).map((r) => [r.date, r.choices]));
+  return { actor, perDay };
+}
+
+test("the starting list counts each day's choice points, and a day without any shows none", async () => {
+  const { perDay } = await withChoices({ choicePoints: [cp(CP1, "2026-10-12"), cp(CP2, "2026-10-12"), cp(CP3, "2026-10-10")] });
+  assert.deepEqual(perDay(), { "Mon 12 Oct": 2, "Sun 11 Oct": 0, "Sat 10 Oct": 1 });
+  assert.equal(choiceLabel(1), "1 choice point");
+  assert.equal(choiceLabel(2), "2 choice points");
+});
+
+test("a new choice point counts; one being removed does not, and counts again after an undo", async () => {
+  const { actor, perDay } = await withChoices({ choicePoints: [cp(CP1, "2026-10-12")] });
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP2, "2026-10-11") });
+  assert.equal(perDay()["Sun 11 Oct"], 1);
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP1, "2026-10-12", 1, true) });
+  assert.equal(perDay()["Mon 12 Oct"], 0, "waiting out its undo window");
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP1, "2026-10-12", 1, false) });
+  assert.equal(perDay()["Mon 12 Oct"], 1, "undone");
+  actor.send({ type: "choice-point.deleted", id: CP1, day: "2026-10-12" });
+  assert.equal(perDay()["Mon 12 Oct"], 0, "deleted");
+});
+
+test("an older version of a choice point does not overwrite a newer one", async () => {
+  const { actor, perDay } = await withChoices({ choicePoints: [cp(CP1, "2026-10-12", 3, true)] });
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP1, "2026-10-12", 2, false) });
+  assert.equal(perDay()["Mon 12 Oct"], 0);
+});
+
+test("with no choice points to ask, the list still works and shows no counts", async () => {
+  const { actor, perDay } = await withChoices({ error: "no-answerer" });
+  assert.ok(actor.getSnapshot().matches("ready"));
+  assert.deepEqual(Object.values(perDay()), [0, 0, 0]);
+});
+
+test("the new page for today counts today's choice points", () => {
+  const today = rows(DAYS, null, at(13, 9), { "2026-10-13": 2 })[0];
+  assert.deepEqual([today.date, today.choices], ["Tue 13 Oct", 2]);
 });

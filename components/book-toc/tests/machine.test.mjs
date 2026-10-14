@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, markedChapter } from "../machine.js";
+import { machine, markedChapter, chapterCounts, counts, choiceLabel } from "../machine.js";
 
 // The actor is where the contents' decisions live (3.2): which book it shows, and the
 // chapter it marks. The mark is the chapter the user just chose (a jump the fact has
@@ -30,10 +30,11 @@ const book = (over = {}) => ({
 
 const changed = (over = {}) => ({ type: "book.changed", ...book(over) });
 
-function start({ read, open } = {}) {
+function start({ read, open, list } = {}) {
   const ask = (target, name) => {
     if (name === "open") return Promise.resolve(open ?? { id: null });
     if (name === "read") return Promise.resolve(read ?? { book: book() });
+    if (name === "list") return Promise.resolve(list ?? { error: "no-answerer" });
     return Promise.resolve({});
   };
   const actor = createActor(machine, { input: { ask } });
@@ -172,4 +173,62 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     await vimSettle();
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
   }
+});
+
+// The journal's counts: choice points name their day, the written book's chapters name
+// theirs, and the two are joined by date.
+const DAY1 = "2026-10-11";
+const DAY2 = "2026-10-13";
+const CP1 = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+const CP2 = "01ARZ3NDEKTSV4RRFFQ69G5FC2";
+const CP3 = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
+const journal = (over = {}) =>
+  book({
+    written: true,
+    chapters: [{ title: "Sunday 11 October", day: DAY1 }, { title: "Tuesday 13 October", day: DAY2 }],
+    toc: [{ title: "Tuesday 13 October", chapter: 1 }, { title: "Sunday 11 October", chapter: 0 }],
+    ...over,
+  });
+const cp = (id, day, over = {}) => ({ id, day, version: 1, removing: false, ...over });
+const perChapter = (actor) => chapterCounts(ctx(actor).book, ctx(actor).choicePoints);
+
+test("the journal's days count their choice points from the starting list", async () => {
+  const { actor } = await open({ read: { book: journal() }, list: { choicePoints: [cp(CP1, DAY2), cp(CP2, DAY2), cp(CP3, DAY1)] } });
+  assert.deepEqual(perChapter(actor), { 0: 1, 1: 2 });
+  assert.equal(choiceLabel(1), "1 choice point");
+  assert.equal(choiceLabel(2), "2 choice points");
+});
+
+test("any other book shows no counts", async () => {
+  const { actor } = await open({ list: { choicePoints: [cp(CP1, DAY2)] } });
+  assert.deepEqual(perChapter(actor), {});
+});
+
+test("an error reply leaves the journal's contents without counts", async () => {
+  const { actor } = await open({ read: { book: journal() } });
+  assert.ok(actor.getSnapshot().matches("showing"));
+  assert.deepEqual(perChapter(actor), {});
+});
+
+test("a removing choice point is not counted, and counts again after an undo", async () => {
+  const { actor } = await open({ read: { book: journal() }, list: { choicePoints: [cp(CP1, DAY2)] } });
+  // The removing flag changes without a new version, so an equal version is taken.
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP1, DAY2, { removing: true }) });
+  assert.deepEqual(perChapter(actor), {});
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP1, DAY2) });
+  assert.deepEqual(perChapter(actor), { 1: 1 });
+  actor.send({ type: "choice-point.deleted", id: CP1, day: DAY2 });
+  assert.deepEqual(perChapter(actor), {});
+});
+
+test("a choice point older than the one held is ignored", async () => {
+  const { actor } = await open({ read: { book: journal() }, list: { choicePoints: [cp(CP1, DAY2, { version: 3 })] } });
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP1, DAY2, { version: 2, removing: true }) });
+  assert.deepEqual(perChapter(actor), { 1: 1 });
+  actor.send({ type: "choice-point.changed", choicePoint: cp(CP2, DAY1) });
+  assert.deepEqual(perChapter(actor), { 0: 1, 1: 1 });
+});
+
+test("counts skips choice points being removed", () => {
+  assert.deepEqual(counts({ a: { day: DAY1, removing: false }, b: { day: DAY1, removing: true } }), { [DAY1]: 1 });
 });

@@ -83,6 +83,8 @@ test("the journal is the first book, its days the chapters oldest first and the 
     // No day is open, so today's empty page is one more chapter at the end; a day of
     // another year carries its year.
     assert.deepEqual(book.chapters.map((c) => c.title), ["Wednesday 31 December 2025", "Sunday 11 October", "Tuesday 13 October"]);
+    // Each chapter names its day, today's empty page included, so a view can count by day.
+    assert.deepEqual(book.chapters.map((c) => c.day), ["2025-12-31", "2026-10-11", "2026-10-13"]);
     assert.deepEqual(book.toc.map((e) => [e.title, e.chapter]), [["Tuesday 13 October", 2], ["Sunday 11 October", 1], ["Wednesday 31 December 2025", 0]]);
     assert.deepEqual(book.position, { chapter: 2, block: 0 });
     assert.equal(book.written, true);
