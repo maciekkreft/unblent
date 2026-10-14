@@ -1,7 +1,7 @@
 {
   "payload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The book whose evaluators are wanted.",
+    "description": "The book whose evaluators are wanted; every book's evaluators when left out.",
     "type": "object",
     "properties": {
       "book": {
@@ -9,14 +9,11 @@
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       }
     },
-    "required": [
-      "book"
-    ],
     "additionalProperties": false
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The book's evaluators, oldest first, each whole as evaluator.changed carries it.",
+    "description": "The evaluators, of the book asked for or of every book, oldest first, each whole as evaluator.changed carries it.",
     "type": "object",
     "properties": {
       "evaluators": {

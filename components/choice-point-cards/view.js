@@ -1,12 +1,12 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { EditorState, Compartment, Prec, Annotation } from "@codemirror/state";
-import { EditorView, keymap, drawSelection, placeholder } from "@codemirror/view";
+import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } from "@codemirror/state";
+import { EditorView, keymap, drawSelection, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
-import { machine, savable } from "./machine.js";
+import { machine, boxMarks, cardWarnings, sayMarks, statusOf } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
 
@@ -31,6 +31,11 @@ const boxTheme = (lines) =>
       minHeight: `calc(var(--text-sm) * var(--leading-normal) * ${lines})`,
     },
     ".cm-line": { fontSize: "var(--text-sm)", padding: "0" },
+    // A checked line keeps room at its right end for its marks, which stand there.
+    ".cm-line.cm-checked": { position: "relative" },
+    ...Object.fromEntries(
+      [1, 2, 3, 4].map((n) => [`.cm-line.cm-checked-${n}`, { paddingRight: `calc((var(--text-sm) + var(--space-xs) * 2 + var(--space-2xs)) * ${n})` }]),
+    ),
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
     ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
     ".cm-placeholder": { color: "var(--color-mute)" },
@@ -61,6 +66,91 @@ const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
+
+// Jev's marks for a box, by line text, as the machine decided them (boxMarks); a line
+// whose text matches none has no mark.
+const setMarks = StateEffect.define();
+const marksField = StateField.define({
+  create: () => new Map(),
+  update: (value, tr) => tr.effects.reduce((v, e) => (e.is(setMarks) ? e.value : v), value),
+});
+
+// The names are literals so the icon check sees each one (11.2).
+const MARK_ICONS = {
+  check: () => icon("check"),
+  warning: () => icon("warning"),
+  "person-simple-walk": () => icon("person-simple-walk"),
+  brain: () => icon("brain"),
+};
+
+// The marks at a line's end. They are a widget, not text: the cursor, Vim and the line's
+// height pass them by, and CodeMirror ignores their events. The pointer over them, or a
+// tap, says which line the status line is to tell about.
+class MarksWidget extends WidgetType {
+  constructor(marks, text, point) {
+    super();
+    this.marks = marks;
+    this.text = text;
+    this.point = point;
+    this.key = JSON.stringify(marks);
+  }
+
+  eq(other) {
+    return other.key === this.key && other.text === this.text;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "marks";
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", sayMarks(this.marks));
+    render(
+      this.marks.map((m) =>
+        m.pending ? html`<span class="mark pending" title=${sayMarks([m])}><i></i></span>` : html`<span class="mark ${m.tone}" title=${sayMarks([m])} style=${`opacity: ${m.sure}`}>${MARK_ICONS[m.icon]?.()}</span>`,
+      ),
+      span,
+    );
+    span.addEventListener("pointerenter", (e) => {
+      if (e.pointerType === "touch") return;
+      span.dataset.over = "";
+      this.point("hover", this.text);
+    });
+    span.addEventListener("pointerleave", () => {
+      delete span.dataset.over;
+      this.point("hover", null);
+    });
+    // Pressing a mark keeps the cursor and the keyboard where they are.
+    span.addEventListener("mousedown", (e) => e.preventDefault());
+    span.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      this.point("tap", this.text);
+    });
+    return span;
+  }
+
+  destroy(dom) {
+    if ("over" in dom.dataset) this.point("hover", null);
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+const marksDecorations = (point) =>
+  EditorView.decorations.compute([marksField, "doc"], (state) => {
+    const marks = state.field(marksField);
+    const ranges = [];
+    if (!marks.size) return Decoration.none;
+    for (let i = 1; i <= state.doc.lines; i += 1) {
+      const line = state.doc.line(i);
+      const these = marks.get(line.text);
+      if (!these?.length) continue;
+      ranges.push(Decoration.line({ class: `cm-checked cm-checked-${Math.min(these.length, 4)}` }).range(line.from));
+      ranges.push(Decoration.widget({ widget: new MarksWidget(these, line.text, point), side: 1 }).range(line.to));
+    }
+    return Decoration.set(ranges);
+  });
 
 // A hollow arrow from (bx, by) to its tip at (tx, ty), as polygon points: a shaft of half
 // width w and a head of half width hw and length hl.
@@ -235,6 +325,24 @@ class ChoicePointCards extends LitElement {
       align-items: baseline;
       gap: var(--space-sm);
     }
+    /* The card's warning joins a row as a third column only when it is there, so a card
+       without one is laid out as before. */
+    .move,
+    .flagged {
+      grid-auto-flow: column;
+    }
+    .flagged {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: baseline;
+      gap: var(--space-sm);
+    }
+    .flag {
+      align-self: center;
+      display: flex;
+      font-size: var(--text-sm);
+      color: var(--color-danger);
+    }
     .move b,
     .field > span {
       font-size: var(--text-caption);
@@ -349,6 +457,62 @@ class ChoicePointCards extends LitElement {
     ::selection {
       background: var(--color-accent-selection);
     }
+    /* Jev's marks at a checked line's right end, as tall as the line, so a box keeps its
+       height. */
+    .marks {
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: flex;
+      gap: var(--space-2xs);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .mark {
+      display: inline-grid;
+      place-items: center;
+      width: calc(var(--text-sm) + var(--space-xs) * 2);
+      height: calc(var(--text-sm) * var(--leading-normal));
+      border-radius: var(--radius-sm);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+      cursor: pointer;
+    }
+    .mark svg {
+      display: block;
+    }
+    .mark:hover {
+      background: var(--color-surface-hover);
+    }
+    .mark.right {
+      color: var(--color-success);
+      background: var(--color-success-subtle);
+    }
+    .mark.wrong {
+      color: var(--color-danger);
+      background: var(--color-danger-subtle);
+    }
+    .mark.pending {
+      cursor: default;
+      background: none;
+    }
+    .mark.pending i {
+      width: calc(var(--space-xs) * 1.5);
+      height: calc(var(--space-xs) * 1.5);
+      border-radius: var(--radius-full);
+      background: var(--color-mute);
+      animation: pulse calc(var(--duration-slide) * 4) ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.3;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .mark.pending i {
+        animation: none;
+      }
+    }
     .foot {
       display: flex;
       align-items: center;
@@ -430,27 +594,27 @@ class ChoicePointCards extends LitElement {
   // mode; any other folds the sheet like Done. A keydown handler at Prec.highest, not a
   // keymap, because the Vim plugin's handler runs before every keymap and would take it.
   // The key never reaches what is around the box, so nothing there acts on it too.
-  #keys(field) {
+  #keys(id, field) {
     return Prec.highest(
       EditorView.domEventHandlers({
         keydown: (event, view) => {
           if (event.key !== "Escape" || event.isComposing) return false;
           event.stopPropagation();
-          const box = this.#boxes.get(`${this.#actor.snapshot?.context.draft?.id}:${field}`);
+          const box = this.#boxes.get(`${id}:${field}`);
           const mode = box?.vimOn ? getCM(view)?.state?.vim : null;
           if (mode?.insertMode || mode?.visualMode) return false;
           event.preventDefault();
-          const id = this.#actor.snapshot?.context.draft?.id;
-          if (id) this.#done(id);
+          this.#done(id);
           return true;
         },
       }),
     );
   }
 
-  #extensions(key, field, spec, vimOn) {
+  #extensions(key, spec, vimOn) {
+    const { id, field } = spec;
     return [
-      this.#keys(field),
+      this.#keys(id, field),
       // The Vim plugin must see a key before any keymap does.
       this.#boxes.get(key).vim.of(vimExtensions(vimOn)),
       // Vim hides the native selection, so its visual-mode range shows only through
@@ -464,30 +628,52 @@ class ChoicePointCards extends LitElement {
       field === "away" || field === "towards" ? tallTheme : shortTheme,
       placeholder(spec.hint),
       EditorView.contentAttributes.of({ "aria-label": spec.label }),
+      marksField.init(() => spec.marks),
+      marksDecorations((source, text) => this.#actor.send({ type: "_point", source, id, field: text == null ? null : field, text })),
       EditorView.updateListener.of((update) => {
+        if (update.selectionSet || update.docChanged || update.focusChanged) this.#cursorOn(id, field, update.view);
         if (!update.docChanged || update.transactions.every((t) => t.annotation(fromDraft))) return;
-        this.#actor.send({ type: "_edit", field, value: update.state.doc.toString() });
+        this.#actor.send({ type: "_edit", id, field, value: update.state.doc.toString() });
       }),
       EditorView.domEventHandlers({
         blur: () => {
           // WebKit keeps the document's selection inside a blurred editor, and a later
           // key nobody cancels is typed there; dropping it leaves nothing to type into.
           document.getSelection()?.removeAllRanges();
-          this.#actor.send({ type: "_blur" });
+          this.#actor.send({ type: "_blur", id });
         },
       }),
     ];
   }
 
-  // Editors are made when the sheet opens and dropped when it folds; an open one follows
-  // its draft text (a change from the fact while nothing waits to save) and Vim.
+  // The line the text cursor is on, told to the machine when it changes, so the status
+  // line can say Jev's answers about it; nothing while no box has the keyboard.
+  #cursorAt = null;
+  #cursorOn(id, field, view) {
+    const here = (at) => at?.id === id && at.field === field;
+    if (!view.hasFocus && !here(this.#cursorAt)) return;
+    const text = view.hasFocus ? view.state.doc.lineAt(view.state.selection.main.head).text : null;
+    if (here(this.#cursorAt) && this.#cursorAt.text === text) return;
+    this.#cursorAt = text == null ? null : { id, field, text };
+    this.#actor.send({ type: "_point", source: "cursor", id, field: text == null ? null : field, text });
+  }
+
+  // Editors are made when a sheet opens and dropped when it folds; an open one follows
+  // its draft text (a change from the fact while nothing waits to save) and Vim. Lit draws
+  // the list by position, so when a sheet above folds, an editor moves to the region now
+  // drawn for it rather than being made again.
   #syncBoxes() {
     const vimOn = this.#actor.snapshot?.context.vimKeys === true;
     const regions = new Map([...this.renderRoot.querySelectorAll(".box[data-key]")].map((r) => [r.dataset.key, r]));
     for (const [key, box] of this.#boxes) {
-      if (regions.get(key) === box.region && box.view.dom.parentNode === box.region) continue;
-      box.view.destroy();
-      this.#boxes.delete(key);
+      const region = regions.get(key);
+      if (!region) {
+        box.view.destroy();
+        this.#boxes.delete(key);
+      } else if (region !== box.region || box.view.dom.parentNode !== region) {
+        region.replaceChildren(box.view.dom);
+        box.region = region;
+      }
     }
     for (const [key, region] of regions) {
       const spec = this.#wanted.get(key);
@@ -495,14 +681,14 @@ class ChoicePointCards extends LitElement {
       let box = this.#boxes.get(key);
       if (!box) {
         region.replaceChildren();
-        box = { region, vim: new Compartment(), vimOn };
+        box = { region, vim: new Compartment(), vimOn, marksKey: spec.marksKey };
         this.#boxes.set(key, box);
         box.view = new EditorView({
           parent: region,
           // Shadow DOM: CodeMirror reads the selection through the root and mounts its
           // stylesheet there (7.5), so it must know the shadow root.
           root: this.renderRoot,
-          state: EditorState.create({ doc: spec.text, extensions: this.#extensions(key, spec.field, spec, vimOn) }),
+          state: EditorState.create({ doc: spec.text, extensions: this.#extensions(key, spec, vimOn) }),
         });
         continue;
       }
@@ -510,6 +696,10 @@ class ChoicePointCards extends LitElement {
       if (box.vimOn !== vimOn) {
         box.vimOn = vimOn;
         effects.push(box.vim.reconfigure(vimExtensions(vimOn)));
+      }
+      if (box.marksKey !== spec.marksKey) {
+        box.marksKey = spec.marksKey;
+        effects.push(setMarks.of(spec.marks));
       }
       const doc = box.view.state.doc.toString();
       const changes = doc === spec.text ? undefined : { from: 0, to: doc.length, insert: spec.text };
@@ -530,36 +720,53 @@ class ChoicePointCards extends LitElement {
   }
 
   #add() {
-    this.#send({ type: "_add" }, `.box[data-field="situation"]`);
+    this.#actor.send({ type: "_add" });
+    this.#focusNext = `.box[data-key="${this.#actor.snapshot?.context.drafts.at(-1)?.id}:situation"]`;
+    this.requestUpdate();
   }
 
   #open(id) {
-    this.#send({ type: "_open", id }, `.box[data-field="situation"]`);
+    this.#send({ type: "_open", id }, `.box[data-key="${id}:situation"]`);
   }
 
   #done(id) {
-    this.#send({ type: "_done" }, `.card[data-id="${id}"]`);
+    this.#send({ type: "_done", id }, `.card[data-id="${id}"]`);
   }
 
-  #delete() {
-    this.#send({ type: "_delete" }, ".pill");
+  #delete(id) {
+    this.#send({ type: "_delete", id }, ".pill");
   }
 
-  #card(r) {
+  #card(context, r) {
+    const warn = cardWarnings(context, r);
+    const flag = (field) =>
+      warn[field] ? html`<span class="flag" role="img" aria-label="A line here is not the answer you expect">${icon("warning")}</span>` : nothing;
+    // A card shows a box on one row, so its lines are kept apart by a dot.
+    const oneRow = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean).join(" · ");
     const move = (kind, label, text) =>
-      html`<span class="move ${kind}"><b>${label}</b><span>${text.trim() || "—"}</span></span>`;
+      html`<span class="move ${kind}"><b>${label}</b><span>${oneRow(text) || "—"}</span>${flag(kind)}</span>`;
+    const sit = html`<span class="sit ${oneRow(r.situation) ? "" : "none"}">${oneRow(r.situation) || "A choice point"}</span>`;
     return html`<button type="button" class="card" data-id=${r.id} @click=${() => this.#open(r.id)}>
-      <span class="sit ${r.situation.trim() ? "" : "none"}">${r.situation.trim() || "A choice point"}</span>
+      ${warn.situation ? html`<span class="flagged">${sit}${flag("situation")}</span>` : sit}
       ${move("away", "Away", r.away)} ${move("towards", "Towards", r.towards)}
     </button>`;
   }
 
   // One box as the render wants it; the editor inside it is made in updated(). A press on
   // the caption puts the keyboard in its box, as a label does for a field.
-  #box(draft, field) {
+  #box(context, draft, field) {
     const { label, hint } = BOXES[field];
     const key = `${draft.id}:${field}`;
-    this.#wanted.set(key, { field, label, hint, text: draft[field] });
+    const lines = boxMarks(context, draft.id, field);
+    this.#wanted.set(key, {
+      id: draft.id,
+      field,
+      label,
+      hint,
+      text: draft[field],
+      marks: new Map(lines.map((l) => [l.text, l.marks])),
+      marksKey: JSON.stringify(lines),
+    });
     const focus = () => {
       const box = this.#boxes.get(key);
       if (box) this.#focusBox(box);
@@ -570,14 +777,8 @@ class ChoicePointCards extends LitElement {
     </div>`;
   }
 
-  #sheet(snapshot) {
-    const { context } = snapshot;
-    const { draft } = context;
-    const status = snapshot.matches({ ready: { open: "dirty" } })
-      ? "Saving…"
-      : savable(context)
-        ? "Saved"
-        : "Kept once you write in a box";
+  #sheet(context, draft) {
+    const status = statusOf(context, draft.id);
     // Escape on a button closes the sheet like Done; the key is taken so nothing around
     // it acts too. The boxes decide their own Escape, for Vim (#keys).
     const keydown = (e) => {
@@ -586,17 +787,22 @@ class ChoicePointCards extends LitElement {
       e.stopPropagation();
       this.#done(draft.id);
     };
-    return html`<div class="sheet" role="group" aria-label="Choice point" @keydown=${keydown}>
+    // A tapped mark keeps its answer in the status line until something else is pressed.
+    const pointerdown = (e) => {
+      if (!context.pointed.tap || e.composedPath().some((n) => n.classList?.contains("marks"))) return;
+      this.#actor.send({ type: "_point", source: "tap", id: draft.id, field: null });
+    };
+    return html`<div class="sheet" role="group" aria-label="Choice point" @keydown=${keydown} @pointerdown=${pointerdown}>
       <div class="grid">
-        ${this.#box(draft, "away")}
+        ${this.#box(context, draft, "away")}
         <div class="v">${vee}</div>
-        ${this.#box(draft, "towards")}
-        <div class="bottom">${this.#box(draft, "situation")} ${this.#box(draft, "thoughts")}</div>
+        ${this.#box(context, draft, "towards")}
+        <div class="bottom">${this.#box(context, draft, "situation")} ${this.#box(context, draft, "thoughts")}</div>
       </div>
       <div class="foot">
         <span class="status" role="status">${status}</span>
         <div class="buttons">
-          <button type="button" class="delete" @click=${() => this.#delete()}>Delete</button>
+          <button type="button" class="delete" @click=${() => this.#delete(draft.id)}>Delete</button>
           <button type="button" class="done" @click=${() => this.#done(draft.id)}>Done</button>
         </div>
       </div>
@@ -608,12 +814,14 @@ class ChoicePointCards extends LitElement {
     if (!snapshot) return nothing;
     const ready = snapshot.matches("ready");
     const failed = snapshot.matches("failed");
-    const { choicePoints, draft } = snapshot.context;
+    const { context } = snapshot;
+    const { choicePoints, drafts } = context;
     // A new choice point joins the list where it will stand once kept, last, so the sheet
     // keeps its place (and the keyboard) when the fact first announces it.
     const shown = choicePoints.filter((r) => !r.removing);
     this.#wanted.clear();
-    const items = draft && !shown.some((r) => r.id === draft.id) ? [...shown, draft] : shown;
+    const items = [...shown, ...drafts.filter((d) => !shown.some((r) => r.id === d.id))];
+    const draftOf = (r) => drafts.find((d) => d.id === r.id);
     return html`<section tabindex="-1" aria-labelledby="heading">
       <div class="head">
         <h3 id="heading">Choice points</h3>
@@ -623,7 +831,7 @@ class ChoicePointCards extends LitElement {
       </div>
       ${failed ? html`<p class="empty">Choice points are unavailable.</p>` : nothing}
       ${items.length
-        ? html`<div class="list">${items.map((r) => (draft?.id === r.id ? this.#sheet(snapshot) : this.#card(r)))}</div>`
+        ? html`<div class="list">${items.map((r) => (draftOf(r) ? this.#sheet(context, draftOf(r)) : this.#card(context, r)))}</div>`
         : nothing}
     </section>`;
   }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf } from "../machine.js";
+import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings } from "../machine.js";
 
 const json = (name) => JSON.parse(readFileSync(new URL(`../events/${name}.json`, import.meta.url), "utf8"));
 const SCHEMAS = { "choice-point.saved": json("choice-point.saved"), "removal.started": json("removal.started") };
@@ -34,15 +34,23 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 // `days` maps a date to the choice points the fact answers for it; `vimKeys` is the
 // settings fact's answer, or none when the page holds no settings.
-async function start(days = {}, vimKeys) {
+// `checks` is what choice-point-checks answers for a day, and `evaluators` the evaluators
+// fact's list; left out, the page holds neither fact.
+async function start(days = {}, vimKeys, { checks, evaluators } = {}) {
   let n = 0;
   const asked = [];
+  const checksAsked = [];
   const clock = new SimulatedClock();
   const actor = createActor(machine, {
     clock,
     input: {
       ask: (target, name, payload) => {
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
+        if (target === "choice-point-checks") {
+          checksAsked.push(payload.day);
+          return Promise.resolve(checks ? checks(payload.day) : { error: "no-answerer" });
+        }
+        if (target === "evaluators") return Promise.resolve(evaluators ? { evaluators } : { error: "no-answerer" });
         asked.push({ target, name, payload });
         return Promise.resolve({ choicePoints: days[payload.day] ?? [] });
       },
@@ -59,7 +67,7 @@ async function start(days = {}, vimKeys) {
     });
   actor.start();
   await flush();
-  return { actor, clock, emitted, asked, ctx: () => actor.getSnapshot().context, state: () => actor.getSnapshot().value };
+  return { actor, clock, emitted, asked, checksAsked, ctx: () => actor.getSnapshot().context, state: () => actor.getSnapshot().value };
 }
 
 const saves = (emitted) => emitted.filter((e) => e.type === "choice-point.saved");
@@ -98,22 +106,28 @@ test("changes follow the shown day, a stale version is ignored, and a deleted on
   assert.deepEqual(ctx().choicePoints, []);
 });
 
+// The one open sheet's id, for the tests that open one.
+const only = (ctx) => {
+  assert.equal(ctx().drafts.length, 1);
+  return ctx().drafts[0].id;
+};
+
 test("typing saves at a throttle, and at once on blur", async () => {
   const { actor, clock, emitted, ctx, state } = await start();
   actor.send({ type: "_add" });
-  const id = ctx().draft.id;
-  assert.deepEqual(state(), { ready: { open: "clean" } });
-  assert.equal(ctx().draft.day, TODAY);
+  const id = only(ctx);
+  assert.deepEqual(state(), { ready: "idle" });
+  assert.equal(ctx().drafts[0].day, TODAY);
 
-  actor.send({ type: "_edit", field: "situation", value: "D" });
+  actor.send({ type: "_edit", id, field: "situation", value: "D" });
   clock.increment(200);
-  actor.send({ type: "_edit", field: "situation", value: "Dinner" });
+  actor.send({ type: "_edit", id, field: "situation", value: "Dinner" });
   assert.equal(saves(emitted).length, 0, "nothing per keystroke");
   clock.increment(200);
   assert.deepEqual(saves(emitted), [{ type: "choice-point.saved", id, day: TODAY, situation: "Dinner", thoughts: "", away: "", towards: "" }]);
 
-  actor.send({ type: "_edit", field: "away", value: "Checked my phone" });
-  actor.send({ type: "_blur" });
+  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone" });
+  actor.send({ type: "_blur", id });
   assert.equal(saves(emitted).length, 2);
   assert.equal(saves(emitted)[1].away, "Checked my phone");
   clock.increment(1000);
@@ -121,17 +135,17 @@ test("typing saves at a throttle, and at once on blur", async () => {
 });
 
 test("Done on a blank new choice point keeps nothing; Done after typing saves at once", async () => {
-  const { actor, emitted, ctx, state } = await start();
+  const { actor, emitted, ctx } = await start();
   actor.send({ type: "_add" });
-  actor.send({ type: "_done" });
-  assert.deepEqual(state(), { ready: "folded" });
-  assert.equal(ctx().draft, null);
+  actor.send({ type: "_done", id: only(ctx) });
+  assert.deepEqual(ctx().drafts, []);
   assert.deepEqual(emitted, []);
 
   actor.send({ type: "_add" });
-  actor.send({ type: "_edit", field: "towards", value: "Listened" });
-  actor.send({ type: "_done" });
-  assert.deepEqual(state(), { ready: "folded" });
+  const id = only(ctx);
+  actor.send({ type: "_edit", id, field: "towards", value: "Listened" });
+  actor.send({ type: "_done", id });
+  assert.deepEqual(ctx().drafts, []);
   assert.equal(saves(emitted).length, 1);
   assert.equal(saves(emitted)[0].towards, "Listened");
 });
@@ -139,26 +153,26 @@ test("Done on a blank new choice point keeps nothing; Done after typing saves at
 test("a kept choice point opens with its texts and follows changes only while nothing waits to save", async () => {
   const { actor, clock, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
   actor.send({ type: "_open", id: A });
-  assert.equal(ctx().draft.situation, "Dinner");
+  assert.equal(ctx().drafts[0].situation, "Dinner");
   actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "From the phone" }, { version: 2 }) });
-  assert.equal(ctx().draft.situation, "From the phone");
-  actor.send({ type: "_edit", field: "situation", value: "Typed here" });
+  assert.equal(ctx().drafts[0].situation, "From the phone");
+  actor.send({ type: "_edit", id: A, field: "situation", value: "Typed here" });
   actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "Another" }, { version: 3 }) });
-  assert.equal(ctx().draft.situation, "Typed here", "what is on screen is not overwritten");
+  assert.equal(ctx().drafts[0].situation, "Typed here", "what is on screen is not overwritten");
   clock.increment(400);
 });
 
 test("Delete saves what waits, then starts the removal; a removed one closes and Undo brings back its card", async () => {
-  const { actor, emitted, ctx, state } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
+  const { actor, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
   actor.send({ type: "_open", id: A });
-  actor.send({ type: "_edit", field: "situation", value: "Dinner party " });
-  actor.send({ type: "_delete" });
+  actor.send({ type: "_edit", id: A, field: "situation", value: "Dinner party " });
+  actor.send({ type: "_delete", id: A });
   assert.deepEqual(
     emitted.map((e) => e.type),
     ["choice-point.saved", "removal.started"],
   );
   assert.deepEqual(emitted[1], { type: "removal.started", kind: "choice-point", id: A, name: "Dinner party" });
-  assert.deepEqual(state(), { ready: "folded" });
+  assert.deepEqual(ctx().drafts, []);
 
   actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "Dinner party " }, { removing: true }) });
   assert.equal(ctx().choicePoints[0].removing, true);
@@ -167,35 +181,41 @@ test("Delete saves what waits, then starts the removal; a removed one closes and
 });
 
 test("Delete on a blank new one just closes; a choice point removed elsewhere while open closes", async () => {
-  const { actor, emitted, state } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
+  const { actor, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
   actor.send({ type: "_add" });
-  actor.send({ type: "_delete" });
+  actor.send({ type: "_delete", id: only(ctx) });
   assert.deepEqual(emitted, []);
-  assert.deepEqual(state(), { ready: "folded" });
+  assert.deepEqual(ctx().drafts, []);
 
   actor.send({ type: "_open", id: A });
   actor.send({ type: "choice-point.deleted", id: A, day: TODAY });
-  assert.deepEqual(state(), { ready: "folded" });
+  assert.deepEqual(ctx().drafts, []);
 });
 
-test("adding another or moving to another day saves the open one first", async () => {
-  const { actor, emitted, ctx, state } = await start();
+test("each choice point folds on its own: several stay open, Done folds one, and a new day saves them all", async () => {
+  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" }), cp(B, TODAY, { situation: "Work" })] });
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_open", id: B });
   actor.send({ type: "_add" });
-  const first = ctx().draft.id;
-  actor.send({ type: "_edit", field: "thoughts", value: "Tight chest" });
-  actor.send({ type: "_add" });
-  assert.equal(saves(emitted).at(-1).id, first);
-  assert.notEqual(ctx().draft.id, first);
-  assert.deepEqual(state(), { ready: { open: "clean" } }, "the new one starts with nothing to save");
+  const added = ctx().drafts[2].id;
+  assert.deepEqual(ctx().drafts.map((d) => d.id), [A, B, added], "opening one leaves the others open");
 
-  actor.send({ type: "_edit", field: "away", value: "Snapped" });
+  actor.send({ type: "_edit", id: A, field: "thoughts", value: "Tight chest" });
+  actor.send({ type: "_edit", id: B, field: "away", value: "Snapped" });
+  clock.increment(400);
+  assert.deepEqual(saves(emitted).map((e) => e.id), [A, B], "one throttle saves every sheet typed in");
+
+  actor.send({ type: "_done", id: B });
+  assert.deepEqual(ctx().drafts.map((d) => d.id), [A, added], "Done folds only its own sheet");
+
+  actor.send({ type: "_edit", id: added, field: "towards", value: "Breathe" });
   actor.send({ type: "day.shown", day: EARLIER });
-  assert.equal(saves(emitted).at(-1).away, "Snapped");
+  assert.equal(saves(emitted).at(-1).towards, "Breathe");
   assert.equal(saves(emitted).at(-1).day, TODAY, "it stays with the day it was added to");
   await flush();
-  assert.equal(ctx().draft, null);
+  assert.deepEqual(ctx().drafts, []);
   actor.send({ type: "_add" });
-  assert.equal(ctx().draft.day, EARLIER, "a new one joins the day shown");
+  assert.equal(ctx().drafts[0].day, EARLIER, "a new one joins the day shown");
 });
 
 test("a fact that cannot answer is an honest failure", async () => {
@@ -214,5 +234,112 @@ test("the Vim keys preference is read at start and followed after; without setti
   actor.send({ type: "_add" });
   actor.send({ type: "settings.changed", vimKeys: false });
   assert.equal(ctx().vimKeys, false, "followed while a sheet is open");
-  assert.ok(ctx().draft, "the open sheet stays open");
+  assert.equal(ctx().drafts.length, 1, "the open sheet stays open");
+});
+
+// --- Jev's marks -------------------------------------------------------------------------
+
+const EV = "01K6TEST0000000000000000E1";
+const Q1 = "01K6TEST0000000000000000Q1";
+const Q2 = "01K6TEST0000000000000000Q2";
+const BEH = "01K6TEST0000000000000000O1";
+const EMO = "01K6TEST0000000000000000O2";
+const OVERT = "01K6TEST0000000000000000O3";
+const COVERT = "01K6TEST0000000000000000O4";
+const EVALUATORS = [
+  {
+    id: EV,
+    questions: [
+      { id: Q1, kind: "pick", options: [{ id: BEH, name: "Behavioral Goal" }, { id: EMO, name: "Emotional Goal" }] },
+      { id: Q2, kind: "pick", options: [{ id: OVERT, name: "Overt behavior" }, { id: COVERT, name: "Covert behavior" }] },
+    ],
+  },
+];
+// Therapy Goal on Towards: the goal's kind expected to be behavioural, with the walking
+// person for it; the behaviour's kind shown only for a behavioural goal, nothing expected.
+const TOWARDS_BOX = {
+  evaluator: EV,
+  questions: [
+    { id: Q1, show: true, expect: BEH, when: null, icons: { [BEH]: "person-simple-walk" } },
+    { id: Q2, show: true, expect: null, when: { question: Q1, option: BEH }, icons: { [COVERT]: "brain" } },
+  ],
+};
+const NONE = { evaluator: null, questions: [] };
+const SETTINGS = { away: NONE, towards: TOWARDS_BOX, situation: NONE, thoughts: NONE };
+const ans = (question, option, name, p) => ({ question, option, name, p });
+const done = (text, answers) => ({ field: "towards", text, status: "done", answers });
+
+test("a line's marks follow the box's settings: shown, only when, expected, and the icon", () => {
+  assert.deepEqual(marksOf(TOWARDS_BOX, { field: "towards", text: "x", status: "pending", answers: [] }), [{ pending: true }]);
+  assert.deepEqual(marksOf(TOWARDS_BOX, { field: "towards", text: "x", status: "failed", answers: [] }), []);
+  assert.deepEqual(marksOf(NONE, done("x", [ans(Q1, BEH, "Behavioral Goal", 0.9)])), [], "a box without an evaluator has no marks");
+
+  const call = marksOf(TOWARDS_BOX, done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.96), ans(Q2, OVERT, "Overt behavior", 0.97)]), EVALUATORS);
+  assert.deepEqual(
+    call.map((m) => [m.icon, m.tone]),
+    [["person-simple-walk", "right"], ["check", "plain"]],
+    "a chosen icon, then an answer given none: a check, uncoloured when nothing is expected",
+  );
+  const notice = marksOf(TOWARDS_BOX, done("Notice", [ans(Q1, BEH, "Behavioral Goal", 0.83), ans(Q2, COVERT, "Covert behavior", 0.88)]), EVALUATORS);
+  assert.deepEqual(notice.map((m) => m.icon), ["person-simple-walk", "brain"]);
+
+  const calm = marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.92), ans(Q2, COVERT, "Covert behavior", 0.6)]), EVALUATORS);
+  assert.deepEqual(
+    calm.map((m) => [m.icon, m.tone, m.expected]),
+    [["warning", "wrong", "Behavioral Goal"]],
+    "not the expected answer: a warning; the second question only when the first is behavioural",
+  );
+
+  const hidden = { ...TOWARDS_BOX, questions: [{ ...TOWARDS_BOX.questions[0], show: false }, { ...TOWARDS_BOX.questions[1], when: null, icons: { [OVERT]: "none" } }] };
+  assert.deepEqual(marksOf(hidden, done("Call", [ans(Q1, BEH, "Behavioral Goal", 0.9), ans(Q2, OVERT, "Overt behavior", 0.9)])), [], "unticked, and an answer set to no icon");
+});
+
+test("the status line names a line's answers, and how sure Jev is shows as the mark's opacity", () => {
+  const calm = marksOf(TOWARDS_BOX, done("Feel calm when she doesn't answer", [ans(Q1, EMO, "Emotional Goal", 0.92)]), EVALUATORS);
+  assert.equal(sayMarks(calm), "Emotional Goal · you expect Behavioral Goal");
+  const call = marksOf(TOWARDS_BOX, done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.7), ans(Q2, OVERT, "Overt behavior", 0.97)]), EVALUATORS);
+  assert.equal(sayMarks(call), "Behavioral Goal · Overt behavior");
+  assert.equal(sayMarks([{ pending: true }]), "Jev is checking…");
+  assert.deepEqual(call.map((m) => m.sure), [0.67, 1], "solid when sure, faded when not");
+  assert.equal(sureOf(0.5), 0.33);
+});
+
+test("the checks are asked by day, followed after, and pointed lines fill the status line", async () => {
+  const CALM = "Feel calm when she doesn't answer";
+  const record = cp(A, TODAY, { situation: "Sunday", towards: "Call Anna\n" + CALM });
+  const report = (day, lines, error) => ({ choicePoint: A, day, lines, ...(error ? { error } : {}) });
+  const { actor, ctx, checksAsked } = await start({ [TODAY]: [record] }, undefined, {
+    evaluators: EVALUATORS,
+    checks: (day) => ({ settings: SETTINGS, choicePoints: day === TODAY ? [report(TODAY, [done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.96)])])] : [] }),
+  });
+  assert.deepEqual(checksAsked, [TODAY]);
+  assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: false });
+
+  actor.send({
+    type: "lines.checked",
+    ...report(TODAY, [done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.96)]), done(CALM, [ans(Q1, EMO, "Emotional Goal", 0.92)])]),
+  });
+  actor.send({ type: "lines.checked", ...report(EARLIER, []) });
+  assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: true }, "a red warning on the card's towards");
+
+  actor.send({ type: "_open", id: A });
+  assert.equal(statusOf(ctx(), A), "Saved");
+  actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: CALM });
+  assert.equal(statusOf(ctx(), A), "Emotional Goal · you expect Behavioral Goal");
+  actor.send({ type: "_point", source: "hover", id: A, field: "towards", text: "Call Anna" });
+  assert.equal(statusOf(ctx(), A), "Behavioral Goal", "the pointer wins over the cursor");
+  actor.send({ type: "_point", source: "hover", id: A, field: null });
+  actor.send({ type: "_point", source: "cursor", id: A, field: null });
+  actor.send({ type: "lines.checked", ...report(TODAY, [], "no-key") });
+  assert.equal(statusOf(ctx(), A), "Saved. Jev could not check: add your Jev key in Settings.");
+
+  actor.send({ type: "_edit", id: A, field: "towards", value: "Call Anna and ask" });
+  actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: "Call Anna and ask" });
+  assert.equal(statusOf(ctx(), A), "Saving…", "an edited line has no answer to say");
+
+  actor.send({ type: "day.shown", day: EARLIER });
+  await flush();
+  assert.deepEqual(checksAsked, [TODAY, EARLIER]);
+  assert.deepEqual(ctx().checks.reports, {});
+  assert.equal(ctx().checks.settings, SETTINGS, "the settings are kept across days");
 });

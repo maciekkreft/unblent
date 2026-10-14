@@ -12,6 +12,7 @@ const SCHEMAS = {
   "settings.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "settings.edited.json"), "utf8")),
   "llm.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "llm.edited.json"), "utf8")),
   "tools.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "tools.edited.json"), "utf8")),
+  "checks.edited": JSON.parse(readFileSync(resolve(HERE, "..", "events", "checks.edited.json"), "utf8")),
 };
 // Every event the tests below emit, with the schema it must match (Testing, shape
 // test); the final test validates them all.
@@ -72,10 +73,18 @@ const TOOLS = { tools: { "notes: list": false }, approval: "auto" };
 // Drive the actor with a fake ask (4.2): pages, then settings, then catalog (list), and —
 // only when the account section is shown — llm, the tool contracts and the tool
 // preferences. `account` mirrors the tag attribute.
-const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS } = {}) => {
+const start = (
+  settings,
+  current = "/a",
+  { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS, checks = { error: "no-answerer" }, evaluators = { evaluators: [] } } = {},
+) => {
   const ask = (target, name) =>
     Promise.resolve(
-      target === "pages"
+      target === "choice-point-checks"
+        ? checks
+        : target === "evaluators"
+          ? evaluators
+          : target === "pages"
         ? { pages: PAGES }
         : target === "catalog"
           ? name === "contracts"
@@ -91,6 +100,11 @@ const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, c
   const emitted = [];
   const emittedLlm = [];
   const emittedTools = [];
+  const emittedChecks = [];
+  actor.on("checks.edited", (e) => {
+    emittedChecks.push(e);
+    recorded.push({ value: e, schema: SCHEMAS["checks.edited"] });
+  });
   actor.on("settings.edited", (e) => {
     emitted.push(e);
     recorded.push({ value: e, schema: SCHEMAS["settings.edited"] });
@@ -105,7 +119,7 @@ const start = (settings, current = "/a", { account = false, llm = LLM_PICTURE, c
   });
   return new Promise((resolve) => {
     actor.subscribe((s) => {
-      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, emittedLlm, emittedTools, snapshot: s });
+      if (s.matches("ready") || s.matches("failed")) resolve({ actor, emitted, emittedLlm, emittedTools, emittedChecks, snapshot: s });
     });
     actor.start();
   });
@@ -341,6 +355,105 @@ test("an unavailable catalog or tools reply leaves the switches empty", async ()
   assert.deepEqual(snapshot.context.toolList, [], "no tools listed when the catalog is unavailable");
   assert.deepEqual(snapshot.context.tools, {}, "and the preference map stays empty (all on)");
   assert.ok(snapshot.matches("ready"), "the sheet still reaches ready");
+});
+
+// The choice point checks: one evaluator of two questions, a pick then a yes / no, and
+// all four boxes unset, as `choice-point-checks: read` gives them without a day.
+const E1 = "01HZZZZZZZZZZZZZZZZZZZZZE1";
+const E2 = "01HZZZZZZZZZZZZZZZZZZZZZE2";
+const Q1 = "01HZZZZZZZZZZZZZZZZZZZZZQ1";
+const Q2 = "01HZZZZZZZZZZZZZZZZZZZZZQ2";
+const Q3 = "01HZZZZZZZZZZZZZZZZZZZZZQ3";
+const BEH = "01HZZZZZZZZZZZZZZZZZZZZZ0B";
+const EMO = "01HZZZZZZZZZZZZZZZZZZZZZ0E";
+const BOOK = "01HZZZZZZZZZZZZZZZZZZZZB00";
+const question = (id, kind, options = []) => ({ id, kind, text: id, yes: "", no: "", options });
+const EVALUATORS = [
+  {
+    id: E1,
+    book: BOOK,
+    name: "Therapy Goal",
+    on: true,
+    questions: [
+      question(Q1, "pick", [
+        { id: BEH, name: "Behavioral Goal", description: "" },
+        { id: EMO, name: "Emotional Goal", description: "" },
+      ]),
+      question(Q2, "yesno"),
+    ],
+    version: 1,
+    pending: false,
+    removing: false,
+  },
+  { id: E2, book: BOOK, name: "Other", on: true, questions: [question(Q3, "yesno")], version: 1, pending: false, removing: false },
+];
+const unsetBox = { evaluator: null, questions: [] };
+const CHECKS = { settings: { away: unsetBox, towards: unsetBox, situation: unsetBox, thoughts: unsetBox }, choicePoints: [] };
+const withChecks = { account: true, checks: CHECKS, evaluators: { evaluators: EVALUATORS } };
+const adoptBox = (actor, field, box) =>
+  actor.send({ type: "checks.changed", settings: { ...actor.getSnapshot().context.checks, [field]: box } });
+
+test("without choice-point-checks the part's settings stay null, so it is hidden", async () => {
+  const { snapshot } = await start(undefined, "/a", { account: true });
+  assert.equal(snapshot.context.checks, null);
+  assert.ok(snapshot.matches("ready"));
+});
+
+test("choosing an evaluator emits the box with every question shown and nothing expected", async () => {
+  const { actor, emittedChecks } = await start(undefined, "/a", withChecks);
+  actor.send({ type: "_setChecker", field: "towards", evaluator: E1 });
+  assert.deepEqual(emittedChecks, [
+    {
+      type: "checks.edited",
+      field: "towards",
+      evaluator: E1,
+      questions: [
+        { id: Q1, show: true, expect: null, when: null, icons: {} },
+        { id: Q2, show: true, expect: null, when: null, icons: {} },
+      ],
+    },
+  ]);
+  actor.send({ type: "_setChecker", field: "away", evaluator: null });
+  assert.equal(emittedChecks.length, 1, "choosing what the box already has emits nothing");
+});
+
+test("a question's change emits the whole box, and only a real change", async () => {
+  const { actor, emittedChecks } = await start(undefined, "/a", withChecks);
+  adoptBox(actor, "towards", { evaluator: E1, questions: [{ id: Q1, show: true, expect: null, when: null, icons: {} }] });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { expect: BEH } });
+  assert.deepEqual(emittedChecks.at(-1).questions, [
+    { id: Q1, show: true, expect: BEH, when: null, icons: {} },
+    { id: Q2, show: false, expect: null, when: null, icons: {} },
+  ], "a question the box holds no setting for is written as not shown");
+  adoptBox(actor, "towards", { evaluator: E1, questions: emittedChecks.at(-1).questions });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { expect: BEH } });
+  assert.equal(emittedChecks.length, 1, "the same answer again emits nothing");
+  actor.send({ type: "_setQuestion", field: "towards", id: Q2, patch: { show: true, when: { question: Q1, option: BEH } } });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, icon: { option: EMO, icon: "warning" } });
+  assert.deepEqual(emittedChecks.at(-1).questions[0].icons, { [EMO]: "warning" });
+  adoptBox(actor, "towards", { evaluator: E1, questions: emittedChecks.at(-1).questions });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, icon: { option: EMO, icon: "auto" } });
+  assert.deepEqual(emittedChecks.at(-1).questions[0].icons, {}, "automatic is written by leaving the answer out");
+});
+
+test("choosing a box's earlier evaluator again brings back its settings", async () => {
+  const { actor, emittedChecks } = await start(undefined, "/a", withChecks);
+  const tuned = [
+    { id: Q1, show: true, expect: BEH, when: null, icons: {} },
+    { id: Q2, show: false, expect: null, when: null, icons: {} },
+  ];
+  adoptBox(actor, "away", { evaluator: E1, questions: tuned });
+  actor.send({ type: "_setChecker", field: "away", evaluator: E2 });
+  adoptBox(actor, "away", { evaluator: E2, questions: emittedChecks.at(-1).questions });
+  actor.send({ type: "_setChecker", field: "away", evaluator: E1 });
+  assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "away", evaluator: E1, questions: tuned });
+});
+
+test("evaluator.changed and evaluator.deleted keep the list to choose from (4.3)", async () => {
+  const { actor } = await start(undefined, "/a", withChecks);
+  actor.send({ type: "evaluator.changed", evaluator: { ...EVALUATORS[1], name: "Renamed" } });
+  actor.send({ type: "evaluator.deleted", id: E1, book: BOOK });
+  assert.deepEqual(actor.getSnapshot().context.evaluators.map((e) => e.name), ["Renamed"]);
 });
 
 test("every payload matches its schema", () => {

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What Jev answered about each line of one choice point now (4, third rule): sent when a line is queued, answered, or fails, and when the settings change which boxes are checked.",
+  "type": "object",
+  "properties": {
+    "choicePoint": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "The choice point the lines are in."
+    },
+    "day": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "The journal day the choice point is kept with."
+    },
+    "lines": {
+      "type": "array",
+      "description": "Every non-empty line of every box that has an evaluator, box by box.",
+      "items": {
+        "type": "object",
+        "description": "One non-empty line of a checked box, in the box's order.",
+        "properties": {
+          "field": {
+            "enum": [
+              "away",
+              "towards",
+              "situation",
+              "thoughts"
+            ],
+            "description": "The box the line is in."
+          },
+          "text": {
+            "type": "string",
+            "description": "The line as written."
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "done",
+              "failed"
+            ],
+            "description": "pending: waiting for Jev. done: answered. failed: Jev could not be asked; error says why."
+          },
+          "answers": {
+            "type": "array",
+            "description": "Jev's answers to every question of the box's evaluator; empty until done.",
+            "items": {
+              "type": "object",
+              "description": "Jev's answer to one question about the line.",
+              "properties": {
+                "question": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "description": "The evaluator's question answered."
+                },
+                "option": {
+                  "type": "string",
+                  "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                  "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The answer as the user sees it: the option's name, or Yes or No."
+                },
+                "p": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "How likely Jev holds the answer to be."
+                }
+              },
+              "required": [
+                "question",
+                "option",
+                "name",
+                "p"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "field",
+          "text",
+          "status",
+          "answers"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "error": {
+      "enum": [
+        "signed-out",
+        "no-key",
+        "bad-key",
+        "rate-limited",
+        "overloaded",
+        "invalid",
+        "busy",
+        "unavailable"
+      ],
+      "description": "Why the last check failed, as llm: decide said it; left out when nothing failed."
+    }
+  },
+  "required": [
+    "choicePoint",
+    "day",
+    "lines"
+  ],
+  "additionalProperties": false
+}

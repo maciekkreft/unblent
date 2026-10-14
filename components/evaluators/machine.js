@@ -67,7 +67,7 @@ const announce = (context, r) => {
 
 function replyList(context, book, reply) {
   const evaluators = [...context.evaluators.values()]
-    .filter((r) => visible(r) && r.book === book)
+    .filter((r) => visible(r) && (book === undefined || r.book === book))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .map((r) => announce(context, r));
   reply({ evaluators });
@@ -261,13 +261,15 @@ export const machine = setup({
       "Owns the evaluators kept with each book: an evaluator is a name and a list of questions, " +
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
       "options, and it is switched on or off. `evaluators: list` answers one book's evaluators, " +
-      "oldest first. A new evaluator starts switched on. It works signed out, numbering versions " +
+      "or every book's when no book is given, oldest first. A new evaluator starts switched on. It works signed out, numbering versions " +
       "itself, and syncs to the account when signed in (section 5); signing in uploads every " +
       "evaluator with its history. The last write wins, so two devices never conflict, and a " +
       "deleted evaluator is kept as a tombstone, which always wins. A removed evaluator, question " +
       "or option is marked while its undo window runs and goes only when the window ends; a mark " +
-      "left by a closed tab ends at the next load. What an evaluator reads and when it runs is " +
-      "not decided yet, so switching one on or off is only kept.",
+      "left by a closed tab ends at the next load. An evaluator reads what it is given: the " +
+      "book's Run box asks the switched-on evaluators about a typed text, and " +
+      "choice-point-checks asks the one chosen for a choice point box about each of its " +
+      "lines, whether it is switched on or not.",
     kind: "fact",
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],

@@ -1,10 +1,11 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, merge } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
+import checksEdited from "./events/checks.edited.json" with { type: "json" };
 
 // The account's thinking effort and cache lifetime shown in plain words (7.7). The
 // effort choices come from `llm: read`; an unknown one falls back to its own name. The
@@ -21,6 +22,17 @@ const EFFORT_LABELS = {
 const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
 const TTL_NOTE = "1 hour costs more to start and pays off from the third question within the hour.";
+
+// The icon an answer of a choice point check may get (checks.edited): Automatic is a
+// check when the answer is the expected one and a warning when not.
+const MARKS = [
+  ["auto", "Automatic"],
+  ["check", "Check"],
+  ["warning", "Warning"],
+  ["person-simple-walk", "Walking person"],
+  ["brain", "Brain"],
+  ["none", "None"],
+];
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -40,7 +52,7 @@ class ActorController {
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
       },
-      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited },
+      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -336,6 +348,67 @@ class SettingsSheet extends LitElement {
       margin: 0;
       color: var(--color-body);
     }
+    /* The choice point checks: one block per box, its evaluator beside its name, and
+       under it one tinted card per question, so the eye reads a question with its own
+       choices and never pairs a choice with the wrong question. */
+    .checks {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      margin-top: var(--space-md);
+    }
+    .checks .group {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .boxes {
+      display: flex;
+      flex-direction: column;
+      margin-top: var(--space-xs);
+    }
+    .box {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+      padding: var(--space-sm) 0;
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    .box:first-child {
+      border-top: 0;
+    }
+    .box select,
+    .question select {
+      max-width: 100%;
+      min-width: 0;
+    }
+    .question {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+      padding: var(--space-xs) var(--space-sm);
+      background: var(--color-canvas-soft);
+      border-radius: var(--radius-sm);
+    }
+    .question > label {
+      align-items: baseline;
+      gap: var(--space-xs);
+      white-space: normal;
+      color: var(--color-ink);
+    }
+    .choices {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: var(--space-2xs) var(--space-sm);
+      font-size: var(--text-sm);
+    }
+    .choices > span {
+      color: var(--color-body-mid);
+    }
+    .choices select {
+      font-size: var(--text-sm);
+      justify-self: start;
+    }
   `;
 
   #actor = new ActorController(this);
@@ -426,7 +499,7 @@ class SettingsSheet extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current, roles, profile, account, llm, toolList, tools } = snapshot.context;
+    const { pages, settings, current, roles, profile, account, llm, toolList, tools, checks, evaluators } = snapshot.context;
     const rows = merge(pages, settings.nav);
     // The product profile (§12) shows only the production options: the editor
     // selects and the layout-switch row. The page order and the viewport switch
@@ -512,7 +585,7 @@ class SettingsSheet extends LitElement {
       <h3>This device</h3>
       ${device}
       <h3 class="later">Your account</h3>
-      ${this.#account(llm, profile, toolList, tools)}
+      ${this.#account(llm, profile, toolList, tools, checks, evaluators)}
     `;
   }
 
@@ -550,7 +623,7 @@ class SettingsSheet extends LitElement {
   // reversible by choosing the previous value; removing the key can only be undone by
   // entering it again, so its button is plainly labelled (Don Norman: forgiveness,
   // honest signifiers).
-  #account(llm, profile, toolList, tools) {
+  #account(llm, profile, toolList, tools, checks, evaluators) {
     if (!llm || !llm.signedIn) return html`<p class="hint">Sign in to set up the chat.</p>`;
     const current = llm.providers.find((p) => p.id === llm.provider);
     // Echo is a test provider (§12): offered only in the workshop, except that an
@@ -619,7 +692,112 @@ class SettingsSheet extends LitElement {
             remove: () => this.#actor.send({ type: "_removeJevKey" }),
           })}
         </div>
+        ${this.#checks(checks, evaluators)}
         ${this.#tools(toolList, tools, profile)}
+      </div>
+    `;
+  }
+
+  // The choice point checks: Jev answers an evaluator's questions about each line of a
+  // box. The part folds the way the Vim keys list does (the user asked for the same fold):
+  // the name and what it costs stay in view, the boxes are in a fold that starts closed.
+  // Hidden when the page has no `choice-point-checks` to keep the settings.
+  #checks(checks, evaluators) {
+    if (!checks) return nothing;
+    const choosable = evaluators.filter((e) => !e.removing);
+    return html`
+      <div class="checks">
+        <span class="group">Choice point checks</span>
+        <details class="keys-fold">
+          <summary>Choose what Jev checks</summary>
+          <div class="boxes">${BOXES.map(({ field, label }) => this.#checkBox(field, label, checks[field], choosable))}</div>
+        </details>
+      </div>
+    `;
+  }
+
+  #checkBox(field, label, box, evaluators) {
+    const current = box?.evaluator ?? null;
+    const evaluator = evaluators.find((e) => e.id === current);
+    const shown = boxView(box, evaluator);
+    const questions = (evaluator?.questions ?? []).filter((q) => !q.removing);
+    return html`
+      <div class="box" data-field=${field}>
+        <label class="field">
+          <span>${label}</span>
+          <select
+            aria-label="Evaluator for ${label}"
+            @change=${(e) => this.#actor.send({ type: "_setChecker", field, evaluator: e.target.value || null })}
+          >
+            <option value="" ?selected=${!evaluator}>Not checked</option>
+            ${evaluators.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
+          </select>
+        </label>
+        ${evaluator ? questions.map((q, i) => this.#checkQuestion(field, q, i, shown.questions[i], questions)) : nothing}
+      </div>
+    `;
+  }
+
+  // One question of a box's evaluator: Show, then, while shown, when it is shown (for a
+  // question after the first), the answer expected, and the icon each answer gets.
+  #checkQuestion(field, q, i, setting, questions) {
+    const set = (patch) => this.#actor.send({ type: "_setQuestion", field, id: q.id, patch });
+    const answers = answersOf(q);
+    const when = setting.when ? `${setting.when.question} ${setting.when.option}` : "";
+    const earlier = questions.slice(0, i);
+    return html`
+      <div class="question" data-question=${q.id}>
+        <label>
+          <input type="checkbox" .checked=${setting.show} @change=${(e) => set({ show: e.target.checked })} />
+          <span>${i + 1}. ${q.text || "Untitled question"}</span>
+        </label>
+        ${setting.show
+          ? html`
+              <div class="choices">
+                ${i > 0
+                  ? html`
+                      <span>Ask</span>
+                      <select
+                        aria-label="When question ${i + 1} is shown"
+                        @change=${(e) => {
+                          const [question, option] = e.target.value.split(" ");
+                          set({ when: question ? { question, option } : null });
+                        }}
+                      >
+                        <option value="" ?selected=${!when}>Always</option>
+                        ${earlier.flatMap((p, n) =>
+                          answersOf(p).map(
+                            (a) => html`<option value="${p.id} ${a.id}" ?selected=${when === `${p.id} ${a.id}`}>
+                              Only when question ${n + 1} is ${a.name}
+                            </option>`,
+                          ),
+                        )}
+                      </select>
+                    `
+                  : nothing}
+                <span>Expect</span>
+                <select aria-label="Answer expected for question ${i + 1}" @change=${(e) => set({ expect: e.target.value || null })}>
+                  <option value="" ?selected=${!setting.expect}>Any answer, no colour</option>
+                  ${answers.map((a) => html`<option value=${a.id} ?selected=${a.id === setting.expect}>${a.name}</option>`)}
+                </select>
+                ${answers.map(
+                  (a) => html`
+                    <span>Icon for ${a.name}</span>
+                    <select
+                      aria-label="Icon for ${a.name}"
+                      @change=${(e) =>
+                        this.#actor.send({ type: "_setQuestion", field, id: q.id, icon: { option: a.id, icon: e.target.value } })}
+                    >
+                      ${MARKS.map(
+                        ([value, name]) =>
+                          html`<option value=${value} ?selected=${(setting.icons[a.id] ?? "auto") === value}>${name}</option>`,
+                      )}
+                    </select>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
       </div>
     `;
   }

@@ -141,13 +141,16 @@ test("signed out: a new evaluator is switched on at version 1, announced and lis
   assert.equal(api.puts.length, 0, "signed out never calls the api");
 });
 
-test("list answers one book's evaluators, oldest first", async () => {
+test("list answers one book's evaluators, or every book's without a book, oldest first", async () => {
   const { actor } = start(fakeStore());
   await ready(actor);
   actor.send(saved({ id: ID2, name: "Second" }));
   actor.send(saved({ id: ID, name: "First" }));
   actor.send(saved({ id: "01ARZ3NDEKTSV4RRFFQ69G5EV3", book: BOOK2, name: "Elsewhere" }));
   assert.deepEqual((await list(actor)).map((e) => e.name), ["First", "Second"]);
+  const every = await new Promise((reply) => actor.send({ type: "list?", cid: "c", payload: {}, reply }));
+  assert.ok(listReply.validate(every).valid, JSON.stringify(every));
+  assert.deepEqual(every.evaluators.map((e) => e.name), ["First", "Second", "Elsewhere"]);
 });
 
 test("signed out: a save changes name and questions, keeps book and tick, and mints the next version", async () => {

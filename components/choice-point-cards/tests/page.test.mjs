@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 // What only a browser shows: the pill opens a sheet with the keyboard in Situation,
 // Escape folds it into a card that a reload keeps, with Vim keys on the first Escape
 // only leaves insert mode, and on a narrow page the V stands above the boxes rather than
-// between them. The decisions are tested in Node.
+// between them, and Jev's marks stand at the end of checked lines, coloured by the expected
+// answer, with the answer said in the status line. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -71,6 +72,89 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("Escape");
         await until(async () => (await inCards(page, (root) => root.querySelector(".card")?.innerText ?? "")).includes("Walk"));
         assert.equal(await situation(), null, "the sheet folded");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Lit draws the list by position, so folding the sheet above moves the editors of the
+    // one below rather than making them again: what is typed there stays and takes keys.
+    test("two choice points stay open, and Done folds only its own", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const cards = page.locator("choice-point-cards");
+        await cards.locator(".pill").click();
+        await page.keyboard.type("First");
+        await cards.locator(".pill").click();
+        await page.keyboard.type("Second");
+        assert.equal(await cards.locator(".sheet").count(), 2);
+        await cards.locator(".sheet").first().locator(".done").click();
+        const situation = cards.locator('.sheet .box[data-field="situation"] .cm-content');
+        await until(async () => (await cards.locator(".sheet").count()) === 1);
+        await situation.click();
+        await page.keyboard.press("End");
+        await page.keyboard.type(" too");
+        assert.equal(await situation.innerText(), "Second too");
+        assert.match(await cards.locator(".card").innerText(), /^First/);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Settings are written through the APIs under the test's own login; Jev is answered
+    // here through page.route, so no real request is made, and the account is told it has
+    // a key.
+    test("checked lines get Jev's marks, the status line says the answer, and the card warns", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("marks"));
+        const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
+        const [evaluator, question, behavioral, emotional] = [id("E1"), id("Q1"), id("A0"), id("A1")];
+        const options = [
+          { id: behavioral, name: "Behavioral Goal", description: "" },
+          { id: emotional, name: "Emotional Goal", description: "" },
+        ];
+        const made = await context.request.put(`${BASE_URL}/api/evaluators/${evaluator}`, {
+          data: { book: id("B1"), name: "Therapy Goal", on: true, baseVersion: null, questions: [{ id: question, kind: "pick", text: "Which kind of goal?", yes: "", no: "", options }] },
+        });
+        assert.equal(made.status(), 200);
+        const box = await context.request.put(`${BASE_URL}/api/choice-point-checks/boxes/towards`, {
+          data: { baseVersion: null, evaluator, questions: [{ id: question, show: true, expect: behavioral, when: null, icons: { [behavioral]: "person-simple-walk" } }] },
+        });
+        assert.equal(box.status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.route("**/api/llm", async (route) => {
+          const res = await route.fetch();
+          const json = await res.json();
+          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+        });
+        await page.route("**/api/llm/decide", (route) => {
+          const calm = /calm/.test(route.request().postDataJSON().state.text);
+          route.fulfill({ json: { answers: [{ id: question, p: 0.92, choice: calm ? emotional : behavioral }], inputTokens: 1, ms: 1 } });
+        });
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const cards = page.locator("choice-point-cards");
+        await cards.locator(".pill").click();
+        await cards.locator('.box[data-field="towards"] .cm-content').click();
+        await page.keyboard.type("Call Anna");
+        await page.keyboard.press("Enter");
+        await page.keyboard.type("Feel calm");
+        const line = (text) => cards.locator(".cm-line", { hasText: text });
+        await line("Feel calm").locator(".mark.wrong").waitFor();
+        assert.equal(await line("Call Anna").locator(".mark.right").count(), 1, "the expected answer is green");
+        assert.equal(await cards.locator(".status").innerText(), "Emotional Goal · you expect Behavioral Goal", "the line the cursor is on");
+        await line("Call Anna").locator(".mark").hover();
+        assert.equal(await cards.locator(".status").innerText(), "Behavioral Goal", "the line the pointer is over");
+        await cards.locator(".done").click();
+        await cards.locator(".card .towards .flag").waitFor();
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

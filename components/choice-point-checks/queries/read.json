@@ -1,0 +1,537 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The day whose choice points' checks are wanted; only the settings when left out.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The settings, whole as checks.changed carries them, and what Jev answered about each line of the day's choice points.",
+    "type": "object",
+    "properties": {
+      "settings": {
+        "type": "object",
+        "description": "Which evaluator checks each box of a choice point, and how its answers are shown, for all four boxes.",
+        "properties": {
+          "away": {
+            "type": "object",
+            "description": "The away box's settings, as checks.edited carries one box.",
+            "properties": {
+              "evaluator": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "The evaluator that checks each line of the box; null for none, so the box is not checked."
+              },
+              "questions": {
+                "type": "array",
+                "description": "How each of the evaluator's questions is shown, in the evaluator's order; a question left out is not shown.",
+                "items": {
+                  "type": "object",
+                  "description": "How one of the evaluator's questions is shown.",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The evaluator's question this setting is for."
+                    },
+                    "show": {
+                      "type": "boolean",
+                      "description": "Whether the question's answer is shown as a mark next to the line."
+                    },
+                    "expect": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                      "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                    },
+                    "when": {
+                      "description": "Show the mark only when another question of the box got this answer; null for always.",
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "question": {
+                              "type": "string",
+                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                            },
+                            "option": {
+                              "type": "string",
+                              "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                              "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                            }
+                          },
+                          "required": [
+                            "question",
+                            "option"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "icons": {
+                      "type": "object",
+                      "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                      "additionalProperties": {
+                        "enum": [
+                          "auto",
+                          "check",
+                          "warning",
+                          "person-simple-walk",
+                          "brain",
+                          "none"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "show",
+                    "expect",
+                    "when",
+                    "icons"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "evaluator",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "towards": {
+            "type": "object",
+            "description": "The towards box's settings, as checks.edited carries one box.",
+            "properties": {
+              "evaluator": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "The evaluator that checks each line of the box; null for none, so the box is not checked."
+              },
+              "questions": {
+                "type": "array",
+                "description": "How each of the evaluator's questions is shown, in the evaluator's order; a question left out is not shown.",
+                "items": {
+                  "type": "object",
+                  "description": "How one of the evaluator's questions is shown.",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The evaluator's question this setting is for."
+                    },
+                    "show": {
+                      "type": "boolean",
+                      "description": "Whether the question's answer is shown as a mark next to the line."
+                    },
+                    "expect": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                      "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                    },
+                    "when": {
+                      "description": "Show the mark only when another question of the box got this answer; null for always.",
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "question": {
+                              "type": "string",
+                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                            },
+                            "option": {
+                              "type": "string",
+                              "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                              "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                            }
+                          },
+                          "required": [
+                            "question",
+                            "option"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "icons": {
+                      "type": "object",
+                      "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                      "additionalProperties": {
+                        "enum": [
+                          "auto",
+                          "check",
+                          "warning",
+                          "person-simple-walk",
+                          "brain",
+                          "none"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "show",
+                    "expect",
+                    "when",
+                    "icons"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "evaluator",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "situation": {
+            "type": "object",
+            "description": "The situation box's settings, as checks.edited carries one box.",
+            "properties": {
+              "evaluator": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "The evaluator that checks each line of the box; null for none, so the box is not checked."
+              },
+              "questions": {
+                "type": "array",
+                "description": "How each of the evaluator's questions is shown, in the evaluator's order; a question left out is not shown.",
+                "items": {
+                  "type": "object",
+                  "description": "How one of the evaluator's questions is shown.",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The evaluator's question this setting is for."
+                    },
+                    "show": {
+                      "type": "boolean",
+                      "description": "Whether the question's answer is shown as a mark next to the line."
+                    },
+                    "expect": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                      "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                    },
+                    "when": {
+                      "description": "Show the mark only when another question of the box got this answer; null for always.",
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "question": {
+                              "type": "string",
+                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                            },
+                            "option": {
+                              "type": "string",
+                              "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                              "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                            }
+                          },
+                          "required": [
+                            "question",
+                            "option"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "icons": {
+                      "type": "object",
+                      "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                      "additionalProperties": {
+                        "enum": [
+                          "auto",
+                          "check",
+                          "warning",
+                          "person-simple-walk",
+                          "brain",
+                          "none"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "show",
+                    "expect",
+                    "when",
+                    "icons"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "evaluator",
+              "questions"
+            ],
+            "additionalProperties": false
+          },
+          "thoughts": {
+            "type": "object",
+            "description": "The thoughts box's settings, as checks.edited carries one box.",
+            "properties": {
+              "evaluator": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "description": "The evaluator that checks each line of the box; null for none, so the box is not checked."
+              },
+              "questions": {
+                "type": "array",
+                "description": "How each of the evaluator's questions is shown, in the evaluator's order; a question left out is not shown.",
+                "items": {
+                  "type": "object",
+                  "description": "How one of the evaluator's questions is shown.",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The evaluator's question this setting is for."
+                    },
+                    "show": {
+                      "type": "boolean",
+                      "description": "Whether the question's answer is shown as a mark next to the line."
+                    },
+                    "expect": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                      "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                    },
+                    "when": {
+                      "description": "Show the mark only when another question of the box got this answer; null for always.",
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "question": {
+                              "type": "string",
+                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                            },
+                            "option": {
+                              "type": "string",
+                              "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                              "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                            }
+                          },
+                          "required": [
+                            "question",
+                            "option"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "icons": {
+                      "type": "object",
+                      "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                      "additionalProperties": {
+                        "enum": [
+                          "auto",
+                          "check",
+                          "warning",
+                          "person-simple-walk",
+                          "brain",
+                          "none"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "show",
+                    "expect",
+                    "when",
+                    "icons"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "evaluator",
+              "questions"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "away",
+          "towards",
+          "situation",
+          "thoughts"
+        ],
+        "additionalProperties": false
+      },
+      "choicePoints": {
+        "type": "array",
+        "description": "The day's choice points that have a checked box, oldest first, each as lines.checked carries it.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "choicePoint": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The choice point the lines are in."
+            },
+            "day": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The journal day the choice point is kept with."
+            },
+            "lines": {
+              "type": "array",
+              "description": "Every non-empty line of every box that has an evaluator, box by box.",
+              "items": {
+                "type": "object",
+                "description": "One non-empty line of a checked box, in the box's order.",
+                "properties": {
+                  "field": {
+                    "enum": [
+                      "away",
+                      "towards",
+                      "situation",
+                      "thoughts"
+                    ],
+                    "description": "The box the line is in."
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "The line as written."
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "done",
+                      "failed"
+                    ],
+                    "description": "pending: waiting for Jev. done: answered. failed: Jev could not be asked; error says why."
+                  },
+                  "answers": {
+                    "type": "array",
+                    "description": "Jev's answers to every question of the box's evaluator; empty until done.",
+                    "items": {
+                      "type": "object",
+                      "description": "Jev's answer to one question about the line.",
+                      "properties": {
+                        "question": {
+                          "type": "string",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                          "description": "The evaluator's question answered."
+                        },
+                        "option": {
+                          "type": "string",
+                          "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                          "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The answer as the user sees it: the option's name, or Yes or No."
+                        },
+                        "p": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1,
+                          "description": "How likely Jev holds the answer to be."
+                        }
+                      },
+                      "required": [
+                        "question",
+                        "option",
+                        "name",
+                        "p"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "field",
+                  "text",
+                  "status",
+                  "answers"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "error": {
+              "enum": [
+                "signed-out",
+                "no-key",
+                "bad-key",
+                "rate-limited",
+                "overloaded",
+                "invalid",
+                "busy",
+                "unavailable"
+              ],
+              "description": "Why the last check failed, as llm: decide said it; left out when nothing failed."
+            }
+          },
+          "required": [
+            "choicePoint",
+            "day",
+            "lines"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "settings",
+      "choicePoints"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "checks.changed",
+    "lines.checked"
+  ]
+}

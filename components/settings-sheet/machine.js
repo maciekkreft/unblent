@@ -67,6 +67,81 @@ const setHidden = (context, path, hidden) => {
   return edited(withNav(context.settings, rows));
 };
 
+// --- Choice point checks ------------------------------------------------------------
+
+// The four boxes of a choice point, in the order choice-point-cards shows them, with its
+// labels, so Settings names a box the way the sheet does.
+export const BOXES = [
+  { field: "away", label: "Away · hooked" },
+  { field: "towards", label: "Towards · unhooked" },
+  { field: "situation", label: "Situation" },
+  { field: "thoughts", label: "Thoughts & feelings" },
+];
+const NO_BOX = { evaluator: null, questions: [] };
+const live = (items) => (Array.isArray(items) ? items : []).filter((x) => x && !x.removing);
+
+// The answers a question can get: a pick question's options, or Yes and No; the value is
+// what checks.edited carries for it (an option id, or yes / no).
+export const answersOf = (q) =>
+  q.kind === "pick"
+    ? live(q.options).map((o) => ({ id: o.id, name: o.name }))
+    : [
+        { id: "yes", name: "Yes" },
+        { id: "no", name: "No" },
+      ];
+
+const unset = (id, show) => ({ id, show, expect: null, when: null, icons: {} });
+
+// One box as Settings shows and edits it: a setting for every live question of its
+// evaluator, in the evaluator's order. A question the box holds no setting for is not
+// shown (checks.edited), so a question added to the evaluator later starts unticked.
+export const boxView = (box, evaluator) => ({
+  evaluator: box?.evaluator ?? null,
+  questions: live(evaluator?.questions).map((q) => {
+    const s = (box?.questions ?? []).find((x) => x.id === q.id);
+    return s ? { ...s, icons: { ...s.icons } } : unset(q.id, false);
+  }),
+});
+
+const evaluatorOf = (context, id) => (id ? context.evaluators.find((e) => e.id === id) : undefined);
+const shownBox = (context, field) => {
+  const b = context.checks?.[field] ?? NO_BOX;
+  return boxView(b, evaluatorOf(context, b.evaluator));
+};
+const checksEdited = (field, b) => ({ type: "checks.edited", field, evaluator: b.evaluator, questions: b.questions });
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// One question's setting changed: the whole box, as checks.edited carries it. "auto" is
+// written by leaving the answer out, which the schema reads as auto.
+const patched = (context, event) => {
+  const b = shownBox(context, event.field);
+  return {
+    ...b,
+    questions: b.questions.map((q) => {
+      if (q.id !== event.id) return q;
+      const next = { ...q, ...event.patch };
+      if (event.icon) {
+        const icons = { ...q.icons };
+        if (event.icon.icon === "auto") delete icons[event.icon.option];
+        else icons[event.icon.option] = event.icon.icon;
+        next.icons = icons;
+      }
+      return next;
+    }),
+  };
+};
+
+// Choosing an evaluator for a box: every question shown, nothing expected; or, if this
+// box had that evaluator earlier while the sheet was open, its settings then, so choosing
+// the previous evaluator again undoes the switch in one step (forgiveness).
+const chosen = (context, event) => {
+  if (!event.evaluator) return { ...NO_BOX };
+  const past = context.past[`${event.field} ${event.evaluator}`];
+  const evaluator = evaluatorOf(context, event.evaluator);
+  if (past) return boxView(past, evaluator);
+  return { evaluator: event.evaluator, questions: live(evaluator?.questions).map((q) => unset(q.id, true)) };
+};
+
 const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, editors: {} };
 
 const adopt = (event) => ({
@@ -96,6 +171,8 @@ export const machine = setup({
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
     contracts: fromPromise(({ input }) => input.ask("catalog", "contracts", {})),
     tools: fromPromise(({ input }) => input.ask("conversations", "tools", {})),
+    checks: fromPromise(({ input }) => input.ask("choice-point-checks", "read", {})),
+    evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
   },
 }).createMachine({
   id: "settings-sheet",
@@ -106,13 +183,30 @@ export const machine = setup({
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps. Every change is saved at " +
       "once by the fact that owns it. Your account also holds the Jev key, which `llm` keeps. " +
-      "Echo is offered as a provider only in the workshop profile.",
+      "Echo is offered as a provider only in the workshop profile. Your account also holds the " +
+      "choice point checks, which `choice-point-checks` keeps, in a fold that starts closed: " +
+      "for each box of a choice point, the evaluator whose questions Jev answers about each " +
+      "line, and per question whether its answer is shown, when (always, or only when an " +
+      "earlier question got a given answer), the answer expected, and the icon each answer " +
+      "gets. Every change saves the whole box at once and Jev checks the day on screen again. " +
+      "Choosing an evaluator ticks all its questions with nothing expected; choosing a box's " +
+      "earlier evaluator again while the sheet is open brings back its settings. The part is " +
+      "hidden on a page without `choice-point-checks`.",
     kind: "view",
-    emits: ["settings.edited", "llm.edited", "tools.edited"],
+    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
     attributes: ["account"],
-    asks: ["pages: list", "settings: read", "catalog: list", "llm: read", "catalog: contracts", "conversations: tools"],
+    asks: [
+      "pages: list",
+      "settings: read",
+      "catalog: list",
+      "llm: read",
+      "catalog: contracts",
+      "conversations: tools",
+      "choice-point-checks: read",
+      "evaluators: list",
+    ],
   },
   // The active profile (§12), adopted from settings; a page without settings
   // stays in `workshop`, the full sheet, exactly as before profiles existed.
@@ -132,6 +226,12 @@ export const machine = setup({
     // false is off. `tools.changed` keeps the map current after the starting ask (4.3).
     toolList: [],
     tools: {},
+    // The choice point checks: the four boxes' settings, or null when no fact answers
+    // (the part is then hidden); every book's evaluators to choose from; and, per box and
+    // evaluator, the settings a box had before its evaluator was switched this session.
+    checks: null,
+    evaluators: [],
+    past: {},
   }),
   initial: "loadingPages",
   states: {
@@ -218,8 +318,32 @@ export const machine = setup({
         src: "tools",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "loadingChecks" },
+          { target: "loadingChecks", actions: assign({ tools: ({ event }) => ({ ...event.output.tools }) }) },
+        ],
+        onError: { target: "loadingChecks" },
+      },
+    },
+    // The choice point checks: optional like the tools. A page without the fact replies
+    // no-answerer, `checks` stays null and the part is not shown.
+    loadingChecks: {
+      invoke: {
+        src: "checks",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "ready", actions: assign({ tools: ({ event }) => ({ ...event.output.tools }) }) },
+          { target: "loadingEvaluators", actions: assign({ checks: ({ event }) => event.output.settings }) },
+        ],
+        onError: { target: "ready" },
+      },
+    },
+    loadingEvaluators: {
+      invoke: {
+        src: "evaluators",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
+          { target: "ready", actions: assign({ evaluators: ({ event }) => event.output.evaluators }) },
         ],
         onError: { target: "ready" },
       },
@@ -294,6 +418,25 @@ export const machine = setup({
         // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
         // it and announces tools.changed, adopted below (4.3). Reversible by flipping back.
         _toggleTool: { actions: emit(({ event }) => toolsEdited(event.key, event.on)) },
+        // The choice point checks: each gesture emits the whole box, and only when it
+        // differs, since every checks.edited is saved and may cost Jev requests; the sheet
+        // adopts it back through checks.changed (4.3).
+        _setChecker: {
+          guard: ({ context, event }) => context.checks !== null && (context.checks[event.field]?.evaluator ?? null) !== (event.evaluator || null),
+          actions: [
+            assign({
+              past: ({ context, event }) => {
+                const b = context.checks[event.field];
+                return b?.evaluator ? { ...context.past, [`${event.field} ${b.evaluator}`]: b } : context.past;
+              },
+            }),
+            emit(({ context, event }) => checksEdited(event.field, chosen(context, event))),
+          ],
+        },
+        _setQuestion: {
+          guard: ({ context, event }) => context.checks !== null && !same(patched(context, event), shownBox(context, event.field)),
+          actions: emit(({ context, event }) => checksEdited(event.field, patched(context, event))),
+        },
       },
     },
     failed: {},
@@ -327,6 +470,25 @@ export const machine = setup({
     // another device arrives as the whole map, adopted as the switch states.
     "tools.changed": {
       actions: assign({ tools: ({ event }) => ({ ...event.tools }) }),
+    },
+    // The choice point checks and the evaluators, followed after the starting asks (4.3).
+    "checks.changed": {
+      actions: assign({ checks: ({ event }) => event.settings }),
+    },
+    // Consumed only because it supersedes `choice-point-checks: read` (4.2); the sheet
+    // shows no line's answers. XState drops a transition with no action, so it has an
+    // empty one.
+    "lines.checked": { actions: () => {} },
+    "evaluator.changed": {
+      actions: assign({
+        evaluators: ({ context, event }) =>
+          context.evaluators.some((e) => e.id === event.evaluator.id)
+            ? context.evaluators.map((e) => (e.id === event.evaluator.id ? event.evaluator : e))
+            : [...context.evaluators, event.evaluator],
+      }),
+    },
+    "evaluator.deleted": {
+      actions: assign({ evaluators: ({ context, event }) => context.evaluators.filter((e) => e.id !== event.id) }),
     },
   },
 });
