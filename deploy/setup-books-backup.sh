@@ -11,7 +11,9 @@ UNITS_SRC=/opt/unblent/deploy/systemd
 
 [ "$(id -u)" -eq 0 ] || { echo "Run as root: sudo $0" >&2; exit 1; }
 [ -r "$LITESTREAM_ENV" ] || { echo "Missing $LITESTREAM_ENV (Litestream creds)" >&2; exit 1; }
-command -v rclone >/dev/null || { echo "rclone not installed: apt install rclone" >&2; exit 1; }
+# Ubuntu's rclone (1.60) checks each upload with a request R2 refuses (501), so
+# every run fails and sends the same files again; the release from rclone.org works.
+command -v rclone >/dev/null || { echo "rclone not installed: the .deb from https://rclone.org/downloads/" >&2; exit 1; }
 
 # 1. Credentials file for rclone, derived from Litestream's, root-only.
 # The endpoint carries the R2 account id (it was inline in the committed

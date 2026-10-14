@@ -11,7 +11,12 @@ Type=simple
 # so nothing reloads it when a user appears.
 User=unblent
 Group=unblent
-WorkingDirectory=/opt/unblent
+# An empty working directory: litestream 0.5's watcher can mistake a directory
+# renamed inside data/ for ".", scan its own working directory, and pick up
+# databases there by relative paths it cannot replicate, which stops every sync.
+# Here such a scan finds nothing. litestream.yml uses absolute paths only.
+StateDirectory=unblent-litestream
+WorkingDirectory=/var/lib/unblent-litestream
 # R2 credentials (LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY) and
 # LITESTREAM_ENDPOINT, root-owned, never in git; systemd reads the file before
 # dropping to unblent.
