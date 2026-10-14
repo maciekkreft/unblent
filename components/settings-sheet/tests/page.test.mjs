@@ -1,7 +1,7 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The starter key row under Judging (architecture.md 12). The test server has no
+// The starter key row under Evaluating (architecture.md 12). The test server has no
 // starter keys, so the page's reads of its own llm server are answered here: first a
 // new account with 87 starter requests left, then the picture after an own key is saved.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");

@@ -187,7 +187,7 @@ for (const engine of ENGINES) {
       await press("Cancel");
       await until(async () => (await key())?.text.startsWith("Key saved"));
 
-      // The Jev key (the page sets `judging`) is its own field, saved the same way.
+      // The Jev key is its own field, saved the same way.
       const jev = () =>
         page.evaluate(() => {
           const group = document.querySelector("settings-sheet").shadowRoot.querySelector(".judging");

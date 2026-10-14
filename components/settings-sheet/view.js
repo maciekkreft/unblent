@@ -39,7 +39,6 @@ class ActorController {
         // The `account` attribute (7.7): read from the host's light DOM, so the
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
-        judging: this.host.hasAttribute("judging"),
       },
       events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited },
     });
@@ -65,10 +64,9 @@ class SettingsSheet extends LitElement {
   // manifest is visible. `keyDraft` holds what the user typed in the key box until
   // they save it, and is cleared after, so the key never lingers in the field. `replacingKey` is true while
   // the box is open over a key already saved.
-  // `jevDraft` and `replacingJev` are the same two states for the Jev key (`judging`).
+  // `jevDraft` and `replacingJev` are the same two states for the Jev key.
   static properties = {
     account: { type: Boolean, reflect: true },
-    judging: { type: Boolean, reflect: true },
     keyDraft: { state: true },
     replacingKey: { state: true },
     jevDraft: { state: true },
@@ -428,7 +426,7 @@ class SettingsSheet extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !(snapshot.matches("ready") || snapshot.matches("failed"))) return nothing;
     if (snapshot.matches("failed")) return html`<p class="failed">settings unavailable</p>`;
-    const { pages, settings, current, roles, profile, account, judging, llm, toolList, tools } = snapshot.context;
+    const { pages, settings, current, roles, profile, account, llm, toolList, tools } = snapshot.context;
     const rows = merge(pages, settings.nav);
     // The product profile (§12) shows only the production options: the editor
     // selects and the layout-switch row. The page order and the viewport switch
@@ -514,7 +512,7 @@ class SettingsSheet extends LitElement {
       <h3>This device</h3>
       ${device}
       <h3 class="later">Your account</h3>
-      ${this.#account(llm, profile, toolList, tools, judging)}
+      ${this.#account(llm, profile, toolList, tools)}
     `;
   }
 
@@ -552,7 +550,7 @@ class SettingsSheet extends LitElement {
   // reversible by choosing the previous value; removing the key can only be undone by
   // entering it again, so its button is plainly labelled (Don Norman: forgiveness,
   // honest signifiers).
-  #account(llm, profile, toolList, tools, judging) {
+  #account(llm, profile, toolList, tools) {
     if (!llm || !llm.signedIn) return html`<p class="hint">Sign in to set up the chat.</p>`;
     const current = llm.providers.find((p) => p.id === llm.provider);
     // Echo is a test provider (§12): offered only in the workshop, except that an
@@ -607,22 +605,20 @@ class SettingsSheet extends LitElement {
           </select>
           <span class="help">${TTL_NOTE}</span>
         </label>
-        ${judging
-          ? html`<div class="judging">
-              <span class="group">Judging</span>
-              ${this.#keyField({
-                // While the starter key is in use there is no own key to replace or
-                // remove, so the box stays open for one (architecture.md 12).
-                keySet: llm.jev?.keySet === true && llm.jev.starterLeft === undefined,
-                note: this.#starterNote(llm.jev?.starterLeft),
-                label: "Jev key",
-                draftName: "jevDraft",
-                replacingName: "replacingJev",
-                save: (key) => this.#actor.send({ type: "_saveJevKey", key }),
-                remove: () => this.#actor.send({ type: "_removeJevKey" }),
-              })}
-            </div>`
-          : nothing}
+        <div class="judging">
+          <span class="group">Evaluating</span>
+          ${this.#keyField({
+            // While the starter key is in use there is no own key to replace or
+            // remove, so the box stays open for one (architecture.md 12).
+            keySet: llm.jev?.keySet === true && llm.jev.starterLeft === undefined,
+            note: this.#starterNote(llm.jev?.starterLeft),
+            label: "Jev key",
+            draftName: "jevDraft",
+            replacingName: "replacingJev",
+            save: (key) => this.#actor.send({ type: "_saveJevKey", key }),
+            remove: () => this.#actor.send({ type: "_removeJevKey" }),
+          })}
+        </div>
         ${this.#tools(toolList, tools, profile)}
       </div>
     `;
@@ -686,7 +682,7 @@ class SettingsSheet extends LitElement {
 
   #starterNote(left) {
     if (left === undefined) return null;
-    if (left === 0) return "Starter requests used up. Add your own Jev key to keep judging.";
+    if (left === 0) return "Starter requests used up. Add your own Jev key to keep evaluating.";
     return `Starter key · ${left} of 100 requests left`;
   }
 }

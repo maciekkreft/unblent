@@ -105,16 +105,13 @@ export const machine = setup({
       "page order and visibility, the switches, and Vim keys. Your account holds the chat " +
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps. Every change is saved at " +
-      "once by the fact that owns it. Where the page judges with Jev (the `judging` attribute), " +
-      "Your account also holds the Jev key, which `llm` keeps. Echo is offered as a provider only in the workshop " +
-      "profile.",
+      "once by the fact that owns it. Your account also holds the Jev key, which `llm` keeps. " +
+      "Echo is offered as a provider only in the workshop profile.",
     kind: "view",
     emits: ["settings.edited", "llm.edited", "tools.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
-    // `judging`: with it, and `account`, the account section also offers the Jev key;
-    // only the pages that judge set it, so every other Settings stays as it was.
-    attributes: ["account", "judging"],
+    attributes: ["account"],
     asks: ["pages: list", "settings: read", "catalog: list", "llm: read", "catalog: contracts", "conversations: tools"],
   },
   // The active profile (§12), adopted from settings; a page without settings
@@ -125,7 +122,6 @@ export const machine = setup({
     ask: input.ask,
     current: input.current,
     account: Boolean(input.account),
-    judging: Boolean(input.judging),
     pages: [],
     settings: { ...DEFAULT },
     roles: {},
