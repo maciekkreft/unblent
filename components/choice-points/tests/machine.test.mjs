@@ -175,8 +175,19 @@ test("a save changes the texts, keeps the day, mints the next version, and the s
   assert.deepEqual([last.day, last.thoughts, last.away, last.towards, last.version], [DAY, "Not again", "Snapped", "Paused", 2]);
   actor.send(saved({ thoughts: "Not again", away: "Snapped", towards: "Paused" }));
   assert.equal(changed.length, 2);
+});
+
+test("a save that empties all four boxes of a kept one removes it, and its tombstone keeps the texts", async () => {
+  const store = fakeStore();
+  const { actor, changed, deleted } = start(store);
+  await ready(actor);
+  actor.send(saved({ away: "Snapped" }));
   actor.send(saved({ situation: "", thoughts: "", away: "", towards: "" }));
-  assert.equal(changed.at(-1).version, 3, "emptying one already kept is a change");
+  assert.equal(changed.length, 1, "no change is announced, only the deletion");
+  assert.deepEqual(deleted, [{ type: "choice-point.deleted", id: ID, day: DAY }]);
+  assert.deepEqual(await list(actor), []);
+  const tomb = store.rows.get(ID);
+  assert.deepEqual([tomb.deleted, tomb.situation, tomb.away, tomb.version], [true, "Meeting ran late", "Snapped", 2]);
 });
 
 // --- Removal ---------------------------------------------------------------------------

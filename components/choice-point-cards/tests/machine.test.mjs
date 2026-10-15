@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings } from "../machine.js";
+import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable } from "../machine.js";
 
 const json = (name) => JSON.parse(readFileSync(new URL(`../events/${name}.json`, import.meta.url), "utf8"));
-const SCHEMAS = { "choice-point.saved": json("choice-point.saved"), "removal.started": json("removal.started") };
+const SCHEMAS = { "choice-point.saved": json("choice-point.saved") };
 const recorded = [];
 
 const NOW = new Date(2026, 9, 14, 9, 30).getTime();
@@ -162,31 +162,48 @@ test("a kept choice point opens with its texts and follows changes only while no
   clock.increment(400);
 });
 
-test("Delete saves what waits, then starts the removal; a removed one closes and Undo brings back its card", async () => {
-  const { actor, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
+test("folded with every box empty, a kept one is removed by saving it empty; a new one sends nothing", async () => {
+  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
   actor.send({ type: "_open", id: A });
-  actor.send({ type: "_edit", id: A, field: "situation", value: "Dinner party " });
-  actor.send({ type: "_delete", id: A });
-  assert.deepEqual(
-    emitted.map((e) => e.type),
-    ["choice-point.saved", "removal.started"],
-  );
-  assert.deepEqual(emitted[1], { type: "removal.started", kind: "choice-point", id: A, name: "Dinner party" });
+  actor.send({ type: "_edit", id: A, field: "situation", value: "" });
+  clock.increment(400);
+  actor.send({ type: "_blur", id: A });
+  assert.deepEqual(emitted, [], "four empty boxes are not saved while the sheet is open");
+  actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "Dinner" }, { version: 2 }) });
+  assert.equal(ctx().drafts[0].situation, "", "what was cleared is not refilled");
+  actor.send({ type: "_done", id: A });
+  assert.deepEqual(saves(emitted), [{ type: "choice-point.saved", id: A, day: TODAY, situation: "", thoughts: "", away: "", towards: "" }]);
   assert.deepEqual(ctx().drafts, []);
 
-  actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "Dinner party " }, { removing: true }) });
-  assert.equal(ctx().choicePoints[0].removing, true);
-  actor.send({ type: "choice-point.changed", choicePoint: cp(A, TODAY, { situation: "Dinner party " }, { removing: false }) });
-  assert.equal(ctx().choicePoints[0].removing, false, "Undo: the card is back");
+  actor.send({ type: "_add" });
+  actor.send({ type: "_edit", id: only(ctx), field: "away", value: "x" });
+  actor.send({ type: "_edit", id: only(ctx), field: "away", value: "" });
+  actor.send({ type: "_done", id: only(ctx) });
+  assert.equal(saves(emitted).length, 1, "a new one never kept sends nothing");
 });
 
-test("Delete on a blank new one just closes; a choice point removed elsewhere while open closes", async () => {
-  const { actor, emitted, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
+test("an earlier day's choice points open to be read: no new one, no typing, no save on fold", async () => {
+  const { actor, emitted, ctx } = await start({ [EARLIER]: [cp(B, EARLIER, { situation: "Old" }), cp(A, EARLIER)] });
+  actor.send({ type: "day.shown", day: EARLIER });
+  await flush();
+  assert.equal(writable(ctx()), false);
   actor.send({ type: "_add" });
-  actor.send({ type: "_delete", id: only(ctx) });
-  assert.deepEqual(emitted, []);
-  assert.deepEqual(ctx().drafts, []);
+  assert.deepEqual(ctx().drafts, [], "no new choice point on an earlier day");
+  actor.send({ type: "_open", id: B });
+  actor.send({ type: "_edit", id: B, field: "situation", value: "Changed" });
+  assert.equal(ctx().drafts[0].situation, "Old");
+  actor.send({ type: "_done", id: B });
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_done", id: A });
+  assert.deepEqual(emitted, [], "an empty one kept from before is not removed from an earlier day");
 
+  actor.send({ type: "day.shown", day: TODAY });
+  await flush();
+  assert.equal(writable(ctx()), true);
+});
+
+test("a choice point removed elsewhere while open closes", async () => {
+  const { actor, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
   actor.send({ type: "_open", id: A });
   actor.send({ type: "choice-point.deleted", id: A, day: TODAY });
   assert.deepEqual(ctx().drafts, []);
@@ -214,8 +231,6 @@ test("each choice point folds on its own: several stay open, Done folds one, and
   assert.equal(saves(emitted).at(-1).day, TODAY, "it stays with the day it was added to");
   await flush();
   assert.deepEqual(ctx().drafts, []);
-  actor.send({ type: "_add" });
-  assert.equal(ctx().drafts[0].day, EARLIER, "a new one joins the day shown");
 });
 
 test("a fact that cannot answer is an honest failure", async () => {
@@ -323,7 +338,7 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
   assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: true }, "a red warning on the card's towards");
 
   actor.send({ type: "_open", id: A });
-  assert.equal(statusOf(ctx(), A), "Saved");
+  assert.equal(statusOf(ctx(), A), "", "saving is not reported");
   actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: CALM });
   assert.equal(statusOf(ctx(), A), "Emotional Goal · you expect Behavioral Goal");
   actor.send({ type: "_point", source: "hover", id: A, field: "towards", text: "Call Anna" });
@@ -331,11 +346,11 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
   actor.send({ type: "_point", source: "hover", id: A, field: null });
   actor.send({ type: "_point", source: "cursor", id: A, field: null });
   actor.send({ type: "lines.checked", ...report(TODAY, [], "no-key") });
-  assert.equal(statusOf(ctx(), A), "Saved. Jev could not check: add your Jev key in Settings.");
+  assert.equal(statusOf(ctx(), A), "Jev could not check: add your Jev key in Settings.");
 
   actor.send({ type: "_edit", id: A, field: "towards", value: "Call Anna and ask" });
   actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: "Call Anna and ask" });
-  assert.equal(statusOf(ctx(), A), "Saving…", "an edited line has no answer to say");
+  assert.equal(statusOf(ctx(), A), "Jev could not check: add your Jev key in Settings.", "an edited line has no answer to say");
 
   actor.send({ type: "day.shown", day: EARLIER });
   await flush();

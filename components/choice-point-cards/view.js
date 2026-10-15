@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } f
 import { EditorView, keymap, drawSelection, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
-import { machine, boxMarks, cardWarnings, sayMarks, statusOf } from "./machine.js";
+import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
 
@@ -237,12 +237,6 @@ class ChoicePointCards extends LitElement {
     section:focus {
       outline: none;
     }
-    .head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: var(--space-sm);
-    }
     h3 {
       margin: 0;
       font-size: var(--text-caption);
@@ -268,21 +262,30 @@ class ChoicePointCards extends LitElement {
       cursor: default;
       color: var(--color-mute);
     }
-    .pill {
-      display: inline-flex;
+    /* The New choice point row reads like the New note and New chat rows: a muted line
+       with a plus, the whole width, so it is one more row of the list rather than a
+       control beside its heading. */
+    .new {
+      display: flex;
       align-items: center;
-      gap: var(--space-xs);
+      width: 100%;
+      box-sizing: border-box;
+      text-align: left;
       padding: var(--space-xs) var(--space-sm);
-      border-radius: var(--radius-full);
+      border-color: transparent;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--color-body-mid);
     }
-    .pill:hover:not(:disabled) {
-      border-color: var(--color-accent);
-      background: var(--color-accent-subtle);
+    .new:hover {
+      background: var(--color-surface-hover);
     }
-    /* Turned so the split opens downwards, the way the V of the sheet does. */
-    .pill svg {
+    .new .mark {
+      display: inline-flex;
+      margin-right: var(--space-xs);
+    }
+    .new .mark svg {
       display: block;
-      transform: rotate(180deg);
     }
     .list {
       display: flex;
@@ -448,6 +451,11 @@ class ChoicePointCards extends LitElement {
     .box:focus-within {
       box-shadow: var(--focus-ring);
     }
+    /* An earlier day's sheet is read, not written: no frame or text cursor invites typing. */
+    .sheet.read .box {
+      border-color: transparent;
+      cursor: default;
+    }
     .away .box:focus-within {
       background: var(--color-warning-subtle);
     }
@@ -564,7 +572,7 @@ class ChoicePointCards extends LitElement {
   #actor = new ActorController(this);
 
   // Where the keyboard goes once the next render lands: a box of the open sheet, a card
-  // folded from it, or the pill. Kept here because the elements exist only after render.
+  // folded from it, or the New choice point row. Kept here because the elements exist only after render.
   #focusNext = null;
 
   // The editors of the open sheet by key ("<id>:<field>"), each with the region it is
@@ -575,14 +583,14 @@ class ChoicePointCards extends LitElement {
   updated() {
     this.#syncBoxes();
     if (!this.#focusNext) return;
-    const target = this.renderRoot.querySelector(this.#focusNext) ?? this.renderRoot.querySelector(".pill");
+    const target = this.renderRoot.querySelector(this.#focusNext) ?? this.renderRoot.querySelector(".new");
     this.#focusNext = null;
     const box = [...this.#boxes.values()].find((b) => b.region === target);
     if (box) this.#focusBox(box);
     else target?.focus();
   }
 
-  // A box opened from the pill or a card takes the keyboard in Vim's insert mode when Vim
+  // A box opened from the New row or a card takes the keyboard in Vim's insert mode when Vim
   // keys is on, so the first key typed is text.
   #focusBox(box) {
     box.view.focus();
@@ -613,6 +621,9 @@ class ChoicePointCards extends LitElement {
 
   #extensions(key, spec, vimOn) {
     const { id, field } = spec;
+    // An earlier day's box is shown, not edited (writable); it takes no focus, so the
+    // sheet's own keydown folds it on Escape.
+    const read = spec.read ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [placeholder(spec.hint)];
     return [
       this.#keys(id, field),
       // The Vim plugin must see a key before any keymap does.
@@ -626,7 +637,7 @@ class ChoicePointCards extends LitElement {
       keymap.of([{ key: "Enter", run: insertNewline }]),
       EditorView.lineWrapping,
       field === "away" || field === "towards" ? tallTheme : shortTheme,
-      placeholder(spec.hint),
+      read,
       EditorView.contentAttributes.of({ "aria-label": spec.label }),
       marksField.init(() => spec.marks),
       marksDecorations((source, text) => this.#actor.send({ type: "_point", source, id, field: text == null ? null : field, text })),
@@ -725,16 +736,14 @@ class ChoicePointCards extends LitElement {
     this.requestUpdate();
   }
 
+  // An earlier day's boxes take no keyboard, so its sheet opens with it on Close.
   #open(id) {
-    this.#send({ type: "_open", id }, `.box[data-key="${id}:situation"]`);
+    const writing = writable(this.#actor.snapshot.context);
+    this.#send({ type: "_open", id }, writing ? `.box[data-key="${id}:situation"]` : `.sheet[data-id="${id}"] .close`);
   }
 
   #done(id) {
     this.#send({ type: "_done", id }, `.card[data-id="${id}"]`);
-  }
-
-  #delete(id) {
-    this.#send({ type: "_delete", id }, ".pill");
   }
 
   #card(context, r) {
@@ -763,6 +772,7 @@ class ChoicePointCards extends LitElement {
       field,
       label,
       hint,
+      read: !writable(context),
       text: draft[field],
       marks: new Map(lines.map((l) => [l.text, l.marks])),
       marksKey: JSON.stringify(lines),
@@ -779,6 +789,7 @@ class ChoicePointCards extends LitElement {
 
   #sheet(context, draft) {
     const status = statusOf(context, draft.id);
+    const read = !writable(context);
     // Escape on a button closes the sheet like Done; the key is taken so nothing around
     // it acts too. The boxes decide their own Escape, for Vim (#keys).
     const keydown = (e) => {
@@ -792,7 +803,7 @@ class ChoicePointCards extends LitElement {
       if (!context.pointed.tap || e.composedPath().some((n) => n.classList?.contains("marks"))) return;
       this.#actor.send({ type: "_point", source: "tap", id: draft.id, field: null });
     };
-    return html`<div class="sheet" role="group" aria-label="Choice point" @keydown=${keydown} @pointerdown=${pointerdown}>
+    return html`<div class="sheet ${read ? "read" : ""}" data-id=${draft.id} role="group" aria-label="Choice point" @keydown=${keydown} @pointerdown=${pointerdown}>
       <div class="grid">
         ${this.#box(context, draft, "away")}
         <div class="v">${vee}</div>
@@ -802,8 +813,7 @@ class ChoicePointCards extends LitElement {
       <div class="foot">
         <span class="status" role="status">${status}</span>
         <div class="buttons">
-          <button type="button" class="delete" @click=${() => this.#delete(draft.id)}>Delete</button>
-          <button type="button" class="done" @click=${() => this.#done(draft.id)}>Done</button>
+          <button type="button" class=${read ? "close" : "done"} @click=${() => this.#done(draft.id)}>${read ? "Close" : "Done"}</button>
         </div>
       </div>
     </div>`;
@@ -822,16 +832,20 @@ class ChoicePointCards extends LitElement {
     this.#wanted.clear();
     const items = [...shown, ...drafts.filter((d) => !shown.some((r) => r.id === d.id))];
     const draftOf = (r) => drafts.find((d) => d.id === r.id);
+    // An earlier day without choice points has nothing to show or add.
+    if (!items.length && !failed && !writable(context)) return nothing;
     return html`<section tabindex="-1" aria-labelledby="heading">
-      <div class="head">
-        <h3 id="heading">Choice points</h3>
-        <button type="button" class="pill" ?disabled=${!ready} @click=${() => this.#add()}>
-          ${icon("arrows-split")} Choice point
-        </button>
-      </div>
+      <h3 id="heading">Choice points</h3>
       ${failed ? html`<p class="empty">Choice points are unavailable.</p>` : nothing}
-      ${items.length
-        ? html`<div class="list">${items.map((r) => (draftOf(r) ? this.#sheet(context, draftOf(r)) : this.#card(context, r)))}</div>`
+      ${items.length || writable(context)
+        ? html`<div class="list">
+            ${items.map((r) => (draftOf(r) ? this.#sheet(context, draftOf(r)) : this.#card(context, r)))}
+            ${writable(context)
+              ? html`<button type="button" class="new" ?disabled=${!ready} @click=${() => this.#add()}>
+                  <span class="mark">${icon("plus")}</span>New choice point
+                </button>`
+              : nothing}
+          </div>`
         : nothing}
     </section>`;
   }

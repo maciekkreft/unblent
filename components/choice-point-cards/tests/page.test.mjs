@@ -1,11 +1,12 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// What only a browser shows: the pill opens a sheet with the keyboard in Situation,
+// What only a browser shows: the New choice point row opens a sheet with the keyboard in Situation,
 // Escape folds it into a card that a reload keeps, with Vim keys on the first Escape
 // only leaves insert mode, and on a narrow page the V stands above the boxes rather than
 // between them, and Jev's marks stand at the end of checked lines, coloured by the expected
-// answer, with the answer said in the status line. The decisions are tested in Node.
+// answer, with the answer said in the status line, and an earlier day's choice point can
+// be read but not typed in. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
 
@@ -29,14 +30,14 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    test("the pill opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
+    test("the New choice point row opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
       try {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.click("choice-point-cards .pill");
+        await page.click("choice-point-cards .new");
         await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
         await page.keyboard.type("Family dinner");
         await page.keyboard.press("Shift+Tab");
@@ -61,8 +62,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await until(async () => (await inCards(page, (root) => root.querySelector(".pill")?.disabled)) === false);
-        await page.click("choice-point-cards .pill");
+        await until(async () => (await inCards(page, (root) => root.querySelector(".new")?.disabled)) === false);
+        await page.click("choice-point-cards .new");
         await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
         await page.keyboard.press("Escape");
         await page.keyboard.type("iWalk");
@@ -88,9 +89,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const cards = page.locator("choice-point-cards");
-        await cards.locator(".pill").click();
+        await cards.locator(".new").click();
         await page.keyboard.type("First");
-        await cards.locator(".pill").click();
+        await cards.locator(".new").click();
         await page.keyboard.type("Second");
         assert.equal(await cards.locator(".sheet").count(), 2);
         await cards.locator(".sheet").first().locator(".done").click();
@@ -142,7 +143,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         });
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const cards = page.locator("choice-point-cards");
-        await cards.locator(".pill").click();
+        await cards.locator(".new").click();
         await cards.locator('.box[data-field="towards"] .cm-content').click();
         await page.keyboard.type("Call Anna");
         await page.keyboard.press("Enter");
@@ -161,6 +162,39 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // An earlier day and its choice point arrive through the APIs under the test's own login.
+    test("an earlier day's choice point opens to be read: no New row, no typing, Close", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        const cookie = forgeCookie("read");
+        await signedIn(context, cookie);
+        const then = Date.now() - 3 * 864e5;
+        const at = new Date(then);
+        const day = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+        const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
+        assert.equal((await put("journal/days", { record: { id: "01J00000000000000000000DAY", day, text: "Earlier", editedAt: then }, baseVersion: null })).status(), 200);
+        assert.equal((await put("choice-points/01J000000000000000000000CP", { day, situation: "Old", thoughts: "", away: "Snapped", towards: "Paused", baseVersion: null })).status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await page.locator("journal-days .row", { hasText: "Earlier" }).click();
+        const cards = page.locator("choice-point-cards");
+        await cards.locator(".card").click();
+        await cards.locator(".close").waitFor();
+        assert.equal(await cards.locator(".new").count(), 0, "no New choice point on an earlier day");
+        assert.equal(await cards.locator(".done").count(), 0);
+        await cards.locator('.box[data-field="towards"]').click();
+        await page.keyboard.type("zzz");
+        assert.equal(await cards.locator('.box[data-field="towards"] .cm-content').innerText(), "Paused", "the boxes cannot be typed in");
+        await cards.locator(".close").click();
+        await cards.locator(".card").waitFor();
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     test("on a wide page the V stands between the moves, on a phone-wide page above them", async () => {
       const layout = async (width) => {
         const context = await browser.newContext({ viewport: { width, height: 800 } });
@@ -169,7 +203,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           const page = await context.newPage();
           const problems = watch(page);
           await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-          await page.click("choice-point-cards .pill");
+          await page.click("choice-point-cards .new");
           const box = (sel) => page.locator(`choice-point-cards ${sel}`).boundingBox();
           const [v, away, towards] = [await box(".v"), await box(".field.away"), await box(".field.towards")];
           assert.deepEqual(problems, []);

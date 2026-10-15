@@ -93,8 +93,10 @@ const outboxRow = (r, baseVersion) => ({ id: r.id, ...content(r), baseVersion, .
 
 // A new id adds a choice point to its day, unless all four texts are empty: the view may
 // save a sheet the user opened and left blank, and that is not a choice point yet. A save
-// to one already kept changes its texts and keeps its day and its mark. A deleted id
-// stays deleted (5).
+// to one already kept changes its texts and keeps its day and its mark, except that four
+// empty texts remove it: the view has no Delete, and emptying the boxes is how the user
+// says it is gone. Its tombstone keeps the texts it had, so it could still be restored.
+// A deleted id stays deleted (5).
 function applySave(context, event, enqueue) {
   if (!isId(event.id)) return;
   const was = context.choicePoints.get(event.id);
@@ -104,6 +106,7 @@ function applySave(context, event, enqueue) {
     if (!isDay(event.day) || TEXTS.every((k) => texts[k] === "")) return;
     return commit(context, enqueue, record({ id: event.id, day: event.day, ...texts }));
   }
+  if (TEXTS.every((k) => texts[k] === "")) return commit(context, enqueue, { ...was, removing: false, deleted: true });
   const next = { ...was, ...texts };
   if (same(was, next)) return;
   commit(context, enqueue, next);
@@ -213,7 +216,9 @@ export const machine = setup({
       "brought, what the user did or would do when hooked (away) and when unhooked (towards). " +
       "Each one names its journal day by date and keeps that day for good. `choice-points: list` " +
       "answers one day's choice points, or every day's when no day is given, oldest first. A " +
-      "choice point the user opened and left with all four boxes empty is not kept. It works " +
+      "choice point the user opened and left with all four boxes empty is not kept, and a save " +
+      "that empties all four boxes of a kept one removes it at once, without an undo window; " +
+      "its tombstone keeps the texts it had. It works " +
       "signed out, numbering versions itself, and syncs to the account when signed in " +
       "(section 5); signing in uploads every choice point with its history. The last write " +
       "wins, so two devices never conflict, and a deleted choice point is kept as a tombstone, " +

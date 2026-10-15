@@ -7,8 +7,8 @@ import { setup, assign, enqueueActions, fromPromise, spawnChild, stopChild } fro
 // follows choice-point.changed / choice-point.deleted after (4.3, fourth rule). The day
 // comes from day.shown, so the rule for which day the journal shows stays in
 // journal-entry. Writing leaves as choice-point.saved, at a throttle while typing and at
-// once on blur or Done (4.3, third rule); a delete leaves as removal.started, and
-// `choice-points` marks it until notice-stack settles or undoes it. It also asks
+// once on blur or Done (4.3, third rule); a save of four empty boxes is how `choice-points`
+// learns to remove one, so no event of its own is needed for that. It also asks
 // settings: read for the "Vim keys" preference (12) and follows settings.changed, and
 // choice-point-checks: read for Jev's marks, following lines.checked and checks.changed;
 // evaluators: list gives only the names of expected answers. The ask, the id
@@ -33,21 +33,26 @@ export const isEmpty = (d) => FIELDS.every((k) => !d[k].trim());
 
 const held = (context, id) => context.choicePoints.find((r) => r.id === id);
 
-// A choice point the fact never had and with nothing written is not one yet: closing it
-// keeps nothing, so there is nothing to save or delete. One the fact holds is always
-// saved, so clearing its boxes is kept.
-export const savable = (context, draft) => Boolean(draft) && (Boolean(held(context, draft.id)) || !isEmpty(draft));
+// Only today's page is written on, the same as the day's own text; an earlier day's choice
+// points open to be read.
+export const writable = (context) => context.day === dateOf(context.now());
+
+// Four empty boxes are never saved while the sheet is open: to `choice-points` that save
+// removes a kept choice point, and the user may be clearing a box only to write it again.
+export const savable = (draft) => Boolean(draft) && !isEmpty(draft);
 
 export const draftIn = (context, id) => context.drafts.find((d) => d.id === id);
 
-const saveOne = (enqueue, context, draft) => {
-  if (savable(context, draft)) enqueue.emit({ type: "choice-point.saved", ...draft });
+const saveOne = (enqueue, draft) => {
+  if (!savable(draft)) return false;
+  enqueue.emit({ type: "choice-point.saved", ...draft });
+  return true;
 };
 
-// Every open sheet with typing that waits to be saved is saved, at the throttle's end.
+// Every open sheet with typing that waits to be saved is saved, at the throttle's end. An
+// emptied one stays waiting, so a change from the fact does not refill what was cleared.
 const saveWaiting = enqueueActions(({ context, enqueue }) => {
-  for (const id of context.dirty) saveOne(enqueue, context, draftIn(context, id));
-  enqueue.assign({ dirty: [] });
+  enqueue.assign({ dirty: context.dirty.filter((id) => !saveOne(enqueue, draftIn(context, id))) });
 });
 
 const without = (list, id) => list.filter((x) => (x.id ?? x) !== id);
@@ -88,31 +93,23 @@ const edit = assign(({ context, event }) => ({
   dirty: context.dirty.includes(event.id) ? context.dirty : [...context.dirty, event.id],
 }));
 
-const editable = ({ context, event }) => opened(context, event) && FIELDS.includes(event.field) && typeof event.value === "string";
+const typable = ({ context, event }) =>
+  writable(context) && opened(context, event) && FIELDS.includes(event.field) && typeof event.value === "string";
 
-// Done folds the one sheet: what typing in it still waits to save is saved first.
+// Done folds the one sheet: what typing in it still waits to save is saved first. Folded
+// with every box empty, a kept one is removed, by saving it empty; a new one was never
+// kept, so nothing is sent. There is no Delete and no Undo: an empty choice point holds
+// nothing to lose.
 const fold = enqueueActions(({ context, event, enqueue }) => {
-  if (context.dirty.includes(event.id)) saveOne(enqueue, context, draftIn(context, event.id));
-  enqueue.assign({ drafts: without(context.drafts, event.id), dirty: without(context.dirty, event.id) });
-});
-
-// Only what is kept, or about to be, can be deleted with an Undo: what typing still
-// waits to save is saved first, so the fact holds what it is about to mark. A blank new
-// one just closes, because closing it already keeps nothing.
-const remove = enqueueActions(({ context, event, enqueue }) => {
   const draft = draftIn(context, event.id);
-  if (savable(context, draft)) {
-    if (context.dirty.includes(draft.id) || !held(context, draft.id)) enqueue.emit({ type: "choice-point.saved", ...draft });
-    enqueue.emit({ type: "removal.started", kind: "choice-point", id: draft.id, name: draft.situation.trim() });
-  }
+  if (writable(context) && isEmpty(draft) && held(context, draft.id)) enqueue.emit({ type: "choice-point.saved", ...draft });
+  else if (context.dirty.includes(event.id)) saveOne(enqueue, draft);
   enqueue.assign({ drafts: without(context.drafts, event.id), dirty: without(context.dirty, event.id) });
 });
 
 // While a box has the keyboard its blur saves that sheet at once.
 const settle = enqueueActions(({ context, event, enqueue }) => {
-  if (!context.dirty.includes(event.id)) return;
-  saveOne(enqueue, context, draftIn(context, event.id));
-  enqueue.assign({ dirty: without(context.dirty, event.id) });
+  if (context.dirty.includes(event.id) && saveOne(enqueue, draftIn(context, event.id))) enqueue.assign({ dirty: without(context.dirty, event.id) });
 });
 
 // --- Jev's marks ----------------------------------------------------------------------
@@ -217,8 +214,8 @@ export function cardWarnings(context, record) {
 }
 
 // The status line under an open sheet: Jev's answers about the line the pointer is over,
-// the mark last tapped, or the line the text cursor is on, in that order; otherwise
-// Saving… or Saved as before, with why Jev could not check when it could not.
+// the mark last tapped, or the line the text cursor is on, in that order; otherwise why
+// Jev could not check when it could not. Saving is not reported: it always happens.
 export function statusOf(context, id) {
   const { pointed } = context;
   const draft = draftIn(context, id);
@@ -230,10 +227,7 @@ export function statusOf(context, id) {
     const said = line && sayMarks(line.marks);
     if (said) return said;
   }
-  if (context.dirty.includes(id)) return "Saving…";
-  if (!savable(context, draft)) return "Kept once you write in a box";
-  const error = ERROR_SENTENCES[reportOf(context, draft.id)?.error];
-  return error ? `Saved. ${error}` : "Saved";
+  return ERROR_SENTENCES[reportOf(context, draft.id)?.error] ?? "";
 }
 
 const POINTS = new Set(["hover", "tap", "cursor"]);
@@ -260,34 +254,39 @@ export const machine = setup({
   meta: {
     description:
       "Shows the choice points of the journal day on the page, under the day's text, in a " +
-      "section headed \"Choice points\". A \"Choice point\" pill adds one to that day and opens it " +
-      "in place with the keyboard in Situation: the V drawing and four boxes, Away · hooked, " +
+      "section headed \"Choice points\". On today's page a \"New choice point\" row after the " +
+      "day's choice points, muted with a plus like the New note row, adds one and opens it in " +
+      "place with the keyboard in Situation: the V drawing and four boxes, Away · hooked, " +
       "Towards · unhooked, Situation, and Thoughts & feelings. The boxes grow with what is " +
       "written and take Vim's keys when Vim keys is on; Tab moves on to the next box or " +
-      "button. What is written is saved a short time into typing and at once when a box " +
-      "loses focus, and the sheet says Saving… or Saved. Done, or Escape, folds that sheet " +
-      "into a card showing the situation and the away and towards moves, one line each; with " +
-      "Vim keys on, the first Escape in a box leaves insert mode and the next one folds the " +
-      "sheet. Pressing a card opens it again. Each choice point folds and unfolds on its own, " +
-      "so several can be open at once. A choice point opened " +
-      "and closed with nothing written is not kept. A choice point stays editable on every " +
-      "day, also after the day's own text is closed. Delete shows the usual notice with Undo. " +
-      "It follows the day the journal page shows from day.shown, and shows today until the " +
-      "page has said. On a narrow width the V stands above the boxes. When Settings has an " +
-      "evaluator check a box, Jev's marks stand at the right end of each checked line, " +
-      "inside the box: a pulsing dot while Jev is checking, then a mark per shown answer, " +
-      "green when it is the answer expected, red when not, uncoloured when none is " +
-      "expected, solid when Jev is sure and faded when it is not; an answer given no icon " +
-      "in Settings gets a check, or a warning when it is not the expected one. A line edited " +
-      "since it was checked has no mark until it is checked again. The marks are not text: " +
-      "they do not move the cursor or count for Vim. The answer's name, and for a red mark " +
-      "the expected answer (\"Emotional Goal · you expect Behavioral Goal\"), is the mark's " +
-      "hint and is said in the status line under the boxes while the pointer is over a mark, " +
-      "after a mark is tapped until something else is pressed, or while the text cursor is " +
-      "on a checked line; otherwise the status line says Saving… or Saved, and why Jev could " +
-      "not check when it could not. A folded card shows a red warning beside the situation, " +
-      "away or towards line when a line there is not the expected answer.",
+      "button. What is written is saved a short time into typing and at once when a box loses " +
+      "focus; the sheet does not say so. Done, or Escape, folds that sheet into a card " +
+      "showing the situation and the away and towards moves, one line each; with Vim keys on, " +
+      "the first Escape in a box leaves insert mode and the next one folds the sheet. " +
+      "Pressing a card opens it again. Each choice point folds and unfolds on its own, so " +
+      "several can be open at once. A choice point folded with all four boxes empty is " +
+      "removed, also one kept before; there is no Delete button and no Undo, because an empty " +
+      "one holds nothing to lose. Only today's page is written on, the same as the day's own " +
+      "text: on an earlier day there is no New choice point row, and a card opens its sheet " +
+      "to be read, with boxes that cannot be typed in and a Close button instead of Done. It " +
+      "follows the day the journal page shows from day.shown, and shows today until the page " +
+      "has said. On a narrow width the V stands above the boxes. When Settings has an " +
+      "evaluator check a box, Jev's marks stand at the right end of each checked line, inside " +
+      "the box: a pulsing dot while Jev is checking, then a mark per shown answer, green when " +
+      "it is the answer expected, red when not, uncoloured when none is expected, solid when " +
+      "Jev is sure and faded when it is not; an answer given no icon in Settings gets a " +
+      "check, or a warning when it is not the expected one. A line edited since it was " +
+      "checked has no mark until it is checked again. The marks are not text: they do not " +
+      "move the cursor or count for Vim. The answer's name, and for a red mark the expected " +
+      "answer (\"Emotional Goal · you expect Behavioral Goal\"), is the mark's hint and is said " +
+      "in the status line under the boxes while the pointer is over a mark, after a mark is " +
+      "tapped until something else is pressed, or while the text cursor is on a checked line; " +
+      "otherwise the status line says why Jev could not check when it could not, and is " +
+      "empty. A folded card shows a red warning beside the situation, away or towards line " +
+      "when a line there is not the expected answer.",
     kind: "view",
+    // removal.started is no longer sent; it stays declared only because 11.2 refuses
+    // removing one owner's schema of an event that others still emit and consume.
     emits: ["choice-point.saved", "removal.started"],
     asks: ["choice-points: list", "settings: read", "choice-point-checks: read", "evaluators: list"],
     attributes: [],
@@ -295,6 +294,7 @@ export const machine = setup({
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
+    now: input.now,
     throttleMs: input.throttleMs ?? 400,
     day: dateOf(input.now()),
     choicePoints: [],
@@ -382,7 +382,7 @@ export const machine = setup({
       target: ".loading",
       actions: [
         saveWaiting,
-        assign(({ context, event }) => ({ day: event.day, drafts: [], choicePoints: [], checks: { ...context.checks, reports: {} } })),
+        assign(({ context, event }) => ({ day: event.day, drafts: [], dirty: [], choicePoints: [], checks: { ...context.checks, reports: {} } })),
         stopChild("checks"),
         spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
       ],
@@ -411,7 +411,7 @@ export const machine = setup({
       initial: "idle",
       on: {
         // A new one opens beside any already open; it is saved once something is written.
-        _add: { actions: assign(({ context }) => ({ drafts: [...context.drafts, blank(context.mint(), context.day)] })) },
+        _add: { guard: ({ context }) => writable(context), actions: assign(({ context }) => ({ drafts: [...context.drafts, blank(context.mint(), context.day)] })) },
         _open: {
           guard: ({ context, event }) => {
             const r = held(context, event.id);
@@ -421,18 +421,17 @@ export const machine = setup({
         },
         _blur: { guard: ({ context, event }) => opened(context, event), actions: settle },
         _done: { guard: ({ context, event }) => opened(context, event), actions: fold },
-        _delete: { guard: ({ context, event }) => opened(context, event), actions: remove },
         "choice-point.changed": { actions: follow },
         "choice-point.deleted": { actions: follow },
       },
       states: {
         idle: {
-          on: { _edit: { guard: editable, target: "typing", actions: edit } },
+          on: { _edit: { guard: typable, target: "typing", actions: edit } },
         },
         // Typing within the window, in any open sheet, joins the one save at its end: a
         // throttle, not a debounce, so the targetless edits below never restart the timer.
         typing: {
-          on: { _edit: { guard: editable, actions: edit } },
+          on: { _edit: { guard: typable, actions: edit } },
           after: { throttle: { target: "idle", actions: saveWaiting } },
         },
       },
