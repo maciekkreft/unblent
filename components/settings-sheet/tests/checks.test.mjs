@@ -1,8 +1,8 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// A file of its own because the 5s budget (11) is per file, and its two loads of the
-// product page leave no room beside the other settings tests.
+// A file of its own because the 5s budget (11) is per file, and its load of the product
+// page leaves little room beside the other settings tests.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
@@ -19,48 +19,58 @@ for (const engine of ENGINES) {
       await browser?.close();
     });
 
-    // The choice point checks on the product page: folded until asked for, a box given an
-    // evaluator and an expected answer, and the choice still there after a reload. The
-    // evaluator is made through the evaluators API under the test's own login.
-    test("the choice point checks fold open, and a box's evaluator and expected answer are kept", async () => {
+    // The choice point checks on the product page, in one load: folded until asked for, a
+    // box's evaluator and expected answer as the account holds them, and choosing an
+    // evaluator for another box answered by its questions. The evaluator and the stored box
+    // are made through the APIs under the test's own login; that a chosen box is kept and
+    // synced is decided in choice-point-checks' Node tests (9).
+    test("the choice point checks fold open, show a box's stored evaluator and expected answer, and take a new one", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
         await signedIn(context, forgeCookie("checks"));
         const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
         const evaluator = id("E1");
+        const question = id("Q1");
         const options = ["Behavioral Goal", "Emotional Goal"].map((name, i) => ({ id: id(`A${i}`), name, description: "" }));
-        const put = await context.request.put(`${BASE_URL}/api/evaluators/${evaluator}`, {
-          data: {
-            book: id("B1"),
-            name: "Therapy Goal",
-            on: true,
-            baseVersion: null,
-            questions: [{ id: id("Q1"), kind: "pick", text: "Which kind of goal is it?", yes: "", no: "", options }],
-          },
-        });
-        assert.equal(put.status(), 200);
+        const [made, stored] = await Promise.all([
+          context.request.put(`${BASE_URL}/api/evaluators/${evaluator}`, {
+            data: {
+              book: id("B1"),
+              name: "Therapy Goal",
+              on: true,
+              baseVersion: null,
+              questions: [{ id: question, kind: "pick", text: "Which kind of goal is it?", yes: "", no: "", options }],
+            },
+          }),
+          context.request.put(`${BASE_URL}/api/choice-point-checks/boxes/towards`, {
+            data: {
+              evaluator,
+              questions: [{ id: question, show: true, expect: options[0].id, when: null, icons: {} }],
+              baseVersion: null,
+            },
+          }),
+        ]);
+        assert.deepEqual([made.status(), stored.status()], [200, 200]);
         const page = await context.newPage();
         const problems = watch(page);
         const sheet = page.locator("settings-sheet");
         const towards = sheet.locator('.box[data-field="towards"]');
-        const open = async () => {
-          await page.locator("dock-desk .controls .pill").click();
-          await sheet.locator("summary", { hasText: "Choose what Jev checks" }).click();
-        };
+        const away = sheet.locator('.box[data-field="away"]');
+        const expected = 'select[aria-label="Answer expected for question 1"]';
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await sheet.locator(".checks details.keys-fold").waitFor({ state: "attached" });
         await page.locator("dock-desk .controls .pill").click();
         assert.equal(await towards.isVisible(), false, "the boxes are folded away at first");
         await sheet.locator("summary", { hasText: "Choose what Jev checks" }).click();
-        await towards.locator('select[aria-label="Evaluator for Towards · unhooked"]').selectOption(evaluator);
-        await towards.locator('select[aria-label="Answer expected for question 1"]').selectOption(options[0].id);
-
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await open();
-        await until(async () => (await towards.locator('select[aria-label="Answer expected for question 1"]').count()) === 1);
+        await until(async () => (await towards.locator(expected).count()) === 1);
         assert.equal(await towards.locator('select[aria-label="Evaluator for Towards · unhooked"]').inputValue(), evaluator);
-        assert.equal(await towards.locator('select[aria-label="Answer expected for question 1"]').inputValue(), options[0].id);
+        assert.equal(await towards.locator(expected).inputValue(), options[0].id);
+
+        assert.equal(await away.locator(expected).count(), 0);
+        await away.locator('select[aria-label="Evaluator for Away · hooked"]').selectOption(evaluator);
+        await away.locator(expected).selectOption(options[1].id);
+        assert.equal(await away.locator(expected).inputValue(), options[1].id);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
