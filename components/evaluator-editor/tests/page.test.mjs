@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 // nothing. Playwright's WebKit focuses a pressed button, so the press beside the button
 // stands in for Safari's press on it.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -25,6 +25,8 @@ const inEditor = (page, fn, arg) =>
     ([fn, arg]) => new Function("root", "arg", `return (${fn})(root, arg)`)(document.querySelector("evaluator-editor").shadowRoot, arg),
     [fn.toString(), arg],
   );
+// The second question's wording, as its box shows it.
+const secondText = (page) => inEditor(page, (root) => root.querySelectorAll('.question [data-field="text"] .cm-content')[1]?.textContent);
 const optionCount = (page) => inEditor(page, (root) => root.querySelectorAll(".option").length);
 // Where the editor is scrolled: its own scroller and the document, whichever moves.
 const scrolled = (page) => inEditor(page, (root) => [root.querySelector(".page").scrollTop, document.scrollingElement.scrollTop]);
@@ -104,9 +106,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         return `${q}:${field}`;
       });
 
-    const twoQuestions = async (vimKeys) => {
+    const twoQuestions = async (vimKeys, cookie) => {
       const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
       context.setDefaultTimeout(4000);
+      if (cookie) await signedIn(context, cookie);
       await context.addInitScript((v) => localStorage.setItem("settings", v), settings(vimKeys));
       const page = await context.newPage();
       const problems = watch(page);
@@ -185,10 +188,30 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("Tab");
         await settle(page);
         assert.equal(await focused(page), "2:yes");
-        const text = () => inEditor(page, (root) => root.querySelectorAll('.question [data-field="text"] .cm-content')[1]?.textContent);
-        assert.equal(await text(), "Is it a goal?");
+        assert.equal(await secondText(page), "Is it a goal?");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // What the box saved is what comes back: a test of its own, so each fits its budget.
+    // Signed in, so the account's copy is the sign that the save is kept: the reload
+    // waits for it rather than for a pause.
+    test("a question typed in its box is there after a reload", async () => {
+      const { context, page, problems } = await twoQuestions(true, forgeCookie("evaluator-editor"));
+      try {
+        // Add a question left the keyboard in its box; Tab saves what it holds.
+        await page.keyboard.type("Is it a goal?");
+        await page.keyboard.press("Escape");
+        await page.keyboard.press("Tab");
+        await until(async () => {
+          await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+          const { evaluators } = await (await context.request.get(`${BASE_URL}/api/evaluators`)).json();
+          return evaluators.some((e) => e.questions.some((q) => q.text === "Is it a goal?"));
+        });
         await page.reload({ waitUntil: "domcontentloaded" });
-        await until(async () => (await text().catch(() => null)) === "Is it a goal?");
+        await until(async () => (await secondText(page).catch(() => null)) === "Is it a goal?");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
