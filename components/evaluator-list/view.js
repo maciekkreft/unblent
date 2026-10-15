@@ -315,7 +315,15 @@ class EvaluatorList extends LitElement {
   // one, else New evaluator. Ephemeral UI focus, not a fact.
   #focusId = null;
 
+  // When the editor opens another evaluator, by a pick or by itself, the keyboard starts
+  // again from that row rather than from where it last moved.
+  #seenOpen = null;
+
   #focusRow(ids, open) {
+    if (open !== this.#seenOpen) {
+      this.#seenOpen = open;
+      this.#focusId = null;
+    }
     if (this.#focusId && ids.includes(this.#focusId)) return this.#focusId;
     if (open && ids.includes(open)) return open;
     return ids[0] ?? null;

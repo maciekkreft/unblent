@@ -17,7 +17,9 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // evaluator.saved, at a throttle while typing and at once on blur (4.3, third rule). A
 // removal leaves as removal.started; `evaluators` marks the item until notice-stack
 // settles or undoes it, and the draft follows those marks, so the item disappears at
-// once and comes back on Undo. The ask, the id minting and the throttle arrive through
+// once and comes back on Undo. Whenever the evaluator it shows changes, picked or opened
+// by itself on another book, a reload or a pin, it says which with evaluator.opened, so
+// the list marks that row; it learns nothing back. The ask, the id minting and the throttle arrive through
 // input, so the machine is a pure definition importable in Node.
 
 const blankQuestion = (id) => ({ id, kind: "yesno", text: "", yes: "", no: "", options: [], removing: false });
@@ -259,6 +261,16 @@ const followSubject = (next, extra = []) => [
   { actions: [...extra, assign(({ context, event }) => next({ context, event }))] },
 ];
 
+// The list marks the row the editor shows, and the editor opens evaluators by itself, so
+// it says so each time the id shown changes. Not while fetching: the list keeps its mark
+// until the next evaluator is on screen.
+const announce = enqueueActions(({ context, enqueue }) => {
+  const id = context.draft?.id ?? null;
+  if (id === context.announced) return;
+  enqueue.assign({ announced: id });
+  enqueue.emit({ type: "evaluator.opened", id });
+});
+
 const pinned = (context) => context.pin != null && context.pin === shownBook(context);
 
 // A book's title from books' list or its news, for the About line.
@@ -310,9 +322,10 @@ export const machine = setup({
       "and no mean and each option's description are text boxes that grow with what is written " +
       "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
       "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
-      "back to the field last used, never jumping to the name.",
+      "back to the field last used, never jumping to the name. Whichever evaluator it opens, " +
+      "picked or opened by itself, the list beside it marks.",
     kind: "view",
-    emits: ["evaluator.saved", "removal.started", "pin.toggled"],
+    emits: ["evaluator.saved", "removal.started", "pin.toggled", "evaluator.opened"],
     attributes: ["subject"],
     asks: ["evaluators: list", "settings: read", "subject: read", "books: list", "pins: read"],
   },
@@ -334,6 +347,8 @@ export const machine = setup({
     // Each book's title by id, for the About line.
     titles: {},
     draft: null,
+    // The id last told to the list with evaluator.opened.
+    announced: null,
     // The pick being fetched: { id, book }, and `restore` for the evaluator open before a
     // reload, kept on this device (3.1) because list-then-item keeps its item shown; it
     // is reopened only while that evaluator still exists.
@@ -417,18 +432,21 @@ export const machine = setup({
               Array.isArray(event.output?.evaluators) &&
               (!context.want.restore || event.output.evaluators.some((r) => r.id === context.want.id && !r.removing)),
             target: "ready.editing",
-            actions: enqueueActions(({ context, event, enqueue }) => {
-              const { want } = context;
-              const next = { ...context, book: want.book, evaluators: event.output.evaluators };
-              const id = want.latest ? (newest(next.evaluators, want.book)?.id ?? want.id) : want.id;
-              enqueue.assign({ book: want.book, evaluators: next.evaluators, draft: opened(next, id, want.book), want: null });
-              if (id !== want.id) enqueue(() => context.remember({ id, book: want.book }));
-            }),
+            actions: [
+              enqueueActions(({ context, event, enqueue }) => {
+                const { want } = context;
+                const next = { ...context, book: want.book, evaluators: event.output.evaluators };
+                const id = want.latest ? (newest(next.evaluators, want.book)?.id ?? want.id) : want.id;
+                enqueue.assign({ book: want.book, evaluators: next.evaluators, draft: opened(next, id, want.book), want: null });
+                if (id !== want.id) enqueue(() => context.remember({ id, book: want.book }));
+              }),
+              announce,
+            ],
           },
           {
             guard: ({ event }) => Array.isArray(event.output?.evaluators),
             target: "ready",
-            actions: assign(({ context, event }) => ({ book: context.want.book, evaluators: event.output.evaluators, want: null })),
+            actions: [assign(({ context, event }) => ({ book: context.want.book, evaluators: event.output.evaluators, want: null })), announce],
           },
           // The fact could not answer: an honest failure rather than an empty editor.
           { target: "failed" },
@@ -516,6 +534,7 @@ export const machine = setup({
             actions: [
               save,
               assign(({ context, event }) => ({ draft: opened(context, event.id, event.book) })),
+              announce,
               ({ context, event }) => context.remember({ id: event.id, book: event.book }),
             ],
           },

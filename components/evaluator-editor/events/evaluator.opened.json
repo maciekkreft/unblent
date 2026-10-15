@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The editor is now showing this evaluator, whether the user picked it or the editor opened it by itself (another book, a reload, a pin): its id changed, so a list can mark that row. null when the editor shows none.",
+  "type": "object",
+  "properties": {
+    "id": { "type": ["string", "null"], "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

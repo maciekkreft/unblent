@@ -62,24 +62,31 @@ test("another book opens its most recently edited evaluator, the Journal only it
   const list = () => actors["evaluator-list"].getSnapshot().context.evaluators.map((e) => e.name);
   const editor = () => actors["evaluator-editor"].getSnapshot().context;
   const draft = () => editor().draft;
+  // The row the list marks, which it learns only from the editor's evaluator.opened.
+  const open = () => actors["evaluator-list"].getSnapshot().context.open;
   try {
     await until(() => list().length === 3);
+    assert.equal(open(), null);
     actors["evaluator-list"].send({ type: "_pick", id: OLD });
     await until(() => draft()?.id === OLD);
+    await until(() => open() === OLD);
     actors["evaluator-editor"].send({ type: "_edit", patch: { name: "Book's old, edited" } });
     actors["evaluator-editor"].send({ type: "_blur" });
 
     actors.books.send({ type: "book.selected", id: JOURNAL });
     await until(() => draft()?.book === JOURNAL);
     assert.equal(draft().id, JOURNAL_EVAL, "the Journal's own, though one marked Show in journal is newer");
+    await until(() => open() === JOURNAL_EVAL);
 
     actors.books.send({ type: "book.selected", id: BOOK });
     await until(() => draft()?.book === BOOK);
     assert.equal(draft().id, OLD, "the one edited last, though it had no time before");
+    await until(() => open() === OLD);
 
     actors.books.send({ type: "book.selected", id: BOOK2 });
     await until(() => draft()?.book === BOOK2);
     assert.deepEqual([draft().name, editor().evaluators.some((r) => r.id === draft().id)], ["", false], "a New evaluator");
+    await until(() => open() === draft().id);
   } finally {
     unwire();
   }
@@ -163,6 +170,23 @@ test("pinned, the list and the open evaluator stay on their book while the stage
     await until(() => list().book === JOURNAL);
     await until(() => draft()?.book === JOURNAL);
     assert.equal(draft().name, "Journal's", "unpinned, the editor follows to the Journal's newest");
+    await until(() => list().open === JOURNAL_EVAL);
+  } finally {
+    unwire();
+  }
+});
+
+test("after a reload the evaluator the editor reopens is the row the list marks", async () => {
+  const { actors, unwire } = await wire(["journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
+    journal: { store: store({ days: new Map() }), now: () => NOW },
+    books: { store: store({ rows: new Map([[BOOK, book]]) }, new Map([["open", { id: BOOK, at: 1 }]])), now: () => NOW, api: null, revoke: () => {} },
+    evaluators: { store: store({ rows: new Map([[BOOK_EVAL, evaluator(BOOK_EVAL, BOOK, "Book's")]]) }) },
+    "evaluator-list": { mint, following: true },
+    "evaluator-editor": { mint, following: true, throttleMs: 50, open: { id: BOOK_EVAL, book: BOOK } },
+  });
+  try {
+    await until(() => actors["evaluator-editor"].getSnapshot().context.draft?.id === BOOK_EVAL);
+    await until(() => actors["evaluator-list"].getSnapshot().context.open === BOOK_EVAL);
   } finally {
     unwire();
   }

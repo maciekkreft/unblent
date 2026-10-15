@@ -2,13 +2,15 @@ import { setup, assign, emit, fromPromise } from "xstate";
 
 // The view component that lists the open book's evaluators (6.4), the list of the
 // Evaluators tab's list-then-item. It owns only UI state — the book it shows, the rows,
-// the row last opened, and a draft id for New evaluator — and points at three facts: it
+// the row the editor shows, and a draft id for New evaluator — and points at three facts: it
 // asks subject: read for what is open and follows subject.changed, asks evaluators: list
 // for the open book and follows evaluator.changed / evaluator.deleted, asks books: list
 // for which book is the journal and what each book is called and follows book.changed /
 // book.deleted, and asks settings: read for the "Vim keys" preference (12) and follows
 // settings.changed (4.3, fourth rule), and asks pins: read for the book the tab is pinned
-// to and follows pins.changed. A pick and a tick leave as gestures (4.3, fifth rule). The
+// to and follows pins.changed. Which row is open it learns only from the editor's
+// evaluator.opened, never from its own pick, because the editor also opens evaluators by
+// itself (another book, a reload, a pin) and one source keeps the mark right. A pick and a tick leave as gestures (4.3, fifth rule). The
 // ask and the id minting arrive through input, so this stays importable in Node.
 //
 // New evaluator is always the first row and always names a minted id no evaluator has
@@ -133,9 +135,10 @@ const without = (map, id) => {
 // A different book, or none, starts the Run box afresh.
 const fresh = { text: "", results: {}, asked: [], error: null, running: false };
 
+// `open` stays: the editor still shows a deleted evaluator until it opens another, and
+// an undone delete brings the row back marked.
 const gone = (context, id) => ({
   evaluators: context.evaluators.filter((e) => e.id !== id),
-  open: context.open === id ? null : context.open,
   results: without(context.results, id),
   asked: context.asked.filter((e) => e.id !== id),
 });
@@ -193,12 +196,12 @@ const follow = (next) => [
     target: ".loading",
     actions: assign(({ context, event }) => {
       const n = next({ context, event });
-      return { ...fresh, ...n, book: wanted(n), evaluators: [], open: null };
+      return { ...fresh, ...n, book: wanted(n), evaluators: [] };
     }),
   },
   {
     target: ".idle",
-    actions: assign(({ context, event }) => ({ ...fresh, ...next({ context, event }), book: null, evaluators: [], open: null })),
+    actions: assign(({ context, event }) => ({ ...fresh, ...next({ context, event }), book: null, evaluators: [] })),
   },
 ];
 
@@ -248,7 +251,9 @@ export const machine = setup({
       "of them and the text. A failed run says why in one sentence. With `subject`, a line at " +
       "the top names the book shown. While the editor's pin is on, as `pins` says, the list " +
       "stays on that book when another comes on the stage, and unpinning brings the stage's " +
-      "book back at once.",
+      "book back at once. The row of the evaluator the editor shows is marked, whether the user " +
+      "picked it or the editor opened it by itself on another book, after a reload or a pin, " +
+      "and the keyboard starts from it.",
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject"],
@@ -268,7 +273,7 @@ export const machine = setup({
     // The journal's book id, null until books answers, and each book's title by id.
     journal: null,
     titles: {},
-    // The row last opened; UI state, so the list marks what the editor was opened on.
+    // The evaluator the editor shows, learned from evaluator.opened; the row marked.
     open: null,
     draft: input.mint(),
     vimKeys: false,
@@ -363,7 +368,6 @@ export const machine = setup({
         _pick: {
           guard: ({ context, event }) => event.id === context.draft || shownHas(context, event.id),
           actions: [
-            assign(({ event }) => ({ open: event.id })),
             emit(({ context, event }) => ({ type: "evaluator.selected", id: event.id, book: context.book })),
           ],
         },
@@ -378,6 +382,7 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "evaluator.opened": { actions: assign({ open: ({ event }) => event.id }) },
     "subject.changed": follow(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),
     // `pins`' news (4.3, fourth rule): the tab's book pinned, or unpinned.
     "pins.changed": [

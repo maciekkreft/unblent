@@ -10,6 +10,7 @@ import { machine, duplicateNames } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
+import opened from "./events/evaluator.opened.json" with { type: "json" };
 
 // The multi-line fields are CodeMirror boxes, one editor each, so they take Vim's keys
 // when the "Vim keys" preference (12) is on: Vim sits in a compartment turned on and off
@@ -91,7 +92,7 @@ class ActorController {
         remember,
         following: this.host.subject,
       },
-      events: { "evaluator.saved": saved, "removal.started": started, "pin.toggled": pinToggled },
+      events: { "evaluator.saved": saved, "removal.started": started, "pin.toggled": pinToggled, "evaluator.opened": opened },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

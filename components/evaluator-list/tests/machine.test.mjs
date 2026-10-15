@@ -242,7 +242,11 @@ test("a pick of a shown evaluator or New evaluator emits evaluator.selected with
     { type: "evaluator.selected", id: id(1), book: A },
     { type: "evaluator.selected", id: D1, book: A },
   ]);
-  assert.equal(ctx().open, D1);
+  assert.equal(ctx().open, null, "the mark waits for the editor");
+  actor.send({ type: "evaluator.opened", id: id(1) });
+  assert.equal(ctx().open, id(1));
+  actor.send({ type: "evaluator.opened", id: null });
+  assert.equal(ctx().open, null);
   valid(emitted);
 });
 
