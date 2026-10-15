@@ -4,8 +4,7 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // `evaluators` is: local-first, cached in the browser, numbering versions itself while
 // signed out and syncing to the per-user server when signed in. The last write wins and
 // a delete is a tombstone that always wins (5). The view where the user acted emits
-// choice-point.saved and removal.started; notice-stack emits removal.undone or
-// removal.settled when the undo window ends (4.3, fifth rule). Everything with a side
+// choice-point.saved (4.3, fifth rule). Everything with a side
 // effect (the store, the network, the ask) arrives through input, so this stays a pure
 // definition importable in Node.
 
@@ -26,8 +25,7 @@ const createdAt = (id) => new Date([...id.slice(0, 10)].reduce((ms, c) => ms * 3
 // --- Records --------------------------------------------------------------------------
 
 // One fixed shape and key order, so two copies of the same content compare equal as
-// text. `removing` marks a choice point in this tab's undo window; it is kept in the
-// cache (so a leftover mark settles at the next load) but never sent to the server.
+// text.
 const record = (r) => ({
   id: r.id,
   day: r.day,
@@ -36,12 +34,10 @@ const record = (r) => ({
   away: str(r.away),
   towards: str(r.towards),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
-  removing: r.removing === true,
   ...(r.deleted === true ? { deleted: true } : {}),
 });
 
-// What a write carries, and what decides whether a change is a new version. The mark
-// belongs to this tab's undo window, so setting or clearing it is not a change.
+// What a write carries, and what decides whether a change is a new version.
 const content = (r) => ({ day: r.day, situation: r.situation, thoughts: r.thoughts, away: r.away, towards: r.towards });
 const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b));
 
@@ -49,8 +45,10 @@ const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b))
 const visible = (r) => r && !r.deleted;
 
 const announce = (context, r) => {
-  const { deleted, version, removing, ...rest } = r;
-  return { ...rest, createdAt: createdAt(r.id), version, pending: context.outbox.has(r.id), removing };
+  const { deleted, version, ...rest } = r;
+  // `removing` stays in the announced shape because a contract only grows (7.1); no
+  // choice point has an undo window, so it is always false.
+  return { ...rest, createdAt: createdAt(r.id), version, pending: context.outbox.has(r.id), removing: false };
 };
 
 function replyList(context, day, reply) {
@@ -66,7 +64,7 @@ function replyList(context, day, reply) {
 // The one place a changed record is kept, stored and announced. A change of content is
 // a new version: signed out it is minted here; signed in the record keeps the version
 // it holds, is queued in the outbox (coalesced by id, keeping the first unsynced base)
-// and a drain is asked for. A change of the mark only is stored and announced, not synced.
+// and a drain is asked for.
 function commit(context, enqueue, next) {
   const current = context.choicePoints.get(next.id);
   const changed = !current || !same(current, next) || Boolean(next.deleted) !== Boolean(current.deleted);
@@ -93,7 +91,7 @@ const outboxRow = (r, baseVersion) => ({ id: r.id, ...content(r), baseVersion, .
 
 // A new id adds a choice point to its day, unless all four texts are empty: the view may
 // save a sheet the user opened and left blank, and that is not a choice point yet. A save
-// to one already kept changes its texts and keeps its day and its mark, except that four
+// to one already kept changes its texts and keeps its day, except that four
 // empty texts remove it: the view has no Delete, and emptying the boxes is how the user
 // says it is gone. Its tombstone keeps the texts it had, so it could still be restored.
 // A deleted id stays deleted (5).
@@ -106,56 +104,27 @@ function applySave(context, event, enqueue) {
     if (!isDay(event.day) || TEXTS.every((k) => texts[k] === "")) return;
     return commit(context, enqueue, record({ id: event.id, day: event.day, ...texts }));
   }
-  if (TEXTS.every((k) => texts[k] === "")) return commit(context, enqueue, { ...was, removing: false, deleted: true });
+  if (TEXTS.every((k) => texts[k] === "")) return commit(context, enqueue, { ...was, deleted: true });
   const next = { ...was, ...texts };
   if (same(was, next)) return;
   commit(context, enqueue, next);
-}
-
-// An id that is not one of the choice points' own matches nothing, so other facts'
-// removals pass by.
-function applyMark(context, { kind, id }, removing, enqueue) {
-  if (kind !== "choice-point") return;
-  const r = context.choicePoints.get(id);
-  if (!visible(r) || r.removing === removing) return;
-  commit(context, enqueue, { ...r, removing });
-}
-
-// Only a choice point still marked settles: one that was undone stays.
-function applySettle(context, { kind, id }, enqueue) {
-  if (kind !== "choice-point") return;
-  const r = context.choicePoints.get(id);
-  if (!visible(r) || !r.removing) return;
-  commit(context, enqueue, { ...r, removing: false, deleted: true });
-}
-
-// At load no tab can undo anything any more, because the tab that showed the undo
-// notice is gone, so every leftover mark settles.
-function settleAll(context, enqueue) {
-  for (const r of [...context.choicePoints.values()].filter(visible)) {
-    if (r.removing) applySettle(context, { kind: "choice-point", id: r.id }, enqueue);
-  }
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.payload.day, message.reply);
   else if (message.type === "choice-point.saved") applySave(context, message, enqueue);
-  else if (message.type === "removal.started") applyMark(context, message, true, enqueue);
-  else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
-  else if (message.type === "removal.settled") applySettle(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "choice-point.saved", "removal.started", "removal.undone", "removal.settled"].map((t) => [t, { actions: queue }]),
+  ["list?", "choice-point.saved"].map((t) => [t, { actions: queue }]),
 );
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
 const SYNC_IDLE_MS = 2000;
 
 const ready = (context, enqueue) => {
-  settleAll(context, enqueue);
   for (const message of context.queued) flush(context, message, enqueue);
   enqueue.assign({ queued: [] });
   if (context.userId) enqueue.raise({ type: "_sync", pull: true });
@@ -222,8 +191,8 @@ export const machine = setup({
       "signed out, numbering versions itself, and syncs to the account when signed in " +
       "(section 5); signing in uploads every choice point with its history. The last write " +
       "wins, so two devices never conflict, and a deleted choice point is kept as a tombstone, " +
-      "which always wins. A removed choice point is marked while its undo window runs and goes " +
-      "only when the window ends; a mark left by a closed tab ends at the next load.",
+      "which always wins. Every choice point is announced with `removing` false, because " +
+      "none has an undo window; the field stays because a contract only grows.",
     kind: "fact",
     shape: "replicated",
     emits: ["choice-point.changed", "choice-point.deleted"],
@@ -268,7 +237,7 @@ export const machine = setup({
       },
       on: QUEUED,
     },
-    // The store is loaded; confirm who is signed in before settling and flushing, so a
+    // The store is loaded; confirm who is signed in before flushing, so a
     // change is made with the right signed-out or signed-in rule.
     checkingSession: {
       invoke: {
@@ -294,9 +263,6 @@ export const machine = setup({
       on: {
         "list?": { actions: ({ context, event }) => replyList(context, event.payload.day, event.reply) },
         "choice-point.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
-        "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, true, enqueue)) },
-        "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
-        "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => applySettle(context, event, enqueue)) },
         // Signing in enqueues the whole cache, tombstones included, so what was made
         // signed out becomes the account's (5); a different user resets the cursor.
         "session.changed": {
@@ -374,11 +340,11 @@ export const machine = setup({
   },
 });
 
-// Adopt one record the server holds: its content and version, with this tab's mark kept.
+// Adopt one record the server holds: its content and version.
 // Announced as a change or, for a tombstone of a choice point this tab was showing, as gone.
 function adopt(context, server, enqueue) {
   const held = context.choicePoints.get(server.id);
-  const r = record({ ...server, removing: !server.deleted && held?.removing });
+  const r = record(server);
   context.choicePoints.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
   if (r.deleted) {

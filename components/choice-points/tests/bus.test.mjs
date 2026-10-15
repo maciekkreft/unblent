@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 // The kit (10): choice-points, real, on the real bus with its real schemas. A stand-in
-// mounted with choice-point-cards' own event schemas saves, removes and asks the way that
+// mounted with choice-point-cards' own event schema saves and asks the way that
 // view does, so each step is sent by hand.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
@@ -32,7 +32,7 @@ const cardsSchema = (name) => JSON.parse(readFileSync(new URL(`../../choice-poin
 function standIn(heard) {
   const machine = setup({}).createMachine({
     id: "test-cards",
-    meta: { kind: "view", emits: ["choice-point.saved", "removal.started"], asks: ["choice-points: list"], attributes: [] },
+    meta: { kind: "view", emits: ["choice-point.saved"], asks: ["choice-points: list"], attributes: [] },
     on: {
       go: { actions: emit(({ event }) => event.body) },
       "choice-point.changed": { actions: ({ event }) => heard.push(event) },
@@ -40,12 +40,12 @@ function standIn(heard) {
     },
   });
   const actor = mount(machine, {
-    events: { "choice-point.saved": cardsSchema("choice-point.saved"), "removal.started": cardsSchema("removal.started") },
+    events: { "choice-point.saved": cardsSchema("choice-point.saved") },
   });
   return { actor, list: (payload) => ask(machine, "choice-points", "list", payload) };
 }
 
-test("the view's save and removal reach choice-points, and its list answers what was saved", async () => {
+test("the view's saves reach choice-points, and its list answers what was saved", async () => {
   const store = memory();
   const { actors, unwire } = await wire(["choice-points"], { "choice-points": { store } });
   const heard = [];
@@ -60,9 +60,9 @@ test("the view's save and removal reach choice-points, and its list answers what
     assert.deepEqual(reply.choicePoints.map((c) => c.id), [ID]);
     assert.deepEqual((await cards.list({})).choicePoints.length, 1);
 
-    cards.actor.send({ type: "go", body: { type: "removal.started", kind: "choice-point", id: ID, name: "Meeting ran late" } });
-    await until(() => heard.at(-1).choicePoint.removing === true);
-    assert.equal(store.rows.get(ID).removing, true);
+    cards.actor.send({ type: "go", body: { ...body, situation: "", towards: "" } });
+    await until(() => heard.at(-1).type === "choice-point.deleted");
+    assert.equal(store.rows.get(ID).deleted, true);
   } finally {
     unmount(cards.actor);
     unwire();

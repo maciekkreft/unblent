@@ -8,7 +8,6 @@ import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
-import started from "./events/removal.started.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page
 // (the product page nests it), so it scrolls with the day it is about.
@@ -221,7 +220,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
-      events: { "choice-point.saved": saved, "removal.started": started },
+      events: { "choice-point.saved": saved },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -854,9 +853,8 @@ class ChoicePointCards extends LitElement {
     const { choicePoints, drafts } = context;
     // A new choice point joins the list where it will stand once kept, last, so the sheet
     // keeps its place (and the keyboard) when the fact first announces it.
-    const shown = choicePoints.filter((r) => !r.removing);
     this.#wanted.clear();
-    const items = [...shown, ...drafts.filter((d) => !shown.some((r) => r.id === d.id))];
+    const items = [...choicePoints, ...drafts.filter((d) => !choicePoints.some((r) => r.id === d.id))];
     const draftOf = (r) => drafts.find((d) => d.id === r.id);
     // An earlier day without choice points has nothing to show or add.
     if (!items.length && !failed && !writable(context)) return nothing;

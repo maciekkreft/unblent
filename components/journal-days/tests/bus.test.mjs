@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // The kit (10): journal-days and choice-points, both real, on the real bus with their
 // real schemas. journal and session are not mounted, so journal-days' asks of them are
-// answered by hand; a stand-in saves and removes the way choice-point-cards does.
+// answered by hand; a stand-in saves the way choice-point-cards does.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
 const { mount, unmount, ask } = await import("bus");
@@ -32,25 +32,26 @@ const answers = {
   session: { userId: null, registrationOpen: true },
 };
 
-test("a saved choice point is counted on its day, not while it is being removed", async () => {
+test("a saved choice point is counted on its day, and not once its boxes are emptied", async () => {
   const days = { ask: (target, name, payload) => (answers[target] ? Promise.resolve(answers[target]) : ask(machine, target, name, payload)) };
   const { actors, unwire } = await wire(["choice-points", "journal-days"], { "choice-points": { store: memory() }, "journal-days": days });
   const cards = mount(
     setup({}).createMachine({
       id: "test-cards",
-      meta: { kind: "view", emits: ["choice-point.saved", "removal.started"], asks: [], attributes: [] },
+      meta: { kind: "view", emits: ["choice-point.saved"], asks: [], attributes: [] },
       on: { go: { actions: emit(({ event }) => event.body) } },
     }),
-    { events: { "choice-point.saved": cardsSchema("choice-point.saved"), "removal.started": cardsSchema("removal.started") } },
+    { events: { "choice-point.saved": cardsSchema("choice-point.saved") } },
   );
   const held = () => actors["journal-days"].getSnapshot().context.choicePoints;
   try {
     await until(() => actors["choice-points"].getSnapshot().matches("ready") && actors["journal-days"].getSnapshot().matches("ready"));
-    cards.send({ type: "go", body: { type: "choice-point.saved", id: ID, day: DAY, situation: "Meeting ran late", thoughts: "", away: "", towards: "" } });
+    const body = { type: "choice-point.saved", id: ID, day: DAY, situation: "Meeting ran late", thoughts: "", away: "", towards: "" };
+    cards.send({ type: "go", body });
     await until(() => held()[ID]);
     assert.deepEqual(held()[ID], { day: DAY, version: 1, removing: false });
-    cards.send({ type: "go", body: { type: "removal.started", kind: "choice-point", id: ID, name: "Meeting ran late" } });
-    await until(() => held()[ID].removing === true);
+    cards.send({ type: "go", body: { ...body, situation: "" } });
+    await until(() => !held()[ID]);
   } finally {
     unmount(cards);
     unwire();

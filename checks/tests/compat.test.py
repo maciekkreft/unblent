@@ -141,8 +141,8 @@ class Removal(unittest.TestCase):
 
     removal = staticmethod(check.removal_breaks)
 
-    def parties(self, consumers=()):
-        return {"events": {"x.done": {"emitters": set(), "consumers": set(consumers)}},
+    def parties(self, consumers=(), emitters=("a",)):
+        return {"events": {"x.done": {"emitters": set(emitters), "consumers": set(consumers)}},
                 "queries": {}, "commands": {}}
 
     def test_event_nobody_consumes_may_go(self):
@@ -153,6 +153,15 @@ class Removal(unittest.TestCase):
 
     def test_event_still_consumed_breaks(self):
         self.assertTrue(self.removal("a", "events", "x.done", {"a", "b"}, self.parties(["b"])))
+
+    def test_event_its_component_stopped_emitting_may_go(self):
+        # Others still emit and consume it; their own copies stay and are checked.
+        self.assertFalse(self.removal("a", "events", "x.done", {"a", "b", "c"},
+                                      self.parties(["b"], emitters=["c"])))
+
+    def test_event_its_component_still_emits_breaks(self):
+        self.assertTrue(self.removal("a", "events", "x.done", {"a", "b", "c"},
+                                     self.parties(["b"], emitters=["a", "c"])))
 
     def test_query_or_command_breaks_while_component_remains(self):
         self.assertTrue(self.removal("a", "queries", "list", {"a"}, self.parties()))

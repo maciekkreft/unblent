@@ -598,13 +598,17 @@ def _affected_line(kind: str, name: str, parties: dict) -> str:
 
 def removal_breaks(comp: str, kind: str, name: str, known: set, parties: dict) -> bool:
     """Section 7.1, 11.2: whether deleting a schema file can break anyone. Deleting a
-    component deletes its contracts with it. Otherwise only an event's schema may go,
-    and only while no component of the working tree consumes the event, because then
-    nothing reads it."""
+    component deletes its contracts with it. Otherwise only an event's schema may go:
+    while no component of the working tree consumes the event, because then nothing
+    reads it, or when the component no longer declares the event in its emits, because
+    a component hands its copy to the bus only for what it emits; the other emitters'
+    own copies stay and are compared as usual."""
     if comp not in known:
         return False
-    if kind == "events" and not parties["events"].get(name, {}).get("consumers"):
-        return False
+    if kind == "events":
+        p = parties["events"].get(name, {})
+        if not p.get("consumers") or comp not in p.get("emitters", ()):
+            return False
     return True
 
 
@@ -613,7 +617,8 @@ def check_schema_compat(manifests: dict) -> None:
     commands/ schema is compared against HEAD; a removed or renamed field, a new
     required field, a narrowed type, a lost enum/const value, a dropped oneOf branch,
     additionalProperties closing, or a schema deleted while its component remains
-    (except an event's that no component consumes), each fails, naming the path inside the schema and the components affected."""
+    (except an event's that no component consumes, or one its component no longer
+    emits), each fails, naming the path inside the schema and the components affected."""
     parties = _contract_parties(manifests)
     known = {Path(p).parent.name for p in manifests}
     for status, path in _schema_changes():

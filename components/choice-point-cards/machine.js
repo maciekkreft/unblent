@@ -74,7 +74,7 @@ const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 // The day's choice points after one change from the fact. Another day's change passes
 // by; an older version than the one held is stale (4.3), and an equal one may carry a
-// new removal mark, so it is taken.
+// new pending flag, so it is taken.
 const changedList = (context, event) => {
   if (event.type === "choice-point.deleted") return context.choicePoints.filter((r) => r.id !== event.id);
   const r = event.choicePoint;
@@ -85,13 +85,13 @@ const changedList = (context, event) => {
 };
 
 // Each open sheet follows a change only while nothing typed in it waits to be saved, so a
-// change never overwrites what is on screen. One that is gone or being removed closes.
+// change never overwrites what is on screen. One that is gone closes.
 const follow = enqueueActions(({ context, event, enqueue }) => {
   const choicePoints = changedList(context, event);
   let { drafts, dirty } = context;
   for (const draft of context.drafts) {
     const record = choicePoints.find((r) => r.id === draft.id);
-    if ((!record && held(context, draft.id)) || record?.removing) {
+    if (!record && held(context, draft.id)) {
       drafts = without(drafts, draft.id);
       dirty = without(dirty, draft.id);
     } else if (record && !dirty.includes(draft.id)) drafts = drafts.map((d) => (d.id === draft.id ? draftOf(record) : d));
@@ -313,9 +313,7 @@ export const machine = setup({
       "empty. A folded card shows a red warning beside the situation, away or towards line " +
       "when a line there is not the expected answer.",
     kind: "view",
-    // removal.started is no longer sent; it stays declared only because 11.2 refuses
-    // removing one owner's schema of an event that others still emit and consume.
-    emits: ["choice-point.saved", "removal.started"],
+    emits: ["choice-point.saved"],
     asks: ["choice-points: list", "settings: read", "choice-point-checks: read", "evaluators: list"],
     attributes: [],
   },
@@ -460,7 +458,7 @@ export const machine = setup({
         _open: {
           guard: ({ context, event }) => {
             const r = held(context, event.id);
-            return Boolean(r) && !r.removing && !opened(context, event);
+            return Boolean(r) && !opened(context, event);
           },
           actions: assign(({ context, event }) => ({ drafts: [...context.drafts, draftOf(held(context, event.id))] })),
         },
