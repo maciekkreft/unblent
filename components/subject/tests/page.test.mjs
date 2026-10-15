@@ -740,10 +740,13 @@ for (const engine of ENGINES) {
       await until(async () => (await serverNotes(page)).some((n) => n.deleted && (n.about ?? []).some((l) => l.place)));
 
       // A reload keeps it gone: the tombstone is pulled, and no mark is painted.
+      const pulled = page.waitForResponse((res) => res.url().includes("/api/notes?since="));
       await page.reload({ waitUntil: "domcontentloaded" });
       await ready(page);
       await readerHasText(page);
-      await new Promise((r) => setTimeout(r, 400));
+      // What the pull brought has been announced and painted.
+      await pulled;
+      await page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
       assert.equal((await marks(page)).length, 0, "the removed highlight does not come back");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
