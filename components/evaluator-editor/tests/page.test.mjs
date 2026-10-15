@@ -15,7 +15,10 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 const JOURNAL = "00000000000000000000000JRN";
 const settings = (vimKeys) => JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
-const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+// Until the page has run what a press or a key set going: the desk's look a moment
+// after a focusout (a timeout), the render that follows, and one frame painted.
+const settle = (page) =>
+  page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r))))));
 
 const inEditor = (page, fn, arg) =>
   page.evaluate(
@@ -26,12 +29,11 @@ const optionCount = (page) => inEditor(page, (root) => root.querySelectorAll(".o
 // Where the editor is scrolled: its own scroller and the document, whichever moves.
 const scrolled = (page) => inEditor(page, (root) => [root.querySelector(".page").scrollTop, document.scrollingElement.scrollTop]);
 
-// A press at the pace a person presses: over, down, up.
+// A press as a person presses: over, down, a frame for the page to react, up.
 async function press(page, x, y) {
   await page.mouse.move(x, y);
-  await pause(60);
   await page.mouse.down();
-  await pause(100);
+  await settle(page);
   await page.mouse.up();
 }
 
@@ -108,19 +110,22 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await context.addInitScript((v) => localStorage.setItem("settings", v), settings(vimKeys));
       const page = await context.newPage();
       const problems = watch(page);
+      // Each save the editor makes, read off the trace's console transcript (10).
+      const saves = { count: 0 };
+      page.on("console", (msg) => / event evaluator\.saved /.test(msg.text()) && saves.count++);
       await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
       await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
       await page.click("evaluator-list .row.new .open");
       await page.fill("evaluator-editor input.title", "Goal or value");
       await page.locator("evaluator-editor").getByRole("button", { name: "Add a question" }).click();
       await until(async () => (await inEditor(page, (root) => root.querySelectorAll(".question").length)) === 2);
-      return { context, page, problems, second: page.locator("evaluator-editor .question").nth(1) };
+      return { context, page, problems, saves, second: page.locator("evaluator-editor .question").nth(1) };
     };
     const at = async (page, locator) => {
       await locator.scrollIntoViewIfNeeded();
       const box = await locator.boundingBox();
       await press(page, box.x + box.width / 2, box.y + box.height / 2);
-      await pause(250);
+      await settle(page);
     };
 
     // A press on a choice drops the focus on the page when the browser does not focus
@@ -129,19 +134,23 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test("with Vim keys on, switching the second question's kind keeps the keyboard in that question", async () => {
       const { context, page, problems, second } = await twoQuestions(true);
       try {
-        await at(page, second.getByText("Pick one"));
-        await at(page, second.locator(".option input").first());
-        await page.keyboard.type("Goal", { delay: 30 });
-        await at(page, second.locator(".option input").nth(1));
+        // The second question as the user left it: Pick one, its first option named, the
+        // keyboard in its second option. Only the presses after are what is tested.
+        await inEditor(page, (root) => root.querySelectorAll(".question")[1].querySelector('input[value="pick"]').click());
+        await until(async () => (await second.locator(".option input").count()) === 2);
+        await inEditor(page, (root) => {
+          const [first, next] = root.querySelectorAll(".question")[1].querySelectorAll(".option input");
+          first.value = "Goal";
+          first.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          next.focus();
+        });
         assert.equal(await focused(page), "2:option");
         await at(page, second.getByText("Yes / no"));
-        await pause(300);
         assert.notEqual(await focused(page), "1:name", "the name did not take the keyboard");
         assert.match((await focused(page)) ?? "", /^2:/, "the keyboard stays in the second question");
         const choice = await second.getByText("Yes / no").boundingBox();
         assert.ok(choice.y >= 0 && choice.y + choice.height <= 600, "the choice pressed is still in view");
         await at(page, second.getByText("Pick one"));
-        await pause(300);
         assert.match((await focused(page)) ?? "", /^2:/);
         assert.equal(await inEditor(page, (root) => root.querySelectorAll(".question")[1].querySelector(".option input").value), "Goal");
         assert.deepEqual(problems, []);
@@ -153,20 +162,28 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // The boxes are editors drawn inside the form: neither the save a moment into typing
     // nor the save when a box loses focus may take the keyboard out of the box in use.
     test("with Vim keys on, typing in the second question's box keeps the keyboard there through both saves", async () => {
-      const { context, page, problems, second } = await twoQuestions(true);
+      const { context, page, problems, saves, second } = await twoQuestions(true);
+      // The next save, and the render of the fact's answer to it.
+      const saved = async () => {
+        const seen = saves.count;
+        await until(() => saves.count > seen);
+        await settle(page);
+      };
       try {
         // Add a question left the keyboard in its box, in Vim's insert mode; a press
         // inside the box keeps it so.
         await at(page, second.locator('[data-field="text"]'));
-        await page.keyboard.type("Is it", { delay: 20 });
-        await pause(400);
-        await page.keyboard.type(" a goal?", { delay: 20 });
-        await pause(400);
+        let save = saved();
+        await page.keyboard.type("Is it");
+        await save;
+        save = saved();
+        await page.keyboard.type(" a goal?");
+        await save;
         assert.equal(await focused(page), "2:text");
         await page.keyboard.press("Escape");
         assert.equal(await focused(page), "2:text", "Escape leaves insert mode and stays in the box");
         await page.keyboard.press("Tab");
-        await pause(400);
+        await settle(page);
         assert.equal(await focused(page), "2:yes");
         const text = () => inEditor(page, (root) => root.querySelectorAll('.question [data-field="text"] .cm-content')[1]?.textContent);
         assert.equal(await text(), "Is it a goal?");
