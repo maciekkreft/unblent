@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -39,9 +39,18 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  describe(`component-list in ${engine.name}`, { timeout: 60000 }, () => {
+  let browser;
+  before(async () => {
+    browser = await engine.launch();
+  }, { timeout: 30000 });
+  after(async () => {
+    await browser?.close();
+  }, { timeout: 15000 });
+
   test(`the components page lists every component in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    const page = await browser.newPage();
+    const context = await browser.newContext();
+    const page = await context.newPage();
     page.setDefaultTimeout(4000);
     const problems = [];
     page.on("console", (msg) => {
@@ -56,7 +65,7 @@ for (const engine of ENGINES) {
     });
 
     try {
-      await page.goto(`${BASE_URL}/workshop/design/components`);
+      await page.goto(`${BASE_URL}/workshop/design/components`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         (n) => document.querySelector("component-list")?.shadowRoot?.querySelectorAll(".card").length === n,
         COMPONENT_DIRS.length,
@@ -89,13 +98,13 @@ for (const engine of ENGINES) {
       assert.match(list, /asks catalog: list/);
 
       mkdirSync(SCREENSHOTS, { recursive: true });
-      await page.screenshot({
-        path: resolve(SCREENSHOTS, `components-${engine.name}.png`),
-        fullPage: true,
-      });
+      // The first screen only: the whole page is many screens long, and capturing it
+      // took most of this test's budget.
+      await page.screenshot({ path: resolve(SCREENSHOTS, `components-${engine.name}.png`) });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
+  });
   });
 }
