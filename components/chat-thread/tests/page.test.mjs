@@ -120,8 +120,11 @@ async function openProduct(browser, engineName, name) {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await signedIn(context, forge(userId));
-  assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
-  const imp = await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE });
+  const [echo, imp] = await Promise.all([
+    context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } }),
+    context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE }),
+  ]);
+  assert.ok(echo.ok(), "the account is set to Echo");
   assert.ok(imp.ok(), "the sample book is imported");
   assert.ok((await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}/opened`)).ok(), "the sample book is the open one");
   const page = await context.newPage();
@@ -491,13 +494,12 @@ for (const engine of ENGINES) {
         await send(page, "about this book");
         await until(async () => (await lastAnswer(page)).includes("about this book"));
         await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await inputReady(page);
-        // With the book as subject again, conversation-list scopes to the book's chats; the
-        // chat's presence there proves it was linked to the book (about), not left unlinked.
-        await until(async () => await bookIsSubject(page));
-        await until(async () => (await chatTitles(page)).includes("about this book"));
-        assert.ok((await chatTitles(page)).includes("about this book"), "the new chat is listed under the open book after a reload");
+        // The account's copy names the book (about). That a chat about the open book is the
+        // one listed under it is decided in conversation-list's Node tests.
+        const { conversations } = await (await context.request.get(`${BASE_URL}/api/conversations`)).json();
+        const chat = conversations.find((c) => c.title === "about this book");
+        assert.ok(chat, "the new chat is saved to the account");
+        assert.ok(chat.about.some((link) => link.kind === "book" && link.id === BOOK_ID), "the new chat is linked to the open book");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();
