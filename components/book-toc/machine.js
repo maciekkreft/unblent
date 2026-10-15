@@ -22,8 +22,17 @@ const pickToc = (b) => ({
   id: b.id,
   toc: b.toc,
   chapter: b.position.chapter,
+  written: b.written === true,
   days: b.written === true ? (b.chapters ?? []).map((c) => c.day ?? null) : null,
 });
+
+// The written book's saved position never follows the reader: books keeps it on the
+// last day, so it moves only when a day is added, as when yesterday's hour of writing
+// runs out and today's empty page appears. The journal's page keeps showing the day
+// picked here until another is picked or the journal is opened again, so the pick
+// stays marked as long, even a pick of the chapter already current, and a position
+// that moves never ends it.
+const keepsPick = (book) => book.written;
 
 // What a count needs of a choice point: its day, and its version, so an event older
 // than what is held is ignored (4.3, fourth rule).
@@ -96,7 +105,9 @@ export const machine = setup({
     description:
       "Shows the open book's table of contents and lets the user jump to a chapter. The current " +
       "chapter is marked: the one just clicked, until the book's saved position moves, and then " +
-      "the position. A part of the book the contents does not list, such as a dedication page, " +
+      "the position. In the journal, whose saved position is always its last day, the day " +
+      "clicked stays marked until another is clicked or the journal is opened again, as the " +
+      "journal's page keeps showing it. A part of the book the contents does not list, such as a dedication page, " +
       "counts as part of the entry before it. While the book is the journal, a day with choice " +
       "points says how many under its date, \"· 1 choice point\" or \"· 3 choice points\"; one " +
       "being deleted is not counted while its Undo is offered, and counts again after an undo. " +
@@ -175,7 +186,8 @@ export const machine = setup({
     "book.changed": {
       guard: "ours",
       actions: assign({
-        jump: ({ context, event }) => (event.position.chapter !== context.book.chapter ? null : context.jump),
+        jump: ({ context, event }) =>
+          event.position.chapter !== context.book.chapter && !keepsPick(context.book) ? null : context.jump,
         book: ({ event }) => pickToc(event),
       }),
     },
@@ -192,8 +204,9 @@ export const machine = setup({
     _select: {
       guard: ({ context, event }) => Boolean(context.book) && context.book.id === event.id,
       actions: enqueueActions(({ context, event, enqueue }) => {
-        // The already-current chapter has nothing to confirm, so it holds no jump.
-        enqueue.assign({ jump: event.chapter === context.book.chapter ? null : event.chapter });
+        // The already-current chapter has nothing to confirm, so it holds no jump, unless
+        // the position will not follow the pick (keepsPick).
+        enqueue.assign({ jump: event.chapter === context.book.chapter && !keepsPick(context.book) ? null : event.chapter });
         enqueue.emit({ type: "chapter.selected", id: event.id, chapter: event.chapter });
       }),
     },

@@ -232,3 +232,51 @@ test("a choice point older than the one held is ignored", async () => {
 test("counts skips choice points being removed", () => {
   assert.deepEqual(counts({ a: { day: DAY1, removing: false }, b: { day: DAY1, removing: true } }), { [DAY1]: 1 });
 });
+
+// When yesterday's hour of writing runs out, books adds today's empty page as a new last
+// chapter and moves the journal's position onto it; the journal's page keeps showing the
+// day picked here, so the contents must keep marking it.
+const DAY3 = "2026-10-14";
+const grown = () =>
+  changed(
+    journal({
+      chapters: [{ title: "Sunday 11 October", day: DAY1 }, { title: "Tuesday 13 October", day: DAY2 }, { title: "Wednesday 14 October", day: DAY3 }],
+      toc: [{ title: "Wednesday 14 October", chapter: 2 }, { title: "Tuesday 13 October", chapter: 1 }, { title: "Sunday 11 October", chapter: 0 }],
+      position: { chapter: 2, block: 0 },
+      version: 2,
+    }),
+  );
+const mark = (actor) => markedChapter(ctx(actor).book.toc, ctx(actor).jump ?? ctx(actor).book.chapter);
+
+test("in the journal, the picked day stays marked when today's page is added", async () => {
+  const { actor, selected } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) } });
+  // Yesterday is still open, so it is the last chapter and already current.
+  actor.send({ type: "_select", id: ID, chapter: 1 });
+  assert.deepEqual(selected, [{ type: "chapter.selected", id: ID, chapter: 1 }]);
+  actor.send(grown());
+  assert.equal(ctx(actor).book.chapter, 2, "the saved position moved to today's page");
+  assert.equal(mark(actor), 1, "yesterday, the day the page shows, stays marked");
+});
+
+test("in the journal, an earlier day picked stays marked as the journal grows", async () => {
+  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) } });
+  actor.send({ type: "_select", id: ID, chapter: 0 });
+  actor.send(grown());
+  assert.equal(mark(actor), 0);
+});
+
+test("opening the journal again marks its last chapter, today's page", async () => {
+  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) } });
+  actor.send({ type: "_select", id: ID, chapter: 1 });
+  actor.send(grown());
+  actor.send({ type: "book.opened", id: ID });
+  await flush();
+  assert.equal(ctx(actor).jump, null, "the pick ends, so the saved position, today's page, is marked");
+});
+
+test("in any other book a move of the position still ends a click on the current chapter", async () => {
+  const { actor } = await open();
+  actor.send({ type: "_select", id: ID, chapter: 0 });
+  actor.send(changed({ position: { chapter: 1, block: 0 } }));
+  assert.equal(mark(actor), 1);
+});
