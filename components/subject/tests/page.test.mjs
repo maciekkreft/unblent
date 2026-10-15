@@ -365,6 +365,14 @@ const hnHas = (page, selector) =>
 // visibilitychange (fact.js), so a test need not wait out the 2s debounce for a write to
 // reach the server. The tab stays "visible", so this is a drain and a pull, as a focus is.
 const drain = (page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+// Until the server holds what `holds` looks for, nudging the drain on every look: a save
+// lands a moment after its text shows, and a nudge before it finds an empty outbox and
+// leaves the save to the 2 s idle window.
+const synced = (page, holds, timeout = 4000) =>
+  until(async () => {
+    await drain(page);
+    return holds(await serverNotes(page));
+  }, timeout);
 
 // Put the caret at the end (a comment line) or start (a quote line) of the document, the
 // only deterministic way to aim typing at the empty comment line or the fixed quote line.
@@ -585,16 +593,15 @@ for (const engine of ENGINES) {
       await until(async () => (await editorBody(page)) === "A new note about the open book");
       assert.equal(await aboutText(page), "About: Sample Book", "the line is unchanged once the note is saved");
       await until(async () => (await shownTitles(page)).includes("A new note about the open book"), 8000);
-      await drain(page);
 
       // The new note's book link must reach the server, not only the local cache (the
       // fault: api.put dropped about, so a signed-in user's links never left the
       // browser). Poll until the server holds the note, then assert its link is there.
       let stored;
-      await until(async () => {
-        stored = (await serverNotes(page)).find((n) => n.title === "A new note about the open book");
+      await synced(page, (notes) => {
+        stored = notes.find((n) => n.title === "A new note about the open book");
         return Boolean(stored);
-      }, 8000);
+      });
       assert.deepEqual(stored.about, [{ kind: "book", id: first }], "the new note's book link reached the server");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
@@ -681,8 +688,7 @@ for (const engine of ENGINES) {
       assert.ok(sameSet(await shownTitles(page), listBefore), "the note list shows no new row");
 
       // The highlight note reaches the server, so a reload is deterministic.
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)));
+      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
 
       // Reload: the book reopens and its highlight is painted again.
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -727,8 +733,7 @@ for (const engine of ENGINES) {
       // tombstone (below) is what a fresh load pulls — the reload stays deterministic.
       await dragOver(page, await dragRect(page));
       await until(async () => (await marks(page)).length > 0);
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)));
+      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
 
       // Remove; the short window elapses at once: the mark goes and the note becomes a
       // tombstone that reaches the server.
@@ -736,8 +741,7 @@ for (const engine of ENGINES) {
       await until(async () => /Remove/.test(await bubbleText(page) ?? ""));
       await clickBubble(page, ".act.remove");
       await until(async () => (await marks(page)).length === 0);
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => n.deleted && (n.about ?? []).some((l) => l.place)));
+      await synced(page, (notes) => notes.some((n) => n.deleted && (n.about ?? []).some((l) => l.place)));
 
       // A reload keeps it gone: the tombstone is pulled, and no mark is painted.
       const pulled = page.waitForResponse((res) => res.url().includes("/api/notes?since="));
@@ -795,8 +799,7 @@ for (const engine of ENGINES) {
       // The highlight note must reach the server before its comment is written, so the
       // comment's save is based on a real version, not the null of a note still being
       // created (an immediate second write on the same id would come back a conflict).
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)), 8000);
+      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
 
       // Type a comment on the line under the quote; once it saves, the book mark gains its
       // commented accent (the round-trip through notes and back).
@@ -813,8 +816,7 @@ for (const engine of ENGINES) {
       );
 
       // The comment reaches the server.
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.body ?? "").includes("A thought about this")), 8000);
+      await synced(page, (notes) => notes.some((n) => (n.body ?? "").includes("A thought about this")));
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
