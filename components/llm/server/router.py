@@ -7,13 +7,11 @@ SQLite file, so isolation holds by construction.
 Routes: GET "" returns the account's picture (without signedIn, which the browser
 adds); PUT "" changes settings and the keys; POST "/complete" streams one answer as
 newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
-questions and returns its answers, on the account's own Jev key or, for a new account,
-the owner's starter key for its first 100 answered requests (architecture.md 12). A request body that fails validation is answered
+questions and returns its answers, on the account's own Jev key. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
 """
 
 import json
-import os
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -38,11 +36,6 @@ _EFFORTS = ("default", "low", "medium", "high", "xhigh", "max")
 _TTLS = ("5m", "1h")
 _DEFAULT_MODEL = "claude-opus-5"
 
-# Starter keys (architecture.md 12): SEED_API_KEYS names .env entries, and each name
-# with a row here fills one key slot. A name without a slot is ignored.
-_SEED_SLOTS = {"TYPESAFE_AI_API_KEY": "jev"}
-STARTER_LIMIT = 100
-
 # The models a provider offers, cached per user for ten minutes so a read does not
 # call the provider on every mount; cleared for a user when their settings change.
 _models_cache: dict[str, tuple[float, list[dict]]] = {}
@@ -53,17 +46,9 @@ _models_cache: dict[str, tuple[float, list[dict]]] = {}
 # keeps one handle per request (as notes' and books' modules do).
 @contextmanager
 def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
-    path = user_dir(user_id) / "llm.db"
-    # An account whose llm.db does not exist yet is new; only a new account gets the
-    # starter keys (architecture.md 12), so accounts from before keep none.
-    new = not path.exists()
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(user_dir(user_id) / "llm.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
-    if new:
-        with connection:
-            for provider, env in _seeds():
-                connection.execute("INSERT OR IGNORE INTO starter (provider, env, used) VALUES (?, ?, 0)", (provider, env))
     try:
         with connection:
             yield connection
@@ -83,29 +68,8 @@ def _key(connection: sqlite3.Connection, provider: str) -> str | None:
     return crypto.decrypt(row["cipher"]) if row else None
 
 
-def _seeds() -> list[tuple[str, str]]:
-    # An entry that is unset is ignored, like an empty name after a trailing comma.
-    names = [name.strip() for name in os.environ.get("SEED_API_KEYS", "").split(",")]
-    return [(_SEED_SLOTS[name], name) for name in names if name in _SEED_SLOTS and os.environ.get(name)]
-
-
-def _starter(connection: sqlite3.Connection, provider: str) -> tuple[int, str | None] | None:
-    """The starter requests left for a slot and the key, read from the environment now
-    (None when its entry has gone); None when the account has no starter row."""
-    row = connection.execute("SELECT env, used FROM starter WHERE provider = ?", (provider,)).fetchone()
-    if row is None:
-        return None
-    return max(STARTER_LIMIT - row["used"], 0), os.environ.get(row["env"]) or None
-
-
 def _jev(connection: sqlite3.Connection) -> dict:
-    if _key(connection, "jev") is not None:
-        return {"keySet": True}
-    starter = _starter(connection, "jev")
-    if starter is None:
-        return {"keySet": False}
-    left, key = starter
-    return {"keySet": left > 0 and key is not None, "starterLeft": left}
+    return {"keySet": _key(connection, "jev") is not None}
 
 
 def _models(user_id: str, provider: str, key: str | None) -> list[dict]:
@@ -265,31 +229,13 @@ async def do_complete(request: Request, user_id: str = Depends(require_user)):
     return StreamingResponse(lines(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _jev_key(user_id: str) -> tuple[str | None, bool]:
-    """The Jev key a decide uses, and whether it is the starter key: the account's own
-    key first, then the starter key while requests are left."""
-    with _connect(user_id) as connection:
-        own = _key(connection, "jev")
-        if own is not None:
-            return own, False
-        starter = _starter(connection, "jev")
-        if starter is None or starter[0] == 0:
-            return None, False
-        return starter[1], starter[1] is not None
-
-
 def _decide(user_id: str, state: dict, questions: list) -> dict:
-    key, starter = _jev_key(user_id)
+    with _connect(user_id) as connection:
+        key = _key(connection, "jev")
     if key is None:
         # The error rides the reply, as complete's does, so the asker shows it.
         return {"error": "no-key"}
-    reply = jev_adapter.decide(key, state, questions)
-    if not starter or "answers" not in reply:
-        return reply
-    # Only a request that got answers is counted.
-    with _connect(user_id) as connection:
-        connection.execute("UPDATE starter SET used = used + 1 WHERE provider = 'jev'")
-        return {**reply, "starterLeft": _starter(connection, "jev")[0]}
+    return jev_adapter.decide(key, state, questions)
 
 
 def _options_ok(options) -> bool:

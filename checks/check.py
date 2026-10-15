@@ -1299,12 +1299,9 @@ def _throwaway_server(port: int):
     # a throwaway one per run keeps the suite off the real data/ and its passkeys and
     # per-user files disposable. RP_ID=localhost lets WebAuthn accept any port.
     data_dir = tempfile.mkdtemp(prefix="unblent-test-data-")
-    # No starter keys (architecture.md 12): a forged test account would otherwise
-    # judge on the owner's real Jev key and spend it.
     server_env = {
         **_dotenv(), **os.environ,
         "RP_ID": "localhost", "MAX_USERS": "1", "UNBLENT_DATA": data_dir,
-        "SEED_API_KEYS": "",
     }
     server = subprocess.Popen(
         # Warnings only: the access log would drown the per-file progress; an error still prints.

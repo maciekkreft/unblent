@@ -489,7 +489,7 @@ composer/        the composer (3.6), loaded once per page; tests/ never served
 store/           the store interface; tests/ never served
 deploy/          systemd unit, litestream.yml (section 5) and the rclone units that copy the files (section 5) and anything else the host needs; never served
 data/            per-user SQLite files (section 5) and `books/`, the imported files, gitignored
-.env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS, SEED_API_KEYS), gitignored
+.env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
 ```
 
 Static serving is namespaced so the future app can own `/`:
@@ -572,8 +572,6 @@ The architecture document describes the rules; the checks are what make them rea
 
 - **"Vim keys" is one device preference.** `settings` keeps `vimKeys`, off by default, per profile like its other preferences; every editor that has Vim asks `settings: read` at start and follows `settings.changed`, turning Vim on or off in place, so no editor needs a Vim copy of itself and Settings shows one switch instead of a choice per editor. Every list moves between its rows with the arrow keys and, with Vim keys on, also with j, k, gg and G, never while the user is typing in a field.
 
-- **Starter keys.** A new account uses the owner's keys, those whose `.env` entries `SEED_API_KEYS` names, for its first 100 answered requests per key, until the user saves a key of their own. `llm` reads such a key from `.env` each time it is used and never stores it in the account's file.
-
 - **Echo is a test provider.** A standing-in provider that echoes the conversation streams answers without a key or a network call, so tests and by-hand checks never spend money. It is offered as a choice in Settings only in the `workshop` profile; the server accepts it always, and an account left on Echo in the product sees it named "Echo (test)" with the real providers to switch to.
 
 ---
@@ -644,11 +642,3 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - A written tool run on a passage the user selects, not only on typed text (sketch: `~/.claude/plans/book-tools.md`).
 - A built-in tool that fills a new tool's page from the passage being read, and another that scores how well a tool's questions and criteria match what the book says (sketch: `~/.claude/plans/book-tools.md`).
 - Optional questions and weights in a written tool's score, only if a real tool asks for them (sketch: `~/.claude/plans/book-tools.md`).
-
----
-
-## 15. To do
-
-Work that is decided but not done yet. Remove a line when its work is done.
-
-- Remove the starter keys (section 12): a new account no longer gets 100 free requests on the owner's keys. The `SEED_API_KEYS` entry is already gone from `.env`; what remains is the code in `llm`'s server module that reads it and counts the requests, its tests, the entry in `check.py`, the "Starter keys" line in section 12 and the mention in section 11.1.

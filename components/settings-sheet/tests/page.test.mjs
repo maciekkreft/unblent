@@ -1,9 +1,8 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The starter key row under Evaluating (architecture.md 12). The test server has no
-// starter keys, so the page's reads of its own llm server are answered here: first a
-// new account with 87 starter requests left, then the picture after an own key is saved.
+// The Jev key row under Evaluating. The page's reads of its own llm server are answered
+// here, so no key reaches Jev: first an account with no key, then the picture after one is saved.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
@@ -46,33 +45,31 @@ for (const engine of ENGINES) {
       await browser?.close();
     });
 
-    test("the count shows, and adding one's own key replaces it", async () => {
+    test("a new account has no Jev key until it saves its own", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
-        await signedIn(context, forgeCookie("starter"));
+        await signedIn(context, forgeCookie("jev-key"));
         const saved = [];
         await context.route("**/api/llm", async (route) => {
           if (route.request().method() === "PUT") {
             saved.push(route.request().postDataJSON());
             return route.fulfill({ json: picture({ keySet: true }) });
           }
-          return route.fulfill({ json: picture({ keySet: true, starterLeft: 87 }) });
+          return route.fulfill({ json: picture({ keySet: false }) });
         });
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/llm`, { waitUntil: "domcontentloaded" });
 
-        await until(async () => (await judging(page))?.text.includes("Starter key · 87 of 100 requests left"));
-        const starter = await judging(page);
-        assert.equal(starter.input, true, "the box for one's own key is open");
-        assert.deepEqual(starter.buttons, ["Save"], "the starter key has no Replace or Remove");
+        await until(async () => (await judging(page))?.input);
+        assert.deepEqual((await judging(page)).buttons, ["Save"], "no key to replace or remove");
 
         await page.locator('settings-sheet .key input[aria-label="Jev key"]').fill("jev-not-a-real-key");
         await page.locator("settings-sheet .judging button", { hasText: "Save" }).click();
         await until(async () => (await judging(page))?.text.includes("Key saved"));
         assert.deepEqual(saved, [{ jevKey: "jev-not-a-real-key" }]);
-        assert.ok(!(await judging(page)).text.includes("Starter"), "the own key replaces the count");
+        assert.deepEqual((await judging(page)).buttons, ["Replace", "Remove"]);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

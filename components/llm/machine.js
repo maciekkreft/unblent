@@ -155,8 +155,7 @@ export const machine = setup({
       "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
       "server and never sent back to the browser. A chat answer streams back piece by piece as " +
       "events, one answer at a time; `decide` asks Jev yes-or-no and pick-one questions and " +
-      "returns the answers in the reply. A new account judges on the owner's starter Jev key for its " +
-      "first 100 answered requests, until it saves a key of its own. The settings belong to the account, so they are the " +
+      "returns the answers in the reply, on the account's own Jev key. The settings belong to the account, so they are the " +
       "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call.",
@@ -290,15 +289,6 @@ export const machine = setup({
               actions: [
                 ({ context, event }) => context.decided(event.output),
                 assign({ decided: null }),
-                // A starter-key answer carries the count left, so Settings shows it
-                // without a reload (architecture.md 12, "Starter keys").
-                enqueueActions(({ context, event, enqueue }) => {
-                  const left = event.output?.starterLeft;
-                  if (left === undefined) return;
-                  const picture = { ...context.picture, jev: { keySet: left > 0, starterLeft: left } };
-                  enqueue.assign({ picture });
-                  enqueue.emit({ type: "llm.changed", ...picture });
-                }),
               ],
             },
             onError: {

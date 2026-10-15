@@ -76,8 +76,7 @@
             }
           },
           "inputTokens": { "type": "integer", "minimum": 0 },
-          "ms": { "type": "integer", "minimum": 0 },
-          "starterLeft": { "type": "integer", "minimum": 0, "maximum": 100, "description": "When the starter key answered, how many starter requests are left." }
+          "ms": { "type": "integer", "minimum": 0 }
         },
         "required": ["answers", "inputTokens", "ms"],
         "additionalProperties": false
