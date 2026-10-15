@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 
 // The server module, tested against the check's throwaway server with a forged session
 // cookie (an HMAC over the user id under SESSION_SECRET). Each test has its own user,
@@ -15,7 +17,8 @@ const cookieFor = (userId) =>
   `unblent_session=${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
 
 let counter = 0;
-const freshCookie = () => cookieFor(`evaluators-test-${Date.now()}-${counter++}`);
+const freshUser = () => `evaluators-test-${Date.now()}-${counter++}`;
+const freshCookie = () => cookieFor(freshUser());
 
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5EV1";
 const ID2 = "01ARZ3NDEKTSV4RRFFQ69G5EV2";
@@ -39,7 +42,9 @@ test("every route needs a signed-in user", async () => {
 test("a create continues from the base the browser held, and any later write wins", async () => {
   const cookie = freshCookie();
   const created = await (await put(ID, body({ baseVersion: 3 }), cookie)).json();
-  assert.deepEqual(created, { id: ID, book: BOOK, name: "Goals", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false });
+  const { updatedAt, ...rest } = created;
+  assert.deepEqual(rest, { id: ID, book: BOOK, name: "Goals", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false });
+  assert.ok(!Number.isNaN(Date.parse(updatedAt)), "a write without a time is stamped by the server");
   // Last write wins: a stale base is never refused.
   const res = await put(ID, body({ name: "Renamed", on: false, baseVersion: 1 }), cookie);
   assert.equal(res.status, 200);
@@ -57,6 +62,32 @@ test("Show in journal is set by a write that carries it and kept by one that lea
   assert.deepEqual([kept.journal, kept.version], [true, 3]);
   const off = await (await put(ID, body({ name: "Renamed", journal: false }), cookie)).json();
   assert.deepEqual([off.journal, off.version], [false, 4]);
+});
+
+test("the browser's time of a change is kept, and a resend of the same content keeps the first", async () => {
+  const cookie = freshCookie();
+  const first = await (await put(ID, body({ updatedAt: "2026-01-02T03:04:05.006Z" }), cookie)).json();
+  assert.equal(first.updatedAt, "2026-01-02T03:04:05.006Z");
+  const same = await (await put(ID, body({ updatedAt: "2026-02-02T00:00:00.000Z" }), cookie)).json();
+  assert.equal(same.updatedAt, "2026-01-02T03:04:05.006Z");
+  const edited = await (await put(ID, body({ name: "Renamed", updatedAt: "2026-02-02T00:00:00.000Z" }), cookie)).json();
+  assert.equal(edited.updatedAt, "2026-02-02T00:00:00.000Z");
+});
+
+test("a file from before updatedAt gains the column, its rows null", async () => {
+  const user = freshUser();
+  const dir = join(process.env.UNBLENT_DATA, user);
+  execFileSync("python3", [
+    "-c",
+    "import os, sqlite3, sys; os.makedirs(sys.argv[1], exist_ok=True); c = sqlite3.connect(os.path.join(sys.argv[1], 'evaluators.db'));" +
+      " c.executescript('CREATE TABLE evaluators (id TEXT PRIMARY KEY, book TEXT NOT NULL, name TEXT NOT NULL, \"on\" INTEGER NOT NULL, journal INTEGER NOT NULL DEFAULT 0, questions TEXT NOT NULL, version INTEGER NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);');" +
+      " c.execute('INSERT INTO evaluators VALUES (?, ?, ?, 1, 0, ?, 1, 1, 0)', (sys.argv[2], sys.argv[3], 'Old', '[]')); c.commit()",
+    dir,
+    ID,
+    BOOK,
+  ]);
+  const all = await (await pull(0, cookieFor(user))).json();
+  assert.deepEqual(all.evaluators.map((e) => [e.name, e.updatedAt]), [["Old", null]]);
 });
 
 test("a book is set when the evaluator is born and never changes", async () => {
@@ -82,7 +113,7 @@ test("a delete is a tombstone that always wins and is pulled like a change", asy
 
 test("a body that is not an evaluator is refused with a fixed reply", async () => {
   const cookie = freshCookie();
-  for (const bad of [body({ on: "yes" }), body({ book: "nope" }), body({ questions: ["x"] }), body({ baseVersion: true }), body({ journal: "yes" })]) {
+  for (const bad of [body({ on: "yes" }), body({ book: "nope" }), body({ questions: ["x"] }), body({ baseVersion: true }), body({ journal: "yes" }), body({ updatedAt: "yesterday" })]) {
     const res = await put(ID, bad, cookie);
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { error: "bad-request" });

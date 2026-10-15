@@ -43,7 +43,7 @@ const api = {
 };
 
 const actor = mount(machine, {
-  input: { store, api, ask: (target, name, payload) => ask(machine, target, name, payload) },
+  input: { store, api, ask: (target, name, payload) => ask(machine, target, name, payload), now: () => new Date().toISOString() },
   events: { "evaluator.changed": changed, "evaluator.deleted": deleted },
   queries: { list },
 });

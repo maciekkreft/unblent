@@ -46,6 +46,7 @@ const record = (r) => ({
   questions: questionsOf(r.questions),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   removing: r.removing === true,
+  ...(typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {}),
   ...(r.deleted === true ? { deleted: true } : {}),
 });
 
@@ -97,9 +98,11 @@ const keepMarked = (old, incoming) => {
 function commit(context, enqueue, next) {
   const current = context.evaluators.get(next.id);
   const changed = !current || !same(current, next) || Boolean(next.deleted) !== Boolean(current.deleted);
-  let r = next;
-  if (changed && context.userId == null) r = { ...next, version: current ? current.version + 1 : 1 };
-  else if (current) r = { ...next, version: current.version };
+  // A change of content is stamped here, signed in or out, so the editor can open a
+  // book's most recently edited evaluator offline too; the server keeps the stamp.
+  let r = changed ? { ...next, updatedAt: context.now() } : next;
+  if (changed && context.userId == null) r = { ...r, version: current ? current.version + 1 : 1 };
+  else if (current) r = { ...r, version: current.version };
   context.evaluators.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
   if (changed && context.userId != null) {
@@ -116,7 +119,13 @@ function commit(context, enqueue, next) {
   if (changed && context.userId != null) enqueue.raise({ type: "_drain" });
 }
 
-const outboxRow = (r, baseVersion) => ({ id: r.id, ...content(r), baseVersion, ...(r.deleted ? { deleted: true } : {}) });
+const outboxRow = (r, baseVersion) => ({
+  id: r.id,
+  ...content(r),
+  baseVersion,
+  ...(r.updatedAt ? { updatedAt: r.updatedAt } : {}),
+  ...(r.deleted ? { deleted: true } : {}),
+});
 
 const live = (context, id) => {
   const r = context.evaluators.get(id);
@@ -266,7 +275,8 @@ export const machine = setup({
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
       "options, and it is switched on or off. An evaluator marked \"Show in journal\" is " +
       "listed in the Journal's Evaluators tab as well as its own book's. `evaluators: list` answers one book's evaluators, " +
-      "or every book's when no book is given, oldest first. A new evaluator starts switched on. It works signed out, numbering versions " +
+      "or every book's when no book is given, oldest first, each with when its content last " +
+      "changed (`updatedAt`, absent on one kept from before it was recorded). A new evaluator starts switched on. It works signed out, numbering versions " +
       "itself, and syncs to the account when signed in (section 5); signing in uploads every " +
       "evaluator with its history. The last write wins, so two devices never conflict, and a " +
       "deleted evaluator is kept as a tombstone, which always wins. A removed evaluator, question " +
@@ -287,6 +297,7 @@ export const machine = setup({
     store: input.store,
     api: input.api,
     ask: input.ask,
+    now: input.now ?? (() => new Date().toISOString()),
     userId: null,
     cursor: 0,
     queued: [],

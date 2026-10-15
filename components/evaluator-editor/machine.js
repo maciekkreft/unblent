@@ -208,6 +208,20 @@ const removal = (kind, find, flagged, dropped) => ({
   }),
 });
 
+// A book's most recently edited evaluator, as the note editor opens the newest note: only
+// one kept with that book, so in the Journal one marked Show in journal never counts. One
+// with no updatedAt (kept from before it was recorded) is the oldest; equal times fall to
+// the later id, which is the later made.
+export const newest = (evaluators, book) =>
+  evaluators
+    .filter((r) => r.book === book && !r.removing)
+    .reduce((best, r) => {
+      if (!best) return r;
+      const a = r.updatedAt ?? "";
+      const b = best.updatedAt ?? "";
+      return a > b || (a === b && r.id > best.id) ? r : best;
+    }, null);
+
 const isPick = (event) => typeof event.id === "string" && typeof event.book === "string";
 
 // An evaluator is kept with a book, so only a subject that is a book has evaluators.
@@ -219,8 +233,8 @@ const shownBook = (context) => context.want?.book ?? (context.draft ? context.bo
 
 // A new subject or pin (with `subject`): `next` gives both. The evaluator open is left
 // only for another book while the tab is not pinned. What was typed is saved first, as
-// when moving to another evaluator, and the new book opens on a New evaluator, as the
-// note editor opens an empty page. A subject with no book leaves it: subject: read
+// when moving to another evaluator, and the new book opens on its most recently edited
+// evaluator, or a New evaluator when it has none (`latest`). A subject with no book leaves it: subject: read
 // answers null until its own asks land, and acting on that would close the evaluator a
 // reload has just reopened. Unpinning follows the stage at once, as the list does.
 const followSubject = (next, extra = []) => [
@@ -236,7 +250,7 @@ const followSubject = (next, extra = []) => [
       save,
       assign(({ context, event }) => ({
         ...next({ context, event }),
-        want: { id: context.mint(), book: bookOf(next({ context, event }).subject) },
+        want: { id: context.mint(), book: bookOf(next({ context, event }).subject), latest: true },
         draft: null,
       })),
       ({ context }) => context.remember({ id: context.want.id, book: context.want.book }),
@@ -287,7 +301,9 @@ export const machine = setup({
       "and deleting the evaluator, wait out the undo window, with Undo in a notice. The " +
       "evaluator open before a reload opens again while it is still kept. With `subject` it " +
       "follows the book open on the stage, as the list beside it does: when another book " +
-      "comes on, what was typed is saved and a New evaluator of that book opens; while the " +
+      "comes on, what was typed is saved and that book's most recently edited evaluator opens, " +
+      "or a New evaluator when it has none; in the Journal only the Journal's own count, not " +
+      "those marked Show in journal; while the " +
       "pin at the top right is on it stays on its book, and so does the list beside it; " +
       "unpinning brings the stage's book back at once. The line beside the pin names the book, " +
       "and the pin is kept by `pins`, so it survives a reload. The question, what yes " +
@@ -401,9 +417,12 @@ export const machine = setup({
               Array.isArray(event.output?.evaluators) &&
               (!context.want.restore || event.output.evaluators.some((r) => r.id === context.want.id && !r.removing)),
             target: "ready.editing",
-            actions: assign(({ context, event }) => {
-              const next = { ...context, book: context.want.book, evaluators: event.output.evaluators };
-              return { book: next.book, evaluators: next.evaluators, draft: opened(next, context.want.id, context.want.book), want: null };
+            actions: enqueueActions(({ context, event, enqueue }) => {
+              const { want } = context;
+              const next = { ...context, book: want.book, evaluators: event.output.evaluators };
+              const id = want.latest ? (newest(next.evaluators, want.book)?.id ?? want.id) : want.id;
+              enqueue.assign({ book: want.book, evaluators: next.evaluators, draft: opened(next, id, want.book), want: null });
+              if (id !== want.id) enqueue(() => context.remember({ id, book: want.book }));
             }),
           },
           {

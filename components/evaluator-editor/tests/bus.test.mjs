@@ -36,31 +36,50 @@ const evaluator = (id, bookId, name) => ({ id, book: bookId, name, on: true, que
 let minted = 0;
 const mint = () => `01K7TEST00000000000000M${String(++minted).padStart(3, "0")}`;
 
-test("switching the open book to the journal and back moves the list and the open evaluator with it", async () => {
+test("another book opens its most recently edited evaluator, the Journal only its own, and a book with none a New evaluator", async () => {
+  const BOOK2 = "01K7TEST0000000000000BK002";
+  const OLD = "01K7TEST0000000000000E0003";
+  const MARKED = "01K7TEST0000000000000E0004";
+  const at = (r, updatedAt) => ({ ...r, updatedAt });
+  const rows = [
+    at(evaluator(BOOK_EVAL, BOOK, "Book's"), "2026-10-01T00:00:00.000Z"),
+    evaluator(OLD, BOOK, "Book's old"),
+    at({ ...evaluator(MARKED, BOOK, "Marked"), journal: true }, "2026-09-02T00:00:00.000Z"),
+    at(evaluator(JOURNAL_EVAL, JOURNAL, "Journal's"), "2026-09-01T00:00:00.000Z"),
+  ];
   const { actors, unwire } = await wire(["journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
     journal: { store: store({ days: new Map() }), now: () => NOW },
-    books: { store: store({ rows: new Map([[BOOK, book]]) }, new Map([["open", { id: BOOK, at: 1 }]])), now: () => NOW, api: null, revoke: () => {} },
-    evaluators: {
-      store: store({ rows: new Map([[BOOK_EVAL, evaluator(BOOK_EVAL, BOOK, "Book's")], [JOURNAL_EVAL, evaluator(JOURNAL_EVAL, JOURNAL, "Journal's")]]) }),
+    books: {
+      store: store({ rows: new Map([[BOOK, book], [BOOK2, { ...book, id: BOOK2, title: "Another" }]]) }, new Map([["open", { id: BOOK, at: 1 }]])),
+      now: () => NOW,
+      api: null,
+      revoke: () => {},
     },
+    evaluators: { store: store({ rows: new Map(rows.map((r) => [r.id, r])) }) },
     "evaluator-list": { mint, following: true },
     "evaluator-editor": { mint, following: true, throttleMs: 50 },
   });
   const list = () => actors["evaluator-list"].getSnapshot().context.evaluators.map((e) => e.name);
-  const draft = () => actors["evaluator-editor"].getSnapshot().context.draft;
+  const editor = () => actors["evaluator-editor"].getSnapshot().context;
+  const draft = () => editor().draft;
   try {
-    await until(() => list().join() === "Book's");
-    actors["evaluator-list"].send({ type: "_pick", id: BOOK_EVAL });
-    await until(() => draft()?.name === "Book's");
+    await until(() => list().length === 3);
+    actors["evaluator-list"].send({ type: "_pick", id: OLD });
+    await until(() => draft()?.id === OLD);
+    actors["evaluator-editor"].send({ type: "_edit", patch: { name: "Book's old, edited" } });
+    actors["evaluator-editor"].send({ type: "_blur" });
 
     actors.books.send({ type: "book.selected", id: JOURNAL });
-    await until(() => list().join() === "Journal's");
     await until(() => draft()?.book === JOURNAL);
-    assert.equal(draft().name, "", "the journal opens on a New evaluator, not the book's");
+    assert.equal(draft().id, JOURNAL_EVAL, "the Journal's own, though one marked Show in journal is newer");
 
     actors.books.send({ type: "book.selected", id: BOOK });
-    await until(() => list().join() === "Book's");
     await until(() => draft()?.book === BOOK);
+    assert.equal(draft().id, OLD, "the one edited last, though it had no time before");
+
+    actors.books.send({ type: "book.selected", id: BOOK2 });
+    await until(() => draft()?.book === BOOK2);
+    assert.deepEqual([draft().name, editor().evaluators.some((r) => r.id === draft().id)], ["", false], "a New evaluator");
   } finally {
     unwire();
   }
@@ -143,7 +162,7 @@ test("pinned, the list and the open evaluator stay on their book while the stage
     actors["evaluator-editor"].send({ type: "_togglePin" });
     await until(() => list().book === JOURNAL);
     await until(() => draft()?.book === JOURNAL);
-    assert.equal(draft().name, "", "unpinned, the editor follows to the Journal");
+    assert.equal(draft().name, "Journal's", "unpinned, the editor follows to the Journal's newest");
   } finally {
     unwire();
   }

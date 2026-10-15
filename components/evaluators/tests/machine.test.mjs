@@ -84,9 +84,9 @@ function fakeApi({ pull } = {}) {
   };
 }
 
-function start(store, { api, ask } = {}) {
+function start(store, { api, ask, now } = {}) {
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { store, api, ask }, clock });
+  const actor = createActor(machine, { input: { store, api, ask, now }, clock });
   const changed = [];
   const deleted = [];
   actor.on("evaluator.changed", (e) => {
@@ -121,6 +121,25 @@ async function drain(clock) {
   clock.increment(SYNC_IDLE_MS);
   await flush();
 }
+
+test("a change of content is stamped with its time, kept in the cache and the outbox; a mark keeps the stamp", async () => {
+  const store = fakeStore([{ id: ID2, book: BOOK, name: "Old", on: true, questions: [], version: 1 }]);
+  const api = fakeApi();
+  const times = ["2026-03-01T00:00:00.000Z", "2026-03-02T00:00:00.000Z"];
+  const { actor, changed, clock } = start(store, { api, ask: askUser("u1"), now: () => times.shift() });
+  await ready(actor);
+  actor.send(saved());
+  assert.equal(changed.at(-1).updatedAt, "2026-03-01T00:00:00.000Z");
+  assert.equal(store.outbox.get(ID).updatedAt, "2026-03-01T00:00:00.000Z", "sent, so the server keeps the browser's time");
+  actor.send({ type: "removal.started", kind: "question", id: Q1 });
+  assert.equal(changed.at(-1).updatedAt, "2026-03-01T00:00:00.000Z");
+  actor.send(saved({ name: "Renamed" }));
+  assert.equal(store.rows.get(ID).updatedAt, "2026-03-02T00:00:00.000Z");
+  const listed = await list(actor);
+  assert.deepEqual(listed.map((r) => [r.id, r.updatedAt]), [[ID, "2026-03-02T00:00:00.000Z"], [ID2, undefined]], "one kept from before has none");
+  await drain(clock);
+  assert.equal(api.puts.at(-1).updatedAt, "2026-03-02T00:00:00.000Z");
+});
 
 // --- Signed out: minting and announcing without a server ------------------------------
 
@@ -301,7 +320,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "journal", "name", "on", "questions"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "journal", "name", "on", "questions", "updatedAt"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });

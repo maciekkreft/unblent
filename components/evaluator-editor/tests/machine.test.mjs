@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isEmpty, duplicateNames } from "../machine.js";
+import { machine, isEmpty, duplicateNames, newest } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -351,4 +351,15 @@ test("the Vim keys preference is read at start and followed after; without setti
   actor.send({ type: "settings.changed", vimKeys: false });
   assert.equal(ctx().vimKeys, false);
   assert.equal(ctx().draft.id, R);
+});
+
+test("a book's newest evaluator: its own only, none-timed oldest, equal times to the later id, a removing one never", () => {
+  const e = (id, book, updatedAt, removing = false) => ({ id, book, updatedAt, removing });
+  const OTHER_BOOK = "01K6TEST000000000000000PA2";
+  assert.equal(newest([], P), null);
+  assert.equal(newest([e(R, P), e(R2, P)], P).id, R2);
+  assert.equal(newest([e(R, P, "2026-01-01T00:00:00.000Z"), e(R2, P)], P).id, R);
+  assert.equal(newest([e(R, P, "2026-01-02T00:00:00.000Z"), e(R2, P, "2026-01-01T00:00:00.000Z")], P).id, R);
+  assert.equal(newest([e(R, P, "2026-01-01T00:00:00.000Z"), e(R2, P, "2026-01-02T00:00:00.000Z", true)], P).id, R);
+  assert.equal(newest([e(R, OTHER_BOOK, "2026-01-02T00:00:00.000Z")], P), null);
 });

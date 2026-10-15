@@ -9,6 +9,7 @@ back as the tombstone rather than reviving it.
 import json
 import re
 import sqlite3
+from datetime import datetime, timezone
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -42,11 +43,28 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(evaluators)")}
     if "journal" not in columns:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN journal INTEGER NOT NULL DEFAULT 0")
+    # Rows written before updated_at keep NULL, which the editor ranks as the oldest.
+    if "updated_at" not in columns:
+        connection.executescript("ALTER TABLE evaluators ADD COLUMN updated_at TEXT")
     try:
         with connection:
             yield connection
     finally:
         connection.close()
+
+
+def _is_time(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _is_id(value) -> bool:
@@ -62,6 +80,7 @@ def _record(row: sqlite3.Row) -> dict:
         "journal": bool(row["journal"]),
         "questions": json.loads(row["questions"]),
         "version": row["version"],
+        "updatedAt": row["updated_at"],
         "deleted": bool(row["deleted"]),
     }
 
@@ -84,7 +103,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         return JSONResponse(_BAD, status_code=400)
     book, name, on = payload.get("book"), payload.get("name"), payload.get("on")
     questions, base, deleted = payload.get("questions"), payload.get("baseVersion"), payload.get("deleted", False)
-    journal = payload.get("journal")
+    journal, updated = payload.get("journal"), payload.get("updatedAt")
     valid = (
         _is_id(book)
         and isinstance(name, str)
@@ -94,10 +113,14 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
         and isinstance(deleted, bool)
         and (journal is None or isinstance(journal, bool))
+        and (updated is None or _is_time(updated))
     )
     if not valid:
         return JSONResponse(_BAD, status_code=400)
     stored = json.dumps(questions)
+    # The browser's stamp is kept when it sends one, so an edit made signed out or offline
+    # ranks by when it was made, not by when it arrived.
+    updated = updated or _now()
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM evaluators WHERE id = ?", (evaluator_id,)).fetchone()
         if row is None:
@@ -105,8 +128,8 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
             # from the base the client held, or 1, so an evaluator made signed out arrives
             # with its history. A tombstone can be born here, for one deleted before upload.
             connection.execute(
-                'INSERT INTO evaluators (id, book, name, "on", journal, questions, version, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (evaluator_id, book, name, int(on), int(bool(journal)), stored, (base or 0) + 1, _next_seq(connection), int(deleted)),
+                'INSERT INTO evaluators (id, book, name, "on", journal, questions, version, seq, deleted, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (evaluator_id, book, name, int(on), int(bool(journal)), stored, (base or 0) + 1, _next_seq(connection), int(deleted), updated),
             )
             return _reread(connection, evaluator_id)
         # A write onto a tombstone, or a second delete, returns the tombstone unchanged.
@@ -119,8 +142,8 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         if not deleted and (name, int(on), shown, stored) == (row["name"], row["on"], row["journal"], row["questions"]):
             return _record(row)
         connection.execute(
-            'UPDATE evaluators SET name = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ? WHERE id = ?',
-            (name, int(on), shown, stored, row["version"] + 1, _next_seq(connection), int(deleted), evaluator_id),
+            'UPDATE evaluators SET name = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ?, updated_at = ? WHERE id = ?',
+            (name, int(on), shown, stored, row["version"] + 1, _next_seq(connection), int(deleted), updated, evaluator_id),
         )
         return _reread(connection, evaluator_id)
 

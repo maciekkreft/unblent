@@ -122,6 +122,11 @@
               "type": "integer",
               "minimum": 1
             },
+            "updatedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When the evaluator's content last changed, as an ISO time; absent on one kept from before it was recorded, which counts as the oldest."
+            },
             "pending": {
               "type": "boolean",
               "description": "A change the server has not acknowledged yet (5)."
