@@ -83,7 +83,13 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, open: recall(), remember },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        mint: ulid,
+        open: recall(),
+        remember,
+        following: this.host.subject,
+      },
       events: { "evaluator.saved": saved, "removal.started": started },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -104,7 +110,8 @@ class ActorController {
 }
 
 class EvaluatorEditor extends LitElement {
-  static properties = { height: { type: String, reflect: true } };
+  // Follow the book open on the stage. Reflected so a page's bare `subject` reads as true.
+  static properties = { height: { type: String, reflect: true }, subject: { type: Boolean, reflect: true } };
 
 
   static styles = css`

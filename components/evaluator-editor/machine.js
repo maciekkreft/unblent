@@ -3,10 +3,12 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // The view component that edits one evaluator (6.4): the item the Evaluators tab's
 // list-then-item shows under its Back bar when evaluator.selected arrives. It owns only
 // UI state — the evaluator being edited as a draft, the book it is kept with, and
-// whether typing is waiting to be saved — and points at two facts: it asks
+// whether typing is waiting to be saved — and points at three facts: it asks
 // evaluators: list for the book evaluator.selected names and follows evaluator.changed /
-// evaluator.deleted after, and asks settings: read for the "Vim keys" preference (12)
-// and follows settings.changed (4.3, fourth rule). Every edit leaves as the whole evaluator,
+// evaluator.deleted after, asks settings: read for the "Vim keys" preference (12)
+// and follows settings.changed, and, with `subject`, asks subject: read and follows
+// subject.changed (4.3, fourth rule), so the tab never keeps showing an evaluator of a
+// book that is no longer on the stage while the list beside it has moved on. Every edit leaves as the whole evaluator,
 // evaluator.saved, at a throttle while typing and at once on blur (4.3, third rule). A
 // removal leaves as removal.started; `evaluators` marks the item until notice-stack
 // settles or undoes it, and the draft follows those marks, so the item disappears at
@@ -198,12 +200,41 @@ const removal = (kind, find, flagged, dropped) => ({
 
 const isPick = (event) => typeof event.id === "string" && typeof event.book === "string";
 
+// An evaluator is kept with a book, so only a subject that is a book has evaluators.
+const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
+
+// The book of the evaluator open or being fetched; null while none is.
+const shownBook = (context) => context.want?.book ?? context.draft?.book ?? null;
+
+// A new subject (with `subject`): the evaluator open is left only for another book. What
+// was typed is saved first, as when moving to another evaluator, and the new book opens
+// on a New evaluator, as the note editor opens an empty page. A subject with no book
+// leaves it: subject: read answers null until its own asks land, and acting on that
+// would close the evaluator a reload has just reopened.
+const followSubject = (subjectOf) => [
+  {
+    guard: ({ context, event }) => {
+      const book = bookOf(subjectOf(event));
+      return context.following && book != null && shownBook(context) != null && book !== shownBook(context);
+    },
+    target: ".fetching",
+    actions: [
+      save,
+      assign(({ context, event }) => ({ want: { id: context.mint(), book: bookOf(subjectOf(event)) }, draft: null })),
+      ({ context }) => context.remember({ id: context.want.id, book: context.want.book }),
+    ],
+  },
+];
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the boxes stay plain.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // The subject starting picture; subject.changed is held for this ask until its reply
+    // lands (subject: read supersededBy), so it is applied after, in order.
+    readSubject: fromPromise(({ input }) => (input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }))),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -218,20 +249,23 @@ export const machine = setup({
       "whole evaluator a short time into typing and when a field loses focus, and a new " +
       "evaluator with nothing written in it is never saved. Removing a question or an option, " +
       "and deleting the evaluator, wait out the undo window, with Undo in a notice. The " +
-      "evaluator open before a reload opens again while it is still kept. The question, what yes " +
+      "evaluator open before a reload opens again while it is still kept. With `subject` it " +
+      "follows the book open on the stage, as the list beside it does: when another book " +
+      "comes on, what was typed is saved and a New evaluator of that book opens. The question, what yes " +
       "and no mean and each option's description are text boxes that grow with what is written " +
       "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
       "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
       "back to the field last used, never jumping to the name.",
     kind: "view",
     emits: ["evaluator.saved", "removal.started"],
-    attributes: [],
-    asks: ["evaluators: list", "settings: read"],
+    attributes: ["subject"],
+    asks: ["evaluators: list", "settings: read", "subject: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
     throttleMs: input.throttleMs ?? 200,
+    following: Boolean(input.following),
     // The book whose evaluators are held, and those evaluators.
     book: null,
     evaluators: [],
@@ -243,17 +277,26 @@ export const machine = setup({
     remember: input.remember ?? (() => {}),
     vimKeys: false,
   }),
-  // Beside the states, so the preference arrives whatever the editor is doing; a
-  // settings.changed that races it is held until the reply lands (settings: read
-  // supersededBy).
-  invoke: {
-    src: "settings",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
-    onError: { actions: [] },
-  },
+  // Beside the states, so the preference and the subject arrive whatever the editor is
+  // doing; a settings.changed or subject.changed that races its ask is held until the
+  // reply lands (supersededBy).
+  invoke: [
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "readSubject",
+      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      onDone: followSubject(({ output }) => output?.subject ?? null),
+      onError: { actions: [] },
+    },
+  ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "subject.changed": followSubject(({ subject }) => subject ?? null),
   },
   initial: "starting",
   states: {
