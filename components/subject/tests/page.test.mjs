@@ -182,10 +182,6 @@ const pinPressed = (page) =>
 const clickPin = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".pin")?.click());
 
-// Whether the editor's pin is flashing its danger border (a refusal, D7).
-const pinFlashing = (page) =>
-  page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".pin.flashing") != null);
-
 // Click a note-list row by its note id, the gesture that emits note.selected.
 const clickRow = (page, id) =>
   page.evaluate((id) => document.querySelector("note-list").shadowRoot.querySelector(`.row[data-id="${id}"]`)?.click(), id);
@@ -493,34 +489,27 @@ for (const engine of ENGINES) {
       await until(async () => (await apartRow(page))?.title === "About two");
       assert.equal((await apartRow(page)).selected, "true", "the apart row reads as the open one");
 
-      // Clicking the apart row is clicking the note already open: nothing changes, and it
-      // is not refused, so no pin flash and no notice (task 1). Give a flash time to appear.
-      await clickRow(page, NOTE_TWO);
-      await page.waitForTimeout(200);
-      assert.equal(await pinFlashing(page), false, "the open note's own row does not flash the pin");
-      assert.ok(!/pinned/i.test(await noticeText(page)), "and shows no refusal notice");
-      assert.equal(await editorBody(page), "About two");
-
-      // Picking a different note while pinned is refused (slice 7, D7/D8): the note on
-      // screen does not change, the pin flashes its danger border, and a toast explains.
-      await clickRow(page, NOTE_ONE);
-      await until(async () => await pinFlashing(page));
-      await until(async () => /pinned/i.test(await noticeText(page)));
-      assert.equal(await editorBody(page), "About two", "a refused pick did not change the note");
-
-      // Unpin: nothing changes on screen, and the pin is no longer pressed. The note is
-      // still open and still not about book one, so its apart row stays.
-      await clickPin(page);
-      await until(async () => !(await pinPressed(page)));
-      assert.equal(await editorBody(page), "About two");
-      assert.equal((await apartRow(page))?.title, "About two", "the apart row stays after unpinning");
-
-      // Unpinned, the same pick now opens (forgiveness, one step): the editor follows it.
-      // The stage is book one, so its note is what the list shows, and the apart row goes.
+      // Picking a different note while pinned opens it, with no notice (12): the pin
+      // belongs to the editor, so it stays on, now on the picked note, and the stage's
+      // own note is open, so nothing is apart.
       await clickRow(page, NOTE_ONE);
       await until(async () => (await editorBody(page)) === "About one");
+      assert.ok(await pinPressed(page), "the pin stays on after a pick");
+      assert.ok(!/pinned/i.test(await noticeText(page)), "and no notice is shown");
+      await until(async () => (await apartRow(page)) == null);
+
+      // Pinned on book one's note, the stage moves to book two: the note stays.
+      await openTile(page, two);
+      await until(async () => sameSet(await shownTitles(page), ["About two"]));
+      assert.equal(await editorBody(page), "About one", "the pinned note did not follow the stage");
+
+      // Unpin, and the next change of stage is followed again.
+      await clickPin(page);
+      await until(async () => !(await pinPressed(page)));
+      await openTile(page, one);
       await until(async () => sameSet(await shownTitles(page), ["About one"]));
-      assert.equal(await apartRow(page), null, "the open note is about the subject now, so nothing is apart");
+      await openTile(page, two);
+      await until(async () => (await editorBody(page)) === "About two");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();

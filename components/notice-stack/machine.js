@@ -38,13 +38,6 @@ const TABLE = {
     standing: false,
     actions: [],
   }),
-  // A pinned editor would not open the note the user picked (12): only news, the pin
-  // itself is where the user acts. One row per reason so a repeat replaces.
-  "note.refused": (p) => ({
-    key: `note.refused:${p.reason}`,
-    standing: false,
-    actions: [],
-  }),
   // A removal waits out the undo window here, so every delete is reversible in one step: Undo brings
   // the thing back; the window running out, or a dismiss, lets it go. One row per
   // thing, so several removals stack, each with its own window.
@@ -95,7 +88,7 @@ export const machine = setup({}).createMachine({
   meta: {
     description:
       "Shows what a fact could not do for the user as notices that can be dismissed: a refused " +
-      "sign-in, a refused note, and a save conflict. A conflict offers Keep mine, which saves " +
+      "sign-in, a book that could not be added, and a save conflict. A conflict offers Keep mine, which saves " +
       "the user's copy again, because `notes` otherwise keeps the server's copy. Something the " +
       "user deleted or removed shows as a dark notice with Undo for the undo window; hovering or " +
       "focusing it holds the window, and when the window runs out or the notice is dismissed the " +
@@ -116,7 +109,6 @@ export const machine = setup({}).createMachine({
     "note.conflicted": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
-    "note.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and

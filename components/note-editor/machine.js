@@ -8,8 +8,8 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 // note.changed after (4.3), and emits note.saved at a short throttle while the user
 // types, and on blur. With the `subject` attribute it follows the stage (12): it opens
 // the newest note about the subject, re-follows when the subject changes, and a pin
-// keeps the note in place — a pinned editor refuses note.selected and load with
-// note.refused so the note on screen never changes by surprise. It announces the note
+// stops the re-following, so a change on the stage never moves the note on screen; a
+// pick by the user always opens. It announces the note
 // it shows with note.opened whenever its id changes (6.4). The view (view.js) is a
 // CodeMirror 6 document with three levels (Title/Heading/Subheading) like Notes.app,
 // and Vim when the "Vim keys" preference is on (12). A note is markdown on the wire and
@@ -213,14 +213,11 @@ export const machine = setup({
       enqueue.assign({ subject, titles });
       if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
     }),
-    // A pinned editor was asked to change its note (D7): it does not, it says so
-    // (note.refused, id = the note asked for) and flashes the pin for --duration-undo.
-    // A repeat restarts the window.
-    refuse: enqueueActions(({ event, enqueue }) => {
-      enqueue.emit({ type: "note.refused", id: event.id, reason: "pinned" });
-      enqueue.cancel("flash");
-      enqueue.assign({ flashing: true });
-      enqueue.raise({ type: "_unflash" }, { delay: ({ context }) => context.flashMs, id: "flash" });
+    // A pick opens its note even while pinned: the pin belongs to the editor, not to one
+    // note, so it moves to the note picked and survives a reload there.
+    open: enqueueActions(({ context, event, enqueue }) => {
+      enqueue.assign({ id: event.id, body: "", baseVersion: null, sent: null, about: [] });
+      if (context.pinned) enqueue(() => context.remember?.(event.id));
     }),
   },
 }).createMachine({
@@ -234,13 +231,13 @@ export const machine = setup({
       "the most recently edited note about the subject whenever the subject changes, or an " +
       "empty page that a note about the subject arriving later fills; a new note is linked to " +
       "the subject at its first save, the About line shows that link, and a keystroke made " +
-      "before the subject is known waits for it. A pinned note stays: a request to open another " +
-      "note is refused with a notice until it is unpinned, and the pin and the titles of " +
-      "subjects seen are kept on this device. It announces the note it shows, or none for the " +
+      "before the subject is known waits for it. While pinned the editor stays on its note when " +
+      "the subject changes; picking another note still opens it and the pin stays on, now on " +
+      "that note. The pin and the titles of subjects seen are kept on this device. It announces the note it shows, or none for the " +
       "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
       "here.",
     kind: "view",
-    emits: ["note.saved", "note.opened", "note.refused"],
+    emits: ["note.saved", "note.opened"],
     attributes: ["height", "follows", "subject"],
     asks: ["notes: list", "notes: read", "subject: read", "settings: read"],
   },
@@ -259,9 +256,6 @@ export const machine = setup({
     // so the machine stays importable in Node.
     remember: input.remember,
     restoreId: input.subjecting ? input.recall?.() ?? null : null,
-    // How long the pin flashes on a refusal (--duration-undo, read in the view and passed
-    // in so the machine stays importable in Node, like undoMs in note-list).
-    flashMs: input.flashMs,
     id: null,
     body: "",
     baseVersion: null,
@@ -288,8 +282,6 @@ export const machine = setup({
     // Whether a pin restore is in flight, so a successful load starts pinned and a
     // not-found one forgets the pin (D10).
     restoring: false,
-    // Whether the pin is flashing a refusal right now (drives the danger border).
-    flashing: false,
     // The notes fetched at start, kept so a forgotten pin can choose from the same
     // picture without a second query.
     startNotes: [],
@@ -305,30 +297,11 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    // A command addressing this instance (4.4). A pinned editor refuses it (D7); the
-    // note asked for rides in note.refused. Otherwise it lands like a load always has.
-    load: [
-      // Pinned but told to load the note already on screen: nothing changes, and it is
-      // not refused (12) — the list keeps a clickable row for a pinned note.
-      { guard: ({ context, event }) => context.pinned && event.id === context.id },
-      { guard: ({ context }) => context.pinned, actions: "refuse" },
-      {
-        target: ".loading",
-        actions: assign({ id: ({ event }) => event.id, body: "", baseVersion: null, sent: null, about: [] }),
-      },
-    ],
+    // A command addressing this instance (4.4).
+    load: { target: ".loading", actions: "open" },
     // The list's gesture (4.3, fifth rule), taken only when this editor follows the
-    // selection. A pinned editor refuses it (D7). An unfollowing editor leaves it to the
-    // bus to record as ignored.
-    "note.selected": [
-      { guard: ({ context, event }) => context.follows && context.pinned && event.id === context.id },
-      { guard: ({ context }) => context.follows && context.pinned, actions: "refuse" },
-      {
-        guard: ({ context }) => context.follows,
-        target: ".loading",
-        actions: assign({ id: ({ event }) => event.id, body: "", baseVersion: null, sent: null, about: [] }),
-      },
-    ],
+    // selection. An unfollowing editor leaves it to the bus to record as ignored.
+    "note.selected": { guard: ({ context }) => context.follows, target: ".loading", actions: "open" },
     focus: { actions: ({ context }) => context.focus() },
     // The user pinned or unpinned (D7): remember the pinned note's id, or forget it.
     // Guarded so the button does nothing while the editor holds no note.
@@ -339,7 +312,6 @@ export const machine = setup({
         ({ context }) => context.remember?.(context.pinned ? context.id : null),
       ],
     },
-    _unflash: { actions: assign({ flashing: false }) },
     // The stage moved (4.3): a different subject is on it. Held for us until the starting
     // subject: read reply lands (subject: read supersededBy), so it is never lost and
     // never applied before the picture it supersedes. Ignored when not following.

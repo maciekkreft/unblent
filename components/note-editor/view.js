@@ -9,7 +9,6 @@ import { vim, Vim } from "@replit/codemirror-vim";
 import { machine, parseBody, serialize, aboutTitleOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
-import refused from "./events/note.refused.json" with { type: "json" };
 
 // The note editor's view: a CodeMirror 6 document. The fact stays one plain markdown
 // string; the document the user edits is marker-free, and per-line level lives in a
@@ -60,15 +59,6 @@ const titleStore = {
       // No persistence available; the titles live only for this page.
     }
   },
-};
-
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's flash window;
-// the token is the one clock, the same --duration-undo note-list reads for its undo bar.
-const toMs = (text, fallback = 3000) => {
-  const t = (text || "").trim();
-  const n = parseFloat(t);
-  if (Number.isNaN(n)) return fallback;
-  return t.endsWith("ms") ? n : n * 1000;
 };
 
 // Body carries no decoration, so a new line defaults to Body for free (§2 of the
@@ -205,9 +195,6 @@ class ActorController {
   }
 
   hostConnected() {
-    // The flash window comes from --duration-undo, read off the host so a stylesheet or
-    // a test can set it; the machine only ever sees the number (importable in Node).
-    const flashMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
@@ -221,9 +208,8 @@ class ActorController {
         remember: pinStore.remember,
         recallTitles: titleStore.recall,
         rememberTitles: titleStore.remember,
-        flashMs,
       },
-      events: { "note.saved": saved, "note.opened": opened, "note.refused": refused },
+      events: { "note.saved": saved, "note.opened": opened },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -292,8 +278,8 @@ class NoteEditor extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    /* The pin: a toggle, muted while following, accent when pinned, its border flashing
-       danger when it refused a change (D7). One icon, sized by the caption type. */
+    /* The pin: a toggle, muted while following, accent when pinned (D7). One icon,
+       sized by the caption type. */
     .pin {
       flex: none;
       display: inline-flex;
@@ -316,9 +302,6 @@ class NoteEditor extends LitElement {
     }
     .pin[aria-pressed="true"] {
       color: var(--color-accent);
-    }
-    .pin.flashing {
-      border-color: var(--color-danger);
     }
     .pin:disabled {
       color: var(--color-mute);
@@ -610,14 +593,13 @@ class NoteEditor extends LitElement {
 
   // The header shown only while following the stage (D7): the About line, and the pin
   // toggle. The pin is disabled while the editor holds no note; its label names the
-  // action for assistive tech, its colour follows the state (accent when pinned), and
-  // its border flashes danger after it refuses a change.
-  #header(aboutTitle, pinned, flashing, id) {
+  // action for assistive tech, and its colour follows the state (accent when pinned).
+  #header(aboutTitle, pinned, id) {
     return html`
       <div class="header">
         <span class="about">${aboutTitle ? html`About: ${aboutTitle}` : nothing}</span>
         <button
-          class="pin ${flashing ? "flashing" : ""}"
+          class="pin"
           type="button"
           aria-pressed=${pinned}
           aria-label=${pinned ? "Unpin note" : "Pin note"}
@@ -640,12 +622,12 @@ class NoteEditor extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { subjecting, pinned, flashing, id, vimKeys } = snapshot.context;
+    const { subjecting, pinned, id, vimKeys } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
       <div class="editor">
-        ${subjecting ? this.#header(aboutTitle, pinned, flashing, id) : nothing}
+        ${subjecting ? this.#header(aboutTitle, pinned, id) : nothing}
         <div class="region" role="textbox" aria-label="Note"></div>
         <div class="footer">
           <p class="status">

@@ -40,7 +40,7 @@ function describe(source) {
       ? `“${title}” was deleted elsewhere, so your edit could not be kept.`
       : `Your edit to “${title}” clashed with a newer copy. Keep yours, or dismiss to take theirs.`;
   }
-  // book.refused, note.refused and session.refused all carry a `reason`, but from
+  // book.refused and session.refused both carry a `reason`, but from
   // different vocabularies, so each is read first by its event type.
   if (source.type === "book.refused") {
     switch (source.reason) {
@@ -51,9 +51,6 @@ function describe(source) {
       default:
         return "The server is unavailable. Try again in a moment.";
     }
-  }
-  if (source.type === "note.refused") {
-    return "This note is pinned. Unpin it to open another.";
   }
   switch (source.reason) {
     case "cancelled":

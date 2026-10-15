@@ -12,7 +12,7 @@ import { machine, titleOf, parseBody, serialize, aboutTitleOf } from "../machine
 // the view edits are pure functions, tested at the end.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "note.refused"].map((n) => [n, schemaOf(n)]));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.opened"].map((n) => [n, schemaOf(n)]));
 // Every emit of every test, checked against its schema by the last test.
 const recorded = [];
 
@@ -45,22 +45,19 @@ function editor({
   remember,
   recallTitles,
   rememberTitles,
-  flashMs = 3000,
 } = {}) {
   const clock = new SimulatedClock();
   const saved = [];
   const opened = [];
-  const refused = [];
   const actor = createActor(machine, {
-    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles, flashMs },
+    input: { ask, mint, focus, follows, subjecting, recall, remember, recallTitles, rememberTitles },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.opened", (e) => opened.push(e.id));
-  actor.on("note.refused", (e) => refused.push(e));
   for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
   actor.start();
-  return { actor, clock, saved, opened, refused };
+  return { actor, clock, saved, opened };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -493,62 +490,29 @@ test("a pinned editor keeps its note when the subject changes, only remembering 
   assert.equal(s.context.subject.id, "bookB", "but the new subject is remembered");
 });
 
-test("a pinned editor refuses note.selected and load, naming the note it refused", async () => {
+test("a pinned editor opens a picked note and stays pinned on it, remembering it", async () => {
+  const remembered = [];
   const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
-  const { actor, refused } = editor({
-    subjecting: true,
-    follows: true,
-    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
-  });
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, follows: true, remember: (v) => remembered.push(v), ask });
   await settle();
   actor.send({ type: "_togglePin" });
-  const open = actor.getSnapshot().context.id;
 
   actor.send({ type: "note.selected", id: ID2 });
-  assert.equal(actor.getSnapshot().context.id, open, "the note on screen did not change");
-  assert.deepEqual(refused, [{ type: "note.refused", id: ID2, reason: "pinned" }]);
-
-  actor.send({ type: "load", id: ID2 });
-  assert.equal(refused.length, 2, "load is refused too, once per attempt");
-  assert.equal(actor.getSnapshot().context.id, open);
-});
-
-test("a pinned editor does not refuse a select or load of the note it already shows", async () => {
-  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
-  const { actor, refused } = editor({
-    subjecting: true,
-    follows: true,
-    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
-  });
   await settle();
-  actor.send({ type: "_togglePin" });
-  const open = actor.getSnapshot().context.id;
+  assert.equal(actor.getSnapshot().context.id, ID2, "the pick opened");
+  assert.equal(actor.getSnapshot().context.pinned, true, "the pin stays on the editor");
+  assert.deepEqual(remembered, [ID, ID2], "the pin now remembers the picked note");
 
-  actor.send({ type: "note.selected", id: open });
-  actor.send({ type: "load", id: open });
-  assert.equal(actor.getSnapshot().context.id, open, "the note on screen did not change");
-  assert.equal(actor.getSnapshot().context.flashing, false, "the pin did not flash");
-  assert.deepEqual(refused, [], "its own note is not refused");
-});
-
-test("a refusal flashes the pin for the flash window, and a repeat restarts it", async () => {
-  const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
-  const { actor, clock } = editor({
-    subjecting: true,
-    follows: true,
-    flashMs: 3000,
-    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
-  });
+  actor.send({ type: "load", id: ID });
   await settle();
-  actor.send({ type: "_togglePin" });
-  actor.send({ type: "note.selected", id: ID2 });
-  assert.equal(actor.getSnapshot().context.flashing, true);
-  clock.increment(2999);
-  actor.send({ type: "note.selected", id: ID2 });
-  clock.increment(1);
-  assert.equal(actor.getSnapshot().context.flashing, true, "still flashing: the window restarted");
-  clock.increment(2999);
-  assert.equal(actor.getSnapshot().context.flashing, false, "cleared a full window after the last refusal");
+  assert.equal(actor.getSnapshot().context.id, ID, "load opens too");
+  assert.equal(remembered.at(-1), ID);
 });
 
 test("the pin does nothing while the editor holds no note", async () => {
