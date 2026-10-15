@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, shown } from "../machine.js";
+import { machine, shown, apart } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -364,4 +364,14 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     await vimSettle();
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
   }
+});
+
+test("the open chat not about the subject is set apart; one about it, or with no subject, is not", () => {
+  const about = (id, book) => ({ id, title: id, subtitle: "", about: [{ kind: "book", id: book }], updatedAt: 1 });
+  const chats = [about("a", "b1"), about("b", "b2")];
+  const subject = { kind: "book", id: "b1" };
+  assert.equal(apart({ chats, following: true, subject, open: "b" })?.id, "b", "a pinned chat of another book");
+  assert.equal(apart({ chats, following: true, subject, open: "a" }), null, "already shown");
+  assert.equal(apart({ chats, following: true, subject: null, open: "b" }), null, "every chat shown");
+  assert.equal(apart({ chats, following: true, subject, open: "draft" }), null, "no row yet");
 });

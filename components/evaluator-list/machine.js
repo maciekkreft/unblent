@@ -7,7 +7,8 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // for the open book and follows evaluator.changed / evaluator.deleted, asks books: list
 // for which book is the journal and what each book is called and follows book.changed /
 // book.deleted, and asks settings: read for the "Vim keys" preference (12) and follows
-// settings.changed (4.3, fourth rule). A pick and a tick leave as gestures (4.3, fifth rule). The
+// settings.changed (4.3, fourth rule), and asks pins: read for the book the tab is pinned
+// to and follows pins.changed. A pick and a tick leave as gestures (4.3, fifth rule). The
 // ask and the id minting arrive through input, so this stays importable in Node.
 //
 // New evaluator is always the first row and always names a minted id no evaluator has
@@ -175,29 +176,43 @@ const fromChange = (context, event) => ({
   titles: { ...context.titles, [event.id]: event.title },
 });
 
-// A new subject: a different book is asked for afresh; no book shows the line that
-// says to open one.
-const follow = (subjectOf) => [
+// The book the list shows: the one the tab is pinned to, else the book on the stage.
+export const wanted = ({ pin, subject }) => pin ?? bookOf(subject);
+
+// A new subject or pin: `next` gives both. A different book is asked for afresh; no book
+// shows the line that says to open one. While pinned the subject is only noted, and
+// unpinning shows the book on the stage at once, because a list left on the pinned book
+// would offer no way back to it.
+const follow = (next) => [
   {
-    guard: ({ context, event }) => bookOf(subjectOf(event)) === context.book,
-    actions: assign({ subject: ({ event }) => subjectOf(event) }),
+    guard: ({ context, event }) => wanted(next({ context, event })) === context.book,
+    actions: assign(({ context, event }) => next({ context, event })),
   },
   {
-    guard: ({ event }) => bookOf(subjectOf(event)) != null,
+    guard: ({ context, event }) => wanted(next({ context, event })) != null,
     target: ".loading",
-    actions: assign(({ event }) => ({ ...fresh, subject: subjectOf(event), book: bookOf(subjectOf(event)), evaluators: [], open: null })),
+    actions: assign(({ context, event }) => {
+      const n = next({ context, event });
+      return { ...fresh, ...n, book: wanted(n), evaluators: [], open: null };
+    }),
   },
   {
     target: ".idle",
-    actions: assign(({ event }) => ({ ...fresh, subject: subjectOf(event), book: null, evaluators: [], open: null })),
+    actions: assign(({ context, event }) => ({ ...fresh, ...next({ context, event }), book: null, evaluators: [], open: null })),
   },
 ];
 
 export const machine = setup({
   actors: {
-    // The subject starting picture; subject.changed is held for this ask until its reply
-    // lands (subject: read supersededBy), so it is applied after, in order.
-    readSubject: fromPromise(({ input }) => (input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }))),
+    // The starting picture: the pin, then the subject. pins.changed and subject.changed are
+    // each held for this ask until their reply lands (supersededBy), so they are applied
+    // after, in order.
+    readSubject: fromPromise(async ({ input }) => {
+      if (!input.following) return { subject: null, pin: null };
+      const pins = await input.ask("pins", "read", {});
+      const subject = await input.ask("subject", "read", {});
+      return { subject: subject?.subject ?? null, pin: typeof pins?.evaluators === "string" ? pins.evaluators : null };
+    }),
     // The book's evaluators; evaluator.changed / evaluator.deleted are held for this ask
     // until its reply lands, so a change that races it is applied after it.
     // The journal asks for every book's, as it lists the marked ones of any book.
@@ -230,11 +245,14 @@ export const machine = setup({
       "shows each question with its answer and how likely it is, and evaluators with yes / no " +
       "questions a score, the geometric mean of those answers. Results are not saved: Clear " +
       "removes them, a change to an evaluator removes its own, and another book removes all " +
-      "of them and the text. A failed run says why in one sentence.",
+      "of them and the text. A failed run says why in one sentence. With `subject`, a line at " +
+      "the top names the book shown. While the editor's pin is on, as `pins` says, the list " +
+      "stays on that book when another comes on the stage, and unpinning brings the stage's " +
+      "book back at once.",
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list"],
+    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list", "pins: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -242,6 +260,10 @@ export const machine = setup({
     following: Boolean(input.following),
     subject: null,
     book: null,
+    // The book `pins` holds for this tab, and whether pins.changed came before the start
+    // reply, which is then the older picture.
+    pin: null,
+    pinsObserved: false,
     evaluators: [],
     // The journal's book id, null until books answers, and each book's title by id.
     journal: null,
@@ -260,7 +282,10 @@ export const machine = setup({
     {
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: follow(({ output }) => output?.subject ?? null),
+      onDone: follow(({ context, event }) => ({
+        subject: event.output?.subject ?? null,
+        pin: context.pinsObserved ? context.pin : (event.output?.pin ?? null),
+      })),
       onError: { actions: [] },
     },
     {
@@ -353,7 +378,12 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "subject.changed": follow(({ subject }) => subject ?? null),
+    "subject.changed": follow(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),
+    // `pins`' news (4.3, fourth rule): the tab's book pinned, or unpinned.
+    "pins.changed": [
+      { guard: ({ context }) => !context.following, actions: [] },
+      ...follow(({ context, event }) => ({ subject: context.subject, pin: event.evaluators ?? null, pinsObserved: true })),
+    ],
     "book.changed": learn(fromChange),
     "book.deleted": { actions: assign({ titles: ({ context, event }) => without(context.titles, event.id) }) },
     // The fact's news (4.3, fourth rule), for the evaluators shown only. One that no

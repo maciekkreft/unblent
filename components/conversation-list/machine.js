@@ -47,6 +47,15 @@ const isAbout = (chat, subject) =>
 export const shown = ({ chats, following, subject }) =>
   following && subject != null ? chats.filter((c) => isAbout(c, subject)) : chats;
 
+// The open chat, when it is not among the shown chats (12): a pinned chat after the stage
+// moved. Only while following a subject; otherwise the open chat is always shown. Its row
+// is the same row as any other; the view sets it apart, as note-list does for a note.
+export const apart = ({ chats, following, subject, open }) => {
+  if (!following || subject == null || open == null) return null;
+  const chat = chats.find((c) => c.id === open);
+  return chat && !isAbout(chat, subject) ? chat : null;
+};
+
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
 // context immutable; the view re-renders on every snapshot regardless).
 const without = (set, id) => {
@@ -92,7 +101,9 @@ export const machine = setup({
     description:
       "Lists the chats, newest first, and lets the user open one, start a new one, or delete " +
       "one. The first row is always New chat. While a subject is on the stage only the chats " +
-      "about it are listed; with no subject every chat is listed. Deleting waits out the undo " +
+      "about it are listed; with no subject every chat is listed. The open chat, when it is not " +
+      "about the subject, such as a pinned chat, is listed apart at the top so the open row is " +
+      "never missing. Deleting waits out the undo " +
       "window, so it can be taken back in one step. It learns which chat is open from " +
       "`conversations` and never decides it.",
     kind: "view",

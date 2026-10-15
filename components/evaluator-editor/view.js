@@ -9,6 +9,7 @@ import { vim, Vim, getCM } from "@replit/codemirror-vim";
 import { machine, duplicateNames } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
+import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 
 // The multi-line fields are CodeMirror boxes, one editor each, so they take Vim's keys
 // when the "Vim keys" preference (12) is on: Vim sits in a compartment turned on and off
@@ -90,7 +91,7 @@ class ActorController {
         remember,
         following: this.host.subject,
       },
-      events: { "evaluator.saved": saved, "removal.started": started },
+      events: { "evaluator.saved": saved, "removal.started": started, "pin.toggled": pinToggled },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -122,6 +123,53 @@ class EvaluatorEditor extends LitElement {
     }
     :host([height="fill"]) {
       flex: 1;
+    }
+    /* The header, as the note editor's: the book on the left, the pin on the right. */
+    .header {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      min-height: var(--space-lg);
+      padding: var(--space-xs) var(--space-md) 0;
+    }
+    .about {
+      flex: 1;
+      min-width: 0;
+      font-size: var(--text-caption);
+      color: var(--color-mute);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* The pin: a toggle, muted while following, accent when pinned, as the note
+       editor's and the chat's. */
+    .pin {
+      flex: none;
+      display: inline-flex;
+      appearance: none;
+      background: none;
+      border: var(--border-width) solid transparent;
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs);
+      margin: 0;
+      font: inherit;
+      font-size: var(--text-body);
+      cursor: pointer;
+      color: var(--color-body-mid);
+    }
+    .pin svg {
+      display: block;
+    }
+    .pin:hover:not([aria-pressed="true"]) {
+      color: var(--color-ink);
+    }
+    .pin[aria-pressed="true"] {
+      color: var(--color-accent);
+    }
+    .pin:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .page {
       flex: 1;
@@ -376,6 +424,29 @@ class EvaluatorEditor extends LitElement {
     this.#actor.send(event);
   }
 
+  // Only while following the stage, where the pin means something: the book the tab
+  // shows, and the pin that keeps the list and this editor on it when the stage moves (12).
+  #header(snapshot) {
+    const { following, book, pin, titles } = snapshot.context;
+    if (!following) return nothing;
+    const pinned = pin != null && pin === book;
+    const title = titles[book];
+    return html`
+      <div class="header">
+        <span class="about">${title ? html`About: ${title}` : nothing}</span>
+        <button
+          class="pin"
+          type="button"
+          aria-pressed=${pinned}
+          aria-label=${pinned ? "Unpin evaluators" : "Pin evaluators"}
+          @click=${() => this.#send({ type: "_togglePin" })}
+        >
+          ${icon("push-pin")}
+        </button>
+      </div>
+    `;
+  }
+
   // Adding a question or an option puts the keyboard in its first field, in Vim's insert
   // mode when Vim keys is on, so the first key typed is text.
   async #add(event, selector) {
@@ -484,6 +555,7 @@ class EvaluatorEditor extends LitElement {
     const questions = draft.questions.filter((q) => !q.removing);
     this.#wanted.clear();
     return html`
+      ${this.#header(snapshot)}
       <div class="page">
         <form
           @submit=${(e) => e.preventDefault()}

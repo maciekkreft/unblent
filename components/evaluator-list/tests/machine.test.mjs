@@ -24,7 +24,7 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide } = {}) => {
+const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
@@ -33,6 +33,7 @@ const start = async ({ subject = book(A), following = true, fail, kept = KEPT, v
       ask: (target, name, payload) => {
         asked.push([target, name, payload]);
         if (target === "subject") return Promise.resolve({ subject });
+        if (target === "pins") return Promise.resolve({ note: null, chat: null, evaluators: pinned });
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
         if (target === "llm") return decide(payload);
         return Promise.resolve(fail ?? { evaluators: kept[payload.book] ?? [] });
@@ -165,7 +166,11 @@ test("a book picked while another is still loading is the one shown", async () =
       following: true,
       mint: () => D1,
       ask: (target, name, payload) =>
-        target === "subject" ? Promise.resolve({ subject: book(A) }) : new Promise((r) => pending.set(payload.book, r)),
+        target === "subject"
+          ? Promise.resolve({ subject: book(A) })
+          : target === "pins"
+            ? Promise.resolve({ note: null, chat: null, evaluators: null })
+            : new Promise((r) => pending.set(payload.book, r)),
     },
   });
   actor.start();
@@ -177,6 +182,40 @@ test("a book picked while another is still loading is the one shown", async () =
   pending.get(B)({ evaluators: KEPT[B] });
   await flush();
   assert.deepEqual(actor.getSnapshot().context.evaluators.map((e) => e.id), [id(2)]);
+});
+
+test("pinned at start, the list shows the pinned book and stays on it when the stage moves", async () => {
+  const { actor, ctx, asked } = await start({ subject: book(A), pinned: B });
+  assert.equal(ctx().book, B);
+  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(2)]);
+  actor.send({ type: "subject.changed", subject: book(A) });
+  await flush();
+  assert.equal(ctx().book, B, "still the pinned book");
+  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{ book: B }], "A was never asked for");
+});
+
+test("pinned to the book shown, the list stays on it; unpinned, it shows the stage's book at once", async () => {
+  const { actor, ctx } = await start({ subject: book(A) });
+  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: A });
+  actor.send({ type: "subject.changed", subject: book(B) });
+  await flush();
+  assert.equal(ctx().book, A, "pinned: stays on A");
+  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
+  await flush();
+  await flush();
+  assert.equal(ctx().book, B, "unpinned: the book on the stage");
+  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(2)]);
+});
+
+test("pins.changed unpinning elsewhere follows the stage; pinning the shown book changes nothing shown", async () => {
+  const { actor, ctx } = await start({ subject: book(A), pinned: B });
+  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
+  await flush();
+  await flush();
+  assert.equal(ctx().book, A);
+  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: A });
+  assert.equal(ctx().book, A);
+  assert.ok(actor.getSnapshot().matches("ready"));
 });
 
 test("without `subject` nothing is asked and it says to open a book", async () => {

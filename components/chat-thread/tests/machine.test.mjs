@@ -15,6 +15,7 @@ const other = (component, name) =>
   JSON.parse(readFileSync(resolve(HERE, "..", "..", component, "queries", `${name}.json`), "utf8"));
 const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
+const PIN_TOGGLED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "pin.toggled.json"), "utf8"));
 
 const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
 const CHAT2 = "01HQ8ZK7M4N5P6Q7R8S9T0V1W5";
@@ -33,7 +34,7 @@ const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
 function start(options = {}) {
-  const { openId = null, chatsById = {}, readError = {} } = options;
+  const { openId = null, chatsById = {}, readError = {}, pinned = null } = options;
   const input = {
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
@@ -47,12 +48,18 @@ function start(options = {}) {
         const conversation = chatsById[payload.id];
         return Promise.resolve(conversation ? { conversation } : { error: "not-found" });
       }
+      if (key === "pins: read") return Promise.resolve({ note: null, chat: pinned, evaluators: null });
       throw new Error(`unexpected ask ${key}`);
     },
   };
   const actor = createActor(machine, { input });
+  const toggled = [];
+  actor.on("pin.toggled", (e) => {
+    toggled.push(e.id);
+    see({ what: e.what, id: e.id }, PIN_TOGGLED);
+  });
   actor.start();
-  return { actor };
+  return { actor, toggled };
 }
 
 const state = (h) => h.actor.getSnapshot().value;
@@ -105,6 +112,38 @@ test("the open chat deleted falls back to the empty page", async () => {
   await until(() => state(h) === "showing", "showing");
   h.actor.send({ type: "conversation.deleted", id: CHAT });
   await until(() => state(h) === "empty", "empty");
+});
+
+test("the pin pins the open chat and unpins it; with no chat open it does nothing", async () => {
+  const h = start({ openId: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
+  await until(() => state(h) === "showing", "showing");
+  h.actor.send({ type: "_togglePin" });
+  assert.equal(h.actor.getSnapshot().context.pin, CHAT);
+  h.actor.send({ type: "_togglePin" });
+  assert.deepEqual(h.toggled, [CHAT, null]);
+  h.actor.send({ type: "conversation.opened", id: null });
+  await until(() => state(h) === "empty", "empty");
+  assert.equal(h.actor.getSnapshot().can({ type: "_togglePin" }), false);
+});
+
+test("opening another chat while pinned moves the pin to it; deleting the pinned chat unpins", async () => {
+  const h = start({ openId: CHAT, pinned: CHAT, chatsById: { [CHAT]: emptyChat(CHAT), [CHAT2]: emptyChat(CHAT2) } });
+  await until(() => state(h) === "showing", "showing");
+  assert.equal(h.actor.getSnapshot().context.pin, CHAT, "the pin from pins");
+  h.actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.deepEqual(h.toggled, [CHAT2]);
+  await until(() => state(h) === "showing", "showing");
+  h.actor.send({ type: "conversation.deleted", id: CHAT2 });
+  assert.deepEqual(h.toggled, [CHAT2, null]);
+});
+
+test("opening another chat while not pinned leaves the pins alone", async () => {
+  const h = start({ openId: CHAT, pinned: CHAT2, chatsById: { [CHAT]: emptyChat(CHAT), [CHAT2]: emptyChat(CHAT2) } });
+  await until(() => state(h) === "showing", "showing");
+  h.actor.send({ type: "conversation.opened", id: CHAT2 });
+  h.actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
+  h.actor.send({ type: "conversation.opened", id: CHAT });
+  assert.deepEqual(h.toggled, []);
 });
 
 test("an unavailable read says the server cannot be reached", async () => {

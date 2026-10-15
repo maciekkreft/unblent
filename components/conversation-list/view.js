@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown } from "./machine.js";
+import { machine, shown, apart } from "./machine.js";
 import selected from "./events/conversation.selected.json" with { type: "json" };
 import discarded from "./events/conversation.discarded.json" with { type: "json" };
 
@@ -172,6 +172,19 @@ class ConversationList extends LitElement {
       flex: 1;
       min-width: 0;
     }
+    /* The open chat kept in the list though it is not about the subject (12), as
+       note-list keeps a note: a caption naming why it is here, and a rule under the row
+       that sets it off from the chats about the subject below it. */
+    .tag {
+      display: block;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
+    .row.apart {
+      border-bottom: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-0);
+      margin-bottom: var(--space-2xs);
+    }
     /* The "New chat" row is one line, centred in a chat row's two-line height so the
        list keeps a constant row height, the same as note-list. The height is the two
        line-boxes a chat row stacks (title + subtitle), expressed from the type tokens. */
@@ -325,8 +338,11 @@ class ConversationList extends LitElement {
   #rows(snapshot) {
     const chats = shown(snapshot.context);
     const { draft } = snapshot.context;
-    // The "New chat" row leads the list: the fresh chat to start, always on top.
-    return [...(draft ? [{ id: draft, draft: true }] : []), ...chats];
+    // The open chat, when it is not about the subject (12), leads the list set apart, so
+    // its highlighted row is never missing; then the "New chat" row, the fresh chat to
+    // start.
+    const kept = apart(snapshot.context);
+    return [...(kept ? [{ ...kept, apart: true }] : []), ...(draft ? [{ id: draft, draft: true }] : []), ...chats];
   }
 
   #focusRow(rows, open) {
@@ -494,6 +510,7 @@ class ConversationList extends LitElement {
     const classes = [
       "row",
       r.draft ? "draft" : "",
+      r.apart ? "apart" : "",
       isDiscarding ? "discarding" : "",
       d && d.dragging ? "dragging" : "",
       d && d.armed ? "armed" : "",
@@ -546,6 +563,7 @@ class ConversationList extends LitElement {
         <span class="under">Delete</span>
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
+            ${r.apart ? html`<span class="tag">Open from elsewhere</span>` : nothing}
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "New chat" : r.title}</span>
             <span class="subtitle">${r.subtitle || " "}</span>
           </span>

@@ -97,3 +97,54 @@ test("in the journal a marked evaluator of another book is listed, opened and ed
     unwire();
   }
 });
+
+test("pinned, the list and the open evaluator stay on their book while the stage moves; unpinned, both follow it, and a reload keeps the pin", async () => {
+  const saved = [];
+  const wiring = (stored) =>
+    wire(["pins", "journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
+      pins: { stored, save: (v) => saved.push(v) },
+      journal: { store: store({ days: new Map() }), now: () => NOW },
+      books: { store: store({ rows: new Map([[BOOK, book]]) }, new Map([["open", { id: BOOK, at: 1 }]])), now: () => NOW, api: null, revoke: () => {} },
+      evaluators: {
+        store: store({ rows: new Map([[BOOK_EVAL, evaluator(BOOK_EVAL, BOOK, "Book's")], [JOURNAL_EVAL, evaluator(JOURNAL_EVAL, JOURNAL, "Journal's")]]) }),
+      },
+      "evaluator-list": { mint, following: true },
+      "evaluator-editor": { mint, following: true, throttleMs: 50 },
+    });
+  let { actors, unwire } = await wiring(null);
+  const list = () => actors["evaluator-list"].getSnapshot().context;
+  const draft = () => actors["evaluator-editor"].getSnapshot().context.draft;
+  try {
+    await until(() => list().evaluators.map((e) => e.name).join() === "Book's");
+    actors["evaluator-list"].send({ type: "_pick", id: BOOK_EVAL });
+    await until(() => draft()?.name === "Book's");
+    actors["evaluator-editor"].send({ type: "_togglePin" });
+    await until(() => actors.pins.getSnapshot().context.pins.evaluators === BOOK);
+
+    actors.books.send({ type: "book.selected", id: JOURNAL });
+    await until(() => list().subject?.id === JOURNAL);
+    await until(() => actors["evaluator-editor"].getSnapshot().context.subject?.id === JOURNAL);
+    assert.equal(list().book, BOOK, "the list stays on the pinned book");
+    assert.equal(draft()?.name, "Book's", "the open evaluator stays");
+  } finally {
+    unwire();
+  }
+
+  // A reload: the pin comes back from what pins saved, with the Journal still on the stage.
+  ({ actors, unwire } = await wiring(saved.at(-1)));
+  try {
+    actors.books.send({ type: "book.selected", id: JOURNAL });
+    await until(() => list().subject?.id === JOURNAL);
+    await until(() => list().evaluators.length > 0);
+    assert.equal(list().book, BOOK, "still pinned after a reload");
+
+    actors["evaluator-list"].send({ type: "_pick", id: BOOK_EVAL });
+    await until(() => draft()?.name === "Book's");
+    actors["evaluator-editor"].send({ type: "_togglePin" });
+    await until(() => list().book === JOURNAL);
+    await until(() => draft()?.book === JOURNAL);
+    assert.equal(draft().name, "", "unpinned, the editor follows to the Journal");
+  } finally {
+    unwire();
+  }
+});

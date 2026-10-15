@@ -155,12 +155,15 @@ export const machine = setup({
     // The starting picture (4.3): every note, and — only while following the stage —
     // the current subject. subject.changed that races the read is held for us until the
     // reply lands (subject: read supersededBy), so a change is applied after it, in order.
+    // The pin too, from `pins`, while following: pins.changed is held for us until that
+    // reply lands (pins: read supersededBy).
     start: fromPromise(async ({ input }) => {
-      const [list, subject] = await Promise.all([
+      const [list, subject, pins] = await Promise.all([
         input.ask("notes", "list", {}),
         input.subjecting ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }),
+        input.subjecting ? input.ask("pins", "read", {}) : Promise.resolve({}),
       ]);
-      return { notes: list?.notes ?? [], subject: subject?.subject ?? null };
+      return { notes: list?.notes ?? [], subject: subject?.subject ?? null, pin: typeof pins?.note === "string" ? pins.note : null };
     }),
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
     read: fromPromise(({ input }) => input.ask("notes", "read", { id: input.id })),
@@ -217,7 +220,23 @@ export const machine = setup({
     // note, so it moves to the note picked and survives a reload there.
     open: enqueueActions(({ context, event, enqueue }) => {
       enqueue.assign({ id: event.id, body: "", baseVersion: null, sent: null, about: [] });
-      if (context.pinned) enqueue(() => context.remember?.(event.id));
+      if (context.pinned) enqueue.emit({ type: "pin.toggled", what: "note", id: event.id });
+    }),
+    // The pin the start found: `pins` holds it, or else the note this editor kept under
+    // its own key before `pins` existed, which is handed to `pins` once and forgotten
+    // here. A pins.changed that arrived first is newer than the reply and wins.
+    takeStartPin: enqueueActions(({ context, event, enqueue }) => {
+      const legacy = context.legacyPin;
+      if (legacy != null) enqueue(() => context.forget?.());
+      if (context.pinsObserved) return;
+      if (event.output.pin != null) enqueue.assign({ restoreId: event.output.pin });
+      else if (legacy != null) {
+        enqueue.assign({ restoreId: legacy });
+        enqueue.emit({ type: "pin.toggled", what: "note", id: legacy });
+      }
+    }),
+    unpin: enqueueActions(({ context, enqueue }) => {
+      if (context.pinned || context.restoring) enqueue.emit({ type: "pin.toggled", what: "note", id: null });
     }),
   },
 }).createMachine({
@@ -233,13 +252,14 @@ export const machine = setup({
       "the subject at its first save, the About line shows that link, and a keystroke made " +
       "before the subject is known waits for it. While pinned the editor stays on its note when " +
       "the subject changes; picking another note still opens it and the pin stays on, now on " +
-      "that note. The pin and the titles of subjects seen are kept on this device. It announces the note it shows, or none for the " +
+      "that note. The pin is kept by `pins` and the titles of subjects seen on this device, so " +
+      "both survive a reload. It announces the note it shows, or none for the " +
       "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
       "here.",
     kind: "view",
-    emits: ["note.saved", "note.opened"],
+    emits: ["note.saved", "note.opened", "pin.toggled"],
     attributes: ["height", "follows", "subject"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -252,10 +272,14 @@ export const machine = setup({
     // The `subject` attribute (D5): present means follow the stage — open the note about
     // it, re-follow on a change, and offer the pin. Off is exactly today's behaviour.
     subjecting: Boolean(input.subjecting),
-    // The pin store (D10): the remembered pinned note id, read and written through input
-    // so the machine stays importable in Node.
-    remember: input.remember,
-    restoreId: input.subjecting ? input.recall?.() ?? null : null,
+    // The note pinned under this editor's own key before `pins` owned the pin, read
+    // through input so the machine stays importable in Node; `forget` clears that key.
+    forget: input.forget,
+    legacyPin: input.subjecting ? input.recall?.() ?? null : null,
+    // The pinned note to reopen at start, from `pins` (D10).
+    restoreId: null,
+    // Whether pins.changed arrived before the start reply, which is then the older picture.
+    pinsObserved: false,
     id: null,
     body: "",
     baseVersion: null,
@@ -303,14 +327,20 @@ export const machine = setup({
     // selection. An unfollowing editor leaves it to the bus to record as ignored.
     "note.selected": { guard: ({ context }) => context.follows, target: ".loading", actions: "open" },
     focus: { actions: ({ context }) => context.focus() },
-    // The user pinned or unpinned (D7): remember the pinned note's id, or forget it.
-    // Guarded so the button does nothing while the editor holds no note.
+    // The user pinned or unpinned (D7): the gesture goes to `pins` (4.3, fifth rule); the
+    // button turns at once and pins.changed confirms it. Guarded so the button does
+    // nothing while the editor holds no note.
     _togglePin: {
       guard: ({ context }) => context.subjecting && context.id != null,
       actions: [
         assign({ pinned: ({ context }) => !context.pinned }),
-        ({ context }) => context.remember?.(context.pinned ? context.id : null),
+        emit(({ context }) => ({ type: "pin.toggled", what: "note", id: context.pinned ? context.id : null })),
       ],
+    },
+    // `pins`' news (4.3, fourth rule): the editor is pinned while `pins` holds its note.
+    "pins.changed": {
+      guard: ({ context }) => context.subjecting,
+      actions: assign({ pinned: ({ context, event }) => event.note != null && event.note === context.id, pinsObserved: true }),
     },
     // The stage moved (4.3): a different subject is on it. Held for us until the starting
     // subject: read reply lands (subject: read supersededBy), so it is never lost and
@@ -347,10 +377,7 @@ export const machine = setup({
     "note.deleted": {
       guard: ({ context, event }) => event.id === context.id,
       target: ".empty",
-      actions: [
-        assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false }),
-        ({ context }) => context.remember?.(null),
-      ],
+      actions: ["unpin", assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false })],
     },
     // The fact's news (4.3, fourth rule). Guarded so a change for another id is left
     // to the bus to record as ignored.
@@ -391,7 +418,7 @@ export const machine = setup({
           { guard: "typedAhead", target: "editing.dirty", actions: "takeStartSubject" },
           {
             target: "choosing",
-            actions: ["takeStartSubject", assign({ startNotes: ({ event }) => event.output.notes })],
+            actions: ["takeStartSubject", "takeStartPin", assign({ startNotes: ({ event }) => event.output.notes })],
           },
         ],
         onError: [
@@ -422,6 +449,11 @@ export const machine = setup({
         // about the subject now on the stage. Tried before the root handler, which
         // would re-follow and skip the choice.
         "subject.changed": { guard: ({ context }) => context.subjecting, actions: "takeSubject" },
+        // A pin set or cleared before the notes arrived: the choice below honours it.
+        "pins.changed": {
+          guard: ({ context }) => context.subjecting,
+          actions: assign({ restoreId: ({ event }) => event.note ?? null, pinsObserved: true }),
+        },
       },
     },
     // The start replies are in: a remembered pin reopens its note (D10), else the newest
@@ -484,10 +516,7 @@ export const machine = setup({
             // start picture as an unpinned editor would.
             guard: ({ context, event }) => context.restoring && event.output.error === "not-found",
             target: "choosing",
-            actions: [
-              assign({ restoreId: null, restoring: false, id: null }),
-              ({ context }) => context.remember?.(null),
-            ],
+            actions: ["unpin", assign({ restoreId: null, restoring: false, id: null })],
           },
           { guard: ({ event }) => event.output.error === "not-found", target: "blank" },
           { target: "failed" },

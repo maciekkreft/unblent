@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise } from "xstate";
+import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 
 // The view that shows the open conversation (architecture.md 3.1): headless of the
 // fact, it owns only its own UI state (the transcript scroll, which thinking records
@@ -7,7 +7,8 @@ import { setup, assign, fromPromise } from "xstate";
 // events for everything after. The question box is a separate view shown through a
 // default slot (6.3), so this component emits nothing. Everything with a side effect —
 // the queries — arrives through input, so this stays a pure definition importable in
-// Node.
+// Node. Its one gesture is the pin (12): it asks `pins` for the pinned chat, follows
+// pins.changed, and emits pin.toggled; `conversations` keeps a pinned chat open.
 
 // A conversation.changed payload is the whole conversation with a `type` on it; the
 // read reply is the same shape without the `type`. One helper, so both feed the view
@@ -197,6 +198,19 @@ export const machine = setup({
     // that races the start is applied after it, in order.
     open: fromPromise(({ input }) => input.ask("conversations", "open", {})),
     read: fromPromise(({ input }) => input.ask("conversations", "read", { id: input.id })),
+    // pins.changed is held for us until this reply lands (pins: read supersededBy).
+    pins: fromPromise(({ input }) => input.ask("pins", "read", {})),
+  },
+  actions: {
+    // The pin belongs to the panel, not to one chat (as the note editor's does): while
+    // the open chat is pinned, opening another moves the pin to it, so it is the one a
+    // reload brings back, and a chat closed or deleted takes the pin with it.
+    movePin: enqueueActions(({ context, event, enqueue }) => {
+      const next = event.type === "conversation.deleted" ? null : (event.id ?? null);
+      if (context.pin == null || context.pin !== context.openId || next === context.pin) return;
+      enqueue.assign({ pin: next });
+      enqueue.emit({ type: "pin.toggled", what: "chat", id: next });
+    }),
   },
 }).createMachine({
   id: "chat-thread",
@@ -207,29 +221,53 @@ export const machine = setup({
       "are written in markdown and drawn as formatted text by a small renderer of our own, " +
       "always as escaped text, so nothing the model writes reaches the page as HTML. It holds " +
       "only the scroll position and which thinking records are open; the chat itself belongs to " +
-      "`conversations`.",
+      "`conversations`. A pin at the top right keeps the open chat when the subject changes; " +
+      "opening another chat while pinned moves the pin to it, and the pin is kept by `pins`, " +
+      "so it survives a reload.",
     kind: "view",
     attributes: ["height", "markdown"],
-    emits: [],
-    asks: ["conversations: open", "conversations: read"],
+    emits: ["pin.toggled"],
+    asks: ["conversations: open", "conversations: read", "pins: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     // Which chat is open on this device, and its contents, or null when none is open.
     openId: null,
     conversation: null,
+    // The chat `pins` holds pinned; the open chat is pinned while the two are the same.
+    pin: null,
+    pinsObserved: false,
   }),
   initial: "starting",
+  invoke: {
+    src: "pins",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: {
+      guard: ({ context }) => !context.pinsObserved,
+      actions: assign({ pin: ({ event }) => (typeof event.output?.chat === "string" ? event.output.chat : null) }),
+    },
+    onError: { actions: [] },
+  },
   on: {
+    "pins.changed": { actions: assign({ pin: ({ event }) => event.chat ?? null, pinsObserved: true }) },
+    // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the
+    // button turns at once. Nothing to pin while no chat is open.
+    _togglePin: {
+      guard: ({ context }) => context.openId != null,
+      actions: [
+        assign({ pin: ({ context }) => (context.pin === context.openId ? null : context.openId) }),
+        emit(({ context }) => ({ type: "pin.toggled", what: "chat", id: context.pin })),
+      ],
+    },
     // The open chat changed on this device (12): load the new one, or clear to the
     // empty page when nothing is open.
     "conversation.opened": [
       {
         guard: ({ event }) => event.id == null,
         target: ".empty",
-        actions: assign({ openId: null, conversation: null }),
+        actions: ["movePin", assign({ openId: null, conversation: null })],
       },
-      { target: ".loading", actions: assign({ openId: ({ event }) => event.id }) },
+      { target: ".loading", actions: ["movePin", assign({ openId: ({ event }) => event.id })] },
     ],
     // The fact's news about the open chat (4.3, fourth rule): adopt it whole. A change
     // for another chat is left to the bus to record as ignored. Held until the read
@@ -242,7 +280,7 @@ export const machine = setup({
     "conversation.deleted": {
       guard: ({ context, event }) => event.id === context.openId,
       target: ".empty",
-      actions: assign({ openId: null, conversation: null }),
+      actions: ["movePin", assign({ openId: null, conversation: null })],
     },
   },
   states: {

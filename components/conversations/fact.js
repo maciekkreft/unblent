@@ -55,6 +55,7 @@ mount(machine, {
   input: {
     session: () => ask(machine, "session", "read", {}),
     subject: () => ask(machine, "subject", "read", {}),
+    pins: () => ask(machine, "pins", "read", {}),
     complete: (request) => ask(machine, "llm", "complete", request),
     // The tool list (catalog: contracts) and each tool call (the `*: tool` wildcard, 7.7).
     contracts: () => ask(machine, "catalog", "contracts", {}),

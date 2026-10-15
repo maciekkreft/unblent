@@ -57,6 +57,17 @@ class EvaluatorList extends LitElement {
       min-height: 0;
       overflow-y: auto;
     }
+    /* The book the list shows, so a list kept on a pinned book says which one; the same
+       caption as the note editor's About line. */
+    .about {
+      margin: 0;
+      padding: var(--space-xs) var(--space-md) 0;
+      font-size: var(--text-caption);
+      color: var(--color-mute);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .list {
       list-style: none;
       margin: 0;
@@ -391,6 +402,7 @@ class EvaluatorList extends LitElement {
     const focusId = this.#focusRow(ids, open);
     const ran = Object.keys(results).length > 0;
     return html`
+      ${this.#header(snapshot)}
       ${this.#runBox(snapshot, ran)}
       <ul class="list" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e, ids)} @focusin=${(e) => this.#focusin(e)}>
         <li class="row new" data-id=${draft} @click=${(e) => this.#rowClick(e, draft)}>
@@ -403,6 +415,13 @@ class EvaluatorList extends LitElement {
         )}
       </ul>
     `;
+  }
+
+  // Only while following the stage: the book the list shows (12).
+  #header(snapshot) {
+    const { following, book, titles } = snapshot.context;
+    const title = following ? titles[book] : null;
+    return title ? html`<p class="about">About: ${title}</p>` : nothing;
   }
 
   #runBox(snapshot, ran) {

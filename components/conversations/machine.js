@@ -13,7 +13,7 @@ import { setup, fromPromise, fromCallback, enqueueActions } from "xstate";
 // loop (7.7): a tool is one of the system's own queries, opted in by its owner, so it
 // asks `llm: complete`, `catalog: contracts` for the tool list, and any marked query
 // through the `*: tool` wildcard. It follows `subject.changed` to open the right chat
-// (12) and `session.changed` to sync. Everything with a side effect — the network, the
+// (12), `pins.changed` to keep a pinned chat open, and `session.changed` to sync. Everything with a side effect — the network, the
 // store, the clock, the id source — arrives through `input`, so this stays a pure
 // definition importable in Node.
 
@@ -658,6 +658,9 @@ const onSubjectChanged = (context, event, enqueue, self) => {
   const sub = event.subject ? { kind: event.subject.kind, id: event.subject.id } : null;
   if (sameSubject(sub, context.lastSubject)) return;
   context.lastSubject = sub;
+  // A pinned open chat stays whatever comes on the stage (12); the chat learns of it only
+  // from what is added later, never from a change to its start (14).
+  if (context.pin != null && context.pin === context.openId) return;
   // The chat already open, if it is about the new subject, stays open (12): a reader who
   // picked an older chat about the book must not have it replaced by the newest one when
   // the subject settles after a reload (the subject can arrive as a late change from none
@@ -775,6 +778,7 @@ const applyBoot = (context, out, self) => {
     const openId = stored != null ? stored : mostRecentAbout(headings, sub);
     Object.assign(context, base, { userId: out.userId, signedIn: true, unavailable: false, headings, openId, lastSubject: sub, tools: toolsValue.tools || {}, approval: toolsValue.approval || "auto" });
   }
+  if (!context.pinsObserved) context.pin = out.pin ?? null;
   const queued = context.queued;
   context.queued = [];
   for (const message of queued) self.send(message);
@@ -788,18 +792,25 @@ const queue = enqueueActions(({ context, event }) => {
 export const machine = setup({
   actors: {
     // The one round trip that gates the rest: session, then the chats and the subject.
+    // The pinned chat is asked beside them; pins.changed is held for us until that reply
+    // lands (pins: read supersededBy).
     boot: fromPromise(async ({ input }) => {
+      const pinsReply = input.pins ? input.pins().catch(() => ({})) : Promise.resolve({});
+      const pinOf = async () => {
+        const pins = await pinsReply;
+        return typeof pins?.chat === "string" ? pins.chat : null;
+      };
       const session = await input.session();
       const userId = session ? session.userId ?? null : null;
-      if (userId == null) return { userId: null };
+      if (userId == null) return { userId: null, pin: await pinOf() };
       let list;
       try {
         list = await input.list();
       } catch {
-        return { userId, failed: true };
+        return { userId, failed: true, pin: await pinOf() };
       }
       const subjectReply = await input.subject().catch(() => ({}));
-      return { userId, list, subject: subjectReply && subjectReply.subject ? subjectReply.subject : null };
+      return { userId, list, subject: subjectReply && subjectReply.subject ? subjectReply.subject : null, pin: await pinOf() };
     }),
     // The browser's focus and online signals (5): a subscribe function from fact.js
     // sends _focus/_online; absent (a Node test) it is a no-op, and tests send those
@@ -822,17 +833,19 @@ export const machine = setup({
       "the result, and asks the model again, at most eight rounds per question, each result cut " +
       "at 120,000 characters. A chat's start is written once, by the view where the chat was " +
       "created, and never changes. When the subject changes the open chat becomes the most " +
-      "recently updated chat about it, or none, so the panel shows an empty new chat.",
+      "recently updated chat about it, or none, so the panel shows an empty new chat; while " +
+      "the open chat is pinned, as `pins` says, it stays open whatever the subject.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",
     emits: ["conversation.changed", "conversation.deleted", "conversation.opened", "tools.changed"],
     // `*: tool` lets the loop ask any query its owner marked as a tool (7.7).
-    asks: ["session: read", "subject: read", "llm: complete", "catalog: contracts", "*: tool"],
+    asks: ["session: read", "subject: read", "pins: read", "llm: complete", "catalog: contracts", "*: tool"],
   },
   context: ({ input }) => ({
     session: input.session,
     subject: input.subject,
+    pins: input.pins,
     complete: input.complete,
     contracts: input.contracts,
     askTool: input.askTool,
@@ -855,17 +868,30 @@ export const machine = setup({
     loading: new Set(),
     openId: null,
     lastSubject: null,
+    // The chat `pins` holds pinned, and whether pins.changed came before the boot reply,
+    // which is then the older picture.
+    pin: null,
+    pinsObserved: false,
     tools: {},
     approval: "auto",
     running: null, // { chatId, turnId, phase, tools, meta, rounds } while a question is being answered
     queued: [],
   }),
   initial: "loading",
+  // `pins`' news (4.3, fourth rule), in any state.
+  on: {
+    "pins.changed": {
+      actions: ({ context, event }) => {
+        context.pin = event.chat ?? null;
+        context.pinsObserved = true;
+      },
+    },
+  },
   states: {
     loading: {
       invoke: {
         src: "boot",
-        input: ({ context }) => ({ session: context.session, list: context.list, subject: context.subject }),
+        input: ({ context }) => ({ session: context.session, list: context.list, subject: context.subject, pins: context.pins }),
         onDone: { target: "ready", actions: enqueueActions(({ context, event, self }) => applyBoot(context, event.output, self)) },
         onError: { target: "ready", actions: enqueueActions(({ context, self }) => applyBoot(context, { userId: null }, self)) },
       },

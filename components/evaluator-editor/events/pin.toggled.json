@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user pressed a pin: what it pins and the id it now pins, or null when it was unpinned.",
+  "type": "object",
+  "properties": {
+    "what": {
+      "enum": ["note", "chat", "evaluators"],
+      "description": "note: the note editor's pin. chat: the chat's pin. evaluators: the Evaluators tab's pin, which pins a book."
+    },
+    "id": {
+      "description": "The note, chat or book now pinned; null to unpin.",
+      "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }]
+    }
+  },
+  "required": ["what", "id"],
+  "additionalProperties": false
+}

@@ -10,7 +10,10 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // book.changed / book.deleted, asks settings: read for the "Vim keys" preference (12)
 // and follows settings.changed, and, with `subject`, asks subject: read and follows
 // subject.changed (4.3, fourth rule), so the tab never keeps showing an evaluator of a
-// book that is no longer on the stage while the list beside it has moved on. Every edit leaves as the whole evaluator,
+// book that is no longer on the stage while the list beside it has moved on. Its pin, as
+// the note editor's and the chat's, sits on the item: pressing it emits pin.toggled, and
+// it asks pins: read and follows pins.changed, so while the tab is pinned to a book it
+// stays there with the list. Every edit leaves as the whole evaluator,
 // evaluator.saved, at a throttle while typing and at once on blur (4.3, third rule). A
 // removal leaves as removal.started; `evaluators` marks the item until notice-stack
 // settles or undoes it, and the draft follows those marks, so the item disappears at
@@ -214,25 +217,38 @@ const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
 // the Journal that is the Journal, whichever book the evaluator is kept with.
 const shownBook = (context) => context.want?.book ?? (context.draft ? context.book : null);
 
-// A new subject (with `subject`): the evaluator open is left only for another book. What
-// was typed is saved first, as when moving to another evaluator, and the new book opens
-// on a New evaluator, as the note editor opens an empty page. A subject with no book
-// leaves it: subject: read answers null until its own asks land, and acting on that
-// would close the evaluator a reload has just reopened.
-const followSubject = (subjectOf) => [
+// A new subject or pin (with `subject`): `next` gives both. The evaluator open is left
+// only for another book while the tab is not pinned. What was typed is saved first, as
+// when moving to another evaluator, and the new book opens on a New evaluator, as the
+// note editor opens an empty page. A subject with no book leaves it: subject: read
+// answers null until its own asks land, and acting on that would close the evaluator a
+// reload has just reopened. Unpinning follows the stage at once, as the list does.
+const followSubject = (next, extra = []) => [
   {
     guard: ({ context, event }) => {
-      const book = bookOf(subjectOf(event));
-      return context.following && book != null && shownBook(context) != null && book !== shownBook(context);
+      const { subject, pin } = next({ context, event });
+      const book = bookOf(subject);
+      return context.following && pin == null && book != null && shownBook(context) != null && book !== shownBook(context);
     },
     target: ".fetching",
     actions: [
+      ...extra,
       save,
-      assign(({ context, event }) => ({ want: { id: context.mint(), book: bookOf(subjectOf(event)) }, draft: null })),
+      assign(({ context, event }) => ({
+        ...next({ context, event }),
+        want: { id: context.mint(), book: bookOf(next({ context, event }).subject) },
+        draft: null,
+      })),
       ({ context }) => context.remember({ id: context.want.id, book: context.want.book }),
     ],
   },
+  { actions: [...extra, assign(({ context, event }) => next({ context, event }))] },
 ];
+
+const pinned = (context) => context.pin != null && context.pin === shownBook(context);
+
+// A book's title from books' list or its news, for the About line.
+const titled = (books) => Object.fromEntries((Array.isArray(books) ? books : []).map((b) => [b.id, b.title]));
 
 export const machine = setup({
   actors: {
@@ -243,9 +259,15 @@ export const machine = setup({
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the boxes stay plain.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
-    // The subject starting picture; subject.changed is held for this ask until its reply
-    // lands (subject: read supersededBy), so it is applied after, in order.
-    readSubject: fromPromise(({ input }) => (input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }))),
+    // The starting picture: the pin, then the subject. pins.changed and subject.changed are
+    // each held for this ask until their reply lands (supersededBy), so they are applied
+    // after, in order.
+    readSubject: fromPromise(async ({ input }) => {
+      if (!input.following) return { subject: null, pin: null };
+      const pins = await input.ask("pins", "read", {});
+      const subject = await input.ask("subject", "read", {});
+      return { subject: subject?.subject ?? null, pin: typeof pins?.evaluators === "string" ? pins.evaluators : null };
+    }),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -265,15 +287,18 @@ export const machine = setup({
       "and deleting the evaluator, wait out the undo window, with Undo in a notice. The " +
       "evaluator open before a reload opens again while it is still kept. With `subject` it " +
       "follows the book open on the stage, as the list beside it does: when another book " +
-      "comes on, what was typed is saved and a New evaluator of that book opens. The question, what yes " +
+      "comes on, what was typed is saved and a New evaluator of that book opens; while the " +
+      "pin at the top right is on it stays on its book, and so does the list beside it; " +
+      "unpinning brings the stage's book back at once. The line beside the pin names the book, " +
+      "and the pin is kept by `pins`, so it survives a reload. The question, what yes " +
       "and no mean and each option's description are text boxes that grow with what is written " +
       "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
       "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
       "back to the field last used, never jumping to the name.",
     kind: "view",
-    emits: ["evaluator.saved", "removal.started"],
+    emits: ["evaluator.saved", "removal.started", "pin.toggled"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "settings: read", "subject: read", "books: list"],
+    asks: ["evaluators: list", "settings: read", "subject: read", "books: list", "pins: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -285,6 +310,13 @@ export const machine = setup({
     evaluators: [],
     // The Journal's book id, once books has said.
     journal: null,
+    // The subject on the stage, and the book `pins` holds for this tab; pinsObserved says
+    // pins.changed came before the start reply, which is then the older picture.
+    subject: null,
+    pin: null,
+    pinsObserved: false,
+    // Each book's title by id, for the About line.
+    titles: {},
     draft: null,
     // The pick being fetched: { id, book }, and `restore` for the evaluator open before a
     // reload, kept on this device (3.1) because list-then-item keeps its item shown; it
@@ -309,6 +341,7 @@ export const machine = setup({
       onDone: {
         actions: assign({
           journal: ({ event }) => (Array.isArray(event.output?.books) ? (event.output.books.find((b) => b?.written === true)?.id ?? null) : null),
+          titles: ({ context, event }) => ({ ...titled(event.output?.books), ...context.titles }),
         }),
       },
       onError: { actions: [] },
@@ -316,17 +349,34 @@ export const machine = setup({
     {
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: followSubject(({ output }) => output?.subject ?? null),
+      onDone: followSubject(({ context, event }) => ({
+        subject: event.output?.subject ?? null,
+        pin: context.pinsObserved ? context.pin : (event.output?.pin ?? null),
+      })),
       onError: { actions: [] },
     },
   ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "subject.changed": followSubject(({ subject }) => subject ?? null),
-    "book.changed": {
-      guard: ({ event }) => event.written === true,
-      actions: assign({ journal: ({ event }) => event.id }),
-    },
+    "subject.changed": followSubject(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),
+    "pins.changed": followSubject(({ context, event }) => ({ subject: context.subject, pin: event.evaluators ?? null, pinsObserved: true })),
+    // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the
+    // editor acts on it at once; pins.changed then confirms it. Nothing to pin while no
+    // evaluator is open.
+    _togglePin: [
+      { guard: ({ context }) => !context.following || shownBook(context) == null, actions: [] },
+      ...followSubject(
+        ({ context }) => ({ subject: context.subject, pin: pinned(context) ? null : shownBook(context) }),
+        [emit(({ context }) => ({ type: "pin.toggled", what: "evaluators", id: pinned(context) ? null : shownBook(context) }))],
+      ),
+    ],
+    "book.changed": [
+      {
+        guard: ({ event }) => event.written === true,
+        actions: assign({ journal: ({ event }) => event.id, titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }),
+      },
+      { actions: assign({ titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }) },
+    ],
     // Followed because it supersedes books: list (4.3, fourth rule); books never deletes
     // the Journal, so this only matters if that ever changes.
     "book.deleted": {

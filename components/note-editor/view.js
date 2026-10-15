@@ -9,6 +9,7 @@ import { vim, Vim } from "@replit/codemirror-vim";
 import { machine, parseBody, serialize, aboutTitleOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
+import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 
 // The note editor's view: a CodeMirror 6 document. The fact stays one plain markdown
 // string; the document the user edits is marker-free, and per-line level lives in a
@@ -17,12 +18,11 @@ import opened from "./events/note.opened.json" with { type: "json" };
 // half: the level field, the theme, the level bar, and Vim, in a compartment that the
 // "Vim keys" preference (12) turns on and off.
 
-// The pinned note's id, kept across reloads (D10): the view's own UI state under a key
-// beginning with its name (3.1). Read and written through the machine's input so the machine stays importable
-// in Node. Wrapped like settings/store.js so a browser refusing storage reads null and
-// drops the write.
+// The note this editor pinned under its own key (3.1) before `pins` owned the pin: read
+// once at start so a device keeps its pin, handed to `pins` by the machine, then
+// cleared. Wrapped like settings/store.js so a browser refusing storage reads null.
 const KEY = "note-editor.pinned";
-const pinStore = {
+const legacyPin = {
   recall() {
     try {
       return localStorage.getItem(KEY);
@@ -30,18 +30,17 @@ const pinStore = {
       return null;
     }
   },
-  remember(id) {
+  forget() {
     try {
-      if (id) localStorage.setItem(KEY, id);
-      else localStorage.removeItem(KEY);
+      localStorage.removeItem(KEY);
     } catch {
-      // No persistence available; the pin lives only for this page.
+      // Nothing stored to clear.
     }
   },
 };
 
 // The titles of subjects this browser has seen (12), kept beside the pin under a key
-// beginning with its name (3.1). "kind:id" -> title. Wrapped like pinStore: a browser refusing storage, or a malformed
+// beginning with its name (3.1). "kind:id" -> title. Wrapped like legacyPin: a browser refusing storage, or a malformed
 // value, reads an empty table and drops the write.
 const TITLES_KEY = "note-editor.titles";
 const titleStore = {
@@ -204,12 +203,12 @@ class ActorController {
         // born knowing whether it follows the selection (6.4) and the stage (D5).
         follows: this.host.follows,
         subjecting: this.host.subject,
-        recall: pinStore.recall,
-        remember: pinStore.remember,
+        recall: legacyPin.recall,
+        forget: legacyPin.forget,
         recallTitles: titleStore.recall,
         rememberTitles: titleStore.remember,
       },
-      events: { "note.saved": saved, "note.opened": opened },
+      events: { "note.saved": saved, "note.opened": opened, "pin.toggled": pinToggled },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

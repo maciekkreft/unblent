@@ -1,0 +1,61 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What is pinned on this device.",
+    "type": "object",
+    "properties": {
+      "note": {
+        "description": "The pinned note's id: the note editor stays on it when the subject changes.",
+        "oneOf": [
+          {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "chat": {
+        "description": "The pinned chat's id: the open chat stays when the subject changes.",
+        "oneOf": [
+          {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "evaluators": {
+        "description": "The book the Evaluators tab is pinned to: its list and editor stay on that book when the subject changes.",
+        "oneOf": [
+          {
+            "type": "string",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "note",
+      "chat",
+      "evaluators"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "pins.changed"
+  ]
+}
