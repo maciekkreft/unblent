@@ -38,6 +38,14 @@ const importBook = async (cookie, id, file) => {
   });
   assert.equal(res.status, 200, `importing ${file}`);
 };
+const putJson = async (cookie, path, body) => {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+    body: JSON.stringify(body),
+  });
+  assert.equal(res.status, 200, `PUT ${path}`);
+};
 
 function watch(page, problems, ignore = false) {
   // A reload aborts whatever book fetch was in flight; that abort is not a fault, so a
@@ -75,10 +83,18 @@ const rstate = (page) => page.evaluate(foot);
 // The strip slides to a turned page; a gesture measured mid-slide lands off the text.
 const waitStill = (page) =>
   page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot?.getAnimations().every((a) => a.playState !== "running"), undefined, WAIT);
-// A brief pause after a chapter loads, so its deferred re-measure has finished before
-// the next turn — the reader cancels that measure on a turn, and this keeps the test
-// clear of the narrow window where the two would race.
-const settle = () => new Promise((r) => setTimeout(r, 350));
+// Until the reader is at rest: its deferred re-measure after a chapter loads has run (two
+// frames, or its 120 ms fallback timer, whichever is later here), so a turn cannot race
+// it, and no slide is still moving the strip. Waited in the page, in its own clock.
+const settle = (page) =>
+  page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const r = document.querySelector("book-reader").shadowRoot;
+        const still = () => (r.getAnimations().every((a) => a.playState !== "running") ? resolve() : requestAnimationFrame(still));
+        setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(still)), 130);
+      }),
+  );
 const focusReader = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".reader").focus());
 const clickTile = (page) =>
   page.evaluate(() => {
@@ -123,7 +139,7 @@ for (const engine of ENGINES) {
       const debug = [];
       context = await browser.newContext();
       context.setDefaultTimeout(4000);
-      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+      await context.addCookies([{ name: "unblent_session", value: opts.cookie ?? cookie, url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
       watch(page, problems, opts.ignoreAborts);
@@ -148,20 +164,45 @@ for (const engine of ENGINES) {
       await waitChapterPage(ctx.page, "Chapter One", 1);
       return ctx;
     };
+    // A user of the test's own, set up through the server, whose book is open at the
+    // start of Chapter Two: the reader reopens it there on load, with no click and no
+    // turn into the chapter first. For a test about what happens inside a chapter.
+    const openInChapterTwo = async (opts = {}) => {
+      const own = forgeCookie();
+      await importBook(own, SAMPLE_ID, SAMPLE);
+      await Promise.all([
+        putJson(own, `/api/books/${SAMPLE_ID}/position`, { chapter: 1, block: 0 }),
+        putJson(own, `/api/books/${SAMPLE_ID}/opened`, {}),
+      ]);
+      const ctx = await open({ ...opts, cookie: own });
+      await waitPagesAtLeast(ctx.page, "Chapter Two", 3);
+      assert.equal((await rstate(ctx.page)).page, 1, "the book reopens at the start of Chapter Two");
+      await focusReader(ctx.page);
+      await settle(ctx.page);
+      return ctx;
+    };
 
-    test("with Vim keys on, Ctrl+f/Ctrl+b and Ctrl+d/Ctrl+u turn the page and G/gg reach the chapter's ends", async () => {
+    test("with Vim keys on, Ctrl+f and Ctrl+d/Ctrl+u turn the page, across a chapter too", async () => {
       const { page, problems } = await openAndRewind({ vimKeys: true });
       try {
         await page.keyboard.press("Control+f");
         await waitPagesAtLeast(page, "Chapter Two", 3);
-        await settle();
+        await settle(page);
         await page.keyboard.press("Control+d");
         await waitChapterPage(page, "Chapter Two", 2);
         await page.keyboard.press("Control+u");
         await waitChapterPage(page, "Chapter Two", 1);
         await page.keyboard.press("Control+f");
         await waitChapterPage(page, "Chapter Two", 2);
-        await waitStill(page);
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test("with Vim keys on, G and gg reach the chapter's ends and Ctrl+b turns back across a chapter", async () => {
+      const { page, problems } = await openInChapterTwo({ vimKeys: true });
+      try {
         await page.keyboard.press("G");
         const { pages } = await rstate(page);
         await waitChapterPage(page, "Chapter Two", pages);
@@ -184,7 +225,7 @@ for (const engine of ENGINES) {
         await page.keyboard.press("Control+f");
         await page.keyboard.press("l");
         await page.keyboard.press("G");
-        await page.waitForTimeout(300);
+        await settle(page);
         assert.deepEqual(await rstate(page), { chap: "Chapter One", page: 1, pages: 1 });
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
@@ -218,7 +259,7 @@ for (const engine of ENGINES) {
         assert.equal((await rstate(page)).page, 1, "the new chapter opens at its first page");
 
         // A turn within the chapter advances the page; its top block is not the first.
-        await settle();
+        await settle(page);
         assert.ok(
           await page.evaluate(() => window.__slid.leaving && window.__slid.moved),
           "crossing into the next chapter slid a fresh strip in",
@@ -245,23 +286,28 @@ for (const engine of ENGINES) {
       try {
         await page.keyboard.press("ArrowRight");
         await waitPagesAtLeast(page, "Chapter Two", 3);
-        await settle();
+        await settle(page);
         // Turn a few pages in, onto a page a normal paragraph begins (past the long
         // opening one, whose start page a saved block would reopen at): what is
         // persisted is the top block (section 12), so the block must start here for
         // the reopen to land past the first page.
-        for (let i = 0; i < 4; i++) {
+        for (let page_ = 2; page_ <= 4; page_++) {
           await page.keyboard.press("ArrowRight");
-          await settle();
+          await waitChapterPage(page, "Chapter Two", page_);
         }
+        const seen = debug.length;
+        await page.keyboard.press("ArrowRight");
         await waitChapterPage(page, "Chapter Two", 5);
 
-        // The place is written to the browser cache the moment it is announced
-        // (book.progressed, throttled) and books stores it; a reload reads it from
-        // there, before any server pull. The 2 s network debounce is only for the
-        // other device (5), so waiting for the announcement is enough.
-        await waitForTrace(debug, PROGRESSED);
-        await new Promise((r) => setTimeout(r, 200));
+        // The place is announced once the last turn settles (book.progressed, throttled)
+        // and books keeps it; a nudge sends it to the server at once rather than after
+        // the 2 s network debounce (5), and its answer is the sign the place is kept.
+        await waitForTrace(debug, PROGRESSED, 3000, seen);
+        // A visible tab's sync drains, then pulls; the reload waits for both answers.
+        const kept = page.waitForResponse((res) => /\/api\/books\/[^/]+\/position$/.test(new URL(res.url()).pathname));
+        const pulled = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/books" && res.request().method() === "GET");
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        await Promise.all([kept, pulled]);
 
         await page.reload({ waitUntil: "domcontentloaded" });
         await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
@@ -293,12 +339,12 @@ for (const engine of ENGINES) {
       try {
         await page.keyboard.press("ArrowRight");
         await waitPagesAtLeast(page, "Chapter Two", 3);
-        await settle();
+        await settle(page);
         await page.keyboard.press("ArrowRight");
         await waitChapterPage(page, "Chapter Two", 2);
         // The footer turns at once; the strip is still sliding for a moment, and a block
         // measured mid-slide could be one on its way out.
-        await settle();
+        await settle(page);
         const before = await topText(page);
         assert.ok(before.length > 0, "there is a top block to keep");
 
@@ -325,15 +371,12 @@ for (const engine of ENGINES) {
     // as opening the right dock narrows it on the product page. The place must survive the
     // round trip: the same page and the same first line after fold then unfold.
     test("keeps the page across a dock fold", async () => {
-      const { page, problems } = await openAndRewind({ viewport: { width: 760, height: 768 } });
+      const { page, problems } = await openInChapterTwo({ viewport: { width: 760, height: 768 } });
       try {
         await ensureLeftOpen(page);
         await page.keyboard.press("ArrowRight");
-        await waitPagesAtLeast(page, "Chapter Two", 3);
-        await settle();
-        await page.keyboard.press("ArrowRight");
         await waitChapterPage(page, "Chapter Two", 2);
-        await settle();
+        await settle(page);
         const before = { ...(await rstate(page)), top: await topText(page), w: await readerWidth(page) };
         assert.ok(before.top.length > 0, "there is a top line to keep");
 
@@ -351,7 +394,7 @@ for (const engine of ENGINES) {
 
         await unfoldLeft(page);
         await waitReaderWidth(page, before.w);
-        await settle();
+        await settle(page);
         const after = { ...(await rstate(page)), top: await topText(page) };
         assert.equal(after.page, before.page, "the same page number after the round trip");
         assert.equal(after.top, before.top, "the same first line after the round trip");
@@ -366,17 +409,14 @@ for (const engine of ENGINES) {
     // would jump to the paragraph's start after a fold. (Chapter Two opens with one
     // paragraph that outruns a page, so a page turn into it lands inside it.)
     test("keeps the place inside a paragraph longer than a page", async () => {
-      const { page, problems } = await openAndRewind({ viewport: { width: 760, height: 768 } });
+      const { page, problems } = await openInChapterTwo({ viewport: { width: 760, height: 768 } });
       try {
         await ensureLeftOpen(page);
-        // Into Chapter Two (past the one-page first chapter), then one turn more, into
-        // the long paragraph: the page then shows it with no block starting on it.
-        await page.keyboard.press("ArrowRight");
-        await waitPagesAtLeast(page, "Chapter Two", 3);
-        await settle();
+        // One turn into Chapter Two, into the long paragraph: the page then shows it with
+        // no block starting on it.
         await page.keyboard.press("ArrowRight");
         await waitChapterPage(page, "Chapter Two", 2);
-        await settle();
+        await settle(page);
 
         // The shown page is inside the long paragraph: no block starts on it, so the
         // place is a character offset, not a block. (This is the page a block-only
@@ -390,12 +430,12 @@ for (const engine of ENGINES) {
         // paragraph. A block anchor would have come back to its start instead.
         await foldLeft(page);
         await waitReaderWider(page, before.w);
-        await settle();
+        await settle(page);
         assert.equal((await rstate(page)).chap, "Chapter Two", "still the same chapter while folded");
 
         await unfoldLeft(page);
         await waitReaderWidth(page, before.w);
-        await settle();
+        await settle(page);
         assert.equal((await rstate(page)).page, before.page, "the same page number after the round trip");
         assert.ok(await page.evaluate(insideLongParagraph), "back inside the long paragraph after the round trip, not at its start");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
@@ -414,9 +454,9 @@ for (const engine of ENGINES) {
         await waitPagesAtLeast(page, "Chapter Two", 3);
         await page.evaluate(() => { document.querySelector("book-reader").shadowRoot.querySelector(".page").style.width = "200.5px"; });
         await waitPagesAtLeast(page, "Chapter Two", 8);
-        await settle();
+        await settle(page);
         await page.keyboard.press("End");
-        await settle();
+        await settle(page);
         const { shown, off } = await page.evaluate(() => {
           const r = document.querySelector("book-reader").shadowRoot;
           const pg = r.querySelector(".page");
@@ -438,7 +478,7 @@ for (const engine of ENGINES) {
         // Leave the second chapter on its second page, so the strip is slid.
         await page.keyboard.press("ArrowRight");
         await waitPagesAtLeast(page, "Chapter Two", 3);
-        await settle();
+        await settle(page);
         await page.keyboard.press("ArrowRight");
         await waitChapterPage(page, "Chapter Two", 2);
 
@@ -468,7 +508,7 @@ for (const engine of ENGINES) {
         });
         await page.evaluate(() => [...document.querySelector("book-toc").shadowRoot.querySelectorAll(".entry")].find((e) => e.textContent.trim() === "Chapter Three")?.click());
         await waitChapterPage(page, "Chapter Three", 1);
-        await new Promise((r) => setTimeout(r, 400));
+        await settle(page);
         assert.deepEqual(await page.evaluate(() => window.__slid), [], "the strip was never in motion over the new chapter");
 
         // The inline emoji is a text-height glyph, and its long code line stays within
@@ -542,7 +582,7 @@ for (const engine of ENGINES) {
           const s = document.querySelector("dock-desk").shadowRoot.querySelector(".scrim");
           return !s || getComputedStyle(s).visibility === "hidden";
         }, undefined, WAIT);
-        await new Promise((r) => setTimeout(r, 350));
+        await page.waitForFunction(() => document.querySelector("dock-desk").shadowRoot.getAnimations().every((a) => a.playState !== "running"), undefined, WAIT);
         assert.equal((await rstate(page)).chap, "Chapter One", "starts on the first chapter");
 
         const box = await page.evaluate(() => {
@@ -657,21 +697,25 @@ const doorPressed = (page) => page.evaluate(() => document.querySelector("profil
 const doorOpacity = (page) => page.evaluate(() => getComputedStyle(document.querySelector("profile-switch").shadowRoot.querySelector("button")).opacity);
 
 for (const engine of ENGINES) {
+  // One browser for both (the launch is the costly part); each test its own context.
+  describe(`the product's door in ${engine.name}`, { timeout: 60000 }, () => {
+  let browser;
+  before(async () => {
+    browser = await engine.launch();
+  }, { timeout: 30000 });
+  after(async () => {
+    await browser?.close();
+  }, { timeout: 15000 });
+
   test(`the product hides the workshop behind the toolbox in ${engine.name}`, async () => {
     const problems = [];
-    const browser = await engine.launch();
+    const context = await browser.newContext();
     try {
-      const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize({ width: 1024, height: 768 });
       watch(page, problems);
-      // Arm the cold sync waiters before the load so the reload below never aborts one.
-      const synced = Promise.all([
-        page.waitForResponse((r) => /\/api\/books\?since=/.test(r.url()), { timeout: WAIT.timeout }),
-        page.waitForResponse((r) => /\/api\/notes\?since=/.test(r.url()), { timeout: WAIT.timeout }),
-      ]);
       await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
         () =>
@@ -700,10 +744,11 @@ for (const engine of ENGINES) {
 
       // The door is transparent until hover reveals it (§12).
       assert.equal(await doorOpacity(page), "0", "the toolbox is invisible until hover");
-      await page.locator("profile-switch button").hover();
+      // The pointer moved over the door, without Playwright's wait for an element it
+      // would call visible, which an invisible door is not yet.
+      const door = await page.locator("profile-switch button").boundingBox();
+      await page.mouse.move(door.x + door.width / 2, door.y + door.height / 2);
       await page.waitForFunction(() => getComputedStyle(document.querySelector("profile-switch").shadowRoot.querySelector("button")).opacity === "1", undefined, WAIT);
-
-      await synced;
 
       // Through the door into the workshop: the grouped nav and the bar switches return,
       // the sheet fills, and the door reads as engaged.
@@ -719,10 +764,27 @@ for (const engine of ENGINES) {
       );
       assert.deepEqual(labels, ["Design", "Stems", "Apps"], "the nav groups the workshop pages");
 
-      // The chosen profile survives a reload (§12, local-only).
-      await page.reload({ waitUntil: "domcontentloaded" });
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // The chosen profile as settings stores it (§12, local-only; that the door's press
+  // stores it is decided in settings' Node tests): the product loads in the workshop.
+  test(`the workshop chosen at the door is kept on load, and the door leads back in ${engine.name}`, async () => {
+    const problems = [];
+    const context = await browser.newContext();
+    try {
+      context.setDefaultTimeout(4000);
+      await context.addCookies([{ name: "unblent_session", value: forgeCookie(), url: BASE_URL }]);
+      await context.addInitScript(() => localStorage.setItem("settings:profile", "workshop"));
+      const page = await context.newPage();
+      await page.setViewportSize({ width: 1024, height: 768 });
+      watch(page, problems);
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("page-nav")?.shadowRoot?.querySelectorAll("a").length > 0, undefined, WAIT);
-      assert.equal(await doorPressed(page), "true", "the workshop profile survives a reload");
+      assert.equal(await doorPressed(page), "true", "the workshop profile is kept on load");
 
       // Back through the same door returns to the product: the links go again.
       await page.locator("profile-switch button").click();
@@ -731,8 +793,9 @@ for (const engine of ENGINES) {
 
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     } finally {
-      await browser.close();
+      await context.close();
     }
+  });
   });
 }
 
@@ -767,8 +830,8 @@ async function ensureLeftOpen(page) {
   if (await leftFolded(page)) {
     await unfoldLeft(page);
     await page.waitForFunction(() => !document.querySelector("dock-desk").shadowRoot.querySelector(".dock.left")?.classList.contains("folded"), undefined, WAIT);
+    await settle(page);
   }
-  await settle();
 }
 
 // The page shown sits inside the fixture's over-long paragraph: its first visible block
@@ -785,10 +848,10 @@ function insideLongParagraph() {
 }
 
 // The trace is a console stream, not page state; poll the captured lines in Node.
-async function waitForTrace(debug, pattern, timeout = 3000) {
+async function waitForTrace(debug, pattern, timeout = 3000, from = 0) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    if (debug.some((l) => pattern.test(l))) return;
+    if (debug.slice(from).some((l) => pattern.test(l))) return;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error("trace line not seen");
