@@ -39,13 +39,24 @@ test("every route needs a signed-in user", async () => {
 test("a create continues from the base the browser held, and any later write wins", async () => {
   const cookie = freshCookie();
   const created = await (await put(ID, body({ baseVersion: 3 }), cookie)).json();
-  assert.deepEqual(created, { id: ID, book: BOOK, name: "Goals", on: true, questions: [QUESTION], version: 4, deleted: false });
+  assert.deepEqual(created, { id: ID, book: BOOK, name: "Goals", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false });
   // Last write wins: a stale base is never refused.
   const res = await put(ID, body({ name: "Renamed", on: false, baseVersion: 1 }), cookie);
   assert.equal(res.status, 200);
   assert.deepEqual([(await res.json()).version], [5]);
   const again = await (await put(ID, body({ name: "Renamed", on: false, baseVersion: 1 }), cookie)).json();
   assert.equal(again.version, 5, "the same content is not a new version");
+});
+
+test("Show in journal is set by a write that carries it and kept by one that leaves it out", async () => {
+  const cookie = freshCookie();
+  await put(ID, body(), cookie);
+  const shown = await (await put(ID, body({ journal: true }), cookie)).json();
+  assert.deepEqual([shown.journal, shown.version], [true, 2]);
+  const kept = await (await put(ID, body({ name: "Renamed" }), cookie)).json();
+  assert.deepEqual([kept.journal, kept.version], [true, 3]);
+  const off = await (await put(ID, body({ name: "Renamed", journal: false }), cookie)).json();
+  assert.deepEqual([off.journal, off.version], [false, 4]);
 });
 
 test("a book is set when the evaluator is born and never changes", async () => {
@@ -71,7 +82,7 @@ test("a delete is a tombstone that always wins and is pulled like a change", asy
 
 test("a body that is not an evaluator is refused with a fixed reply", async () => {
   const cookie = freshCookie();
-  for (const bad of [body({ on: "yes" }), body({ book: "nope" }), body({ questions: ["x"] }), body({ baseVersion: true })]) {
+  for (const bad of [body({ on: "yes" }), body({ book: "nope" }), body({ questions: ["x"] }), body({ baseVersion: true }), body({ journal: "yes" })]) {
     const res = await put(ID, bad, cookie);
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { error: "bad-request" });

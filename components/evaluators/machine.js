@@ -42,6 +42,7 @@ const record = (r) => ({
   book: r.book,
   name: str(r.name),
   on: r.on !== false,
+  journal: r.journal === true,
   questions: questionsOf(r.questions),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   removing: r.removing === true,
@@ -54,7 +55,7 @@ const bare = (questions) =>
 
 // What a write carries, and what decides whether a change is a new version. The marks
 // belong to this tab's undo window, so setting or clearing one is not a change.
-const content = (r) => ({ book: r.book, name: r.name, on: r.on, questions: bare(r.questions) });
+const content = (r) => ({ book: r.book, name: r.name, on: r.on, journal: r.journal, questions: bare(r.questions) });
 const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b));
 
 // A tombstone is kept for the sync (5) but never listed or announced as a change.
@@ -123,14 +124,16 @@ const live = (context, id) => {
 };
 
 // A new id adds an evaluator to its book, switched on; a save to one already kept
-// changes its name and questions, keeps its book and its tick, and keeps whatever of it
-// is still in its undo window. A deleted id stays deleted (5).
+// changes its name, its questions and, when the save says, whether it shows in the
+// journal, keeps its book and its tick, and keeps whatever of it is still in its undo
+// window. A save that leaves `journal` out keeps it, so a tab running an older editor
+// cannot clear it. A deleted id stays deleted (5).
 function applySave(context, event, enqueue) {
   if (!isId(event.id) || context.evaluators.get(event.id)?.deleted) return;
   const was = live(context, event.id);
   if (!was) {
     if (!isId(event.book)) return;
-    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, questions: event.questions }));
+    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, journal: event.journal, questions: event.questions }));
   }
   const questions = keepMarked(
     was.questions,
@@ -139,7 +142,8 @@ function applySave(context, event, enqueue) {
       return { ...q, options: keepMarked(old ? old.options : [], q.options) };
     }),
   );
-  const next = { ...was, name: str(event.name), questions };
+  const journal = typeof event.journal === "boolean" ? event.journal : was.journal;
+  const next = { ...was, name: str(event.name), journal, questions };
   if (same(was, next)) return;
   commit(context, enqueue, next);
 }
@@ -260,7 +264,8 @@ export const machine = setup({
     description:
       "Owns the evaluators kept with each book: an evaluator is a name and a list of questions, " +
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
-      "options, and it is switched on or off. `evaluators: list` answers one book's evaluators, " +
+      "options, and it is switched on or off. An evaluator marked \"Show in journal\" is " +
+      "listed in the Journal's Evaluators tab as well as its own book's. `evaluators: list` answers one book's evaluators, " +
       "or every book's when no book is given, oldest first. A new evaluator starts switched on. It works signed out, numbering versions " +
       "itself, and syncs to the account when signed in (section 5); signing in uploads every " +
       "evaluator with its history. The last write wins, so two devices never conflict, and a " +

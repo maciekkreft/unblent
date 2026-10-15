@@ -4,9 +4,10 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // Evaluators tab's list-then-item. It owns only UI state — the book it shows, the rows,
 // the row last opened, and a draft id for New evaluator — and points at three facts: it
 // asks subject: read for what is open and follows subject.changed, asks evaluators: list
-// for the open book and follows evaluator.changed / evaluator.deleted, and asks
-// settings: read for the "Vim keys" preference (12) and follows settings.changed (4.3,
-// fourth rule). A pick and a tick leave as gestures (4.3, fifth rule). The
+// for the open book and follows evaluator.changed / evaluator.deleted, asks books: list
+// for which book is the journal and what each book is called and follows book.changed /
+// book.deleted, and asks settings: read for the "Vim keys" preference (12) and follows
+// settings.changed (4.3, fourth rule). A pick and a tick leave as gestures (4.3, fifth rule). The
 // ask and the id minting arrive through input, so this stays importable in Node.
 //
 // New evaluator is always the first row and always names a minted id no evaluator has
@@ -24,12 +25,18 @@ const live = (items) => items.filter((x) => !x.removing);
 // them, leaving out any whose deletion can still be undone.
 export const rows = (evaluators) => live(evaluators);
 
-// The line under an evaluator's name: its questions, leaving out any being removed, and
-// "· off" when its tick is off.
-export const subtitle = (evaluator) => {
+// The line under an evaluator's name: its questions, leaving out any being removed,
+// "· off" when its tick is off, and, for one shown in the journal from another book,
+// that book's title.
+export const subtitle = (evaluator, from = null) => {
   const n = live(evaluator.questions).length;
-  return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}`;
+  return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}${from == null ? "" : ` · ${from}`}`;
 };
+
+// The journal lists its own evaluators and every one marked "Show in journal"; any other
+// book lists only its own.
+export const belongs = (book, journal, evaluator) =>
+  evaluator.book === book || (book != null && book === journal && evaluator.journal === true);
 
 // An evaluator is kept with a book, so only a subject that is a book has evaluators.
 export const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
@@ -125,11 +132,48 @@ const without = (map, id) => {
 // A different book, or none, starts the Run box afresh.
 const fresh = { text: "", results: {}, asked: [], error: null, running: false };
 
+const gone = (context, id) => ({
+  evaluators: context.evaluators.filter((e) => e.id !== id),
+  open: context.open === id ? null : context.open,
+  results: without(context.results, id),
+  asked: context.asked.filter((e) => e.id !== id),
+});
+
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 const remint = (context, evaluators) => (evaluators.some((e) => e.id === context.draft) ? context.mint() : context.draft);
 
 const shownHas = (context, id) => rows(context.evaluators).some((e) => e.id === id);
+
+// What books says about the journal and the titles. When that changes whether the book
+// shown is the journal, its evaluators are asked for again, since the journal's list
+// takes in other books' marked ones.
+const learn = (next) => [
+  {
+    guard: ({ context, event }) => {
+      const { journal } = next(context, event);
+      return context.book != null && journal !== context.journal && (context.book === journal || context.book === context.journal);
+    },
+    target: ".loading",
+    reenter: true,
+    actions: assign(({ context, event }) => next(context, event)),
+  },
+  { actions: assign(({ context, event }) => next(context, event)) },
+];
+
+// The journal is the book books marks written.
+const fromList = (context, event) => {
+  const books = Array.isArray(event.output?.books) ? event.output.books : [];
+  return {
+    journal: books.find((b) => b.written === true)?.id ?? null,
+    titles: Object.fromEntries(books.map((b) => [b.id, b.title])),
+  };
+};
+
+const fromChange = (context, event) => ({
+  journal: event.written === true ? event.id : context.journal === event.id ? null : context.journal,
+  titles: { ...context.titles, [event.id]: event.title },
+});
 
 // A new subject: a different book is asked for afresh; no book shows the line that
 // says to open one.
@@ -156,7 +200,13 @@ export const machine = setup({
     readSubject: fromPromise(({ input }) => (input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }))),
     // The book's evaluators; evaluator.changed / evaluator.deleted are held for this ask
     // until its reply lands, so a change that races it is applied after it.
-    load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
+    // The journal asks for every book's, as it lists the marked ones of any book.
+    load: fromPromise(({ input }) =>
+      input.ask("evaluators", "list", input.book === input.journal ? {} : { book: input.book }),
+    ),
+    // book.changed / book.deleted are held for this ask until its reply lands. A page
+    // without books gets no-answerer, and then no book is the journal.
+    books: fromPromise(({ input }) => (input.following ? input.ask("books", "list", {}) : Promise.resolve({ books: [] }))),
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the letters stay off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
@@ -172,7 +222,9 @@ export const machine = setup({
       "row has a tick box that switches the evaluator on or off, its name, greyed when off, and " +
       "how many questions it has. With `subject` it follows the book open on the stage, and " +
       "another book shows that book's evaluators; while no book is open, or without `subject`, " +
-      "it says to open a book. The arrow keys move between the rows, and with Vim keys on so " +
+      "it says to open a book. While the Journal is open it lists the Journal's evaluators and " +
+      "every evaluator of another book marked Show in journal, that book's title on the line " +
+      "under its name; its tick, opening it and Run work as for the Journal's own. The arrow keys move between the rows, and with Vim keys on so " +
       "do j, k, gg and G; Enter opens the row. Above New evaluator, a text box and Run try " +
       "the switched-on evaluators on a text in one request to Jev; each evaluator's row then " +
       "shows each question with its answer and how likely it is, and evaluators with yes / no " +
@@ -182,7 +234,7 @@ export const machine = setup({
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide"],
+    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -191,6 +243,9 @@ export const machine = setup({
     subject: null,
     book: null,
     evaluators: [],
+    // The journal's book id, null until books answers, and each book's title by id.
+    journal: null,
+    titles: {},
     // The row last opened; UI state, so the list marks what the editor was opened on.
     open: null,
     draft: input.mint(),
@@ -214,6 +269,12 @@ export const machine = setup({
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
       onError: { actions: [] },
     },
+    {
+      src: "books",
+      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      onDone: learn(fromList),
+      onError: { actions: [] },
+    },
   ],
   initial: "idle",
   states: {
@@ -221,15 +282,15 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ ask: context.ask, book: context.book }),
+        input: ({ context }) => ({ ask: context.ask, book: context.book, journal: context.journal }),
         onDone: [
           {
             guard: ({ event }) => Array.isArray(event.output?.evaluators),
             target: "ready",
-            actions: assign(({ context, event }) => ({
-              evaluators: event.output.evaluators,
-              draft: remint(context, event.output.evaluators),
-            })),
+            actions: assign(({ context, event }) => {
+              const evaluators = event.output.evaluators.filter((e) => belongs(context.book, context.journal, e));
+              return { evaluators, draft: remint(context, evaluators) };
+            }),
           },
           // The fact could not answer: an honest failure rather than an empty list.
           { target: "failed" },
@@ -293,35 +354,39 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "subject.changed": follow(({ subject }) => subject ?? null),
-    // The fact's news (4.3, fourth rule), for the book shown only.
-    "evaluator.changed": {
-      guard: ({ context, event }) => event.evaluator.book === context.book,
-      actions: assign(({ context, event }) => {
-        const evaluators = [...context.evaluators.filter((e) => e.id !== event.evaluator.id), event.evaluator].sort(byId);
-        // When what it would ask changed (its questions, or its tick), its answers no
-        // longer match, so its result goes, and so does an answer still on its way. A
-        // rename or the server's acknowledgement keeps them.
-        const before = context.evaluators.find((e) => e.id === event.evaluator.id);
-        const keep = before && asks(before) === asks(event.evaluator);
-        return {
-          evaluators,
-          draft: remint(context, evaluators),
-          ...(keep
-            ? {}
-            : {
-                results: without(context.results, event.evaluator.id),
-                asked: context.asked.filter((e) => e.id !== event.evaluator.id),
-              }),
-        };
-      }),
-    },
-    "evaluator.deleted": {
-      actions: assign(({ context, event }) => ({
-        evaluators: context.evaluators.filter((e) => e.id !== event.id),
-        open: context.open === event.id ? null : context.open,
-        results: without(context.results, event.id),
-        asked: context.asked.filter((e) => e.id !== event.id),
-      })),
-    },
+    "book.changed": learn(fromChange),
+    "book.deleted": { actions: assign({ titles: ({ context, event }) => without(context.titles, event.id) }) },
+    // The fact's news (4.3, fourth rule), for the evaluators shown only. One that no
+    // longer belongs, as when "Show in journal" is turned off, leaves the journal's list
+    // as a deleted one does.
+    "evaluator.changed": [
+      {
+        guard: ({ context, event }) =>
+          !belongs(context.book, context.journal, event.evaluator) && context.evaluators.some((e) => e.id === event.evaluator.id),
+        actions: assign(({ context, event }) => gone(context, event.evaluator.id)),
+      },
+      {
+        guard: ({ context, event }) => belongs(context.book, context.journal, event.evaluator),
+        actions: assign(({ context, event }) => {
+          const evaluators = [...context.evaluators.filter((e) => e.id !== event.evaluator.id), event.evaluator].sort(byId);
+          // When what it would ask changed (its questions, or its tick), its answers no
+          // longer match, so its result goes, and so does an answer still on its way. A
+          // rename or the server's acknowledgement keeps them.
+          const before = context.evaluators.find((e) => e.id === event.evaluator.id);
+          const keep = before && asks(before) === asks(event.evaluator);
+          return {
+            evaluators,
+            draft: remint(context, evaluators),
+            ...(keep
+              ? {}
+              : {
+                  results: without(context.results, event.evaluator.id),
+                  asked: context.asked.filter((e) => e.id !== event.evaluator.id),
+                }),
+          };
+        }),
+      },
+    ],
+    "evaluator.deleted": { actions: assign(({ context, event }) => gone(context, event.id)) },
   },
 });

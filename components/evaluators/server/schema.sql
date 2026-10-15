@@ -3,12 +3,14 @@
 -- version is server-assigned; seq orders writes so a client can pull what changed
 -- since its cursor without a clock. deleted marks a tombstone, kept and pulled like a
 -- change, never purged. questions is the evaluator's questions as a JSON array. book is
--- set when the row is born and never changes.
+-- set when the row is born and never changes. journal is "Show in journal"; the router
+-- adds it to a file made before it.
 CREATE TABLE IF NOT EXISTS evaluators (
     id        TEXT PRIMARY KEY,
     book      TEXT NOT NULL,
     name      TEXT NOT NULL,
     "on"      INTEGER NOT NULL,
+    journal   INTEGER NOT NULL DEFAULT 0,
     questions TEXT NOT NULL,
     version   INTEGER NOT NULL,
     seq       INTEGER NOT NULL,

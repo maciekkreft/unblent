@@ -22,6 +22,10 @@
           "type": "boolean",
           "description": "Switched on or off."
         },
+        "journal": {
+          "type": "boolean",
+          "description": "Listed in the journal's Evaluators as well as its own book's (\"Show in journal\"); false when absent."
+        },
         "questions": {
           "type": "array",
           "items": {

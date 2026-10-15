@@ -37,6 +37,11 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "evaluators.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    # CREATE IF NOT EXISTS never adds a column to an existing table, so a db from before
+    # "Show in journal" is migrated here.
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(evaluators)")}
+    if "journal" not in columns:
+        connection.executescript("ALTER TABLE evaluators ADD COLUMN journal INTEGER NOT NULL DEFAULT 0")
     try:
         with connection:
             yield connection
@@ -54,6 +59,7 @@ def _record(row: sqlite3.Row) -> dict:
         "book": row["book"],
         "name": row["name"],
         "on": bool(row["on"]),
+        "journal": bool(row["journal"]),
         "questions": json.loads(row["questions"]),
         "version": row["version"],
         "deleted": bool(row["deleted"]),
@@ -78,6 +84,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         return JSONResponse(_BAD, status_code=400)
     book, name, on = payload.get("book"), payload.get("name"), payload.get("on")
     questions, base, deleted = payload.get("questions"), payload.get("baseVersion"), payload.get("deleted", False)
+    journal = payload.get("journal")
     valid = (
         _is_id(book)
         and isinstance(name, str)
@@ -86,6 +93,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         and all(isinstance(q, dict) for q in questions)
         and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
         and isinstance(deleted, bool)
+        and (journal is None or isinstance(journal, bool))
     )
     if not valid:
         return JSONResponse(_BAD, status_code=400)
@@ -97,20 +105,22 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
             # from the base the client held, or 1, so an evaluator made signed out arrives
             # with its history. A tombstone can be born here, for one deleted before upload.
             connection.execute(
-                'INSERT INTO evaluators (id, book, name, "on", questions, version, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                (evaluator_id, book, name, int(on), stored, (base or 0) + 1, _next_seq(connection), int(deleted)),
+                'INSERT INTO evaluators (id, book, name, "on", journal, questions, version, seq, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (evaluator_id, book, name, int(on), int(bool(journal)), stored, (base or 0) + 1, _next_seq(connection), int(deleted)),
             )
             return _reread(connection, evaluator_id)
         # A write onto a tombstone, or a second delete, returns the tombstone unchanged.
         if row["deleted"]:
             return _record(row)
+        # A write from a browser that predates "Show in journal" leaves it out and keeps it.
+        shown = row["journal"] if journal is None else int(journal)
         # What the server already holds is not a change: no new version and no new seq,
         # so a resend of a write already applied is harmless.
-        if not deleted and (name, int(on), stored) == (row["name"], row["on"], row["questions"]):
+        if not deleted and (name, int(on), shown, stored) == (row["name"], row["on"], row["journal"], row["questions"]):
             return _record(row)
         connection.execute(
-            'UPDATE evaluators SET name = ?, "on" = ?, questions = ?, version = ?, seq = ?, deleted = ? WHERE id = ?',
-            (name, int(on), stored, row["version"] + 1, _next_seq(connection), int(deleted), evaluator_id),
+            'UPDATE evaluators SET name = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ? WHERE id = ?',
+            (name, int(on), shown, stored, row["version"] + 1, _next_seq(connection), int(deleted), evaluator_id),
         )
         return _reread(connection, evaluator_id)
 

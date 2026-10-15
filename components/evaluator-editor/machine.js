@@ -3,9 +3,11 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // The view component that edits one evaluator (6.4): the item the Evaluators tab's
 // list-then-item shows under its Back bar when evaluator.selected arrives. It owns only
 // UI state — the evaluator being edited as a draft, the book it is kept with, and
-// whether typing is waiting to be saved — and points at three facts: it asks
-// evaluators: list for the book evaluator.selected names and follows evaluator.changed /
-// evaluator.deleted after, asks settings: read for the "Vim keys" preference (12)
+// whether typing is waiting to be saved — and points at four facts: it asks
+// evaluators: list for every book's evaluators, because the Journal lists other books'
+// marked ones and a pick there names the Journal, and follows evaluator.changed /
+// evaluator.deleted after, asks books: list for which book is the Journal and follows
+// book.changed / book.deleted, asks settings: read for the "Vim keys" preference (12)
 // and follows settings.changed, and, with `subject`, asks subject: read and follows
 // subject.changed (4.3, fourth rule), so the tab never keeps showing an evaluator of a
 // book that is no longer on the stage while the list beside it has moved on. Every edit leaves as the whole evaluator,
@@ -20,13 +22,14 @@ const blankOption = (id) => ({ id, name: "", description: "", removing: false })
 
 const live = (items) => items.filter((x) => !x.removing);
 
-// The draft as evaluator.saved carries it: no on/off, which evaluator-list owns as a
+// The draft as evaluator.saved carries it, with "Show in journal": no on/off, which evaluator-list owns as a
 // gesture, and no marked item, which `evaluators` keeps in place by itself while its
 // undo window runs.
 export const wire = (d) => ({
   id: d.id,
   book: d.book,
   name: d.name,
+  journal: d.journal === true,
   questions: live(d.questions).map((q) => ({
     id: q.id,
     kind: q.kind,
@@ -57,11 +60,12 @@ const known = (context, id) => context.evaluators.some((r) => r.id === id);
 // user clears is still saved, so clearing it is kept.
 const savable = (context) => context.draft && !context.draft.removing && (known(context, context.draft.id) || !isEmpty(context.draft));
 
-const copy = (r) => structuredClone({ id: r.id, book: r.book, name: r.name, questions: r.questions, removing: r.removing });
+const copy = (r) =>
+  structuredClone({ id: r.id, book: r.book, name: r.name, journal: r.journal === true, questions: r.questions, removing: r.removing });
 
 const opened = (context, id, book) => {
   const found = context.evaluators.find((r) => r.id === id);
-  return found ? copy(found) : { id, book, name: "", questions: [blankQuestion(context.mint())], removing: false };
+  return found ? copy(found) : { id, book, name: "", journal: false, questions: [blankQuestion(context.mint())], removing: false };
 };
 
 // While typing waits to be saved, a change from the fact brings only its removal marks,
@@ -87,11 +91,9 @@ export const merged = (draft, record) => ({
   }),
 });
 
-// The book's evaluators after one change from the fact; another book's change leaves
-// them as they are.
+// The evaluators after one change from the fact.
 const changedList = (context, event) => {
   if (event.type === "evaluator.deleted") return context.evaluators.filter((r) => r.id !== event.id);
-  if (event.evaluator.book !== context.book) return context.evaluators;
   const rest = context.evaluators.filter((r) => r.id !== event.evaluator.id);
   return [...rest, event.evaluator].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 };
@@ -159,6 +161,11 @@ const edits = (target) => ({
     target,
     actions: assign(({ context, event }) => ({ draft: patchOption(context.draft, event.question, event.id, event.patch) })),
   },
+  _journal: {
+    guard: ({ event }) => typeof event.on === "boolean",
+    target,
+    actions: assign(({ context, event }) => ({ draft: { ...context.draft, journal: event.on } })),
+  },
   _addQuestion: {
     target,
     actions: assign(({ context }) => ({
@@ -203,8 +210,9 @@ const isPick = (event) => typeof event.id === "string" && typeof event.book === 
 // An evaluator is kept with a book, so only a subject that is a book has evaluators.
 const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
 
-// The book of the evaluator open or being fetched; null while none is.
-const shownBook = (context) => context.want?.book ?? context.draft?.book ?? null;
+// The book the evaluator open or being fetched was picked in; null while none is. In
+// the Journal that is the Journal, whichever book the evaluator is kept with.
+const shownBook = (context) => context.want?.book ?? (context.draft ? context.book : null);
 
 // A new subject (with `subject`): the evaluator open is left only for another book. What
 // was typed is saved first, as when moving to another evaluator, and the new book opens
@@ -228,7 +236,10 @@ const followSubject = (subjectOf) => [
 
 export const machine = setup({
   actors: {
-    load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
+    load: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
+    // Which book is the Journal, where "Show in journal" says nothing and is not offered;
+    // a page without books gets no-answerer and offers it everywhere.
+    books: fromPromise(({ input }) => input.ask("books", "list", {})),
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the boxes stay plain.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
@@ -243,7 +254,10 @@ export const machine = setup({
   id: "evaluator-editor",
   meta: {
     description:
-      "Edits one evaluator, the item of the Evaluators tab: its name and its questions. Each " +
+      "Edits one evaluator, the item of the Evaluators tab: its name and its questions. Under " +
+      "the name, Show in journal lists an evaluator of any book but the Journal in the " +
+      "Journal's Evaluators as well; one opened from the Journal stays open while the " +
+      "Journal does. Each " +
       "question is Yes / no, with optional words for what yes and no mean, or Pick one, with " +
       "options that each have a name and an optional description. Every edit is saved as the " +
       "whole evaluator a short time into typing and when a field loses focus, and a new " +
@@ -259,16 +273,18 @@ export const machine = setup({
     kind: "view",
     emits: ["evaluator.saved", "removal.started"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "settings: read", "subject: read"],
+    asks: ["evaluators: list", "settings: read", "subject: read", "books: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
     throttleMs: input.throttleMs ?? 200,
     following: Boolean(input.following),
-    // The book whose evaluators are held, and those evaluators.
+    // The book the open evaluator was picked in, and every book's evaluators.
     book: null,
     evaluators: [],
+    // The Journal's book id, once books has said.
+    journal: null,
     draft: null,
     // The pick being fetched: { id, book }, and `restore` for the evaluator open before a
     // reload, kept on this device (3.1) because list-then-item keeps its item shown; it
@@ -288,6 +304,16 @@ export const machine = setup({
       onError: { actions: [] },
     },
     {
+      src: "books",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        actions: assign({
+          journal: ({ event }) => (Array.isArray(event.output?.books) ? (event.output.books.find((b) => b?.written === true)?.id ?? null) : null),
+        }),
+      },
+      onError: { actions: [] },
+    },
+    {
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
       onDone: followSubject(({ output }) => output?.subject ?? null),
@@ -297,6 +323,16 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "subject.changed": followSubject(({ subject }) => subject ?? null),
+    "book.changed": {
+      guard: ({ event }) => event.written === true,
+      actions: assign({ journal: ({ event }) => event.id }),
+    },
+    // Followed because it supersedes books: list (4.3, fourth rule); books never deletes
+    // the Journal, so this only matters if that ever changes.
+    "book.deleted": {
+      guard: ({ context, event }) => event.id === context.journal,
+      actions: assign({ journal: null }),
+    },
   },
   initial: "starting",
   states: {

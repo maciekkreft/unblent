@@ -165,6 +165,20 @@ test("signed out: a save changes name and questions, keeps book and tick, and mi
   assert.equal(changed.length, 3, "the same content is not a change");
 });
 
+test("Show in journal: a new evaluator starts without it, a save sets or clears it, and a save leaving it out keeps it", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved());
+  assert.equal(changed.at(-1).journal, false);
+  actor.send(saved({ journal: true }));
+  assert.deepEqual([changed.at(-1).journal, changed.at(-1).version], [true, 2]);
+  actor.send(saved({ name: "Renamed" }));
+  assert.deepEqual([changed.at(-1).journal, changed.at(-1).name], [true, "Renamed"]);
+  actor.send(saved({ name: "Renamed", journal: false }));
+  assert.deepEqual([changed.at(-1).journal, changed.at(-1).version], [false, 4]);
+  assert.equal((await list(actor))[0].journal, false);
+});
+
 test("switching keeps the tick, and the same tick or an unknown id is no change", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);
@@ -287,7 +301,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "name", "on", "questions"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "journal", "name", "on", "questions"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });

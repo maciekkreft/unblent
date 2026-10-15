@@ -161,6 +161,28 @@ class EvaluatorEditor extends LitElement {
     .mute {
       color: var(--color-mute);
     }
+    /* The tick box as evaluator-list draws its on / off box. */
+    .shown {
+      display: inline-flex;
+      align-self: flex-start;
+      align-items: center;
+      gap: var(--space-xs);
+      font-size: var(--text-sm);
+      color: var(--color-body);
+      cursor: pointer;
+    }
+    .shown input {
+      flex: none;
+      width: calc(var(--space-md) + var(--space-2xs));
+      height: calc(var(--space-md) + var(--space-2xs));
+      margin: 0;
+      accent-color: var(--color-accent);
+      cursor: pointer;
+    }
+    .shown input:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
     input[type="text"],
     .box {
       box-sizing: border-box;
@@ -344,7 +366,7 @@ class EvaluatorEditor extends LitElement {
   // panel far from where the user pressed. The press focuses what it pressed instead,
   // without scrolling, and the click still lands on it.
   #pressed(event) {
-    const control = event.composedPath()[0]?.closest?.("button, input[type=radio]");
+    const control = event.composedPath()[0]?.closest?.("button, input[type=radio], input[type=checkbox]");
     if (!control || !this.renderRoot.contains(control)) return;
     event.preventDefault();
     control.focus({ preventScroll: true });
@@ -456,7 +478,7 @@ class EvaluatorEditor extends LitElement {
     if (!snapshot || snapshot.matches("starting") || snapshot.matches("fetching")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="note">Evaluators unavailable.</p>`;
     if (snapshot.matches({ ready: "choosing" })) return html`<p class="note">Pick an evaluator, or New evaluator.</p>`;
-    const { draft, evaluators } = snapshot.context;
+    const { draft, evaluators, journal } = snapshot.context;
     if (draft.removing) return html`<p class="note">This evaluator was deleted.</p>`;
     const stored = evaluators.some((r) => r.id === draft.id);
     const questions = draft.questions.filter((q) => !q.removing);
@@ -479,6 +501,12 @@ class EvaluatorEditor extends LitElement {
               @input=${(e) => this.#send({ type: "_edit", patch: { name: e.target.value } })}
             />
           </label>
+          ${draft.book === journal
+            ? nothing
+            : html`<label class="shown">
+                <input type="checkbox" .checked=${draft.journal} @change=${(e) => this.#send({ type: "_journal", on: e.target.checked })} />
+                Show in journal
+              </label>`}
           <fieldset class="field">
             <legend>Questions</legend>
             <div class="questions">${questions.map((q, i) => this.#question(q, i))}</div>

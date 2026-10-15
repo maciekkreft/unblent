@@ -44,7 +44,13 @@ const start = async (evaluators = [EVALUATOR, OTHER], vimKeys) => {
     input: {
       ask: (target, name, payload) =>
         Promise.resolve(
-          target === "settings" ? (vimKeys == null ? { error: "no-answerer" } : { vimKeys }) : { evaluators: payload.book === P ? evaluators : [] },
+          target === "settings"
+            ? vimKeys == null
+              ? { error: "no-answerer" }
+              : { vimKeys }
+            : target === "books"
+              ? { error: "no-answerer" }
+              : { evaluators },
         ),
       mint: () => `01K6TEST000000000000000M${String(++n).padStart(2, "0")}`,
       throttleMs: 200,
@@ -115,6 +121,7 @@ test("every edit leaves as the whole evaluator, without on/off or flags, at the 
     id: R,
     book: P,
     name: "Goal or value",
+    journal: false,
     questions: [
       { id: Q1, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "Done once" }, { id: O2, name: "Value", description: "" }] },
       { id: Q2, kind: "yesno", text: "Is it a goal?", yes: "it ends", no: "never", options: [] },
@@ -302,7 +309,7 @@ test("rewording a question leaves as evaluator.saved with the new wording, under
   assert.deepEqual(saves(emitted).at(-1).questions.map((q) => [q.id, q.text]), [[Q1, "Goal or value?"], [Q2, "Is it something to finish?"]]);
 });
 
-test("an evaluator of another book is fetched with that book; a change to another book leaves the draft alone", async () => {
+test("every book's evaluators are asked for, so a pick in another book opens what that book keeps", async () => {
   const B = "01K6TEST000000000000000PB1";
   const theirs = { ...OTHER, id: "01K6TEST000000000000000R03", book: B, name: "Theirs" };
   const asked = [];
@@ -311,7 +318,7 @@ test("an evaluator of another book is fetched with that book; a change to anothe
       ask: (target, name, payload) => {
         if (target === "settings") return Promise.resolve({ vimKeys: false });
         asked.push([target, name, payload]);
-        return Promise.resolve({ evaluators: payload.book === P ? [EVALUATOR] : [theirs] });
+        return Promise.resolve(target === "books" ? { books: [] } : { evaluators: [EVALUATOR, theirs] });
       },
       mint: () => NEW,
     },
@@ -320,10 +327,12 @@ test("an evaluator of another book is fetched with that book; a change to anothe
   await select(actor, { id: R, book: P });
   await select(actor, { id: theirs.id, book: B });
   assert.equal(actor.getSnapshot().context.draft.name, "Theirs");
-  assert.deepEqual(asked, [["evaluators", "list", { book: P }], ["evaluators", "list", { book: B }]]);
+  assert.deepEqual(
+    asked.filter(([t]) => t === "evaluators"),
+    [["evaluators", "list", {}], ["evaluators", "list", {}]],
+  );
   actor.send(changed({ ...EVALUATOR, name: "Elsewhere" }));
   assert.equal(actor.getSnapshot().context.draft.name, "Theirs");
-  assert.ok(!actor.getSnapshot().context.evaluators.some((e) => e.id === R));
   actor.stop();
 });
 

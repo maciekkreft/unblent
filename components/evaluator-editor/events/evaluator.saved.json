@@ -15,6 +15,10 @@
     "name": {
       "type": "string"
     },
+    "journal": {
+      "type": "boolean",
+      "description": "Listed in the journal's Evaluators as well as its own book's (\"Show in journal\"). Left out, an evaluator already kept keeps what it had and a new one is not listed there."
+    },
     "questions": {
       "type": "array",
       "items": {
