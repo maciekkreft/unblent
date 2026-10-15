@@ -150,6 +150,14 @@ const dragOver = async (page, r) => {
 // Nudge `notes` to drain the outbox now instead of after its idle window (fact.js drains on
 // visibilitychange), so a test need not wait out the debounce for a write to reach the server.
 const drain = (page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+// Until the server holds what `holds` looks for, nudging the drain on every look: the
+// editor's save lands a moment after its text shows, and a nudge before it finds an empty
+// outbox and leaves the save to the idle window.
+const synced = (page, holds, timeout = 4000) =>
+  until(async () => {
+    await drain(page);
+    return holds(await serverNotes(page));
+  }, timeout);
 
 // The elements the Notes container (list-then-item#notes) has assigned to its slot: the
 // list, or the item shown after a pick (4.1).
@@ -242,8 +250,7 @@ for (const engine of ENGINES) {
 
       // The highlight note must reach the server before its comment is written, so the
       // comment's save is based on a real version, not the null of a note still being created.
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place)), 8000);
+      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
 
       // Focus the editor; Vim boots in normal mode and draws its block cursor (polled, since
       // Vim arrives with the settings reply and the cursor layer renders a beat after).
@@ -256,8 +263,7 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Escape");
       await until(async () => (await hnDoc(page)).includes("A Vim thought"));
 
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.body ?? "").includes("A Vim thought")), 8000);
+      await synced(page, (notes) => notes.some((n) => (n.body ?? "").includes("A Vim thought")));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
@@ -313,11 +319,10 @@ for (const engine of ENGINES) {
       assert.equal((await hnQuotes(page)).length, 1, "the highlight is still there after its comment was emptied");
 
       // The emptied comment reaches the server.
-      await drain(page);
-      await until(async () => {
-        const n = (await serverNotes(page)).find((x) => (x.about ?? []).some((l) => l.place));
+      await synced(page, (notes) => {
+        const n = notes.find((x) => (x.about ?? []).some((l) => l.place));
         return n && (n.body ?? "") === "";
-      }, 8000);
+      });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
@@ -369,8 +374,7 @@ for (const engine of ENGINES) {
       await hnCaret(page, "end");
       await page.keyboard.type("A plain thought");
       await until(async () => (await hnDoc(page)).includes("A plain thought"));
-      await drain(page);
-      await until(async () => (await serverNotes(page)).some((n) => (n.body ?? "").includes("A plain thought")), 4000);
+      await synced(page, (notes) => notes.some((n) => (n.body ?? "").includes("A plain thought")));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
