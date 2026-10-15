@@ -24,8 +24,8 @@ const ICONS = new Set(["auto", "check", "warning", "person-simple-walk", "brain"
 // ask) is announced as unavailable, the one kind lines.checked has for "Jev cannot be reached".
 const ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable"]);
 
-// The pause a choice point's text must keep before its lines are checked, so a line is
-// asked about once it has stopped changing, not while it is typed.
+// The pause after a settings or evaluator change before the day on screen is checked
+// again, so a run of edits in Settings asks once; also how long a busy line waits.
 export const CHECK_PAUSE_MS = 1500;
 // The pause the network waits for after a change (5), so a run of edits drains once.
 const SYNC_IDLE_MS = 2000;
@@ -172,16 +172,19 @@ function planOf(context, cp) {
   return out;
 }
 
-// A line with an answer is done, one whose last check failed is failed, and any other is
-// waiting for Jev: queued, being asked, or about to be after the pause.
+// A line with an answer is done, one whose last check failed is failed, and one queued or
+// being asked is waiting for Jev. Any other line is still being written and is left out,
+// so it shows no mark until the user finishes it.
 function report(context, cp) {
   let error;
-  const lines = planOf(context, cp).map(({ field, text, key }) => {
+  const lines = [];
+  for (const { field, text, key } of planOf(context, cp)) {
     const answer = context.answers.get(key);
     const failed = !answer && context.failures.get(key);
+    if (!answer && !failed && !queuedKey(context, key)) continue;
     if (failed && !error) error = failed;
-    return { field, text, status: answer ? "done" : failed ? "failed" : "pending", answers: answer ? answer.answers : [] };
-  });
+    lines.push({ field, text, status: answer ? "done" : failed ? "failed" : "pending", answers: answer ? answer.answers : [] });
+  }
   return { choicePoint: cp.id, day: cp.day, lines, ...(error ? { error } : {}) };
 }
 
@@ -206,12 +209,12 @@ const announceAll = (context, enqueue, keys) => {
 
 const queuedKey = (context, key) => context.asking?.key === key || context.jobs.some((j) => j.key === key);
 
-// Queue every line of the choice point that has no answer and is not queued yet, then
-// announce it, so its new lines show as waiting at once.
-function check(context, enqueue, cp) {
+// Queue every line of the choice point that has no answer and is not queued yet (or only
+// those `only` lets through), then announce it, so its new lines show as waiting at once.
+function check(context, enqueue, cp, only = () => true) {
   let added = false;
   for (const line of planOf(context, cp)) {
-    if (context.answers.has(line.key) || queuedKey(context, line.key)) continue;
+    if (!only(line) || context.answers.has(line.key) || queuedKey(context, line.key)) continue;
     context.failures.delete(line.key);
     context.jobs.push({ key: line.key, questions: line.questions, payload: { state: { text: line.text.trim() }, questions: line.questions } });
     added = true;
@@ -229,6 +232,31 @@ function checkDay(context, enqueue) {
 // it: a line edited again, or a choice point removed, while it waited is not asked about.
 const wanted = (context, key) =>
   !context.answers.has(key) && [...context.choicePoints.values()].some((cp) => planOf(context, cp).some((l) => l.key === key));
+
+// A line the user finished (choice-point.saved's finished) is marked until the choice point
+// as `choice-points` announced it holds that text, because the save and the change it
+// leads to may reach this fact in either order. The marked lines are then queued, with
+// any line of the same choice point whose last check failed, so a failure is retried at
+// the next finished line.
+const markOf = (id, field, text) => `${id}\n${field}\n${text.trim()}`;
+
+function checkFinished(context, enqueue, cp) {
+  const marked = planOf(context, cp).filter((l) => context.finished.has(markOf(cp.id, l.field, l.text)));
+  if (marked.length === 0) return;
+  for (const l of marked) context.finished.delete(markOf(cp.id, l.field, l.text));
+  const keys = new Set(marked.map((l) => l.key));
+  check(context, enqueue, cp, (l) => keys.has(l.key) || context.failures.has(l.key));
+}
+
+function finish(context, enqueue, message) {
+  if (!isId(message.id) || !Array.isArray(message.finished)) return;
+  for (const line of message.finished) {
+    if (!FIELDS.includes(line?.field) || !filled(line.text) || !checkerOf(context, line.field)) continue;
+    context.finished.add(markOf(message.id, line.field, line.text));
+  }
+  const cp = context.choicePoints.get(message.id);
+  if (cp) checkFinished(context, enqueue, cp);
+}
 
 const restartPause = (enqueue, id, event) => {
   enqueue.cancel(id);
@@ -297,17 +325,15 @@ function handle(context, message, enqueue) {
       const c = message.choicePoint;
       if (!isId(c?.id) || !isDay(c?.day)) return;
       const next = choicePoint(c);
-      const held = context.choicePoints.get(next.id);
       context.choicePoints.set(next.id, next);
-      // A change that leaves the texts as they were (a version, a mark) is no new check.
-      if (held && JSON.stringify(held) === JSON.stringify(next)) return;
-      restartPause(enqueue, `cp:${next.id}`, { type: "_due", id: next.id });
-      return;
+      return checkFinished(context, enqueue, next);
     }
+    case "choice-point.saved":
+      return finish(context, enqueue, message);
     case "choice-point.deleted":
       context.choicePoints.delete(message.id);
       context.reported.delete(message.id);
-      enqueue.cancel(`cp:${message.id}`);
+      for (const mark of context.finished) if (mark.startsWith(`${message.id}\n`)) context.finished.delete(mark);
       return;
     case "evaluator.changed": {
       const e = message.evaluator;
@@ -351,6 +377,7 @@ const QUEUED_TYPES = [
   "read?",
   "checks.edited",
   "choice-point.changed",
+  "choice-point.saved",
   "choice-point.deleted",
   "evaluator.changed",
   "evaluator.deleted",
@@ -443,17 +470,19 @@ export const machine = setup({
       "is kept under a key made of the evaluator's id, its questions as they stand, and the " +
       "line's text, and never changes once written: editing a line hides its old mark until " +
       "the new text is answered, editing the evaluator's questions leads to a new check, and " +
-      "another device reuses the answers. A line is checked once its choice point has stopped " +
-      "changing for about 1.5 seconds; the day on screen is checked when it is shown, and again " +
-      "after a settings change or a change to a box's evaluator. A line that already has an " +
+      "another device reuses the answers. A line is checked when the user has finished it and " +
+      "moved on, as the choice point's save says: Enter to a new line, the cursor moved to " +
+      "another line, the box losing focus, or the sheet folding; the line being typed is not " +
+      "checked and shows no mark until then. The day on screen is checked when it is shown, " +
+      "and again after a settings change or a change to a box's evaluator. A line that already has an " +
       "answer is never asked again, so opening a day already checked costs nothing. Lines are " +
       "checked one at a time, in a queue, with one Jev request per line that asks all of the " +
       "box's questions together about the line alone; every answer is announced, and which " +
       "marks are shown is decided only when they are shown. Whether the evaluator is switched " +
       "on for its book does not matter here. A failure, such as signed out, no Jev key or " +
       "rate limited, ends the queue and is announced with the lines so the choice point can " +
-      "say why; the lines are asked again at the choice point's next change or the next time " +
-      "its day is shown. When Jev is busy with another request the line waits and is asked " +
+      "say why; the lines are asked again when a line of that choice point is next finished or " +
+      "its day is next shown. When Jev is busy with another request the line waits and is asked " +
       "again. It works signed out and syncs to the account when signed in (section 5).",
     kind: "fact",
     shape: "replicated",
@@ -471,6 +500,7 @@ export const machine = setup({
     evaluators: new Map(), // as evaluators announced them
     choicePoints: new Map(), // id -> { id, day, texts }, as choice-points announced them
     failures: new Map(), // key -> the error its last check ended with
+    finished: new Set(), // lines the user finished that wait to be held here (markOf)
     reported: new Map(), // choice point id -> the lines.checked last announced, as text
     jobs: [],
     asking: null,
@@ -523,12 +553,6 @@ export const machine = setup({
       type: "parallel",
       on: {
         ...HANDLED,
-        _due: {
-          actions: enqueueActions(({ context, event, enqueue }) => {
-            const cp = context.choicePoints.get(event.id);
-            if (cp) check(context, enqueue, cp);
-          }),
-        },
         _dueDay: {
           actions: enqueueActions(({ context, enqueue }) => {
             checkDay(context, enqueue);

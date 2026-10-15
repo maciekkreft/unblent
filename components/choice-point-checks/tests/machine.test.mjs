@@ -172,24 +172,41 @@ const read = (actor, payload = { day: DAY }) =>
 
 const statuses = (event) => event.lines.map((l) => [l.text, l.status].join(":"));
 
-test("a choice point is checked once it has stopped changing for the pause, one line at a time", async () => {
+// What choice-point-cards sends when the user moves on from lines: the save, with them named.
+const saved = (c, finished) => ({ type: "choice-point.saved", id: c.id, day: c.day, situation: c.situation, thoughts: c.thoughts, away: c.away, towards: c.towards, finished });
+const finishAll = (c, field = "towards") => saved(c, c[field].split("\n").filter((t) => t.trim()).map((text) => ({ field, text })));
+
+test("a line is checked only once the user has finished it, one line at a time", async () => {
   const { actor, clock, checked, decides } = await start();
   actor.send(edited());
+  actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call" }) });
   actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mu" }) });
-  clock.increment(CHECK_PAUSE_MS - 100);
-  actor.send({ type: "choice-point.changed", choicePoint: cp() });
-  clock.increment(CHECK_PAUSE_MS - 100);
+  clock.increment(CHECK_PAUSE_MS * 10);
   await flush();
-  assert.equal(decides.length, 0, "a change restarts the pause");
-  clock.increment(100);
+  assert.equal(decides.length, 0, "typing alone, however long the pause, checks nothing");
+  assert.equal(checked.length, 0);
+
+  // The save may arrive before the change it leads to: the line waits for its text.
+  const typing = cp({ towards: "Call mum\nGo for a walk\nRe" });
+  actor.send(saved(typing, [{ field: "towards", text: "Call mum" }]));
+  await flush();
+  assert.equal(decides.length, 0, "not asked before choice-points holds the line");
+  actor.send({ type: "choice-point.changed", choicePoint: typing });
   await flush();
   assert.equal(decides.length, 1, "one request at a time");
+  assert.deepEqual(statuses(checked.at(-1)), ["Call mum:pending"], "lines not finished are left out");
+  actor.send(saved(typing, [{ field: "towards", text: "Go for a walk" }]));
+  await flush();
+  assert.deepEqual(statuses(checked.at(-1)), ["Call mum:pending", "Go for a walk:pending"]);
   assert.deepEqual(decides[0].payload, { state: { text: "Call mum" }, questions: askedOf(evaluator()) });
   assert.deepEqual(statuses(checked.at(-1)), ["Call mum:pending", "Go for a walk:pending"]);
 
   decides[0].answer(reply(0.9, 0.2));
   await flush();
   assert.deepEqual(statuses(checked.at(-1)), ["Call mum:done", "Go for a walk:pending"]);
+  actor.send(saved(cp({ towards: "Call mum\nGo for a walk\nRe" }), [{ field: "away", text: "Unchecked box" }]));
+  await flush();
+  assert.equal(decides.length, 2, "a finished line in a box without an evaluator asks nothing");
   assert.deepEqual(checked.at(-1).lines[0].answers, [
     { question: Q1, option: O1, name: "Behavioral goal", p: 0.9 },
     { question: Q2, option: "no", name: "No", p: 0.8 },
@@ -205,13 +222,14 @@ test("a line already answered is never asked again, in any choice point", async 
   const { actor, clock, checked, decides } = await start();
   actor.send(edited());
   actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum" }) });
-  clock.increment(CHECK_PAUSE_MS);
+  actor.send(finishAll(cp({ towards: "Call mum" })));
   await flush();
   decides[0].answer(reply());
   await flush();
-  actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum  \n\nRest" }) });
-  actor.send({ type: "choice-point.changed", choicePoint: cp({ id: CP2, towards: "Call mum" }) });
-  clock.increment(CHECK_PAUSE_MS);
+  for (const c of [cp({ towards: "Call mum  \n\nRest" }), cp({ id: CP2, towards: "Call mum" })]) {
+    actor.send({ type: "choice-point.changed", choicePoint: c });
+    actor.send(finishAll(c));
+  }
   await flush();
   assert.deepEqual(decides.map((d) => d.payload.state.text), ["Call mum", "Rest"], "only the new line is asked");
   assert.deepEqual(statuses(checked.find((e) => e.choicePoint === CP2)), ["Call mum:done"]);
@@ -221,12 +239,12 @@ test("a line edited again while it waited in the queue is not asked about", asyn
   const { actor, clock, decides } = await start();
   actor.send(edited());
   actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "One\nTwo" }) });
-  clock.increment(CHECK_PAUSE_MS);
+  actor.send(finishAll(cp({ towards: "One\nTwo" })));
   await flush();
   actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "One\nTwo!" }) });
   decides[0].answer(reply());
   await flush();
-  clock.increment(CHECK_PAUSE_MS);
+  actor.send(finishAll(cp({ towards: "One\nTwo!" })));
   await flush();
   assert.deepEqual(decides.map((d) => d.payload.state.text), ["One", "Two!"]);
 });
@@ -275,7 +293,7 @@ test("a failure ends the queue and is announced; busy waits and asks again", asy
   const { actor, clock, checked, decides } = await start();
   actor.send(edited());
   actor.send({ type: "choice-point.changed", choicePoint: cp() });
-  clock.increment(CHECK_PAUSE_MS);
+  actor.send(finishAll(cp()));
   await flush();
   decides[0].answer({ error: "busy" });
   await flush();
@@ -291,10 +309,12 @@ test("a failure ends the queue and is announced; busy waits and asks again", asy
   assert.deepEqual(statuses(checked.at(-1)), ["Call mum:failed", "Go for a walk:failed"]);
   assert.equal(checked.at(-1).error, "no-key");
 
-  actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum\nGo for a walk\n" }) });
-  clock.increment(CHECK_PAUSE_MS);
+  const next = cp({ towards: "Call mum\nGo for a walk\nRest" });
+  actor.send({ type: "choice-point.changed", choicePoint: next });
+  actor.send(saved(next, [{ field: "towards", text: "Rest" }]));
   await flush();
-  assert.equal(decides.length, 3, "the next change asks again");
+  assert.equal(decides.length, 3, "the next finished line asks again, the failed lines with it");
+  assert.deepEqual(statuses(checked.at(-1)), ["Call mum:pending", "Go for a walk:pending", "Rest:pending"]);
   decides[2].answer({ error: "no-answerer" });
   await flush();
   assert.equal(checked.at(-1).error, "unavailable", "a bus refusal is announced as unavailable");
@@ -323,7 +343,7 @@ test("signed out the settings and answers are kept here; signing in uploads them
   const { actor, clock, decides } = await start({ store, api });
   actor.send(edited());
   actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum" }) });
-  clock.increment(CHECK_PAUSE_MS);
+  actor.send(finishAll(cp({ towards: "Call mum" })));
   await flush();
   decides[0].answer(reply());
   await flush();

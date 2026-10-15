@@ -26,6 +26,34 @@
     "towards": {
       "type": "string",
       "description": "What the user did or would do when unhooked: a move towards what matters."
+    },
+    "finished": {
+      "type": "array",
+      "description": "The lines the user has just finished and moved on from, for Jev to check: the line left by Enter or by moving the cursor to another line, every line of a box that lost focus, or every line of a sheet that folded. Absent or empty when the save is only typing.",
+      "items": {
+        "type": "object",
+        "description": "One finished line.",
+        "properties": {
+          "field": {
+            "enum": [
+              "away",
+              "towards",
+              "situation",
+              "thoughts"
+            ],
+            "description": "The box the line is in."
+          },
+          "text": {
+            "type": "string",
+            "description": "The line as written."
+          }
+        },
+        "required": [
+          "field",
+          "text"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

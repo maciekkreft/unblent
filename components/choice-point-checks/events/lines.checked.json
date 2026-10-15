@@ -15,7 +15,7 @@
     },
     "lines": {
       "type": "array",
-      "description": "Every non-empty line of every box that has an evaluator, box by box.",
+      "description": "Every non-empty line of every box that has an evaluator that Jev has answered, is checking, or could not check, box by box; a line still being written is left out until the user finishes it.",
       "items": {
         "type": "object",
         "description": "One non-empty line of a checked box, in the box's order.",

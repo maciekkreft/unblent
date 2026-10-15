@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 // Escape folds it into a card that a reload keeps, with Vim keys on the first Escape
 // only leaves insert mode, and on a narrow page the V stands above the boxes rather than
 // between them, and Jev's marks stand at the end of checked lines, coloured by the expected
-// answer, with the answer said in the status line, and an earlier day's choice point can
+// answer, checked once the user moves on from a line, with the answer said in the status line, and an earlier day's choice point can
 // be read but not typed in. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
@@ -146,14 +146,16 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await cards.locator(".new").click();
         await cards.locator('.box[data-field="towards"] .cm-content').click();
         await page.keyboard.type("Call Anna");
-        await page.keyboard.press("Enter");
-        await page.keyboard.type("Feel calm");
         const line = (text) => cards.locator(".cm-line", { hasText: text });
+        await page.keyboard.press("Enter");
+        await line("Call Anna").locator(".mark.right").waitFor();
+        await page.keyboard.type("Feel calm");
+        assert.equal(await line("Feel calm").locator(".mark").count(), 0, "the line being typed is not checked");
+        await page.keyboard.press("ArrowUp");
         await line("Feel calm").locator(".mark.wrong").waitFor();
-        assert.equal(await line("Call Anna").locator(".mark.right").count(), 1, "the expected answer is green");
-        assert.equal(await cards.locator(".status").innerText(), "Emotional Goal · you expect Behavioral Goal", "the line the cursor is on");
-        await line("Call Anna").locator(".mark").hover();
-        assert.equal(await cards.locator(".status").innerText(), "Behavioral Goal", "the line the pointer is over");
+        assert.equal(await cards.locator(".status").innerText(), "Behavioral Goal", "the line the cursor is on");
+        await line("Feel calm").locator(".mark").hover();
+        assert.equal(await cards.locator(".status").innerText(), "Emotional Goal · you expect Behavioral Goal", "the line the pointer is over");
         await cards.locator(".done").click();
         await cards.locator(".card .towards .flag").waitFor();
         assert.deepEqual(problems, []);

@@ -67,6 +67,23 @@ const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
 
+// The lines the user moved on from in one editor update, by text: the line the cursor was
+// on, followed through the edit, when the cursor now stands on another line. An edit that
+// adds lines (Enter, a paste) also finishes every line it put between the two, so a pasted
+// block is checked whole; the line the cursor is on is never finished while it is typed.
+function leftLines(update) {
+  const before = update.startState;
+  const after = update.state;
+  const from = update.changes.mapPos(before.doc.lineAt(before.selection.main.head).from, -1);
+  const was = after.doc.lineAt(from).number;
+  const now = after.doc.lineAt(after.selection.main.head).number;
+  if (was === now) return [];
+  const [lo, hi] = update.docChanged ? [Math.min(was, now), Math.max(was, now)] : [was, was];
+  const out = [];
+  for (let n = lo; n <= hi; n += 1) if (n !== now) out.push(after.doc.line(n).text);
+  return out;
+}
+
 // Jev's marks for a box, by line text, as the machine decided them (boxMarks); a line
 // whose text matches none has no mark.
 const setMarks = StateEffect.define();
@@ -643,15 +660,17 @@ class ChoicePointCards extends LitElement {
       marksDecorations((source, text) => this.#actor.send({ type: "_point", source, id, field: text == null ? null : field, text })),
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.docChanged || update.focusChanged) this.#cursorOn(id, field, update.view);
-        if (!update.docChanged || update.transactions.every((t) => t.annotation(fromDraft))) return;
-        this.#actor.send({ type: "_edit", id, field, value: update.state.doc.toString() });
+        if (update.transactions.every((t) => t.annotation(fromDraft))) return;
+        if (update.docChanged) this.#actor.send({ type: "_edit", id, field, value: update.state.doc.toString() });
+        const lines = leftLines(update);
+        if (lines.length) this.#actor.send({ type: "_finish", id, field, lines });
       }),
       EditorView.domEventHandlers({
         blur: () => {
           // WebKit keeps the document's selection inside a blurred editor, and a later
           // key nobody cancels is typed there; dropping it leaves nothing to type into.
           document.getSelection()?.removeAllRanges();
-          this.#actor.send({ type: "_blur", id });
+          this.#actor.send({ type: "_blur", id, field });
         },
       }),
     ];

@@ -134,6 +134,37 @@ test("typing saves at a throttle, and at once on blur", async () => {
   assert.equal(saves(emitted).length, 2, "the blur's save ended the window");
 });
 
+test("a line is finished for Jev on Enter or a move to another line, on blur, and on Done", async () => {
+  const { actor, clock, emitted, ctx } = await start();
+  actor.send({ type: "_add" });
+  const id = only(ctx);
+  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone" });
+  clock.increment(400);
+  assert.equal(saves(emitted).at(-1).finished, undefined, "a save while typing finishes nothing");
+
+  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone\n" });
+  actor.send({ type: "_finish", id, field: "away", lines: ["Checked my phone"] });
+  assert.deepEqual(saves(emitted).at(-1).finished, [{ field: "away", text: "Checked my phone" }]);
+  assert.equal(saves(emitted).at(-1).away, "Checked my phone\n", "saved at once with the new line");
+  const count = saves(emitted).length;
+  clock.increment(400);
+  assert.equal(saves(emitted).length, count, "the finish's save ended the wait");
+
+  actor.send({ type: "_finish", id, field: "away", lines: ["   "] });
+  assert.equal(saves(emitted).length, count, "an empty line finishes nothing");
+
+  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone\nSnapped" });
+  actor.send({ type: "_edit", id, field: "towards", value: "Breathe" });
+  actor.send({ type: "_blur", id, field: "away" });
+  assert.deepEqual(saves(emitted).at(-1).finished, [
+    { field: "away", text: "Checked my phone" },
+    { field: "away", text: "Snapped" },
+  ], "a blur finishes every line of its box");
+
+  actor.send({ type: "_done", id });
+  assert.deepEqual(saves(emitted).at(-1).finished.map((l) => l.field), ["away", "away", "towards"], "Done finishes the whole sheet");
+});
+
 test("Done on a blank new choice point keeps nothing; Done after typing saves at once", async () => {
   const { actor, emitted, ctx } = await start();
   actor.send({ type: "_add" });

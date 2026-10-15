@@ -7,7 +7,8 @@ import { setup, assign, enqueueActions, fromPromise, spawnChild, stopChild } fro
 // follows choice-point.changed / choice-point.deleted after (4.3, fourth rule). The day
 // comes from day.shown, so the rule for which day the journal shows stays in
 // journal-entry. Writing leaves as choice-point.saved, at a throttle while typing and at
-// once on blur or Done (4.3, third rule); a save of four empty boxes is how `choice-points`
+// once on blur, Done, Enter or a move to another line (4.3, third rule), the last four
+// naming the lines the user finished so `choice-point-checks` checks only those; a save of four empty boxes is how `choice-points`
 // learns to remove one, so no event of its own is needed for that. It also asks
 // settings: read for the "Vim keys" preference (12) and follows settings.changed, and
 // choice-point-checks: read for Jev's marks, following lines.checked and checks.changed;
@@ -43,11 +44,21 @@ export const savable = (draft) => Boolean(draft) && !isEmpty(draft);
 
 export const draftIn = (context, id) => context.drafts.find((d) => d.id === id);
 
-const saveOne = (enqueue, draft) => {
+const saveOne = (enqueue, draft, finished = []) => {
   if (!savable(draft)) return false;
-  enqueue.emit({ type: "choice-point.saved", ...draft });
+  enqueue.emit({ type: "choice-point.saved", ...draft, ...(finished.length ? { finished } : {}) });
   return true;
 };
+
+// The lines of a draft's boxes, each as { field, text }, that `choice-point-checks` is told
+// the user has finished, so Jev checks a line only once the user has moved on from it.
+export const linesOf = (draft, fields, only) =>
+  fields.flatMap((field) =>
+    draft[field]
+      .split("\n")
+      .filter((text) => text.trim() !== "" && (!only || only.includes(text)))
+      .map((text) => ({ field, text })),
+  );
 
 // Every open sheet with typing that waits to be saved is saved, at the throttle's end. An
 // emptied one stays waiting, so a change from the fact does not refill what was cleared.
@@ -96,20 +107,30 @@ const edit = assign(({ context, event }) => ({
 const typable = ({ context, event }) =>
   writable(context) && opened(context, event) && FIELDS.includes(event.field) && typeof event.value === "string";
 
-// Done folds the one sheet: what typing in it still waits to save is saved first. Folded
-// with every box empty, a kept one is removed, by saving it empty; a new one was never
-// kept, so nothing is sent. There is no Delete and no Undo: an empty choice point holds
-// nothing to lose.
+// Done folds the one sheet: it is saved with every line finished. Folded with every box
+// empty, a kept one is removed, by saving it empty; a new one was never kept, so nothing
+// is sent. There is no Delete and no Undo: an empty choice point holds nothing to lose.
 const fold = enqueueActions(({ context, event, enqueue }) => {
   const draft = draftIn(context, event.id);
   if (writable(context) && isEmpty(draft) && held(context, draft.id)) enqueue.emit({ type: "choice-point.saved", ...draft });
-  else if (context.dirty.includes(event.id)) saveOne(enqueue, draft);
+  else if (writable(context)) saveOne(enqueue, draft, linesOf(draft, FIELDS));
   enqueue.assign({ drafts: without(context.drafts, event.id), dirty: without(context.dirty, event.id) });
 });
 
-// While a box has the keyboard its blur saves that sheet at once.
+// A box losing the keyboard saves its sheet at once with every line of that box finished.
 const settle = enqueueActions(({ context, event, enqueue }) => {
-  if (context.dirty.includes(event.id) && saveOne(enqueue, draftIn(context, event.id))) enqueue.assign({ dirty: without(context.dirty, event.id) });
+  const draft = draftIn(context, event.id);
+  const finished = writable(context) && FIELDS.includes(event.field) ? linesOf(draft, [event.field]) : [];
+  if (!context.dirty.includes(event.id) && !finished.length) return;
+  if (saveOne(enqueue, draft, finished)) enqueue.assign({ dirty: without(context.dirty, event.id) });
+});
+
+// Enter, or the cursor moving to another line, finishes the lines the view names: the sheet
+// is saved at once with them, so Jev checks a line as soon as the user moves on from it.
+const finishLines = enqueueActions(({ context, event, enqueue }) => {
+  const draft = draftIn(context, event.id);
+  const finished = linesOf(draft, [event.field], event.lines);
+  if (finished.length && saveOne(enqueue, draft, finished)) enqueue.assign({ dirty: without(context.dirty, event.id) });
 });
 
 // --- Jev's marks ----------------------------------------------------------------------
@@ -260,7 +281,10 @@ export const machine = setup({
       "Towards · unhooked, Situation, and Thoughts & feelings. The boxes grow with what is " +
       "written and take Vim's keys when Vim keys is on; Tab moves on to the next box or " +
       "button. What is written is saved a short time into typing and at once when a box loses " +
-      "focus; the sheet does not say so. Done, or Escape, folds that sheet into a card " +
+      "focus; the sheet does not say so. Jev checks a line once the user has finished it and " +
+      "moved on: Enter to a new line, the cursor moved to another line, the box losing focus, " +
+      "or the sheet folding; the line being typed gets no mark until then. Done, or Escape, " +
+      "folds that sheet into a card " +
       "showing the situation and the away and towards moves, one line each; with Vim keys on, " +
       "the first Escape in a box leaves insert mode and the next one folds the sheet. " +
       "Pressing a card opens it again. Each choice point folds and unfolds on its own, so " +
@@ -420,6 +444,11 @@ export const machine = setup({
           actions: assign(({ context, event }) => ({ drafts: [...context.drafts, draftOf(held(context, event.id))] })),
         },
         _blur: { guard: ({ context, event }) => opened(context, event), actions: settle },
+        _finish: {
+          guard: ({ context, event }) =>
+            writable(context) && opened(context, event) && FIELDS.includes(event.field) && Array.isArray(event.lines),
+          actions: finishLines,
+        },
         _done: { guard: ({ context, event }) => opened(context, event), actions: fold },
         "choice-point.changed": { actions: follow },
         "choice-point.deleted": { actions: follow },
