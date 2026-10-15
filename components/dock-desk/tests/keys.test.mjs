@@ -76,7 +76,7 @@ for (const engine of ENGINES) {
 
       await page.keyboard.press("Control+.");
       await until(async () => (await focused(page)).panel === "list-then-item#chats");
-      assert.equal(await rightTab(page), "Chat", "the next tab is shown");
+      assert.equal(await rightTab(page), "Chats", "the next tab is shown");
 
       await page.keyboard.press("Control+h");
       await until(async () => (await focused(page)).panel === "book-stage");

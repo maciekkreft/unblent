@@ -426,7 +426,7 @@ for (const engine of ENGINES) {
 
     // In the chat box, as a person reaches it: the Chat tab, a chat, a click in the box.
     const inChatBox = async (page, reach) => {
-      await reach(clickAt(page, deskTab, "Chat"), (s) => s.rightTab === "Chat");
+      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
       await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.chatBox !== null);
       await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
     };
@@ -435,7 +435,7 @@ for (const engine of ENGINES) {
       const { page, problems, step, reach } = await open();
       await inChatBox(page, reach);
       await step("Escape Escape", keys(page, "Escape", "Escape"), (s) =>
-        all(want(s.chats === "conversation-list", `Chat shows ${s.chats}`), want(onRow(s, "Chat"), `the keyboard is on ${s.deep} "${s.deepText}"`)), SETTLE);
+        all(want(s.chats === "conversation-list", `Chats shows ${s.chats}`), want(onRow(s, "Chat"), `the keyboard is on ${s.deep} "${s.deepText}"`)), SETTLE);
       clean(problems);
     });
 
@@ -449,7 +449,7 @@ for (const engine of ENGINES) {
 
     test(`letters after a click on bare desk type nothing anywhere in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, deskTab, "Chat"), (s) => s.rightTab === "Chat");
+      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
       await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.chatBox !== null);
       await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
       await reach(quick(page, "Escape", "Escape"), (s) => s.chats === "conversation-list");
@@ -486,7 +486,7 @@ for (const engine of ENGINES) {
       const { page, problems, step, reach } = await open();
       const typed = await typedNote(page, reach);
       const landed = await step("Ctrl+.", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chat" && s.chats === "conversation-list", `Chat shows ${s.chats} on ${s.rightTab}`), want(onRow(s, chatRow(s)), `the keyboard is on ${s.deep} "${s.deepText}", not ${chatRow(s)}`)), SETTLE);
+        all(want(s.rightTab === "Chats" && s.chats === "conversation-list", `Chats shows ${s.chats} on ${s.rightTab}`), want(onRow(s, chatRow(s)), `the keyboard is on ${s.deep} "${s.deepText}", not ${chatRow(s)}`)), SETTLE);
       const below = landed.chatRows[landed.chatRows.indexOf(landed.deepText) + 1];
       await step("j", keys(page, "j"), (s) => all(want(onRow(s, below), `the keyboard is on ${s.deep} "${s.deepText}", not ${below}`), unchanged(s, typed.look, "editor")));
       clean(problems);
@@ -509,7 +509,7 @@ for (const engine of ENGINES) {
       await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
       await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
       await step("Enter on New chat", keys(page, "Enter"), (s) =>
-        all(want(s.chats === "chat-thread", `Chat shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), unchanged(s, typed.look, "editor")), SETTLE);
+        all(want(s.chats === "chat-thread", `Chats shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), unchanged(s, typed.look, "editor")), SETTLE);
       clean(problems);
     });
 
@@ -535,13 +535,13 @@ for (const engine of ENGINES) {
 
     test(`with no model chosen, Ctrl+. to a chat left open puts the keyboard where letters type nothing in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open(true, { echo: false });
-      await reach(clickAt(page, deskTab, "Chat"), (s) => s.rightTab === "Chat");
+      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
       await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread");
       await reach(clickAt(page, deskTab, "Notes"), (s) => s.rightTab === "Notes");
       await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
       const before = await look(page);
       await step("Ctrl+.", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chat", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
+        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
       await step("j k", keys(page, "j", "k"), (s) => all(unchanged(s, before, "editor"), want(s.chatBox === "", `the chat box holds "${s.chatBox}"`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)));
       clean(problems);
     });
@@ -550,15 +550,15 @@ for (const engine of ENGINES) {
 
     test(`a tab click puts the keyboard in the panel it shows in ${engine.name}`, async () => {
       const { page, problems, step } = await open();
-      await step("click the Chat tab", clickAt(page, deskTab, "Chat"), (s) =>
-        all(want(s.rightTab === "Chat", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
+      await step("click the Chats tab", clickAt(page, deskTab, "Chats"), (s) =>
+        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
       await step("j", keys(page, "j"), (s) => want(onRow(s, "Chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
       clean(problems);
     });
 
     test(`a tab click Safari style puts the keyboard in the panel it shows in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, deskTab, "Chat"), (s) => s.rightTab === "Chat" && panel(s) === "list-then-item#chats");
+      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats" && panel(s) === "list-then-item#chats");
       await step("click the Notes tab, Safari style", async () => {
         await clickAt(page, deskTab, "Notes")();
         await safari(page);
@@ -579,7 +579,7 @@ for (const engine of ENGINES) {
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
       await step("click below the notes", clickAt(page, blankNotes), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`));
       await step("Ctrl+.", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chat", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
+        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
       clean(problems);
     });
 
@@ -656,7 +656,7 @@ for (const engine of ENGINES) {
 
     // A chat open in the Chat tab, then back on the list with the keyboard on its row.
     const fromOpenChat = async (page, reach) => {
-      await reach(clickAt(page, deskTab, "Chat"), (s) => s.rightTab === "Chat");
+      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
       await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.thread.includes("user: question 1"));
       await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
       await reach(quick(page, "Escape", "Escape"), (s) => s.chats === "conversation-list" && onRow(s, "Chat 1"));
@@ -675,7 +675,7 @@ for (const engine of ENGINES) {
       await fromOpenChat(page, reach);
       await step("g g", keys(page, "g", "g"), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
       await step("Enter on New chat", keys(page, "Enter"), (s) =>
-        all(want(s.chats === "chat-thread", `Chat shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), want(s.thread.length === 0, `the thread shows ${JSON.stringify(s.thread)}`)), SETTLE);
+        all(want(s.chats === "chat-thread", `Chats shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), want(s.thread.length === 0, `the thread shows ${JSON.stringify(s.thread)}`)), SETTLE);
       clean(problems);
     });
 
@@ -866,14 +866,14 @@ for (const engine of ENGINES) {
       const { page, problems, step, reach } = await open();
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
       await step("g t", keys(page, "g", "t"), (s) =>
-        all(want(s.rightTab === "Chat", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
+        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
       clean(problems);
     });
 
     test(`gT switches the tab back from a list in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open();
       await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await reach(quick(page, "g", "t"), (s) => s.rightTab === "Chat" && panel(s) === "list-then-item#chats");
+      await reach(quick(page, "g", "t"), (s) => s.rightTab === "Chats" && panel(s) === "list-then-item#chats");
       await step("g T", keys(page, "g", "T"), (s) =>
         all(want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`)), SETTLE);
       clean(problems);
@@ -891,7 +891,7 @@ for (const engine of ENGINES) {
       await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
       const before = await look(page);
       await step("Ctrl+. in the note", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chat", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`), unchanged(s, before, "editor")), SETTLE);
+        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`), unchanged(s, before, "editor")), SETTLE);
       await step("Ctrl+,", keys(page, "Control+,"), (s) => want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`));
       clean(problems);
     });
