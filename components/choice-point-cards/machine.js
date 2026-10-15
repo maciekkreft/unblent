@@ -34,9 +34,11 @@ export const isEmpty = (d) => FIELDS.every((k) => !d[k].trim());
 
 const held = (context, id) => context.choicePoints.find((r) => r.id === id);
 
-// Only today's page is written on, the same as the day's own text; an earlier day's choice
-// points open to be read.
-export const writable = (context) => context.day === dateOf(context.now());
+// Choice points are written exactly while the day's own text is: the journal page says so
+// in day.shown, which keeps yesterday open for an hour past its last edit. Before it has
+// said, or from a sender that does not say, only today's date is written on. An earlier
+// day's choice points open to be read.
+export const writable = (context) => context.dayWritable ?? context.day === dateOf(context.now());
 
 // Four empty boxes are never saved while the sheet is open: to `choice-points` that save
 // removes a kept choice point, and the user may be clearing a box only to write it again.
@@ -290,8 +292,10 @@ export const machine = setup({
       "Pressing a card opens it again. Each choice point folds and unfolds on its own, so " +
       "several can be open at once. A choice point folded with all four boxes empty is " +
       "removed, also one kept before; there is no Delete button and no Undo, because an empty " +
-      "one holds nothing to lose. Only today's page is written on, the same as the day's own " +
-      "text: on an earlier day there is no New choice point row, and a card opens its sheet " +
+      "one holds nothing to lose. Choice points are written exactly while the day's own text " +
+      "is, as the journal page says: today's page, and yesterday's for the hour after midnight " +
+      "the journal keeps it open; when that hour runs out an open sheet becomes read only. On " +
+      "an earlier day there is no New choice point row, and a card opens its sheet " +
       "to be read, with boxes that cannot be typed in and a Close button instead of Done. It " +
       "follows the day the journal page shows from day.shown, and shows today until the page " +
       "has said. On a narrow width the V stands above the boxes. When Settings has an " +
@@ -321,6 +325,8 @@ export const machine = setup({
     now: input.now,
     throttleMs: input.throttleMs ?? 400,
     day: dateOf(input.now()),
+    // Whether the journal page says the shown day can be written; null until it has.
+    dayWritable: null,
     choicePoints: [],
     // The open choice points' texts as typed, in the order they were opened, and the ids
     // of those whose typing waits to be saved.
@@ -401,16 +407,31 @@ export const machine = setup({
       }),
     },
     // Moving to another day settles the open choice points and asks for the new day's.
-    "day.shown": {
-      guard: ({ context, event }) => isDay(event.day) && event.day !== context.day,
-      target: ".loading",
-      actions: [
-        saveWaiting,
-        assign(({ context, event }) => ({ day: event.day, drafts: [], dirty: [], choicePoints: [], checks: { ...context.checks, reports: {} } })),
-        stopChild("checks"),
-        spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
-      ],
-    },
+    // The same day closing to writing (the hour after midnight runs out) saves what was
+    // typed while it was open, and the open sheets stay, now to be read.
+    "day.shown": [
+      {
+        guard: ({ context, event }) => isDay(event.day) && event.day !== context.day,
+        target: ".loading",
+        actions: [
+          saveWaiting,
+          assign(({ context, event }) => ({
+            day: event.day,
+            dayWritable: typeof event.writable === "boolean" ? event.writable : null,
+            drafts: [],
+            dirty: [],
+            choicePoints: [],
+            checks: { ...context.checks, reports: {} },
+          })),
+          stopChild("checks"),
+          spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
+        ],
+      },
+      {
+        guard: ({ event }) => isDay(event.day),
+        actions: [saveWaiting, assign({ dayWritable: ({ event }) => (typeof event.writable === "boolean" ? event.writable : null) })],
+      },
+    ],
   },
   states: {
     // A change the fact makes meanwhile is held for this ask and arrives once the reply

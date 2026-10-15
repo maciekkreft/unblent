@@ -114,14 +114,17 @@ const settle = (context, next, dirty) => {
 const savable = (context) =>
   Boolean(context.draft) && (context.picture.days.some((d) => d.id === context.draft.id) || context.draft.text !== "");
 
-// The shown day's date leaves as day.shown, once when the page has loaded and again only
-// when it moves, so a view about one day (nested under the text) needs no copy of the
-// rule above. Every transition that can move it ends with this.
+// The shown day's date, and whether it can still be written, leave as day.shown, once
+// when the page has loaded and again only when either changes, so a view about one day
+// (nested under the text) needs no copy of the rule above or of the journal's "today
+// only" rule, which keeps yesterday open for an hour past its last edit. Every
+// transition that can move them ends with this.
 const announce = enqueueActions(({ context, enqueue }) => {
-  const { day } = shown(context.picture, selectedOf(context), context.fresh, context.now()).day;
-  if (day === context.shownDay) return;
-  enqueue.assign({ shownDay: day });
-  enqueue.emit({ type: "day.shown", day });
+  const view = shown(context.picture, selectedOf(context), context.fresh, context.now());
+  const { day } = view.day;
+  if (day === context.shownDay && view.editable === context.shownWritable) return;
+  enqueue.assign({ shownDay: day, shownWritable: view.editable });
+  enqueue.emit({ type: "day.shown", day, writable: view.editable });
 });
 
 // Nobody acts at midnight, yet a new page then takes the new day's date. The second past
@@ -200,9 +203,10 @@ export const machine = setup({
       "line's level, and name the Vim keys \\1, \\2, \\3 and \\0 while Vim is on; an earlier " +
       "day shows its levels but offers no buttons. The text is saved a short time into " +
       "typing and when the box loses focus. When a day was saved on two devices at once, the " +
-      "entry shows both copies and the user keeps one. It announces which day it shows, when " +
-      "the page has loaded and whenever that day changes, also at midnight on today's empty " +
-      "page, and it holds a view a page nests in it under the day's text, which scrolls with " +
+      "entry shows both copies and the user keeps one. It announces which day it shows and whether " +
+      "it can still be written, when the page has loaded and whenever either changes, also at " +
+      "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
+      "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day.",
     kind: "view",
     emits: ["day.saved", "day.shown"],
@@ -226,8 +230,10 @@ export const machine = setup({
     // The latest book pick, {id, chapter}, and the books being asked about.
     want: null,
     asking: [],
-    // The date last announced as day.shown; null until the page has loaded.
+    // The date, and whether it could be written, last announced as day.shown; null until
+    // the page has loaded.
     shownDay: null,
+    shownWritable: null,
     draft: null,
     editing: false,
     conflict: null,

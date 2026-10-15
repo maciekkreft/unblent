@@ -100,9 +100,14 @@ const MARK_ICONS = {
   brain: () => icon("brain"),
 };
 
+// A box on a day that cannot be written is shown, not edited (writable); it takes no
+// focus, so the sheet's own keydown folds it on Escape.
+const readOnly = (spec) => (spec.read ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [placeholder(spec.hint)]);
+
 // The marks at a line's end. They are a widget, not text: the cursor, Vim and the line's
 // height pass them by, and CodeMirror ignores their events. The pointer over them, or a
 // tap, says which line the status line is to tell about.
+
 class MarksWidget extends WidgetType {
   constructor(marks, text, point) {
     super();
@@ -638,9 +643,6 @@ class ChoicePointCards extends LitElement {
 
   #extensions(key, spec, vimOn) {
     const { id, field } = spec;
-    // An earlier day's box is shown, not edited (writable); it takes no focus, so the
-    // sheet's own keydown folds it on Escape.
-    const read = spec.read ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [placeholder(spec.hint)];
     return [
       this.#keys(id, field),
       // The Vim plugin must see a key before any keymap does.
@@ -654,7 +656,7 @@ class ChoicePointCards extends LitElement {
       keymap.of([{ key: "Enter", run: insertNewline }]),
       EditorView.lineWrapping,
       field === "away" || field === "towards" ? tallTheme : shortTheme,
-      read,
+      this.#boxes.get(key).read.of(readOnly(spec)),
       EditorView.contentAttributes.of({ "aria-label": spec.label }),
       marksField.init(() => spec.marks),
       marksDecorations((source, text) => this.#actor.send({ type: "_point", source, id, field: text == null ? null : field, text })),
@@ -711,7 +713,7 @@ class ChoicePointCards extends LitElement {
       let box = this.#boxes.get(key);
       if (!box) {
         region.replaceChildren();
-        box = { region, vim: new Compartment(), vimOn, marksKey: spec.marksKey };
+        box = { region, vim: new Compartment(), vimOn, read: new Compartment(), readOn: spec.read, marksKey: spec.marksKey };
         this.#boxes.set(key, box);
         box.view = new EditorView({
           parent: region,
@@ -726,6 +728,11 @@ class ChoicePointCards extends LitElement {
       if (box.vimOn !== vimOn) {
         box.vimOn = vimOn;
         effects.push(box.vim.reconfigure(vimExtensions(vimOn)));
+      }
+      // Yesterday's sheet open as its hour after midnight runs out turns read only in place.
+      if (box.readOn !== spec.read) {
+        box.readOn = spec.read;
+        effects.push(box.read.reconfigure(readOnly(spec)));
       }
       if (box.marksKey !== spec.marksKey) {
         box.marksKey = spec.marksKey;

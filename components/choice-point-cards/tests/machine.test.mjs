@@ -233,6 +233,39 @@ test("an earlier day's choice points open to be read: no new one, no typing, no 
   assert.equal(writable(ctx()), true);
 });
 
+test("yesterday is written on while the journal page says it is, and turns read only in place when its hour runs out", async () => {
+  const YESTERDAY = "2026-10-13";
+  const { actor, clock, emitted, asked, ctx, state } = await start({ [YESTERDAY]: [cp(A, YESTERDAY, { situation: "Late" })] });
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
+  await flush();
+  assert.equal(writable(ctx()), true, "the journal's word wins over the calendar");
+  actor.send({ type: "_add" });
+  assert.equal(ctx().drafts.length, 1, "the New choice point row works");
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_edit", id: A, field: "thoughts", value: "Tired" });
+
+  const loads = asked.length;
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: false });
+  assert.deepEqual(saves(emitted).map((e) => [e.id, e.day, e.thoughts]), [[A, YESTERDAY, "Tired"]], "what was typed while open is saved");
+  assert.equal(writable(ctx()), false);
+  assert.equal(asked.length, loads, "the same day is not asked for again");
+  assert.deepEqual(ctx().drafts.map((d) => d.id).at(-1), A, "the open sheet stays, to be read");
+  assert.equal(state().ready !== undefined, true);
+  actor.send({ type: "_edit", id: A, field: "thoughts", value: "More" });
+  actor.send({ type: "_add" });
+  clock.increment(400);
+  assert.equal(ctx().drafts.find((d) => d.id === A).thoughts, "Tired");
+  assert.equal(ctx().drafts.length, 2);
+  assert.equal(saves(emitted).length, 1);
+
+  // A sender that does not say falls back to the calendar date.
+  actor.send({ type: "day.shown", day: YESTERDAY });
+  assert.equal(writable(ctx()), false);
+  actor.send({ type: "day.shown", day: TODAY });
+  await flush();
+  assert.equal(writable(ctx()), true);
+});
+
 test("a choice point removed elsewhere while open closes", async () => {
   const { actor, ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "Dinner" })] });
   actor.send({ type: "_open", id: A });

@@ -347,3 +347,21 @@ test("at midnight today's empty page announces the new day, and an earlier day s
   clock.increment(at(15) - at(14));
   assert.deepEqual(days, ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-11"]);
 });
+
+test("yesterday kept open past midnight is announced writable, and announced again when the journal closes it", async () => {
+  const late = day(TODAY, "2026-10-12", "Late.", { editedAt: at(12, 23, 50) });
+  const said = [];
+  const now = at(13, 0, 10);
+  const { actor } = await startShowing(picture({ days: [late], open: TODAY }), () => now);
+  actor.on("day.shown", ({ day: d, writable }) => said.push([d, writable]));
+  assert.equal(actor.getSnapshot().context.shownWritable, true, "announced writable at load");
+  // Picked in the Days list it stays the open day, so nothing new is said.
+  actor.send({ type: "day.selected", id: TODAY });
+  assert.deepEqual(said, []);
+  // The journal's own close: the same day, now read only.
+  actor.send(changed(picture({ days: [late], open: null })));
+  assert.deepEqual(said, [["2026-10-12", false]]);
+  // Following the open day instead moves on to today's empty page.
+  actor.send({ type: "day.selected", id: null });
+  assert.deepEqual(said, [["2026-10-12", false], ["2026-10-13", true]]);
+});
