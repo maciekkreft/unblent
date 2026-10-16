@@ -92,6 +92,23 @@ export const inputState = (llm) => {
   return { disabled: false, notice: null };
 };
 
+// Where the box's unsent text is kept (3.1, the view's own UI state): one draft per chat,
+// and one per subject for a chat not yet started, so text typed about one book never
+// shows up beside another, or in the journal. The view keys its storage by this. A chat
+// with no messages counts as new: `conversations` keeps no such chat when the subject
+// moves, so coming back opens none, and its text must be found under the subject. Null
+// while the open chat is still being read, so the view does not load the wrong draft
+// before it is known whether the chat has messages.
+export const chatDraftKey = (id) => `chat:${id}`;
+export const draftKey = (context) => {
+  if (context.openId != null) {
+    if (context.reading === context.openId) return null;
+    if (turns(context.conversation).length) return chatDraftKey(context.openId);
+  }
+  if (context.subject) return `new:${context.subject.kind}:${context.subject.id}`;
+  return "new:";
+};
+
 // A chat is new (it needs `about` and `start`) when it has no turns yet: `conversations`
 // writes the start only when it first creates the chat (12).
 const isNew = (context) => turns(context.conversation).length === 0;
@@ -169,8 +186,11 @@ export const machine = setup({
       "holds and the chat is an honest record of what the model was told. When the user picks a " +
       "chat with no messages yet, such as the New chat row, the box takes focus, in Vim's " +
       "insert mode when Vim keys is on; it follows the user's pick and not which chat is open, " +
-      "so a change of subject or a reload never moves the cursor. It disables itself while " +
-      "nobody is signed in or the chosen provider has no key.",
+      "so a change of subject or a reload never moves the cursor. Unsent text is kept in this " +
+      "browser for each chat, and for a new chat about each open item, so it is still there " +
+      "after a reload or on coming back, and never shows up in another chat; sending clears " +
+      "it, and deleting a chat drops its text. It disables itself while nobody is signed in " +
+      "or the chosen provider has no key.",
     kind: "view",
     attributes: [],
     emits: ["turn.submitted", "turn.steered"],
@@ -193,6 +213,9 @@ export const machine = setup({
     focusRequest: 0,
     // The chat whose read is in flight, so a pick of it waits for the read to land.
     reading: null,
+    // Every chat deleted since mount, in order, so the view drops each one's draft even
+    // when several land between two renders.
+    deleted: [],
   }),
   initial: "starting",
   // Beside the states, so the preference arrives whatever the box is doing and a
@@ -246,8 +269,12 @@ export const machine = setup({
       actions: assign({ conversation: ({ event }) => asConversation(event), touched: ({ context }) => mark(context.touched, "conversation") }),
     },
     "conversation.deleted": {
-      guard: ({ context, event }) => event.id === context.openId,
-      actions: assign({ openId: null, conversation: null, touched: ({ context }) => mark(context.touched, "openId", "conversation") }),
+      actions: assign(({ context, event }) => ({
+        deleted: [...context.deleted, event.id],
+        ...(event.id === context.openId
+          ? { openId: null, conversation: null, touched: mark(context.touched, "openId", "conversation") }
+          : {}),
+      })),
     },
     // The stage moved (4.3): a new chat links to the subject now on the stage.
     "subject.changed": {

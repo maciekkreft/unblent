@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, keymap, drawSelection, placeholder } from "@codemirror/view";
 import { history, historyKeymap, insertNewline } from "@codemirror/commands";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
-import { machine, inputState, pendingTurn, canContinue, retryText } from "./machine.js";
+import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
 
@@ -15,25 +15,45 @@ import steered from "./events/turn.steered.json" with { type: "json" };
 // on and off in place, so the draft and the history survive the switch, and the box is
 // never torn down — even disabled it stays mounted, so a sign-out keeps the draft (12).
 
-// The draft, kept across reloads (3.1): the view's own UI state under a key named for
-// the component, so it follows the browser, not the account, and losing it loses
-// nothing. Wrapped like settings/store.js: a browser refusing storage reads "" and
-// drops the write.
-const KEY = "chat-input.draft";
+// The drafts, kept across reloads (3.1): the view's own UI state, one entry per
+// `draftKey`, under a key named for the component, so they follow the browser, not the
+// account, and losing them loses nothing. Wrapped like settings/store.js: a browser
+// refusing storage reads nothing and drops the write.
+const KEY = "chat-input.drafts";
+// The single draft kept before there was one per chat; it moves to the first key used.
+const OLD_KEY = "chat-input.draft";
+const readAll = () => {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    return all && typeof all === "object" && !Array.isArray(all) ? all : {};
+  } catch {
+    return {};
+  }
+};
 const draftStore = {
-  read() {
-    try {
-      return localStorage.getItem(KEY) ?? "";
-    } catch {
-      return "";
-    }
+  read(key) {
+    const text = readAll()[key];
+    return typeof text === "string" ? text : "";
   },
-  write(text) {
+  write(key, text) {
     try {
-      if (text) localStorage.setItem(KEY, text);
+      const all = readAll();
+      if (text) all[key] = text;
+      else delete all[key];
+      if (Object.keys(all).length) localStorage.setItem(KEY, JSON.stringify(all));
       else localStorage.removeItem(KEY);
     } catch {
       // No persistence available; the draft lives only for this page.
+    }
+  },
+  adoptOld(key) {
+    try {
+      const old = localStorage.getItem(OLD_KEY);
+      if (old == null) return;
+      if (old && !this.read(key)) this.write(key, old);
+      localStorage.removeItem(OLD_KEY);
+    } catch {
+      // As above.
     }
   },
 };
@@ -230,7 +250,11 @@ class ChatInput extends LitElement {
   `;
 
   #actor = new ActorController(this);
-  #draft = draftStore.read();
+  #draft = "";
+  // Which draft the box shows; null until the starting picture names it, so nothing is
+  // loaded or saved under a wrong key before then.
+  #key = null;
+  #deletedSeen = 0;
   #view = null;
   // Vim lives in a compartment so the "Vim keys" preference (12) turns it on or off in
   // place, keeping the draft and the history. A second compartment carries editable, so
@@ -316,7 +340,7 @@ class ChatInput extends LitElement {
   #onUpdate = (update) => {
     if (!update.docChanged) return;
     this.#draft = update.state.doc.toString();
-    draftStore.write(this.#draft);
+    if (this.#key != null) draftStore.write(this.#key, this.#draft);
     this.requestUpdate(); // enable/disable Send as the draft gains or loses text
   };
 
@@ -331,9 +355,33 @@ class ChatInput extends LitElement {
     });
   }
 
+  // Another chat or subject: keep the text typed so far under the old key and show the
+  // new key's text in a fresh state, so Undo never brings back another chat's words. The
+  // fresh state carries the compartments as the preference and the account now set them.
+  #swapDraft(snapshot) {
+    if (!snapshot.matches("ready")) return;
+    const key = draftKey(snapshot.context);
+    if (key == null || key === this.#key) return;
+    if (this.#key == null) {
+      draftStore.adoptOld(key);
+      // Text typed before the picture arrived is kept unless a stored draft is waiting.
+      if (this.#draft && !draftStore.read(key)) draftStore.write(key, this.#draft);
+    } else draftStore.write(this.#key, this.#draft);
+    this.#key = key;
+    this.#draft = draftStore.read(key);
+    const focused = this.#view.hasFocus;
+    this.#view.setState(EditorState.create({ doc: this.#draft, extensions: this.#extensions() }));
+    if (focused) this.#view.focus();
+    this.requestUpdate(); // Send follows the text now shown
+  }
+
   updated() {
     const snapshot = this.#actor.snapshot;
     if (snapshot && this.#view) {
+      this.#swapDraft(snapshot);
+      // After the swap, which saved the text of a chat that may be the one deleted.
+      const deleted = snapshot.context.deleted;
+      for (; this.#deletedSeen < deleted.length; this.#deletedSeen++) draftStore.write(chatDraftKey(deleted[this.#deletedSeen]), "");
       const vimKeys = snapshot.context.vimKeys === true;
       if (vimKeys !== this.#vimOn) {
         this.#vimOn = vimKeys;
@@ -387,7 +435,7 @@ class ChatInput extends LitElement {
 
   #clearDraft() {
     this.#draft = "";
-    draftStore.write("");
+    if (this.#key != null) draftStore.write(this.#key, "");
     if (this.#view) this.#view.dispatch({ changes: { from: 0, to: this.#view.state.doc.length, insert: "" } });
     this.requestUpdate();
   }

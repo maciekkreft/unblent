@@ -122,6 +122,11 @@ const emitEvent = (page, name, dir, fields) =>
     { name, dir, fields },
   );
 
+// Switch what the user is working on, as the subject fact would announce it.
+const BOOK = { kind: "book", id: "chatinput-book", title: "A book" };
+const JOURNAL = { kind: "journal", id: "chatinput-journal", title: "Journal" };
+const moveTo = (page, subject) => emitEvent(page, "subject.changed", "subject", { subject });
+
 const editSettings = (page, vimKeys) =>
   emitEvent(page, "settings.edited", "settings-sheet", { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, vimKeys });
 
@@ -161,6 +166,26 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Enter");
       await until(async () => (await transcript(page)).includes("one"), 4000);
       assert.equal(await draftText(page), "", "Enter in normal mode sends and clears the box");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
+  test(`each subject's new chat keeps its own draft in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "subjects");
+    try {
+      await moveTo(page, BOOK);
+      await page.locator("chat-input .cm-content").click();
+      await page.keyboard.type("about the book");
+
+      await moveTo(page, JOURNAL);
+      await until(async () => (await draftText(page)) === "");
+      await page.keyboard.press("ControlOrMeta+z");
+      assert.equal(await draftText(page), "", "Undo does not bring back the book's text");
+
+      await moveTo(page, BOOK);
+      await until(async () => (await draftText(page)) === "about the book");
       assert.deepEqual(problems, [], problems.join("; "));
     } finally {
       await browser.close();

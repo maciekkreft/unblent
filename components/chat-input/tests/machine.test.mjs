@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, startText, inputState, pendingTurn, canContinue, retryText } from "../machine.js";
+import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -86,6 +86,28 @@ function start(options = {}) {
 
 const ready = (h) => until(() => h.actor.getSnapshot().matches("ready"), "ready");
 const emittedOf = (h, type) => h.emitted.filter((e) => e.type === type);
+
+test("the draft key names a chat with messages, else the subject a new chat is about, else none", () => {
+  const book = { kind: "book", id: "B1", title: "Walden" };
+  const started = { turns: [{ id: USER, role: "user", text: "hi" }] };
+  assert.equal(draftKey({ openId: CHAT, conversation: started, subject: book }), "chat:" + CHAT);
+  assert.equal(draftKey({ openId: CHAT, conversation: null, subject: book }), "new:book:B1", "a chat with no messages is new");
+  assert.equal(draftKey({ openId: CHAT, reading: CHAT, conversation: null, subject: book }), null, "unknown while its read is in flight");
+  assert.equal(draftKey({ openId: null, subject: book }), "new:book:B1");
+  assert.equal(draftKey({ openId: null, subject: null }), "new:");
+});
+
+test("every deleted chat is listed for the view, and the open one closes", async () => {
+  const h = start({ openId: CHAT });
+  await ready(h);
+  h.actor.send({ type: "conversation.deleted", id: ANSWER });
+  assert.equal(h.actor.getSnapshot().context.openId, CHAT, "another chat's deletion leaves the open one");
+  h.actor.send({ type: "conversation.deleted", id: CHAT });
+  const { openId, deleted } = h.actor.getSnapshot().context;
+  assert.equal(openId, null);
+  assert.deepEqual(deleted, [ANSWER, CHAT]);
+  h.actor.stop();
+});
 
 test("a new chat's first message carries the subject link and the start text", async () => {
   const h = start({ subject: { kind: "book", id: "b1", title: "A Book", view: "book-reader" } });
