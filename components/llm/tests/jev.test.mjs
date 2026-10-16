@@ -80,3 +80,33 @@ test("a pick question is sent as a choice and its recorded reply maps back to ou
   assert.deepEqual(mixed.parsed.answers[0], { id: "q", p: 0.25 });
   assert.equal(mixed.parsed.answers[1].choice, "goal");
 });
+
+// A stall is asked once more and a refusal is not, so urlopen is replaced in the same
+// python process; nothing here reaches typesafe.ai.
+const RETRY = `
+import importlib.util, io, json, urllib.error, urllib.request
+spec = importlib.util.spec_from_file_location("jev_adapter", "components/llm/server/jev_adapter.py")
+jev_adapter = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(jev_adapter)
+def run(script):
+    calls = []
+    def urlopen(request, timeout):
+        calls.append(timeout)
+        step = script[len(calls) - 1]
+        if step == "stall":
+            raise TimeoutError()
+        if step == "refused":
+            raise urllib.error.HTTPError(request.full_url, 429, "", {}, None)
+        return io.BytesIO(b'{"answers": {}}')
+    urllib.request.urlopen = urlopen
+    reply, error, _ = jev_adapter.send("key", {})
+    return {"reply": reply, "error": error, "calls": calls}
+print(json.dumps([run(["stall", "ok"]), run(["stall", "stall"]), run(["refused"])]))
+`;
+
+test("a stalled request is retried once after 5 s; a refusal is not", () => {
+  const [recovered, stalled, refused] = JSON.parse(execFileSync(`${ROOT}.venv/bin/python`, ["-c", RETRY], { cwd: ROOT }));
+  assert.deepEqual(recovered, { reply: { answers: {} }, error: null, calls: [5, 5] });
+  assert.deepEqual(stalled, { reply: null, error: "unavailable", calls: [5, 5] });
+  assert.deepEqual(refused, { reply: null, error: "rate-limited", calls: [5] });
+});

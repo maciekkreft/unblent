@@ -12,7 +12,10 @@ import urllib.error
 import urllib.request
 
 _URL = "https://api.typesafe.ai/v1/systemone"
-_TIMEOUT = 20
+# Jev answers in about 300 ms, so a request with no answer after 5 s has stalled; one
+# stall is retried once, which keeps the worst wait near 10 s instead of one long hang.
+_TIMEOUT = 5
+_TRIES = 2
 
 # HTTP statuses Jev answers with, mapped onto the reply's error codes; anything else
 # is "unavailable", which is all the user can act on.
@@ -49,15 +52,21 @@ def send(key: str, payload: dict) -> tuple[dict | None, str | None, int]:
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
     )
-    started = time.monotonic()
-    try:
-        with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
-            reply = json.loads(response.read())
-    except urllib.error.HTTPError as error:
-        return None, _ERRORS.get(error.code, "unavailable"), 0
-    except Exception:
-        return None, "unavailable", 0
-    return reply, None, int((time.monotonic() - started) * 1000)
+    for attempt in range(_TRIES):
+        started = time.monotonic()
+        try:
+            with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
+                reply = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            # Jev answered; asking again would get the same answer.
+            return None, _ERRORS.get(error.code, "unavailable"), 0
+        except (TimeoutError, urllib.error.URLError, ConnectionError):
+            if attempt + 1 < _TRIES:
+                continue
+            return None, "unavailable", 0
+        except Exception:
+            return None, "unavailable", 0
+        return reply, None, int((time.monotonic() - started) * 1000)
 
 
 def decide(key: str, state: dict, questions: list) -> dict:
