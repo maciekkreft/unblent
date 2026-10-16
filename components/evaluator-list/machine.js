@@ -17,8 +17,10 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // yet, so picking it opens an empty editor under that id; once the editor saves,
 // evaluator.changed brings the real row and a fresh draft is minted.
 //
-// The Run box asks llm: decide once for every askable question of the switched-on
-// evaluators. Its results are UI state: kept here, never emitted, never saved.
+// The Run box asks llm: decide once per non-empty line of the text, for every askable
+// question of the switched-on evaluators, one line after another: the decide slot takes
+// one request at a time and tells a second asker "busy". Its results are UI state: kept
+// here per line, never emitted, never saved.
 
 export const UNTITLED = "Untitled evaluator";
 
@@ -83,11 +85,22 @@ const toQuestion = (evaluatorId, question) => {
   return asked;
 };
 
-// The one llm: decide payload for a run.
-export const request = (text, evaluators) => ({
+// The llm: decide payload for one line, from the evaluators as a run took them.
+const payload = (text, asked) => ({
   state: { text },
-  questions: askable(evaluators).flatMap((e) => e.questions.map((q) => toQuestion(e.id, q))),
+  questions: asked.flatMap((e) => e.questions.map((q) => toQuestion(e.id, q))),
 });
+
+// The llm: decide payload for a text and the evaluators shown.
+export const request = (text, evaluators) => payload(text, askable(evaluators));
+
+// The lines a run judges, each on its own: blank ones are skipped, and each keeps its
+// line number in the text.
+export const lines = (text) =>
+  text
+    .split("\n")
+    .map((line, i) => ({ at: i + 1, line: line.trim() }))
+    .filter((l) => l.line !== "");
 
 // An evaluator's score: the geometric mean of its yes / no answers; a pick answer does
 // not count, so an evaluator with only pick questions has none.
@@ -136,13 +149,21 @@ const without = (map, id) => {
 };
 
 // A different book, or none, starts the Run box afresh.
-const fresh = { text: "", results: {}, asked: [], error: null, running: false };
+const fresh = { text: "", runs: [], asked: [], running: false };
+
+// An evaluator whose asks changed, or that went, loses its answers on every line.
+const dropResults = (runs, id) => runs.map((r) => (id in r.results ? { ...r, results: without(r.results, id) } : r));
+
+const settle = (runs, change) => runs.map((r) => (r.status === "asking" ? { ...r, ...change } : r));
+
+// Another line follows only while one waits and an evaluator is still left to ask.
+const more = (context) => context.asked.length > 0 && context.runs.some((r) => r.status === "waiting");
 
 // `open` stays: the editor still shows a deleted evaluator until it opens another, and
 // an undone delete brings the row back marked.
 const gone = (context, id) => ({
   evaluators: context.evaluators.filter((e) => e.id !== id),
-  results: without(context.results, id),
+  runs: dropResults(context.runs, id),
   asked: context.asked.filter((e) => e.id !== id),
 });
 
@@ -247,12 +268,16 @@ export const machine = setup({
       "every evaluator of another book marked Show in journal, that book's title on the line " +
       "under its name; its tick, opening it and Run work as for the Journal's own. The arrow keys move between the rows, and with Vim keys on so " +
       "do j, k, gg and G; Enter opens the row. Above New evaluator, a text box and Run try " +
-      "the switched-on evaluators on a text in one request to Jev, asking only their switched-on " +
-      "questions; each evaluator's row then " +
-      "shows each question with its answer and how likely it is, and evaluators with yes / no " +
-      "questions a score, the geometric mean of those answers. Results are not saved: Clear " +
-      "removes them, a change to an evaluator removes its own, and another book removes all " +
-      "of them and the text. A failed run says why in one sentence. With `subject`, a line at " +
+      "the switched-on evaluators on each line of a text on its own, asking only their switched-on " +
+      "questions: blank lines are skipped, and each line is one request to Jev, sent one after " +
+      "another, never two at once. The lines appear under the box as they are answered, each " +
+      "with its text and, for each evaluator, every question with its answer and how likely it " +
+      "is, and for evaluators with yes / no questions a score for that line, the geometric mean " +
+      "of those answers; there is no score for the whole text. Typing during a run does not " +
+      "change it. A failed line says why in one sentence and stops the run: the lines already " +
+      "answered stay, the ones after it are not asked, and Run starts every line over. Results " +
+      "are not saved: Clear removes them and stops a run, a change to an evaluator removes its " +
+      "own from every line, and another book removes all of them and the text. With `subject`, a line at " +
       "the top names the book shown. While the editor's pin is on, as `pins` says, the list " +
       "stays on that book when another comes on the stage, and unpinning brings the stage's " +
       "book back at once. The row of the evaluator the editor shows is marked, whether the user " +
@@ -281,8 +306,9 @@ export const machine = setup({
     open: null,
     draft: input.mint(),
     vimKeys: false,
-    // The Run box (UI state): the text, whether a run is in flight, the last results by
-    // evaluator id, the evaluators and questions as they were asked, and the last error.
+    // The Run box (UI state): the text, whether a run is in flight, the last run's lines
+    // ({ at, line, status: waiting | asking | done | failed, results by evaluator id,
+    // error }), and the evaluators and questions as the run took them.
     ...fresh,
   }),
   // The subject and settings reads run for the machine's whole life, so a book's load
@@ -337,36 +363,65 @@ export const machine = setup({
       states: {
         waiting: {
           on: {
+            // The lines and evaluators are taken once, so typing during the run changes
+            // nothing it asks.
             _run: {
               guard: ({ context }) => filled(context.text) && askable(context.evaluators).length > 0,
               target: "running",
+              actions: assign(({ context }) => ({
+                asked: askable(context.evaluators),
+                runs: lines(context.text).map((l) => ({ ...l, status: "waiting", results: {}, error: null })),
+              })),
             },
           },
         },
+        // One line per entry: the first waiting line is asked, and the answer re-enters
+        // for the next one, so two requests are never open at once.
         running: {
-          entry: assign(({ context }) => ({ running: true, error: null, asked: askable(context.evaluators) })),
+          entry: assign(({ context }) => {
+            const next = context.runs.findIndex((r) => r.status === "waiting");
+            return { running: true, runs: context.runs.map((r, i) => (i === next ? { ...r, status: "asking" } : r)) };
+          }),
           exit: assign({ running: false }),
           invoke: {
             src: "decide",
-            input: ({ context }) => ({ ask: context.ask, payload: request(context.text, context.evaluators) }),
+            input: ({ context }) => ({ ask: context.ask, payload: payload(context.runs.find((r) => r.status === "asking").line, context.asked) }),
             onDone: [
+              {
+                guard: ({ context, event }) => Array.isArray(event.output?.answers) && more(context),
+                target: "running",
+                reenter: true,
+                actions: assign(({ context, event }) => ({
+                  runs: settle(context.runs, { status: "done", results: results(context.asked, event.output.answers) }),
+                })),
+              },
               {
                 guard: ({ event }) => Array.isArray(event.output?.answers),
                 target: "waiting",
-                actions: assign(({ context, event }) => ({ results: results(context.asked, event.output.answers), asked: [] })),
+                actions: assign(({ context, event }) => ({
+                  runs: settle(context.runs, { status: "done", results: results(context.asked, event.output.answers) }),
+                  asked: [],
+                })),
               },
               {
                 target: "waiting",
-                actions: assign(({ event }) => ({ error: errorKind(event.output?.error), asked: [] })),
+                actions: assign(({ context, event }) => ({
+                  runs: settle(context.runs, { status: "failed", error: errorKind(event.output?.error) }),
+                  asked: [],
+                })),
               },
             ],
-            onError: { target: "waiting", actions: assign({ error: "failed", asked: [] }) },
+            onError: {
+              target: "waiting",
+              actions: assign(({ context }) => ({ runs: settle(context.runs, { status: "failed", error: "failed" }), asked: [] })),
+            },
           },
         },
       },
       on: {
         _type: { actions: assign({ text: ({ event }) => (typeof event.text === "string" ? event.text : "") }) },
-        _clear: { actions: assign({ results: {}, error: null }) },
+        // Clear also stops a run, so nothing it had still on its way comes back.
+        _clear: { target: ".waiting", actions: assign({ runs: [], asked: [] }) },
         // The gestures (7.2: internal messages from the view). A pick names a shown
         // evaluator or the draft; a tick names a shown evaluator and changes it.
         _pick: {
@@ -420,7 +475,7 @@ export const machine = setup({
             ...(keep
               ? {}
               : {
-                  results: without(context.results, event.evaluator.id),
+                  runs: dropResults(context.runs, event.evaluator.id),
                   asked: context.asked.filter((e) => e.id !== event.evaluator.id),
                 }),
           };

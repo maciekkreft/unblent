@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, belongs, bookOf, request, score, results, errorKind } from "../machine.js";
+import { machine, rows, subtitle, belongs, bookOf, request, lines, score, results, errorKind } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -370,54 +370,113 @@ const ANSWERS = {
   ms: 5,
 };
 
-const runner = async (reply = ANSWERS) => {
-  let settle;
+// Jev answers each request when the test settles it, in the order asked.
+const runner = async (replies = () => ANSWERS) => {
+  const pending = [];
   const decided = [];
+  let open = 0;
+  let most = 0;
   const s = await start({
     kept: { [A]: MIXED, [B]: [] },
     decide: (payload) => {
       decided.push(payload);
-      return new Promise((r) => (settle = () => r(reply)));
+      most = Math.max(most, ++open);
+      const n = decided.length;
+      return new Promise((resolve, reject) =>
+        pending.push(() => {
+          open--;
+          const r = replies(n, payload);
+          return r instanceof Error ? reject(r) : resolve(r);
+        }),
+      );
     },
   });
-  return { ...s, decided, settle: async () => (settle(), await flush()) };
+  const settle = async () => (pending.shift()(), await flush());
+  return { ...s, decided, settle, most: () => most };
 };
 
-test("Run asks once, shows it is running, and maps the answers back onto the rows", async () => {
-  const { actor, ctx, decided, settle } = await runner();
+const lineResults = (status, line, at, extra = {}) => ({ at, line, status, results: {}, error: null, ...extra });
+
+const ONE = {
+  [id(1)]: {
+    score: 0.93,
+    questions: [
+      { id: Q(1), text: "Is it kind?", kind: "yesno", label: "Yes", p: 0.93 },
+      { id: Q(4), text: "Which tone?", kind: "pick", label: "Angry", p: 0.6 },
+    ],
+  },
+  [id(5)]: { score: null, questions: [{ id: Q(10), text: "Which?", kind: "pick", label: "Left", p: 0.8 }] },
+};
+
+test("a text is judged line by line: blank lines are skipped and each keeps its line number", () => {
+  assert.deepEqual(lines("  First \n\n   \nSecond\nThird  "), [
+    { at: 1, line: "First" },
+    { at: 4, line: "Second" },
+    { at: 5, line: "Third" },
+  ]);
+  assert.deepEqual(lines(" \n "), []);
+});
+
+test("Run asks once per line, in order, never two at once, and keeps each line's answers", async () => {
+  const { actor, ctx, decided, settle, most } = await runner();
   actor.send({ type: "_run" });
   assert.equal(decided.length, 0, "no text, no run");
-  actor.send({ type: "_type", text: "Hello" });
+  actor.send({ type: "_type", text: "Hello\n\nWorld" });
   actor.send({ type: "_run" });
   assert.equal(ctx().running, true);
   actor.send({ type: "_run" });
+  // Typing during the run changes nothing it asks.
+  actor.send({ type: "_type", text: "Other" });
   assert.equal(decided.length, 1);
   assert.deepEqual(decided[0], request("Hello", MIXED));
+  assert.deepEqual(ctx().runs.map((r) => r.status), ["asking", "waiting"]);
+  await settle();
+  assert.equal(decided.length, 2);
+  assert.deepEqual(decided[1], request("World", MIXED));
+  assert.deepEqual(ctx().runs, [lineResults("done", "Hello", 1, { results: ONE }), lineResults("asking", "World", 3)]);
   await settle();
   assert.equal(ctx().running, false);
-  assert.equal(ctx().error, null);
-  assert.deepEqual(ctx().results, {
-    [id(1)]: {
-      score: 0.93,
-      questions: [
-        { id: Q(1), text: "Is it kind?", kind: "yesno", label: "Yes", p: 0.93 },
-        { id: Q(4), text: "Which tone?", kind: "pick", label: "Angry", p: 0.6 },
-      ],
-    },
-    [id(5)]: { score: null, questions: [{ id: Q(10), text: "Which?", kind: "pick", label: "Left", p: 0.8 }] },
-  });
+  assert.deepEqual(ctx().runs, [lineResults("done", "Hello", 1, { results: ONE }), lineResults("done", "World", 3, { results: ONE })]);
+  assert.equal(most(), 1, "never two requests at once");
   actor.send({ type: "_clear" });
-  assert.deepEqual(ctx().results, {});
+  assert.deepEqual(ctx().runs, []);
 });
 
-test("an error reply says which kind and keeps nothing running", async () => {
-  const { actor, ctx, settle } = await runner({ error: "no-key" });
-  actor.send({ type: "_type", text: "Hello" });
+test("a failed line keeps the lines before it, leaves the rest unasked, and Run starts over", async () => {
+  const { actor, ctx, decided, settle } = await runner((n) => (n === 2 ? { error: "no-key" } : ANSWERS));
+  actor.send({ type: "_type", text: "One\nTwo\nThree" });
   actor.send({ type: "_run" });
   await settle();
+  await settle();
   assert.equal(ctx().running, false);
-  assert.equal(ctx().error, "key");
-  assert.deepEqual(ctx().results, {});
+  assert.equal(decided.length, 2, "line 3 is not asked");
+  assert.deepEqual(ctx().runs, [
+    lineResults("done", "One", 1, { results: ONE }),
+    lineResults("failed", "Two", 2, { error: "key" }),
+    lineResults("waiting", "Three", 3),
+  ]);
+  actor.send({ type: "_run" });
+  assert.deepEqual(ctx().runs.map((r) => r.status), ["asking", "waiting", "waiting"]);
+  assert.deepEqual(decided[2], request("One", MIXED));
+});
+
+test("a request that throws fails its line as one Jev could not answer", async () => {
+  const { actor, ctx, settle } = await runner(() => new Error("down"));
+  actor.send({ type: "_type", text: "One\nTwo" });
+  actor.send({ type: "_run" });
+  await settle();
+  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "failed"], ["waiting", null]]);
+});
+
+test("Clear during a run stops it, so nothing still on its way comes back", async () => {
+  const { actor, ctx, decided, settle } = await runner();
+  actor.send({ type: "_type", text: "One\nTwo" });
+  actor.send({ type: "_run" });
+  actor.send({ type: "_clear" });
+  assert.equal(ctx().running, false);
+  await settle();
+  assert.deepEqual(ctx().runs, []);
+  assert.equal(decided.length, 1);
 });
 
 test("nothing switched on with a question to ask is no run", async () => {
@@ -428,27 +487,33 @@ test("nothing switched on with a question to ask is no run", async () => {
   assert.deepEqual(decided, []);
 });
 
-test("a changed or deleted evaluator loses its result, even one still on its way; a rename keeps it", async () => {
-  const { actor, ctx, settle } = await runner();
-  actor.send({ type: "_type", text: "Hello" });
+const kept = (ctx) => ctx().runs.map((r) => Object.keys(r.results));
+
+test("a changed or deleted evaluator loses its results on every line, even ones still on their way; a rename keeps them", async () => {
+  const { actor, ctx, decided, settle } = await runner();
+  actor.send({ type: "_type", text: "One\nTwo" });
   actor.send({ type: "_run" });
   actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[4], on: false } });
   await settle();
-  assert.deepEqual(Object.keys(ctx().results), [id(1)]);
+  assert.deepEqual(kept(ctx), [[id(1)], []]);
+  await settle();
+  assert.deepEqual(kept(ctx), [[id(1)], [id(1)]]);
+  assert.deepEqual(decided[1].questions.map((x) => x.id.split(":")[0]), [id(1), id(1)], "the next line no longer asks it");
   actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[0], name: "Renamed", version: 2 } });
-  assert.deepEqual(Object.keys(ctx().results), [id(1)]);
+  assert.deepEqual(kept(ctx), [[id(1)], [id(1)]]);
   actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[0], questions: [yesno(1, "Is it cruel?")] } });
-  assert.deepEqual(ctx().results, {});
+  assert.deepEqual(kept(ctx), [[], []]);
 
   const again = await runner();
-  again.actor.send({ type: "_type", text: "Hello" });
+  again.actor.send({ type: "_type", text: "One\nTwo" });
   again.actor.send({ type: "_run" });
   await again.settle();
+  await again.settle();
   again.actor.send({ type: "evaluator.deleted", id: id(1), book: A });
-  assert.deepEqual(Object.keys(again.ctx().results), [id(5)]);
+  assert.deepEqual(kept(again.ctx), [[id(5)], [id(5)]]);
 });
 
-test("switching a question off or on drops only that evaluator's result", async () => {
+test("switching a question off or on drops only that evaluator's results", async () => {
   const { actor, ctx, settle } = await runner();
   actor.send({ type: "_type", text: "Hello" });
   actor.send({ type: "_run" });
@@ -456,7 +521,7 @@ test("switching a question off or on drops only that evaluator's result", async 
   const [first] = MIXED;
   const off = { ...first, questions: first.questions.map((x) => (x.id === Q(1) ? { ...x, on: false } : x)) };
   actor.send({ type: "evaluator.changed", evaluator: off });
-  assert.deepEqual(Object.keys(ctx().results), [id(5)]);
+  assert.deepEqual(kept(ctx), [[id(5)]]);
 
   const again = await runner();
   again.actor.send({ type: "_type", text: "Hello" });
@@ -465,7 +530,7 @@ test("switching a question off or on drops only that evaluator's result", async 
   // A question already off, or one Run does not ask, changes nothing Run asked.
   const unasked = { ...first, questions: first.questions.map((x) => (x.id === Q(3) ? { ...x, on: false } : x)) };
   again.actor.send({ type: "evaluator.changed", evaluator: unasked });
-  assert.deepEqual(Object.keys(again.ctx().results), [id(1), id(5)]);
+  assert.deepEqual(kept(again.ctx), [[id(1), id(5)]]);
 });
 
 test("another book drops every result and the text", async () => {
@@ -478,6 +543,6 @@ test("another book drops every result and the text", async () => {
   actor.send({ type: "subject.changed", subject: book(B) });
   await flush();
   assert.equal(ctx().text, "");
-  assert.deepEqual(ctx().results, {});
+  assert.deepEqual(ctx().runs, []);
   assert.equal(ctx().running, false);
 });

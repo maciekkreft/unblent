@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, rows, subtitle, askable, UNTITLED } from "./machine.js";
+import { machine, rows, subtitle, askable, lines, UNTITLED } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 
@@ -236,10 +236,66 @@ class EvaluatorList extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-danger);
     }
-    /* A row with results stacks its answers under its name. */
-    .item {
+    /* The results, one block per line of the text, in the order of the text. */
+    .lines {
       display: flex;
       flex-direction: column;
+      gap: var(--space-md);
+      margin: 0;
+      padding: var(--space-xs) 0 0;
+      list-style: none;
+    }
+    .line {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      padding-top: var(--space-sm);
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    .said {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin: 0;
+      font-size: var(--text-sm);
+      line-height: var(--leading-tight);
+      color: var(--color-ink);
+      font-weight: var(--weight-semibold);
+      overflow-wrap: anywhere;
+    }
+    /* The line being asked: the same pulsing dot as a choice point's pending check. */
+    .dot {
+      flex: none;
+      width: calc(var(--space-xs) * 1.5);
+      height: calc(var(--space-xs) * 1.5);
+      border-radius: var(--radius-full);
+      background: var(--color-mute);
+      animation: pulse calc(var(--duration-slide) * 4) ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.3;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .dot {
+        animation: none;
+      }
+    }
+    .verdict {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+    }
+    .judge {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+    .judge .name {
+      flex: 1;
+      min-width: 0;
+      font-size: var(--text-sm);
     }
     .score {
       flex: none;
@@ -249,18 +305,12 @@ class EvaluatorList extends LitElement {
       border-radius: var(--radius-full);
       padding: var(--space-2xs) var(--space-sm);
     }
-    .not-run {
-      flex: none;
-      font-size: var(--text-caption);
-      color: var(--color-body-mid);
-    }
-    /* Indented past the tick box, so the answers sit under the name. */
     .answers {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
       margin: 0;
-      padding: var(--space-2xs) var(--space-sm) var(--space-sm) calc(var(--space-md) + var(--space-2xs) + var(--space-sm) * 2);
+      padding: 0;
       list-style: none;
     }
     .answer {
@@ -404,23 +454,20 @@ class EvaluatorList extends LitElement {
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
-    const { draft, open, evaluators, results, book, titles } = snapshot.context;
+    const { draft, open, evaluators, book, titles } = snapshot.context;
     const shown = rows(evaluators);
     const ids = [draft, ...shown.map((e) => e.id)];
     const focusId = this.#focusRow(ids, open);
-    const ran = Object.keys(results).length > 0;
     return html`
       ${this.#header(snapshot)}
-      ${this.#runBox(snapshot, ran)}
+      ${this.#runBox(snapshot)}
       <ul class="list" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e, ids)} @focusin=${(e) => this.#focusin(e)}>
         <li class="row new" data-id=${draft} @click=${(e) => this.#rowClick(e, draft)}>
           <button class="open" type="button" tabindex=${draft === focusId ? 0 : -1}>
             <span class="name draft">${icon("plus")}New evaluator</span>
           </button>
         </li>
-        ${shown.map((e) =>
-          this.#row(e, open, focusId, ran ? (results[e.id] ?? "not run") : null, e.book === book ? null : (titles[e.book] ?? "Another book")),
-        )}
+        ${shown.map((e) => this.#row(e, open, focusId, e.book === book ? null : (titles[e.book] ?? "Another book")))}
       </ul>
     `;
   }
@@ -432,12 +479,13 @@ class EvaluatorList extends LitElement {
     return title ? html`<p class="about">About: ${title}</p>` : nothing;
   }
 
-  #runBox(snapshot, ran) {
-    const { text, evaluators, error, running } = snapshot.context;
+  #runBox(snapshot) {
+    const { text, evaluators, runs, running } = snapshot.context;
     const n = askable(evaluators).length;
+    const m = lines(text).length;
     const cost =
       n > 0
-        ? `Runs the ${n} switched-on evaluator${n === 1 ? "" : "s"} · 1 request`
+        ? `Runs the ${n} switched-on evaluator${n === 1 ? "" : "s"} · ${m === 0 ? "one request per line" : `${m} request${m === 1 ? "" : "s"}`}`
         : rows(evaluators).some((e) => e.on)
           ? "Write a question in a switched-on evaluator to run it."
           : "Switch an evaluator on to run it.";
@@ -453,24 +501,62 @@ class EvaluatorList extends LitElement {
         ></textarea>
         <div class="actions">
           <span class="cost">${cost}</span>
-          ${ran ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
+          ${runs.length > 0 ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
           <button class="go" type="button" ?disabled=${running || n === 0 || text.trim() === ""} @click=${() => this.#actor.send({ type: "_run" })}>
             ${running ? "Running…" : "Run"}
           </button>
         </div>
-        ${error ? html`<p class="error" role="alert">${ERRORS[error]}</p>` : nothing}
+        ${this.#lines(runs, evaluators)}
       </div>
     `;
   }
 
-  // result: null before any run, "not run", or the evaluator's answers and score.
+  // A line not asked yet shows nothing, so the blocks appear one after another as Jev
+  // answers, and a failure leaves only what was answered and the reason.
+  #lines(runs, evaluators) {
+    const shown = runs.filter((r) => r.status !== "waiting");
+    if (shown.length === 0) return nothing;
+    const names = new Map(rows(evaluators).map((e) => [e.id, e.name.trim() || UNTITLED]));
+    return html`<ol class="lines" aria-label="Results by line">
+      ${shown.map(
+        (r) => html`<li class="line ${r.status}" data-at=${r.at}>
+          <p class="said">
+            ${r.status === "asking" ? html`<i class="dot" role="img" aria-label="Asking Jev"></i>` : nothing}<span>${r.line}</span>
+          </p>
+          ${r.status === "failed" ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>` : nothing}
+          ${Object.entries(r.results).map(([id, result]) => this.#verdict(names.get(id) ?? UNTITLED, result))}
+        </li>`,
+      )}
+    </ol>`;
+  }
+
+  // One evaluator's answers and score for one line.
+  #verdict(name, result) {
+    return html`<div class="verdict">
+      <span class="judge">
+        <span class="name">${name}</span>
+        ${result.score != null ? html`<span class="score">${result.score.toFixed(2)}</span>` : nothing}
+      </span>
+      <ul class="answers" aria-label="Answers from ${name}">
+        ${result.questions.map(
+          (q) => html`<li class="answer">
+            <span class="question">${q.text}</span>
+            <span class="meter">
+              <span class="track"><span class="fill ${q.p < 0.5 ? "low" : ""}" style="width: ${Math.round(q.p * 100)}%"></span></span>
+              <span class="label">${q.label} ${q.p.toFixed(2)}</span>
+            </span>
+          </li>`,
+        )}
+      </ul>
+    </div>`;
+  }
+
   // from: the title of the book a row shown in the journal is kept with, or null.
-  #row(e, open, focusId, result, from) {
+  #row(e, open, focusId, from) {
     const tab = e.id === focusId ? 0 : -1;
     const name = e.name.trim();
     return html`
-      <li class="item">
-        <div class="row ${e.id === open ? "current" : ""}" data-id=${e.id} @click=${(event) => this.#rowClick(event, e.id)}>
+      <li class="row ${e.id === open ? "current" : ""}" data-id=${e.id} @click=${(event) => this.#rowClick(event, e.id)}>
           <input
             type="checkbox"
             tabindex=${tab}
@@ -482,25 +568,6 @@ class EvaluatorList extends LitElement {
             <span class="name ${name ? (e.on ? "" : "off") : "untitled"}">${name || UNTITLED}</span>
             <span class="sub">${subtitle(e, from)}</span>
           </button>
-          ${result === "not run"
-            ? html`<span class="not-run">not run</span>`
-            : result?.score != null
-              ? html`<span class="score">${result.score.toFixed(2)}</span>`
-              : nothing}
-        </div>
-        ${result && result !== "not run"
-          ? html`<ul class="answers" aria-label="Answers">
-              ${result.questions.map(
-                (q) => html`<li class="answer">
-                  <span class="question">${q.text}</span>
-                  <span class="meter">
-                    <span class="track"><span class="fill ${q.p < 0.5 ? "low" : ""}" style="width: ${Math.round(q.p * 100)}%"></span></span>
-                    <span class="label">${q.label} ${q.p.toFixed(2)}</span>
-                  </span>
-                </li>`,
-              )}
-            </ul>`
-          : nothing}
       </li>
     `;
   }
