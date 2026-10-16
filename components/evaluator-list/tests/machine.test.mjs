@@ -24,7 +24,7 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null } = {}) => {
+const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
@@ -39,6 +39,7 @@ const start = async ({ subject = book(A), following = true, fail, kept = KEPT, v
         return Promise.resolve(fail ?? { evaluators: kept[payload.book] ?? [] });
       },
       mint: () => drafts.shift(),
+      ...(texts ? { drafts: texts } : {}),
     },
   });
   const emitted = [];
@@ -545,4 +546,24 @@ test("another book drops every result and the text", async () => {
   assert.equal(ctx().text, "");
   assert.deepEqual(ctx().runs, []);
   assert.equal(ctx().running, false);
+});
+
+test("the Run text is kept per book and comes back after a reload", async () => {
+  const kept = {};
+  const texts = { read: (b) => kept[b] ?? "", write: (b, text) => (text ? (kept[b] = text) : delete kept[b]) };
+  const first = await start({ texts, kept: { [A]: [], [B]: [] } });
+  first.actor.send({ type: "_type", text: "One\n\nTwo" });
+  assert.deepEqual(kept, { [A]: "One\n\nTwo" });
+  first.actor.send({ type: "subject.changed", subject: book(B) });
+  await flush();
+  assert.equal(first.ctx().text, "", "another book shows its own text");
+  first.actor.send({ type: "_type", text: "Other" });
+  first.actor.send({ type: "subject.changed", subject: book(A) });
+  await flush();
+  assert.equal(first.ctx().text, "One\n\nTwo", "coming back shows the book's text");
+  first.actor.stop();
+  const again = await start({ texts, kept: { [A]: [], [B]: [] } });
+  assert.equal(again.ctx().text, "One\n\nTwo", "a reload shows the text last typed");
+  again.actor.send({ type: "_type", text: "" });
+  assert.deepEqual(kept, { [B]: "Other" }, "an emptied box keeps nothing");
 });

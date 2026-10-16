@@ -19,6 +19,7 @@ class ActorController {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         mint: ulid,
         following: this.host.subject,
+        drafts,
       },
       events: { "evaluator.selected": selected, "evaluator.switched": switched },
     });
@@ -38,6 +39,36 @@ class ActorController {
     this.actor?.send(event);
   }
 }
+
+// The Run box's text, one entry per book, kept across reloads (3.1): the view's own UI
+// state under a key named for the component, so it follows the browser, not the account,
+// and losing it loses nothing. A browser refusing storage reads nothing and drops the write.
+const KEY = "evaluator-list.drafts";
+const readAll = () => {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    return all && typeof all === "object" && !Array.isArray(all) ? all : {};
+  } catch {
+    return {};
+  }
+};
+const drafts = {
+  read(book) {
+    const text = readAll()[book];
+    return typeof text === "string" ? text : "";
+  },
+  write(book, text) {
+    try {
+      const all = readAll();
+      if (text) all[book] = text;
+      else delete all[book];
+      if (Object.keys(all).length) localStorage.setItem(KEY, JSON.stringify(all));
+      else localStorage.removeItem(KEY);
+    } catch {
+      // No persistence available; the text lives only for this page.
+    }
+  },
+};
 
 const ERRORS = {
   "signed-out": "Sign in to run evaluators.",

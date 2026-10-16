@@ -132,7 +132,17 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           { said: "Two", status: "failed", error: "Jev is busy. Try again in a moment.", verdicts: [] },
         ]);
         assert.deepEqual(bodies.map((b) => b.state.text), ["One", "Two"]);
+
         assert.deepEqual(problems, [], problems.join("; "));
+
+        // The text is kept in this browser: the page opened again shows it in the box. A
+        // second page, not a reload, so no save still on its way is cut off.
+        const again = await context.newPage();
+        const later = watch(again);
+        await again.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
+        await again.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await until(async () => (await again.locator("evaluator-list textarea").inputValue()) === "One\nTwo\nThree");
+        assert.deepEqual(later, [], later.join("; "));
       } finally {
         await context.close();
       }

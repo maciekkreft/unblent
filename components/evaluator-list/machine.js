@@ -220,7 +220,8 @@ const follow = (next) => [
     target: ".loading",
     actions: assign(({ context, event }) => {
       const n = next({ context, event });
-      return { ...fresh, ...n, book: wanted(n), evaluators: [] };
+      const book = wanted(n);
+      return { ...fresh, ...n, book, text: context.drafts.read(book), evaluators: [] };
     }),
   },
   {
@@ -277,7 +278,8 @@ export const machine = setup({
       "change it. A failed line says why in one sentence and stops the run: the lines already " +
       "answered stay, the ones after it are not asked, and Run starts every line over. Results " +
       "are not saved: Clear removes them and stops a run, a change to an evaluator removes its " +
-      "own from every line, and another book removes all of them and the text. With `subject`, a line at " +
+      "own from every line, and another book removes all of them. The text is kept per book in " +
+      "this browser, so a reload or coming back to the book shows it again. With `subject`, a line at " +
       "the top names the book shown. While the editor's pin is on, as `pins` says, the list " +
       "stays on that book when another comes on the stage, and unpinning brings the stage's " +
       "book back at once. The row of the evaluator the editor shows is marked, whether the user " +
@@ -291,6 +293,9 @@ export const machine = setup({
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
+    // The Run box's text per book, kept by the view across reloads (3.1); without one
+    // the text lives only for this page.
+    drafts: input.drafts ?? { read: () => "", write: () => {} },
     following: Boolean(input.following),
     subject: null,
     book: null,
@@ -419,7 +424,12 @@ export const machine = setup({
         },
       },
       on: {
-        _type: { actions: assign({ text: ({ event }) => (typeof event.text === "string" ? event.text : "") }) },
+        _type: {
+          actions: [
+            assign({ text: ({ event }) => (typeof event.text === "string" ? event.text : "") }),
+            ({ context }) => context.book != null && context.drafts.write(context.book, context.text),
+          ],
+        },
         // Clear also stops a run, so nothing it had still on its way comes back.
         _clear: { target: ".waiting", actions: assign({ runs: [], asked: [] }) },
         // The gestures (7.2: internal messages from the view). A pick names a shown
