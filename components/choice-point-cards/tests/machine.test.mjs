@@ -36,7 +36,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 // settings fact's answer, or none when the page holds no settings.
 // `checks` is what choice-point-checks answers for a day, and `evaluators` the evaluators
 // fact's list; left out, the page holds neither fact.
-async function start(days = {}, vimKeys, { checks, evaluators } = {}) {
+async function start(days = {}, vimKeys, { checks, evaluators, unfolded } = {}) {
   let n = 0;
   const asked = [];
   const checksAsked = [];
@@ -57,6 +57,7 @@ async function start(days = {}, vimKeys, { checks, evaluators } = {}) {
       mint: () => `01K6TEST000000000000000M${String(++n).padStart(2, "0")}`,
       now: () => NOW,
       throttleMs: 400,
+      ...(unfolded ? { unfolded } : {}),
     },
   });
   const emitted = [];
@@ -422,4 +423,10 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
   assert.deepEqual(checksAsked, [TODAY, EARLIER]);
   assert.deepEqual(ctx().checks.reports, {});
   assert.equal(ctx().checks.settings, SETTINGS, "the settings are kept across days");
+});
+
+test("the sheets left unfolded open again after a reload; one gone or of another day does not", async () => {
+  const unfolded = { read: (day) => (day === TODAY ? [B, "01K6TEST000000000000000GON", A] : []) };
+  const { ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "One" }), cp(B, TODAY, { situation: "Two" })] }, undefined, { unfolded });
+  assert.deepEqual(ctx().drafts.map((d) => d.id), [B, A], "in the order they were opened");
 });

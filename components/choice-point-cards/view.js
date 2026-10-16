@@ -184,6 +184,38 @@ const BOXES = {
   thoughts: { label: "Thoughts & feelings", hint: "What showed up inside?" },
 };
 
+// Which choice points are unfolded, per day, kept across reloads (3.1): the view's own UI
+// state under a key named for the component, so it follows the browser, not the account,
+// and losing it only folds the sheets. Only the days still listed are kept, so the key does
+// not grow. A browser refusing storage reads nothing and drops the write.
+const KEY = "choice-point-cards.unfolded";
+const readAll = () => {
+  try {
+    const all = JSON.parse(localStorage.getItem(KEY) ?? "{}");
+    return all && typeof all === "object" && !Array.isArray(all) ? all : {};
+  } catch {
+    return {};
+  }
+};
+const unfolded = {
+  read(day) {
+    const ids = readAll()[day];
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  },
+  write(day, ids) {
+    try {
+      const all = readAll();
+      if (JSON.stringify(all[day] ?? []) === JSON.stringify(ids)) return;
+      if (ids.length) all[day] = ids;
+      else delete all[day];
+      if (Object.keys(all).length) localStorage.setItem(KEY, JSON.stringify(all));
+      else localStorage.removeItem(KEY);
+    } catch {
+      // No persistence available; the sheets fold on reload.
+    }
+  },
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -193,10 +225,14 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now(), unfolded },
       events: { "choice-point.saved": saved },
     });
-    this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    this.subscription = this.actor.subscribe((snapshot) => {
+      // Only once the day's choice points are in, so the empty start does not forget them.
+      if (snapshot.matches("ready")) unfolded.write(snapshot.context.day, snapshot.context.drafts.map((d) => d.id));
+      this.host.requestUpdate();
+    });
   }
 
   hostDisconnected() {

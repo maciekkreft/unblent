@@ -101,6 +101,15 @@ const follow = enqueueActions(({ context, event, enqueue }) => {
 
 const opened = (context, event) => Boolean(draftIn(context, event.id));
 
+// The sheets left unfolded on the day before a reload open again, in the order they were
+// opened; one no longer kept, or not of this day, is skipped.
+const reopened = (context, choicePoints) =>
+  context.unfolded
+    .read(context.day)
+    .map((id) => choicePoints.find((r) => r.id === id && r.day === context.day))
+    .filter(Boolean)
+    .map(draftOf);
+
 const edit = assign(({ context, event }) => ({
   drafts: context.drafts.map((d) => (d.id === event.id ? { ...d, [event.field]: event.value } : d)),
   dirty: context.dirty.includes(event.id) ? context.dirty : [...context.dirty, event.id],
@@ -291,7 +300,8 @@ export const machine = setup({
       "showing the situation and the away and towards moves, one line each; with Vim keys on, " +
       "the first Escape in a box leaves insert mode and the next one folds the sheet. " +
       "Pressing a card opens it again. Each choice point folds and unfolds on its own, so " +
-      "several can be open at once. A choice point folded with all four boxes empty is " +
+      "several can be open at once; the ones left open stay open after a reload, kept per day " +
+      "in this browser. A choice point folded with all four boxes empty is " +
       "removed, also one kept before; there is no Delete button and no Undo, because an empty " +
       "one holds nothing to lose. Choice points are written exactly while the day's own text " +
       "is, as the journal page says: today's page, and yesterday's for the hour after midnight " +
@@ -323,6 +333,9 @@ export const machine = setup({
     mint: input.mint,
     now: input.now,
     throttleMs: input.throttleMs ?? 400,
+    // Which choice points were unfolded, per day, kept by the view across reloads (3.1);
+    // without it every sheet starts folded.
+    unfolded: input.unfolded ?? { read: () => [] },
     day: dateOf(input.now()),
     // Whether the journal page says the shown day can be written; null until it has.
     dayWritable: null,
@@ -443,7 +456,10 @@ export const machine = setup({
           {
             guard: ({ event }) => Array.isArray(event.output?.choicePoints),
             target: "ready",
-            actions: assign({ choicePoints: ({ event }) => [...event.output.choicePoints].sort(byId) }),
+            actions: assign(({ context, event }) => {
+              const choicePoints = [...event.output.choicePoints].sort(byId);
+              return { choicePoints, drafts: reopened(context, choicePoints) };
+            }),
           },
           // The fact could not answer: an honest failure rather than an empty day.
           { target: "failed" },

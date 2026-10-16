@@ -49,6 +49,13 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await inCards(page, (root) => root.activeElement?.className), "card", "the keyboard stays on the folded card");
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await card().catch(() => null)) === "Family dinner AWAY — TOWARDS Listened");
+
+        // A sheet left unfolded is unfolded again after a reload.
+        await page.click("choice-point-cards .card");
+        await until(async () => (await inCards(page, (root) => root.querySelectorAll(".sheet").length)) === 1);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await inCards(page, (root) => root.querySelectorAll(".sheet").length).catch(() => 0)) === 1);
+        assert.equal(await card(), null, "no card is left folded");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
