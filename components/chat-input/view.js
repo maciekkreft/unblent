@@ -3,17 +3,18 @@ import { mount, unmount, ask } from "bus";
 import { monotonicFactory } from "ulid";
 import { icon } from "icons";
 import { EditorState, Compartment, Prec } from "@codemirror/state";
-import { EditorView, keymap, drawSelection, placeholder } from "@codemirror/view";
-import { history, historyKeymap, insertNewline } from "@codemirror/commands";
-import { vim, Vim, getCM } from "@replit/codemirror-vim";
+import { EditorView, placeholder } from "@codemirror/view";
+import { Vim, getCM } from "@replit/codemirror-vim";
+import { baseExtensions, setVim, paragraphs } from "editor";
 import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
 
-// The question box (3.1): a CodeMirror document owning only its draft. The box is one
-// editor for both modes: Vim lives in a compartment the "Vim keys" preference (12) turns
-// on and off in place, so the draft and the history survive the switch, and the box is
-// never torn down — even disabled it stays mounted, so a sign-out keeps the draft (12).
+// The question box (3.1): a CodeMirror document owning only its draft. The setup, the
+// Vim switch and the paragraph rule are the editor kit's (10): the "Vim keys" preference
+// (12) turns Vim on and off in place, so the draft and the history survive the switch,
+// and the box is never torn down — even disabled it stays mounted, so a sign-out keeps
+// the draft (12).
 
 // The drafts, kept across reloads (3.1): the view's own UI state, one entry per
 // `draftKey`, under a key named for the component, so they follow the browser, not the
@@ -68,53 +69,18 @@ const toMs = (text, fallback = 300) => {
   return t.endsWith("ms") ? n : n * 1000;
 };
 
-// The structural theme, keyed to tokens like the note editors'; line spacing is padding,
-// never margin. The box grows from one line to six, then scrolls inside, so it never
-// pushes the transcript off screen.
+// The box grows from one line to six, then scrolls inside, so it never pushes the
+// transcript off screen; the rest of the look is the kit's.
 const editorTheme = EditorView.theme({
-  "&": { color: "var(--color-ink)", backgroundColor: "transparent" },
-  "&.cm-focused": { outline: "none" },
   ".cm-scroller": {
-    fontFamily: "var(--font-sans)",
-    lineHeight: "var(--leading-normal)",
     overflowY: "auto",
     maxHeight: "calc(var(--text-body) * var(--leading-normal) * 6)",
   },
   ".cm-content": {
-    caretColor: "var(--color-accent)",
     padding: "var(--space-xs) var(--space-sm)",
     minHeight: "calc(var(--text-body) * var(--leading-normal))",
   },
-  ".cm-line": { fontSize: "var(--text-body)", padding: "0" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
-  ".cm-placeholder": { color: "var(--color-mute)" },
 });
-
-// The Vim block cursor, keyed to tokens, copied from note-editor (components never
-// import each other, 11.2). The plugin ships its own Prec.highest theme, so this raises
-// precedence and marks the competing properties !important to win regardless of order.
-// Focused, it fills with the accent; unfocused, it is hollowed with an inset shadow,
-// which no edge clip can reach — the plugin draws an outline outside an absolutely
-// positioned span, and Safari clips its top and left.
-const fatCursorTheme = Prec.highest(
-  EditorView.theme({
-    ".cm-fat-cursor": {
-      background: "var(--color-accent) !important",
-      color: "var(--color-accent-text) !important",
-    },
-    "&:not(.cm-focused) .cm-fat-cursor": {
-      background: "none !important",
-      outline: "none !important",
-      color: "var(--color-ink) !important",
-      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
-    },
-  }),
-);
-
-// Vim and its block cursor, or nothing: what the Vim compartment holds for the
-// "Vim keys" preference (12).
-const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
 
 class ActorController {
   constructor(host) {
@@ -256,10 +222,8 @@ class ChatInput extends LitElement {
   #key = null;
   #deletedSeen = 0;
   #view = null;
-  // Vim lives in a compartment so the "Vim keys" preference (12) turns it on or off in
-  // place, keeping the draft and the history. A second compartment carries editable, so
-  // a disabled box (signed out, no key) is still the same mounted editor (12).
-  #vim = new Compartment();
+  // Editable lives in a compartment, so a disabled box (signed out, no key) is still the
+  // same mounted editor (12).
   #vimOn = false;
   #editable = new Compartment();
   #editableOn = false;
@@ -279,23 +243,15 @@ class ChatInput extends LitElement {
     this.#vimOn = this.#actor.snapshot?.context.vimKeys === true;
     this.#editableOn = !inputState(this.#actor.snapshot?.context.llm).disabled;
     return [
-      // First: the Vim plugin must see a key before any other keymap at its level does.
-      this.#vim.of(vimExtensions(this.#vimOn)),
+      baseExtensions({ vim: this.#vimOn }),
       this.#keys(),
-      // Vim hides the native selection (its own theme paints ::selection transparent), so
-      // the visual-mode range shows only through CM6's own selection layer.
-      drawSelection(),
-      history(),
-      keymap.of(historyKeymap),
-      EditorView.lineWrapping,
+      // Enter stays a send (#keys); in Vim insert mode #keys leaves it here, where it
+      // makes a paragraph like Enter in every other editor (10).
+      paragraphs(),
       this.#editable.of(EditorView.editable.of(this.#editableOn)),
       editorTheme,
       placeholder("Ask about your library…"),
       EditorView.updateListener.of(this.#onUpdate),
-      // WebKit keeps the document's selection inside a blurred editor, and a later key
-      // whose default nobody cancels is typed there although the focus sits on a list
-      // row or the bare page; dropping it on blur leaves the editor nothing to type into.
-      EditorView.domEventHandlers({ blur: () => void document.getSelection()?.removeAllRanges() }),
     ];
   }
 
@@ -312,14 +268,10 @@ class ChatInput extends LitElement {
         keydown: (event, view) => {
           // An Enter that confirms an input-method composition is not a send.
           if (event.isComposing) return false;
-          if (event.key === "Enter" && event.shiftKey) {
-            if (vimOn() && !inserting(view)) return false; // Vim normal mode: Vim's own
-            // Made here, because WebKit's native line break doubles at the end of the text.
-            event.preventDefault();
-            return insertNewline(view);
-          }
+          // Shift+Enter is the kit's line break (10), or Vim's own in normal mode.
+          if (event.key === "Enter" && event.shiftKey) return false;
           if (event.key === "Enter") {
-            if (inserting(view)) return false; // Vim insert mode: Vim's own new line
+            if (inserting(view)) return false; // Vim insert mode: the kit's paragraph
             event.preventDefault(); // a doomed Enter never drops a stray newline
             this.#send();
             return true;
@@ -383,10 +335,8 @@ class ChatInput extends LitElement {
       const deleted = snapshot.context.deleted;
       for (; this.#deletedSeen < deleted.length; this.#deletedSeen++) draftStore.write(chatDraftKey(deleted[this.#deletedSeen]), "");
       const vimKeys = snapshot.context.vimKeys === true;
-      if (vimKeys !== this.#vimOn) {
-        this.#vimOn = vimKeys;
-        this.#view.dispatch({ effects: this.#vim.reconfigure(vimExtensions(vimKeys)) });
-      }
+      this.#vimOn = vimKeys;
+      setVim(this.#view, vimKeys);
       const editableOn = !inputState(snapshot.context.llm).disabled;
       if (editableOn !== this.#editableOn) {
         this.#editableOn = editableOn;

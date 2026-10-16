@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, parseMarkdown } from "./machine.js";
+import { machine, parseMarkdown, userParagraphs } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -150,8 +150,15 @@ class ChatThread extends LitElement {
       border-radius: var(--radius-md);
       background: var(--color-accent-subtle);
       color: var(--color-ink);
-      white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+    .turn.user .para {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+    /* The editor kit's gap (10), so a message shows here as it did in the box. */
+    .turn.user .gap {
+      height: calc((var(--space-sm) + var(--space-md)) / 2);
     }
     /* The model's answer, across the width. Without the markdown attribute it is plain
        text with its line breaks kept; with it (10) the same text is rendered as
@@ -398,7 +405,9 @@ class ChatThread extends LitElement {
   // is for the model, not the reader, so it shows nothing rather than an empty bubble.
   #user(turn) {
     if (!turn.text) return nothing;
-    return html`<div class="turn user">${turn.text}</div>`;
+    return html`<div class="turn user">
+      ${userParagraphs(turn.text).map((block) => (block ? html`<p class="para">${block}</p>` : html`<div class="gap"></div>`))}
+    </div>`;
   }
 
   #assistant(turn) {

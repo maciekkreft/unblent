@@ -190,6 +190,26 @@ const parseBlocks = (lines) => {
 
 export const parseMarkdown = (text) => parseBlocks(String(text).replace(/\r\n?/g, "\n").split("\n"));
 
+// The reader's own message as the editor kit draws it (10): paragraphs apart by a gap,
+// one gap per blank line, so a message reads as it was typed. A paragraph keeps its
+// single line breaks; "" stands for a gap. Blank lines at either end are dropped, since
+// they separate nothing. Only data: the view draws each paragraph as an escaped text node.
+export function userParagraphs(text) {
+  const lines = String(text).replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  let para = null;
+  for (const line of lines) {
+    if (line === "") {
+      if (para !== null) blocks.push(para);
+      para = null;
+      if (blocks.length) blocks.push("");
+    } else para = para === null ? line : `${para}\n${line}`;
+  }
+  if (para !== null) blocks.push(para);
+  while (blocks.at(-1) === "") blocks.pop();
+  return blocks;
+}
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): which chat is open, then that chat. conversation.opened

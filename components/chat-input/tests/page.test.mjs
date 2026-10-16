@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
 // The chat box on the conversations stem page, driven for real: with Vim keys off (the
-// default) Enter sends and Shift+Enter makes a line; with them on Enter sends in normal
-// mode and makes a line in insert mode (12, D10). The box is one CodeMirror editor whose
+// default) Enter sends and Shift+Enter makes a line, two of them a paragraph; with them
+// on Enter sends in normal mode and makes a paragraph in insert mode (10, 12). The box is one CodeMirror editor whose
 // Vim lives in a compartment the preference turns on and off in place, so the draft
 // survives the switch and a sign-out. This page has no Settings sheet, so the preference
 // and the account picture are driven by the events the sheet and `llm` would emit.
@@ -138,7 +138,11 @@ for (const engine of ENGINES) {
       await page.keyboard.type("first");
       await page.keyboard.press("Shift+Enter");
       await page.keyboard.type("second");
-      assert.equal(await draftText(page), "first\nsecond", "Shift+Enter makes a new line, not a send");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type("third");
+      assert.equal(await draftText(page), "first\nsecond\n\nthird", "Shift+Enter makes a line, two a paragraph, never a send");
+      assert.equal(await page.locator("chat-input .cm-line.cm-gap").count(), 1, "the blank line is drawn as a gap");
 
       await page.keyboard.press("Enter");
       await until(async () => (await transcript(page)).includes("first"), 4000);
@@ -149,17 +153,17 @@ for (const engine of ENGINES) {
     }
   });
 
-  test(`with Vim keys Enter makes a line in insert and sends in normal in ${engine.name}`, async () => {
+  test(`with Vim keys Enter makes a paragraph in insert and sends in normal in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "vim", { vim: true });
     try {
       await until(async () => await vimOn(page), 4000);
       await page.locator("chat-input .cm-content").click();
-      // Normal mode boots; `i` enters insert, where Enter makes a new line.
+      // Normal mode boots; `i` enters insert, where Enter makes a paragraph.
       await page.keyboard.press("i");
       await page.keyboard.type("one");
       await page.keyboard.press("Enter");
       await page.keyboard.type("two");
-      assert.equal(await draftText(page), "one\ntwo", "Enter in insert mode makes a line");
+      assert.equal(await draftText(page), "one\n\ntwo", "Enter in insert mode makes a paragraph");
 
       // Escape leaves insert; in normal mode Enter sends.
       await page.keyboard.press("Escape");

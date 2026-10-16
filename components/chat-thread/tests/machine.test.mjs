@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, parseMarkdown } from "../machine.js";
+import { machine, parseMarkdown, userParagraphs } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -273,4 +273,13 @@ test("every query payload matches its schema", () => {
     const result = new Validator(schema, "2020-12").validate(value);
     assert.ok(result.valid, `${JSON.stringify(value)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
   }
+});
+
+test("a user message splits into paragraphs on blank lines, one gap per blank line", () => {
+  assert.deepEqual(userParagraphs("one"), ["one"]);
+  assert.deepEqual(userParagraphs("one\ntwo"), ["one\ntwo"], "a single line break stays inside the paragraph");
+  assert.deepEqual(userParagraphs("one\n\ntwo\nthree"), ["one", "", "two\nthree"]);
+  assert.deepEqual(userParagraphs("one\n\n\ntwo"), ["one", "", "", "two"], "extra blank lines are extra space");
+  assert.deepEqual(userParagraphs("\n\none\r\n\r\ntwo\n\n"), ["one", "", "two"], "ends trimmed, CRLF read as LF");
+  assert.deepEqual(userParagraphs("<b>x</b>"), ["<b>x</b>"], "text stays text");
 });
