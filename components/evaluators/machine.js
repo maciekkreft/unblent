@@ -26,6 +26,7 @@ const question = (q) =>
   q && isId(q.id)
     ? {
         id: q.id,
+        on: q.on !== false,
         kind: q.kind === "pick" ? "pick" : "yesno",
         text: str(q.text),
         yes: str(q.yes),
@@ -273,7 +274,9 @@ export const machine = setup({
     description:
       "Owns the evaluators kept with each book: an evaluator is a name and a list of questions, " +
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
-      "options, and it is switched on or off. An evaluator marked \"Show in journal\" is " +
+      "options, and it is switched on or off. Each question is switched on or off too: one " +
+      "switched off is kept, with its wording, but not asked, and a question without the " +
+      "switch counts as on. An evaluator marked \"Show in journal\" is " +
       "listed in the Journal's Evaluators tab as well as its own book's. `evaluators: list` answers one book's evaluators, " +
       "or every book's when no book is given, oldest first, each with when its content last " +
       "changed (`updatedAt`, absent on one kept from before it was recorded). A new evaluator starts switched on. It works signed out, numbering versions " +

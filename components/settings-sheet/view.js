@@ -23,15 +23,16 @@ const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
 const TTL_NOTE = "1 hour costs more to start and pays off from the third question within the hour.";
 
-// The icon an answer of a choice point check may get (checks.edited): Automatic is a
-// check when the answer is the expected one and a warning when not.
+// The icon an answer of a choice point check may get (checks.edited): Auto is a
+// check when the answer is the expected one and a warning when not. Each is a button that
+// shows what the mark will look like; Auto and None have no glyph of their own, so a word.
 const MARKS = [
-  ["auto", "Automatic"],
-  ["check", "Check"],
-  ["warning", "Warning"],
-  ["person-simple-walk", "Walking person"],
-  ["brain", "Brain"],
-  ["none", "None"],
+  ["auto", "Auto", "Auto"],
+  ["check", "Check", icon("check")],
+  ["warning", "Warning", icon("warning")],
+  ["person-simple-walk", "Walking person", icon("person-simple-walk")],
+  ["brain", "Brain", icon("brain")],
+  ["none", "None", "None"],
 ];
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -409,6 +410,27 @@ class SettingsSheet extends LitElement {
       font-size: var(--text-sm);
       justify-self: start;
     }
+    .marks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2xs);
+    }
+    .marks button.icon {
+      font-size: var(--text-sm);
+      border: var(--border-width) solid transparent;
+    }
+    .marks button.icon[aria-pressed="true"] {
+      color: var(--color-ink);
+      background: var(--color-accent-subtle);
+      border-color: var(--color-accent);
+    }
+    .question.off > span {
+      color: var(--color-mute);
+    }
+    .question.off .note {
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
   `;
 
   #actor = new ActorController(this);
@@ -736,12 +758,21 @@ class SettingsSheet extends LitElement {
   }
 
   // One question of a box's evaluator: Show, then, while shown, when it is shown (for a
-  // question after the first), the answer expected, and the icon each answer gets.
+  // question after the first), the answer expected, and the icon each answer gets. A
+  // question switched off in the evaluator is not asked, so it has nothing to set here.
   #checkQuestion(field, q, i, setting, questions) {
+    if (q.on === false) {
+      return html`
+        <div class="question off" data-question=${q.id}>
+          <span>${i + 1}. ${q.text || "Untitled question"}</span>
+          <span class="note">Off in the evaluator</span>
+        </div>
+      `;
+    }
     const set = (patch) => this.#actor.send({ type: "_setQuestion", field, id: q.id, patch });
     const answers = answersOf(q);
     const when = setting.when ? `${setting.when.question} ${setting.when.option}` : "";
-    const earlier = questions.slice(0, i);
+    const earlier = questions.slice(0, i).filter((p) => p.on !== false);
     return html`
       <div class="question" data-question=${q.id}>
         <label>
@@ -762,10 +793,10 @@ class SettingsSheet extends LitElement {
                         }}
                       >
                         <option value="" ?selected=${!when}>Always</option>
-                        ${earlier.flatMap((p, n) =>
+                        ${earlier.flatMap((p) =>
                           answersOf(p).map(
                             (a) => html`<option value="${p.id} ${a.id}" ?selected=${when === `${p.id} ${a.id}`}>
-                              Only when question ${n + 1} is ${a.name}
+                              Only when question ${questions.indexOf(p) + 1} is ${a.name}
                             </option>`,
                           ),
                         )}
@@ -780,16 +811,23 @@ class SettingsSheet extends LitElement {
                 ${answers.map(
                   (a) => html`
                     <span>Icon for ${a.name}</span>
-                    <select
-                      aria-label="Icon for ${a.name}"
-                      @change=${(e) =>
-                        this.#actor.send({ type: "_setQuestion", field, id: q.id, icon: { option: a.id, icon: e.target.value } })}
-                    >
+                    <div class="marks" role="group" aria-label="Icon for ${a.name}">
                       ${MARKS.map(
-                        ([value, name]) =>
-                          html`<option value=${value} ?selected=${(setting.icons[a.id] ?? "auto") === value}>${name}</option>`,
+                        ([value, name, face]) => html`
+                          <button
+                            type="button"
+                            class="icon"
+                            title=${name}
+                            aria-label=${name}
+                            aria-pressed=${(setting.icons[a.id] ?? "auto") === value ? "true" : "false"}
+                            @click=${() =>
+                              this.#actor.send({ type: "_setQuestion", field, id: q.id, icon: { option: a.id, icon: value } })}
+                          >
+                            ${face}
+                          </button>
+                        `,
                       )}
-                    </select>
+                    </div>
                   `,
                 )}
               </div>

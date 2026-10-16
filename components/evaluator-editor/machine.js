@@ -22,13 +22,13 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // the list marks that row; it learns nothing back. The ask, the id minting and the throttle arrive through
 // input, so the machine is a pure definition importable in Node.
 
-const blankQuestion = (id) => ({ id, kind: "yesno", text: "", yes: "", no: "", options: [], removing: false });
+const blankQuestion = (id) => ({ id, on: true, kind: "yesno", text: "", yes: "", no: "", options: [], removing: false });
 const blankOption = (id) => ({ id, name: "", description: "", removing: false });
 
 const live = (items) => items.filter((x) => !x.removing);
 
-// The draft as evaluator.saved carries it, with "Show in journal": no on/off, which evaluator-list owns as a
-// gesture, and no marked item, which `evaluators` keeps in place by itself while its
+// The draft as evaluator.saved carries it, with "Show in journal" and each question's
+// switch: no on/off for the evaluator, which evaluator-list owns as a gesture, and no marked item, which `evaluators` keeps in place by itself while its
 // undo window runs.
 export const wire = (d) => ({
   id: d.id,
@@ -37,6 +37,7 @@ export const wire = (d) => ({
   journal: d.journal === true,
   questions: live(d.questions).map((q) => ({
     id: q.id,
+    on: q.on !== false,
     kind: q.kind,
     text: q.text,
     yes: q.yes,
@@ -165,6 +166,13 @@ const edits = (target) => ({
     guard: ({ context, event }) => !!liveOption(context, event.question, event.id),
     target,
     actions: assign(({ context, event }) => ({ draft: patchOption(context.draft, event.question, event.id, event.patch) })),
+  },
+  // A question switched off stays in the draft, editable, and is saved with the rest;
+  // ticking it again brings it back as it was.
+  _switchQuestion: {
+    guard: ({ context, event }) => typeof event.on === "boolean" && !!liveQuestion(context, event.id),
+    target,
+    actions: assign(({ context, event }) => ({ draft: patchQuestion(context.draft, event.id, { on: event.on }) })),
   },
   _journal: {
     guard: ({ event }) => typeof event.on === "boolean",
@@ -306,7 +314,9 @@ export const machine = setup({
       "the name, Show in journal lists an evaluator of any book but the Journal in the " +
       "Journal's Evaluators as well; one opened from the Journal stays open while the " +
       "Journal does. Each " +
-      "question is Yes / no, with optional words for what yes and no mean, or Pick one, with " +
+      "question has a tick box that switches it on or off: one switched off is greyed but stays " +
+      "editable and is kept, but not asked, and ticking it again brings it back; a new question " +
+      "starts switched on. Each question is Yes / no, with optional words for what yes and no mean, or Pick one, with " +
       "options that each have a name and an optional description. Every edit is saved as the " +
       "whole evaluator a short time into typing and when a field loses focus, and a new " +
       "evaluator with nothing written in it is never saved. Removing a question or an option, " +

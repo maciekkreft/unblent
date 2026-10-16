@@ -189,7 +189,8 @@ class EvaluatorEditor extends LitElement {
       color: var(--color-body);
       cursor: pointer;
     }
-    .shown input {
+    .shown input,
+    .ask input {
       flex: none;
       width: calc(var(--space-md) + var(--space-2xs));
       height: calc(var(--space-md) + var(--space-2xs));
@@ -197,9 +198,16 @@ class EvaluatorEditor extends LitElement {
       accent-color: var(--color-accent);
       cursor: pointer;
     }
-    .shown input:focus-visible {
+    .shown input:focus-visible,
+    .ask input:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
+    }
+    .ask {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      cursor: pointer;
     }
     input[type="text"],
     .box {
@@ -254,6 +262,23 @@ class EvaluatorEditor extends LitElement {
       align-items: center;
       justify-content: space-between;
       gap: var(--space-sm);
+    }
+    /* A question switched off is greyed, its words still editable: the tick beside its
+       caption brings it back. */
+    .question.off {
+      border-style: dashed;
+    }
+    .question.off .caption,
+    .question.off .kind label {
+      color: var(--color-mute);
+    }
+    .question.off input[type="text"],
+    .question.off .cm-editor {
+      color: var(--color-body-mid);
+    }
+    .question.off .box,
+    .question.off input[type="text"] {
+      background: transparent;
     }
     /* The two kinds as one two-part switch: radio buttons, so arrow keys move between
        them and the chosen part looks pressed. */
@@ -557,10 +582,19 @@ class EvaluatorEditor extends LitElement {
     const n = i + 1;
     const edit = (patch) => this.#send({ type: "_editQuestion", id: q.id, patch });
     const kind = (k) => this.#send({ type: "_kind", id: q.id, kind: k });
+    const on = q.on !== false;
     return html`
-      <div class="question" data-id=${q.id}>
+      <div class="question ${on ? "" : "off"}" data-id=${q.id}>
         <div class="qhead">
-          <span class="caption">Question ${n}</span>
+          <label class="ask" title=${on ? "Asked; untick to stop asking it" : "Not asked; tick to ask it again"}>
+            <input
+              type="checkbox"
+              aria-label="Ask question ${n}"
+              .checked=${on}
+              @change=${(e) => this.#send({ type: "_switchQuestion", id: q.id, on: e.target.checked })}
+            />
+            <span class="caption">Question ${n}${on ? "" : html` <span class="mute">(off)</span>`}</span>
+          </label>
           <button type="button" class="quiet" aria-label="Remove question ${n}" @click=${() => this.#send({ type: "_removeQuestion", id: q.id })}>
             Remove
           </button>

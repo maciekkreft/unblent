@@ -277,8 +277,8 @@ test("changing the evaluator's questions checks the day on screen again; the box
   actor.send({ type: "evaluator.changed", evaluator: reworded });
   clock.increment(CHECK_PAUSE_MS);
   await flush();
-  assert.equal(decides.length, 2, "new questions are a new check");
-  assert.equal(decides[1].payload.questions[1].instructions, "Can someone see it?");
+  assert.equal(decides.length, 2, "a reworded question is a new check");
+  assert.deepEqual(decides[1].payload.questions.map((q) => q.instructions), ["Can someone see it?"], "only the reworded question is asked");
   assert.deepEqual(statuses(checked.at(-1)), ["Call mum:pending"]);
   decides[1].answer(reply());
   await flush();
@@ -348,17 +348,105 @@ test("signed out the settings and answers are kept here; signing in uploads them
   decides[0].answer(reply());
   await flush();
   assert.equal(store.boxes.get("towards").version, 1);
-  const key = keyOf(EV, askedOf(evaluator()), "Call mum");
-  assert.equal(store.answers.get(key).answers.length, 2);
+  const [q1, q2] = askedOf(evaluator());
+  const keys = [keyOf(EV, [q1], "Call mum"), keyOf(EV, [q2], "Call mum")];
+  assert.deepEqual(keys.map((k) => store.answers.get(k).answers.length), [1, 1], "one record per question");
   assert.equal(api.puts.length, 0, "signed out never calls the api");
 
   actor.send({ type: "session.changed", userId: "u1" });
   await flush();
-  assert.deepEqual(api.puts.map((r) => r.id).sort(), ["answer:" + key, "box:towards"]);
+  assert.deepEqual(api.puts.map((r) => r.id).sort(), [...keys.map((k) => "answer:" + k)].sort().concat("box:towards").sort());
   assert.equal(store.outbox.size, 0, "acknowledged rows leave the outbox");
 
   actor.send(edited({ questions: [] }));
   clock.increment(SYNC_IDLE_MS);
   await flush();
   assert.deepEqual([api.puts.at(-1).id, api.puts.at(-1).baseVersion], ["box:towards", 2]);
+});
+
+// The evaluator with its second question switched on or off.
+const switched = (on) => {
+  const e = evaluator();
+  e.questions[1] = { ...e.questions[1], on };
+  return e;
+};
+const names = (event) => event.lines.map((l) => l.answers.map((a) => a.name).join("+"));
+
+test("switching a question off asks nothing and hides its answer; switching it back on reuses it", async () => {
+  const asks = fakeAsk({ choicePoints: [cp()] });
+  const { actor, clock, checked, decides } = await start({ asks });
+  actor.send(edited());
+  actor.send({ type: "day.shown", day: DAY });
+  await flush();
+  decides[0].answer(reply(0.9, 0.2));
+  await flush();
+  decides[1].answer(reply(0.9, 0.8));
+  await flush();
+  assert.deepEqual(names(checked.at(-1)), ["Behavioral goal+No", "Behavioral goal+Yes"]);
+
+  actor.send({ type: "evaluator.changed", evaluator: switched(false) });
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 2, "switching off asks nothing");
+  assert.deepEqual(statuses(checked.at(-1)), ["Call mum:done", "Go for a walk:done"]);
+  assert.deepEqual(names(checked.at(-1)), ["Behavioral goal", "Behavioral goal"], "its answers are not reported");
+
+  actor.send({ type: "evaluator.changed", evaluator: switched(true) });
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 2, "switching back on asks nothing");
+  assert.deepEqual(names(checked.at(-1)), ["Behavioral goal+No", "Behavioral goal+Yes"], "merged in question order");
+});
+
+test("switching on a question never answered asks only it, only for the lines missing it", async () => {
+  const asks = fakeAsk({ evaluators: [switched(false)], choicePoints: [cp()] });
+  const { actor, clock, checked, decides } = await start({ asks });
+  actor.send(edited());
+  actor.send({ type: "day.shown", day: DAY });
+  await flush();
+  assert.deepEqual(decides[0].payload.questions.map((q) => q.id), [Q1], "a switched-off question is not asked");
+  decides[0].answer({ answers: [{ id: Q1, p: 0.9, choice: O1 }], inputTokens: 1, ms: 1 });
+  await flush();
+  decides[1].answer({ answers: [{ id: Q1, p: 0.7, choice: O2 }], inputTokens: 1, ms: 1 });
+  await flush();
+
+  actor.send({ type: "evaluator.changed", evaluator: switched(true) });
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 3);
+  assert.deepEqual(decides[2].payload, { state: { text: "Call mum" }, questions: [askedOf(evaluator())[1]] }, "only the new question");
+  assert.deepEqual(statuses(checked.at(-1)), ["Call mum:pending", "Go for a walk:pending"]);
+  decides[2].answer({ answers: [{ id: Q2, p: 0.2 }], inputTokens: 1, ms: 1 });
+  await flush();
+  assert.equal(decides[3].payload.state.text, "Go for a walk");
+  decides[3].answer({ answers: [{ id: Q2, p: 0.9 }], inputTokens: 1, ms: 1 });
+  await flush();
+  assert.equal(decides.length, 4);
+  assert.deepEqual(names(checked.at(-1)), ["Behavioral goal+No", "Emotional goal+Yes"]);
+});
+
+test("an answer kept for the whole set of questions before is reused, never asked again", async () => {
+  const store = fakeStore();
+  const legacy = keyOf(EV, askedOf(evaluator()), "Call mum");
+  store.answers.set(legacy, {
+    key: legacy,
+    answers: [
+      { question: Q1, option: O1, name: "Behavioral goal", p: 0.9 },
+      { question: Q2, option: "no", name: "No", p: 0.8 },
+    ],
+  });
+  const asks = fakeAsk({ evaluators: [switched(false)], choicePoints: [cp({ towards: "Call mum" })] });
+  const { actor, clock, checked, decides } = await start({ store, asks });
+  actor.send(edited());
+  actor.send({ type: "day.shown", day: DAY });
+  await flush();
+  assert.equal(decides.length, 0, "the old record answers the asked question");
+  assert.deepEqual(names(checked.at(-1)), ["Behavioral goal"]);
+
+  actor.send({ type: "evaluator.changed", evaluator: switched(true) });
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 0, "and the question switched back on");
+  assert.deepEqual(names(checked.at(-1)), ["Behavioral goal+No"]);
+  assert.ok(store.answers.has(keyOf(EV, [askedOf(evaluator())[0]], "Call mum")), "kept under its own key too");
 });

@@ -24,7 +24,7 @@ for (const engine of ENGINES) {
     // evaluator for another box answered by its questions. The evaluator and the stored box
     // are made through the APIs under the test's own login; that a chosen box is kept and
     // synced is decided in choice-point-checks' Node tests (9).
-    test("the choice point checks fold open, show a box's stored evaluator and expected answer, and take a new one", async () => {
+    test("the choice point checks fold open, show a box's stored evaluator and expected answer, and take a new one and an icon", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
@@ -40,7 +40,10 @@ for (const engine of ENGINES) {
               name: "Therapy Goal",
               on: true,
               baseVersion: null,
-              questions: [{ id: question, kind: "pick", text: "Which kind of goal is it?", yes: "", no: "", options }],
+              questions: [
+                { id: question, kind: "pick", text: "Which kind of goal is it?", yes: "", no: "", options },
+                { id: id("Q2"), kind: "yesno", text: "Is it overt?", yes: "", no: "", options: [], on: false },
+              ],
             },
           }),
           context.request.put(`${BASE_URL}/api/choice-point-checks/boxes/towards`, {
@@ -71,6 +74,16 @@ for (const engine of ENGINES) {
         await away.locator('select[aria-label="Evaluator for Away · hooked"]').selectOption(evaluator);
         await away.locator(expected).selectOption(options[1].id);
         assert.equal(await away.locator(expected).inputValue(), options[1].id);
+
+        const off = away.locator('.question[data-question="' + id("Q2") + '"]');
+        assert.match(await off.innerText(), /Off in the evaluator/);
+        assert.equal(await off.locator("input, select, button").count(), 0, "a question off in the evaluator has nothing to set");
+
+        const marks = away.locator('[role="group"][aria-label="Icon for Emotional Goal"]');
+        const pressed = () => marks.locator('button[aria-pressed="true"]').getAttribute("title");
+        assert.equal(await pressed(), "Auto");
+        await marks.locator('button[title="Brain"]').click();
+        await until(async () => (await pressed()) === "Brain");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

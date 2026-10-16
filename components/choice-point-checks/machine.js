@@ -49,8 +49,10 @@ function cyrb53(text, seed) {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, "0");
 }
 
-// The evaluator's id, its questions exactly as Jev is asked them, and the line: change any
-// of them and the line is a new check.
+// The evaluator's id, a question exactly as Jev is asked it, and the line: change any of
+// them and that question is asked about the line again. An answer is kept per question, so
+// a question switched on or added asks only it; for a one-question evaluator this is the
+// same key the whole set was once kept under.
 export const keyOf = (evaluatorId, questions, text) => {
   const s = JSON.stringify([evaluatorId, questions, text]);
   return cyrb53(s, 1) + cyrb53(s, 2);
@@ -81,9 +83,11 @@ const toQuestion = (q) => {
 };
 
 // The questions of an evaluator as llm: decide is asked them, or [] when it has none to ask.
-export const askedOf = (evaluator) =>
+// A question switched off is kept in the evaluator but not asked; `all` counts it, which is
+// how the whole set was keyed before answers were kept per question.
+export const askedOf = (evaluator, { all = false } = {}) =>
   live(evaluator?.questions)
-    .filter((q) => filled(q.text) && (q.kind !== "pick" || pickable(q)))
+    .filter((q) => (all || q.on !== false) && filled(q.text) && (q.kind !== "pick" || pickable(q)))
     .map(toQuestion);
 
 // Jev's answers mapped to the box's terms: for a yes / no question the side Jev leans to,
@@ -154,11 +158,13 @@ function checkerOf(context, field) {
   const evaluator = id ? context.evaluators.get(id) : null;
   if (!evaluator || evaluator.removing) return null;
   const questions = askedOf(evaluator);
-  return questions.length > 0 ? { evaluator: id, questions } : null;
+  return questions.length > 0 ? { evaluator: id, questions, whole: askedOf(evaluator, { all: true }) } : null;
 }
 
-// Every non-empty line of every checked box, with the key its answer is kept under. A line
-// is keyed without the spaces around it, so adding one is not a new check.
+// Every non-empty line of every checked box, with each asked question and the key its
+// answer is kept under, and `legacy`, the key the whole set was kept under before answers
+// were kept per question. A line is keyed without the spaces around it, so adding one is
+// not a new check.
 function planOf(context, cp) {
   const out = [];
   for (const field of FIELDS) {
@@ -166,24 +172,43 @@ function planOf(context, cp) {
     if (!checker) continue;
     for (const text of cp[field].split("\n")) {
       if (text.trim() === "") continue;
-      out.push({ field, text, key: keyOf(checker.evaluator, checker.questions, text.trim()), questions: checker.questions });
+      const t = text.trim();
+      const items = checker.questions.map((question) => ({ question, key: keyOf(checker.evaluator, [question], t) }));
+      out.push({ field, text, items, legacy: keyOf(checker.evaluator, checker.whole, t) });
     }
   }
   return out;
 }
 
-// A line with an answer is done, one whose last check failed is failed, and one queued or
-// being asked is waiting for Jev. Any other line is still being written and is left out,
-// so it shows no mark until the user finishes it.
+// One question's answer about a line: kept under its own key, or else taken from the whole
+// set's answer kept before, so a line checked then is not asked again. A whole-set answer
+// that leaves the question out still counts as asked.
+function answerOf(context, item, legacy) {
+  const own = context.answers.get(item.key);
+  if (own) return own;
+  const whole = context.answers.get(legacy);
+  return whole ? { key: item.key, answers: whole.answers.filter((a) => a.question === item.question.id) } : null;
+}
+
+const lineKeys = (line) => [...line.items.map((i) => i.key), line.legacy];
+
+// A line with every question answered is done; one with a question queued or being asked
+// is waiting for Jev; one whose last check failed is failed. A line with some answers and
+// the rest not asked yet (a question just switched on) shows what it has. Any other line is
+// still being written and is left out, so it shows no mark until the user finishes it.
 function report(context, cp) {
   let error;
   const lines = [];
-  for (const { field, text, key } of planOf(context, cp)) {
-    const answer = context.answers.get(key);
-    const failed = !answer && context.failures.get(key);
-    if (!answer && !failed && !queuedKey(context, key)) continue;
-    if (failed && !error) error = failed;
-    lines.push({ field, text, status: answer ? "done" : failed ? "failed" : "pending", answers: answer ? answer.answers : [] });
+  for (const line of planOf(context, cp)) {
+    const answers = line.items.map((i) => answerOf(context, i, line.legacy));
+    const missing = line.items.filter((_, n) => !answers[n]);
+    const failed = missing.map((i) => context.failures.get(i.key)).find(Boolean);
+    const pending = missing.some((i) => queuedKey(context, i.key));
+    const known = answers.filter(Boolean);
+    if (known.length === 0 && !failed && !pending) continue;
+    if (failed && !pending && !error) error = failed;
+    const status = missing.length === 0 ? "done" : pending ? "pending" : failed ? "failed" : "done";
+    lines.push({ field: line.field, text: line.text, status, answers: status === "done" ? known.flatMap((a) => a.answers) : [] });
   }
   return { choicePoint: cp.id, day: cp.day, lines, ...(error ? { error } : {}) };
 }
@@ -201,22 +226,34 @@ function announce(context, enqueue, cp) {
 
 const announceAll = (context, enqueue, keys) => {
   for (const cp of context.choicePoints.values()) {
-    if (!keys || planOf(context, cp).some((l) => keys.has(l.key))) announce(context, enqueue, cp);
+    if (!keys || planOf(context, cp).some((l) => lineKeys(l).some((k) => keys.has(k)))) announce(context, enqueue, cp);
   }
 };
 
 // --- Checking --------------------------------------------------------------------------
 
-const queuedKey = (context, key) => context.asking?.key === key || context.jobs.some((j) => j.key === key);
+const queuedKey = (context, key) => Boolean(context.asking?.keys.includes(key)) || context.jobs.some((j) => j.keys.includes(key));
 
-// Queue every line of the choice point that has no answer and is not queued yet (or only
-// those `only` lets through), then announce it, so its new lines show as waiting at once.
+// Queue, for every line of the choice point (or only those `only` lets through), the
+// questions it has no answer to and that are not queued yet, as one Jev request per line;
+// then announce it, so its new lines show as waiting at once. An answer found only in the
+// whole set's old record is kept under its own key here, so it outlives a later edit of
+// another question.
 function check(context, enqueue, cp, only = () => true) {
   let added = false;
   for (const line of planOf(context, cp)) {
-    if (!only(line) || context.answers.has(line.key) || queuedKey(context, line.key)) continue;
-    context.failures.delete(line.key);
-    context.jobs.push({ key: line.key, questions: line.questions, payload: { state: { text: line.text.trim() }, questions: line.questions } });
+    if (!only(line)) continue;
+    const missing = [];
+    for (const item of line.items) {
+      if (context.answers.has(item.key)) continue;
+      const derived = answerOf(context, item, line.legacy);
+      if (derived) storeAnswer(context, enqueue, derived);
+      else if (!queuedKey(context, item.key)) missing.push(item);
+    }
+    if (missing.length === 0) continue;
+    for (const item of missing) context.failures.delete(item.key);
+    const questions = missing.map((i) => i.question);
+    context.jobs.push({ keys: missing.map((i) => i.key), questions, payload: { state: { text: line.text.trim() }, questions } });
     added = true;
   }
   announce(context, enqueue, cp);
@@ -228,10 +265,15 @@ function checkDay(context, enqueue) {
   for (const cp of context.choicePoints.values()) if (cp.day === context.day) check(context, enqueue, cp);
 }
 
-// A queued line is still wanted when it has no answer yet and some choice point still holds
-// it: a line edited again, or a choice point removed, while it waited is not asked about.
-const wanted = (context, key) =>
-  !context.answers.has(key) && [...context.choicePoints.values()].some((cp) => planOf(context, cp).some((l) => l.key === key));
+// A queued line is still wanted when one of its questions has no answer yet and some choice
+// point still asks it: a line edited again, a question switched off, or a choice point
+// removed while it waited is not asked about.
+function wanted(context, job) {
+  const open = job.keys.filter((k) => !context.answers.has(k));
+  if (open.length === 0) return false;
+  const planned = new Set([...context.choicePoints.values()].flatMap((cp) => planOf(context, cp).flatMap((l) => l.items.map((i) => i.key))));
+  return open.some((k) => planned.has(k));
+}
 
 // A line the user finished (choice-point.saved's finished) is marked until the choice point
 // as `choice-points` announced it holds that text, because the save and the change it
@@ -244,8 +286,8 @@ function checkFinished(context, enqueue, cp) {
   const marked = planOf(context, cp).filter((l) => context.finished.has(markOf(cp.id, l.field, l.text)));
   if (marked.length === 0) return;
   for (const l of marked) context.finished.delete(markOf(cp.id, l.field, l.text));
-  const keys = new Set(marked.map((l) => l.key));
-  check(context, enqueue, cp, (l) => keys.has(l.key) || context.failures.has(l.key));
+  const lines = new Set(marked.map((l) => l.legacy));
+  check(context, enqueue, cp, (l) => lines.has(l.legacy) || l.items.some((i) => context.failures.has(i.key)));
 }
 
 function finish(context, enqueue, message) {
@@ -298,6 +340,15 @@ function keepAnswer(context, enqueue, r) {
   context.answers.set(r.key, r);
   context.failures.delete(r.key);
   enqueue(() => context.store.answerPut(r).catch(() => {}));
+}
+
+// An answer made here: kept, and queued for the server when signed in.
+function storeAnswer(context, enqueue, r) {
+  keepAnswer(context, enqueue, r);
+  if (context.userId != null) {
+    queueRow(context, enqueue, answerRow(r));
+    enqueue.raise({ type: "_drain" });
+  }
 }
 
 // --- Messages --------------------------------------------------------------------------
@@ -397,7 +448,7 @@ export const machine = setup({
   guards: {
     syncable: ({ context }) => Boolean(context.userId) && context.api != null,
     needed: ({ context, event }) => Boolean(event.pull) || context.outbox.size > 0,
-    hasJob: ({ context }) => context.jobs.some((j) => wanted(context, j.key)),
+    hasJob: ({ context }) => context.jobs.some((j) => wanted(context, j)),
   },
   actors: {
     // The cache, who is signed in, and the evaluators and choice points to know which
@@ -467,17 +518,21 @@ export const machine = setup({
       "thoughts and feelings), how its answers are shown, and what Jev answered about each " +
       "line written in a checked box. The settings are one row per box, chosen in Settings " +
       "under Your account; the last write wins, so two devices never conflict. Each answer " +
-      "is kept under a key made of the evaluator's id, its questions as they stand, and the " +
-      "line's text, and never changes once written: editing a line hides its old mark until " +
-      "the new text is answered, editing the evaluator's questions leads to a new check, and " +
-      "another device reuses the answers. A line is checked when the user has finished it and " +
+      "is kept per question, under a key made of the evaluator's id, that question as it " +
+      "stands, and the line's text, and never changes once written: editing a line hides its " +
+      "old mark until the new text is answered, editing a question asks only that question " +
+      "again, and another device reuses the answers. A question switched off in the evaluator " +
+      "is not asked and its answers are not reported, which asks nothing; switching it back " +
+      "on asks only the lines that have no answer to it. Answers kept for a whole set of " +
+      "questions before answers were kept per question are still used, so those lines are " +
+      "not asked again. A line is checked when the user has finished it and " +
       "moved on, as the choice point's save says: Enter to a new line, the cursor moved to " +
       "another line, the box losing focus, or the sheet folding; the line being typed is not " +
       "checked and shows no mark until then. The day on screen is checked when it is shown, " +
       "and again after a settings change or a change to a box's evaluator. A line that already has an " +
       "answer is never asked again, so opening a day already checked costs nothing. Lines are " +
-      "checked one at a time, in a queue, with one Jev request per line that asks all of the " +
-      "box's questions together about the line alone; every answer is announced, and which " +
+      "checked one at a time, in a queue, with one Jev request per line that asks the box's " +
+      "questions it has no answer to together, about the line alone; every answer is announced, and which " +
       "marks are shown is decided only when they are shown. Whether the evaluator is switched " +
       "on for its book does not matter here. A failure, such as signed out, no Jev key or " +
       "rate limited, ends the queue and is announced with the lines so the choice point can " +
@@ -573,7 +628,7 @@ export const machine = setup({
             },
             asking: {
               entry: assign(({ context }) => {
-                const i = context.jobs.findIndex((j) => wanted(context, j.key));
+                const i = context.jobs.findIndex((j) => wanted(context, j));
                 return { asking: context.jobs[i], jobs: context.jobs.slice(i + 1) };
               }),
               invoke: {
@@ -651,8 +706,8 @@ export const machine = setup({
   },
 });
 
-// Jev's reply to the line being asked. An answer is kept, queued for the server when
-// signed in, and announced. Busy (another Jev request in flight) puts the line back at the
+// Jev's reply to the line being asked. The answer is split into one record per question,
+// each kept, queued for the server when signed in, and announced. Busy (another Jev request in flight) puts the line back at the
 // head of the queue to be asked after a pause. Any other failure ends the queue: every
 // line in it fails with the same reason, since the next would fail the same way.
 function decided(context, reply, enqueue) {
@@ -661,13 +716,8 @@ function decided(context, reply, enqueue) {
   context.asking = null;
   enqueue.assign({ asking: null });
   if (Array.isArray(reply?.answers)) {
-    const r = { key: job.key, answers: answersOf(job.questions, reply.answers) };
-    keepAnswer(context, enqueue, r);
-    if (context.userId != null) {
-      queueRow(context, enqueue, answerRow(r));
-      enqueue.raise({ type: "_drain" });
-    }
-    announceAll(context, enqueue, new Set([job.key]));
+    job.questions.forEach((q, n) => storeAnswer(context, enqueue, { key: job.keys[n], answers: answersOf([q], reply.answers) }));
+    announceAll(context, enqueue, new Set(job.keys));
     enqueue.raise({ type: "_next" });
     return;
   }
@@ -680,8 +730,8 @@ function decided(context, reply, enqueue) {
   }
   const failed = [job, ...context.jobs];
   context.jobs.length = 0;
-  for (const j of failed) context.failures.set(j.key, error);
-  announceAll(context, enqueue, new Set(failed.map((j) => j.key)));
+  for (const j of failed) for (const k of j.keys) context.failures.set(k, error);
+  announceAll(context, enqueue, new Set(failed.flatMap((j) => j.keys)));
 }
 
 // Apply a sync's summary: adopt acknowledged and pulled boxes and answers, advance the

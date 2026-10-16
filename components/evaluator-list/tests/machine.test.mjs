@@ -59,6 +59,10 @@ test("the rows leave out an evaluator being deleted; the line under each counts 
   assert.equal(subtitle(evaluator(1, A, { on: false })), "1 question · off");
 });
 
+test("the count leaves out a question switched off; one without `on` counts as on", () => {
+  assert.equal(subtitle(evaluator(1, A, { questions: [q(1), { ...q(2), on: false }, { ...q(3), on: true }] })), "2 questions");
+});
+
 test("only a book is a subject with evaluators", () => {
   assert.equal(bookOf(book(A)), A);
   assert.equal(bookOf({ kind: "other", id: A, title: "" }), null);
@@ -323,6 +327,15 @@ test("a run asks every askable question of the switched-on evaluators, under eva
   });
 });
 
+test("a run leaves out a question switched off, so the score uses only the switched-on ones", () => {
+  const both = evaluator(6, A, { questions: [yesno(11, "On?"), yesno(12, "Off?", { on: false }), yesno(13, "Also on?", { on: true })] });
+  assert.deepEqual(
+    request("Hi", [both]).questions.map((x) => x.id),
+    [qid(id(6), Q(11)), qid(id(6), Q(13))],
+  );
+  assert.deepEqual(request("Hi", [evaluator(7, A, { questions: [yesno(14, "Off?", { on: false })] })]).questions, []);
+});
+
 test("the score is the geometric mean of the yes / no answers; none gives no score", () => {
   assert.equal(score([]), null);
   assert.equal(score([0.25, 1]).toFixed(2), "0.50");
@@ -433,6 +446,26 @@ test("a changed or deleted evaluator loses its result, even one still on its way
   await again.settle();
   again.actor.send({ type: "evaluator.deleted", id: id(1), book: A });
   assert.deepEqual(Object.keys(again.ctx().results), [id(5)]);
+});
+
+test("switching a question off or on drops only that evaluator's result", async () => {
+  const { actor, ctx, settle } = await runner();
+  actor.send({ type: "_type", text: "Hello" });
+  actor.send({ type: "_run" });
+  await settle();
+  const [first] = MIXED;
+  const off = { ...first, questions: first.questions.map((x) => (x.id === Q(1) ? { ...x, on: false } : x)) };
+  actor.send({ type: "evaluator.changed", evaluator: off });
+  assert.deepEqual(Object.keys(ctx().results), [id(5)]);
+
+  const again = await runner();
+  again.actor.send({ type: "_type", text: "Hello" });
+  again.actor.send({ type: "_run" });
+  await again.settle();
+  // A question already off, or one Run does not ask, changes nothing Run asked.
+  const unasked = { ...first, questions: first.questions.map((x) => (x.id === Q(3) ? { ...x, on: false } : x)) };
+  again.actor.send({ type: "evaluator.changed", evaluator: unasked });
+  assert.deepEqual(Object.keys(again.ctx().results), [id(1), id(5)]);
 });
 
 test("another book drops every result and the text", async () => {

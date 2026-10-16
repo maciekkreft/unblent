@@ -107,7 +107,7 @@ test("a stored evaluator cleared of every word is still saved", async () => {
   assert.deepEqual(saves(emitted).map((e) => e.name), [""]);
 });
 
-test("every edit leaves as the whole evaluator, without on/off or flags, at the throttle or at blur", async () => {
+test("every edit leaves as the whole evaluator, without the evaluator's on/off or flags, at the throttle or at blur", async () => {
   const { actor, clock, emitted } = await start();
   await select(actor, { id: R, book: P });
   actor.send({ type: "_editOption", question: Q1, id: O1, patch: { description: "Done once" } });
@@ -123,8 +123,8 @@ test("every edit leaves as the whole evaluator, without on/off or flags, at the 
     name: "Goal or value",
     journal: false,
     questions: [
-      { id: Q1, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "Done once" }, { id: O2, name: "Value", description: "" }] },
-      { id: Q2, kind: "yesno", text: "Is it a goal?", yes: "it ends", no: "never", options: [] },
+      { id: Q1, on: true, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "Done once" }, { id: O2, name: "Value", description: "" }] },
+      { id: Q2, on: true, kind: "yesno", text: "Is it a goal?", yes: "it ends", no: "never", options: [] },
     ],
   });
   actor.send({ type: "_edit", patch: { name: "GV" } });
@@ -132,6 +132,31 @@ test("every edit leaves as the whole evaluator, without on/off or flags, at the 
   assert.equal(saves(emitted).at(-1).name, "GV");
   clock.increment(400);
   assert.equal(emitted.length, 2);
+});
+
+test("a question's tick switches it off and on in one step, saved with the whole evaluator; it stays editable", async () => {
+  const { actor, clock, emitted, ctx } = await start();
+  await select(actor, { id: R, book: P });
+  actor.send({ type: "_switchQuestion", id: Q2, on: false });
+  clock.increment(200);
+  assert.deepEqual(saves(emitted).at(-1).questions.map((q) => [q.id, q.on]), [[Q1, true], [Q2, false]]);
+  actor.send({ type: "_editQuestion", id: Q2, patch: { text: "Is it still a goal?" } });
+  actor.send({ type: "_blur" });
+  assert.deepEqual(saves(emitted).at(-1).questions[1], { id: Q2, on: false, kind: "yesno", text: "Is it still a goal?", yes: "finished", no: "never", options: [] });
+  actor.send({ type: "_switchQuestion", id: Q2, on: true });
+  actor.send({ type: "_blur" });
+  assert.equal(saves(emitted).at(-1).questions[1].on, true);
+  actor.send({ type: "_switchQuestion", id: Q2, on: "no" });
+  assert.equal(ctx().draft.questions[1].on, true, "only a yes or a no switches");
+  actor.send({ type: "_addQuestion" });
+  assert.equal(ctx().draft.questions.at(-1).on, true, "a new question starts on");
+});
+
+test("a question switched off elsewhere opens switched off", async () => {
+  const off = { ...EVALUATOR, questions: EVALUATOR.questions.map((q) => (q.id === Q1 ? { ...q, on: false } : q)) };
+  const { actor, ctx } = await start([off]);
+  await select(actor, { id: R, book: P });
+  assert.deepEqual(ctx().draft.questions.map((q) => q.on !== false), [false, true]);
 });
 
 test("switching kind keeps the yes / no wording and the options both ways", async () => {

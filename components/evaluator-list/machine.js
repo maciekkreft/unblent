@@ -28,11 +28,14 @@ const live = (items) => items.filter((x) => !x.removing);
 // them, leaving out any whose deletion can still be undone.
 export const rows = (evaluators) => live(evaluators);
 
-// The line under an evaluator's name: its questions, leaving out any being removed,
-// "· off" when its tick is off, and, for one shown in the journal from another book,
-// that book's title.
+// A question switched off in the editor is kept but not asked; one without `on` is on.
+const switchedOn = (question) => question.on !== false;
+
+// The line under an evaluator's name: its switched-on questions, leaving out any being
+// removed, "· off" when its tick is off, and, for one shown in the journal from another
+// book, that book's title.
 export const subtitle = (evaluator, from = null) => {
-  const n = live(evaluator.questions).length;
+  const n = live(evaluator.questions).filter(switchedOn).length;
   return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}${from == null ? "" : ` · ${from}`}`;
 };
 
@@ -54,10 +57,10 @@ const pickable = (question) => {
 };
 
 const askableQuestion = (question) =>
-  !question.removing && filled(question.text) && (question.kind !== "pick" || pickable(question));
+  !question.removing && switchedOn(question) && filled(question.text) && (question.kind !== "pick" || pickable(question));
 
-// What a run asks: each shown, switched-on evaluator with its askable questions; one with
-// none is not run.
+// What a run asks: each shown, switched-on evaluator with its askable, switched-on
+// questions, so its score uses only those; one with none is not run.
 export const askable = (evaluators) =>
   rows(evaluators)
     .filter((e) => e.on)
@@ -238,13 +241,14 @@ export const machine = setup({
       "Lists the evaluators kept with the open book. New evaluator is the first row and opens " +
       "an empty editor; the evaluator appears in the list once something is written in it. Each " +
       "row has a tick box that switches the evaluator on or off, its name, greyed when off, and " +
-      "how many questions it has. With `subject` it follows the book open on the stage, and " +
+      "how many of its questions are switched on. With `subject` it follows the book open on the stage, and " +
       "another book shows that book's evaluators; while no book is open, or without `subject`, " +
       "it says to open a book. While the Journal is open it lists the Journal's evaluators and " +
       "every evaluator of another book marked Show in journal, that book's title on the line " +
       "under its name; its tick, opening it and Run work as for the Journal's own. The arrow keys move between the rows, and with Vim keys on so " +
       "do j, k, gg and G; Enter opens the row. Above New evaluator, a text box and Run try " +
-      "the switched-on evaluators on a text in one request to Jev; each evaluator's row then " +
+      "the switched-on evaluators on a text in one request to Jev, asking only their switched-on " +
+      "questions; each evaluator's row then " +
       "shows each question with its answer and how likely it is, and evaluators with yes / no " +
       "questions a score, the geometric mean of those answers. Results are not saved: Clear " +
       "removes them, a change to an evaluator removes its own, and another book removes all " +
@@ -404,9 +408,10 @@ export const machine = setup({
         guard: ({ context, event }) => belongs(context.book, context.journal, event.evaluator),
         actions: assign(({ context, event }) => {
           const evaluators = [...context.evaluators.filter((e) => e.id !== event.evaluator.id), event.evaluator].sort(byId);
-          // When what it would ask changed (its questions, or its tick), its answers no
-          // longer match, so its result goes, and so does an answer still on its way. A
-          // rename or the server's acknowledgement keeps them.
+          // When what it would ask changed (its questions, a question's tick, or its
+          // own tick), its answers no longer match, so its result goes, and so does an
+          // answer still on its way. A rename or the server's acknowledgement keeps them,
+          // and so does every other evaluator's.
           const before = context.evaluators.find((e) => e.id === event.evaluator.id);
           const keep = before && asks(before) === asks(event.evaluator);
           return {

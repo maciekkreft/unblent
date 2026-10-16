@@ -216,6 +216,40 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // A question's tick: off greys it and the list's count drops by one; it stays
+    // editable; one press brings it back.
+    test("unticking a question greys it, keeps it editable and leaves it out of the count; ticking brings it back", async () => {
+      const { context, page, problems, second } = await twoQuestions(false);
+      const sub = page.locator("evaluator-list .row:not(.new) .sub").first();
+      const tick = second.getByRole("checkbox", { name: "Ask question 2" });
+      const look = () =>
+        inEditor(page, (root) => {
+          const q = root.querySelectorAll(".question")[1];
+          return { off: q.classList.contains("off"), caption: getComputedStyle(q.querySelector(".caption")).color };
+        });
+      try {
+        await until(async () => (await sub.textContent().catch(() => "")).startsWith("2 questions"));
+        const on = await look();
+        await tick.click();
+        await until(async () => (await sub.textContent()).startsWith("1 question"));
+        const off = await look();
+        assert.equal(off.off, true);
+        assert.notEqual(off.caption, on.caption, "the question is greyed");
+        assert.equal(await tick.isChecked(), false);
+        await at(page, second.locator('[data-field="text"]'));
+        await page.keyboard.type("Still editable?");
+        await settle(page);
+        assert.equal(await secondText(page), "Still editable?");
+        await tick.click();
+        await until(async () => (await sub.textContent()).startsWith("2 questions"));
+        assert.deepEqual(await look(), on);
+        assert.equal(await secondText(page), "Still editable?");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // What the box saved is what comes back: a test of its own, so each fits its budget.
     // Signed in, so the account's copy is the sign that the save is kept: the reload
     // waits for it rather than for a pause.
@@ -233,7 +267,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         });
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await secondText(page).catch(() => null)) === "Is it a goal?");
-        assert.deepEqual(problems, []);
+        // The reload aborting a pull the visibility nudges started is navigation, not a fault.
+        assert.deepEqual(problems.filter((p) => !/Load request cancelled|access control checks/.test(p)), []);
       } finally {
         await context.close();
       }

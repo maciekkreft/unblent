@@ -36,6 +36,10 @@
                 "type": "string",
                 "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
               },
+              "on": {
+                "type": "boolean",
+                "description": "The question is switched on or off: a question switched off is kept but not asked. On when absent."
+              },
               "kind": {
                 "enum": [
                   "yesno",

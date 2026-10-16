@@ -184,6 +184,20 @@ test("signed out: a save changes name and questions, keeps book and tick, and mi
   assert.equal(changed.length, 3, "the same content is not a change");
 });
 
+test("a question's switch is kept and announced: off is a change, and a question without it is on", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved());
+  assert.equal(changed.at(-1).questions[0].on, true);
+  actor.send(saved({ questions: [{ ...yesno(), on: false }] }));
+  assert.deepEqual([changed.at(-1).questions[0].on, changed.at(-1).version], [false, 2]);
+  assert.equal((await list(actor))[0].questions[0].on, false);
+  actor.send(saved({ questions: [{ ...yesno(), on: true }] }));
+  assert.deepEqual([changed.at(-1).questions[0].on, changed.at(-1).version], [true, 3]);
+  actor.send(saved({ questions: [yesno()] }));
+  assert.equal(changed.length, 3, "a question without the switch is the same as one switched on");
+});
+
 test("Show in journal: a new evaluator starts without it, a save sets or clears it, and a save leaving it out keeps it", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);
