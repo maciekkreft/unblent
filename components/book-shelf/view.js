@@ -371,7 +371,33 @@ class BookShelf extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
+    return { h: "left", j: "down", k: "up", l: "right", G: "last", g: "prefix" }[event.key] ?? null;
+  }
+
+  // The grid wraps to the panel's width (auto-fill), so the columns are read from the
+  // rendered layout each time: the tiles that share the first tile's row.
+  #layout() {
+    const all = [...this.renderRoot.querySelectorAll(".grid > .tile")];
+    const top = all[0]?.offsetTop;
+    return {
+      columns: Math.max(1, all.filter((el) => el.offsetTop === top).length),
+      offset: all.filter((el) => el.classList.contains("adding")).length,
+      count: all.length,
+    };
+  }
+
+  // Up and Down keep the column. Down into a short last row, where nothing sits below,
+  // lands on the last tile; past the first or last row the focus stays.
+  #target(at, key, tiles) {
+    if (key === "first") return 0;
+    if (key === "last") return tiles.length - 1;
+    if (key === "left" || key === "right") return at + (key === "right" ? 1 : -1);
+    const { columns, offset, count } = this.#layout();
+    const cell = offset + at;
+    const to = cell + (key === "down" ? columns : -columns);
+    const lastRow = Math.floor((count - 1) / columns);
+    if (key === "down" && to >= count) return Math.floor(cell / columns) < lastRow ? tiles.length - 1 : at;
+    return to < offset ? at : to - offset;
   }
 
   #keydown(event, tiles) {
@@ -380,11 +406,11 @@ class BookShelf extends LitElement {
     // last row): an uncancelled letter is typed wherever the browser still keeps a
     // selection, and that may be a hidden editor (WebKit).
     if (vim) event.preventDefault();
-    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
+    const move = { ArrowRight: "right", ArrowDown: "down", ArrowLeft: "left", ArrowUp: "up" }[event.key] ?? vim;
     const current = this.#focusTile(tiles, this.#actor.snapshot.context.selected);
-    if (step || vim === "first" || vim === "last") {
+    if (move && move !== "prefix") {
       const at = tiles.findIndex((t) => t.id === current);
-      const to = vim === "first" ? 0 : vim === "last" ? tiles.length - 1 : at + step;
+      const to = this.#target(at, move, tiles);
       const next = tiles[Math.min(tiles.length - 1, Math.max(0, to))];
       if (!next || next.id === current) return;
       event.preventDefault();

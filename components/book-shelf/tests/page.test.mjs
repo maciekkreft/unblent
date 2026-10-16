@@ -342,23 +342,48 @@ for (const engine of ENGINES) {
     // The roving tile, where Tab lands on the shelf: the first while no book is open.
     const focusShelf = (page) => page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelector('.tile[tabindex="0"]').focus());
 
-    test("with Vim keys on, j/k, G and gg move along the shelf and Enter opens", async () => {
-      const { page, problems } = await twoBooks(true);
-      const [first, second] = (await tiles(page)).map((t) => t.title);
+    // Which tile has focus, by its place in the grid, since the four books share a title.
+    const focusedAt = (page) =>
+      page.evaluate(() => {
+        const root = document.querySelector("book-shelf").shadowRoot;
+        return [...root.querySelectorAll(".tile")].indexOf(root.activeElement);
+      });
+    // The columns as the grid wrapped them at this width, read the way the shelf reads them.
+    const columns = (page) =>
+      page.evaluate(() => {
+        const all = [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile")];
+        return all.filter((t) => t.offsetTop === all[0].offsetTop).length;
+      });
+    const pressTo = async (page, key, at) => {
+      await page.keyboard.press(key);
+      await until(async () => (await focusedAt(page)) === at);
+    };
+
+    test("the keys move through the shelf as a grid, and with Vim keys on hjkl, G and gg do too", async () => {
+      const cookie = forgeCookie();
+      await Promise.all(
+        ["01K00000000000000000000GR1", "01K00000000000000000000GR2", "01K00000000000000000000GR3", "01K00000000000000000000GR4"].map(
+          (id) => importBook(cookie, id, SAMPLE),
+        ),
+      );
+      const { page, problems } = await open({ cookie, vimKeys: true });
+      await until(async () => (await tiles(page)).length === 4);
+      const cols = await columns(page);
+      assert.equal(cols, 2, "the desk's side panel wraps four tiles into two rows of two");
       await focusShelf(page);
-      assert.equal(await focusedTile(page), first);
-      await page.keyboard.press("j");
-      await until(async () => (await focusedTile(page)) === second);
-      await page.keyboard.press("k");
-      await until(async () => (await focusedTile(page)) === first);
-      await page.keyboard.press("G");
-      await until(async () => (await focusedTile(page)) === second);
+      assert.equal(await focusedAt(page), 0);
+      await pressTo(page, "ArrowRight", 1);
+      await pressTo(page, "ArrowDown", 1 + cols);
+      await pressTo(page, "ArrowUp", 1);
+      await pressTo(page, "h", 0);
+      await pressTo(page, "j", cols);
+      await pressTo(page, "k", 0);
+      await pressTo(page, "l", 1);
+      await pressTo(page, "G", 3);
       await page.keyboard.press("g");
-      await page.keyboard.press("g");
-      await until(async () => (await focusedTile(page)) === first);
-      await page.keyboard.press("j");
+      await pressTo(page, "g", 0);
       await page.keyboard.press("Enter");
-      await until(async () => (await tiles(page)).find((t) => t.title === second)?.selected === true);
+      await until(async () => (await tiles(page))[0].selected === true);
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });

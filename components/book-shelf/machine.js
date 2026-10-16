@@ -72,7 +72,9 @@ export const machine = setup({
       "placeholder tile until the book arrives or the import is refused with a reason. Removing " +
       "a book waits out the undo window before it becomes a deletion, so it can be taken back in " +
       "one step. The journal, the book the user writes, reads \"Written by you\" under its title, " +
-      "shows no chapter count, and has no rename or delete, so it is always on the shelf.",
+      "shows no chapter count, and has no rename or delete, so it is always on the shelf. " +
+      "The arrow keys move through the tiles as a grid: left and right to the next tile, up " +
+      "and down to the tile above or below, and with Vim keys on h, j, k and l do the same.",
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
     attributes: ["renames"],
