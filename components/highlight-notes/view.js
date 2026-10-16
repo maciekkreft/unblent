@@ -1,10 +1,10 @@
 import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { EditorState, StateField, StateEffect, Annotation, Prec, Transaction, Compartment } from "@codemirror/state";
-import { EditorView, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
-import { history, historyKeymap, invertedEffects, insertNewline } from "@codemirror/commands";
-import { vim } from "@replit/codemirror-vim";
+import { EditorState, StateField, StateEffect, Annotation, Transaction } from "@codemirror/state";
+import { EditorView, Decoration, WidgetType } from "@codemirror/view";
+import { invertedEffects } from "@codemirror/commands";
+import { baseExtensions, setVim, paragraphs } from "editor";
 import { machine, ordered, compose, split } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -15,8 +15,8 @@ import discarded from "./events/note.discarded.json" with { type: "json" };
 // note (Decision 1); this view owns only the CodeMirror document and reflects the facts
 // the machine holds.
 //
-// Vim sits in a compartment that the "Vim keys" preference (12) turns on and off in
-// place. It registers no Vim key maps of its own — Vim maps are global to the page and
+// The theme, Vim and paragraphs come from the editor kit (10); Vim is turned on and off
+// in place by the "Vim keys" preference (12). Vim registers no Vim key maps of its own — Vim maps are global to the page and
 // would also change the note editor's keys — so `dd` on a quote line, and every other
 // key, is understood in the transaction filter from the edit it produces, not from the
 // key. The filter (see quoteFilter) therefore holds in both modes: it keeps the quote
@@ -180,43 +180,28 @@ const quoteFilter = EditorState.transactionFilter.of((tr) => {
   return { effects: setRefused.of(damaged), annotations: Transaction.addToHistory.of(false) };
 });
 
-// The structural theme, keyed to tokens like note-editor's; line spacing is padding,
-// never margin. The decoration visuals (the quote highlight, the bin, the drain) live in
-// the component's own styles, which share this shadow root and are checked for tokens.
+// What differs from the kit's theme (10), which yields to it: the document fills the
+// panel and scrolls, and its lines stand in from the panel's edges.
 const editorTheme = EditorView.theme({
-  "&": { height: "100%", color: "var(--color-ink)", backgroundColor: "transparent" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--font-sans)", lineHeight: "var(--leading-normal)", overflow: "auto" },
-  ".cm-content": { caretColor: "var(--color-accent)", padding: "var(--space-sm) var(--space-2xs)" },
-  ".cm-line": { fontSize: "var(--text-body)", padding: "0 var(--space-md)" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
+  "&": { height: "100%" },
+  ".cm-scroller": { overflow: "auto" },
+  ".cm-content": { padding: "var(--space-sm) var(--space-2xs)" },
+  ".cm-line": { padding: "0 var(--space-md)" },
 });
 
-// The Vim block cursor, keyed to tokens, copied from note-editor (components never
-// import each other, 11.2). The plugin ships its own Prec.highest theme, so this raises
-// precedence and marks the competing properties !important to win regardless of order.
-// Focused, it fills with the accent; unfocused, it is hollowed with an inset shadow,
-// which no edge clip can reach — the plugin draws an outline outside an absolutely
-// positioned span, and Safari clips its top and left.
-const fatCursorTheme = Prec.highest(
-  EditorView.theme({
-    ".cm-fat-cursor": {
-      background: "var(--color-accent) !important",
-      color: "var(--color-accent-text) !important",
-    },
-    "&:not(.cm-focused) .cm-fat-cursor": {
-      background: "none !important",
-      outline: "none !important",
-      color: "var(--color-ink) !important",
-      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
-    },
-  }),
-);
+// Whether a line opens a quote, read from the index.
+const isQuoteAt = (state, pos) => {
+  let found = false;
+  state.field(quoteField).between(pos, pos, (from) => {
+    if (from === pos) found = true;
+  });
+  return found;
+};
 
-// Vim and its block cursor, or nothing: what the Vim compartment holds for the
-// "Vim keys" preference (12).
-const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
+// The first comment line under a quote stays a full line even when empty: it is where a
+// new comment is typed, and the line the filter keeps under every quote. Blank lines
+// further down a comment are the gaps between its paragraphs.
+const keepBlank = (state, line) => line.number > 1 && isQuoteAt(state, state.doc.line(line.number - 1).from);
 
 // The bin at the end of a quote line: a muted trash button that begins the undo window,
 // or, during that window, an Undo button and the draining bar. The DOM is recreated when
@@ -479,43 +464,21 @@ class HighlightNotes extends LitElement {
   // and the timer that clears it, cancelled on the next refusal and on disconnect.
   #flashMs = 300;
   #clearTimer = null;
-  // Vim lives in a compartment so the "Vim keys" preference (12) turns it on or off
-  // in place, keeping the text and the undo history. #vimOn is what it holds now.
-  #vim = new Compartment();
-  #vimOn = false;
-
   #extensions() {
-    this.#vimOn = this.#actor.snapshot?.context.vimKeys === true;
     return [
-      // First: the Vim plugin must see a key before any other keymap does.
-      this.#vim.of(vimExtensions(this.#vimOn)),
-      // Vim mode hides the native selection (its own theme paints ::selection
-      // transparent), so a visual-mode range is only visible through CM6's own layer.
-      drawSelection(),
+      ...baseExtensions({ vim: this.#actor.snapshot?.context.vimKeys === true }),
       quoteField,
       discardField,
       refusedField,
       quoteFilter,
+      paragraphs({ keepBlank }),
       invertedEffects.of(invertDiscard),
       editorTheme,
-      history(),
-      keymap.of(historyKeymap),
-      // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
-      keymap.of([{ key: "Enter", run: insertNewline }]),
-      EditorView.lineWrapping,
       EditorView.decorations.compute([quoteField, discardField], (state) => this.#dimLines(state)),
       EditorView.decorations.compute([quoteField, discardField, "selection"], (state) => this.#marksAndBins(state)),
       EditorView.decorations.compute([quoteField, refusedField], (state) => this.#refusedLines(state)),
       EditorView.updateListener.of(this.#onUpdate),
-      // WebKit keeps the document's selection inside a blurred editor, and a later key
-      // whose default nobody cancels is typed there although the focus sits on a list
-      // row or the bare page; dropping it on blur leaves the editor nothing to type into.
-      EditorView.domEventHandlers({
-        blur: () => {
-          document.getSelection()?.removeAllRanges();
-          this.#actor.send({ type: "_blurred" });
-        },
-      }),
+      EditorView.domEventHandlers({ blur: () => this.#actor.send({ type: "_blurred" }) }),
     ];
   }
 
@@ -729,11 +692,7 @@ class HighlightNotes extends LitElement {
   }
 
   updated() {
-    const vimKeys = this.#actor.snapshot?.context.vimKeys === true;
-    if (this.#view && vimKeys !== this.#vimOn) {
-      this.#vimOn = vimKeys;
-      this.#view.dispatch({ effects: this.#vim.reconfigure(vimExtensions(vimKeys)) });
-    }
+    if (this.#view) setVim(this.#view, this.#actor.snapshot?.context.vimKeys === true);
     this.#sync();
   }
 

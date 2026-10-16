@@ -3,65 +3,39 @@ import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
 import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } from "@codemirror/state";
-import { EditorView, keymap, drawSelection, placeholder, Decoration, WidgetType } from "@codemirror/view";
-import { history, historyKeymap, insertNewline } from "@codemirror/commands";
-import { vim, Vim, getCM } from "@replit/codemirror-vim";
+import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
+import { Vim, getCM } from "@replit/codemirror-vim";
+import { baseExtensions, setVim, paragraphs } from "editor";
 import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page
 // (the product page nests it), so it scrolls with the day it is about.
 
-// The four boxes are CodeMirror editors, one each, so they take Vim's keys when the "Vim
-// keys" preference (12) is on: Vim sits in a compartment turned on and off in place. The
-// theme and the Vim cursor are copied from evaluator-editor, because components never
-// import each other (11.2).
+// The four boxes are CodeMirror editors, one each, built on the editor kit (10), so they
+// take Vim's keys when the "Vim keys" preference (12) is on and make paragraphs on Enter.
+// Each line is one item Jev checks, and a blank line is never one (linesOf), so a gap
+// between items costs nothing.
 
 // The box grows with what is written, from `lines` lines; its frame is drawn around it
-// by .box, so the theme draws none.
+// by .box, so the theme draws none. Only what differs from the kit's theme, which yields.
 const boxTheme = (lines) =>
   EditorView.theme({
-    "&": { color: "var(--color-ink)", backgroundColor: "transparent", flex: "1" },
-    "&.cm-focused": { outline: "none" },
-    ".cm-scroller": { fontFamily: "var(--font-sans)", lineHeight: "var(--leading-normal)" },
+    "&": { flex: "1" },
     ".cm-content": {
-      caretColor: "var(--color-accent)",
       padding: "var(--space-xs) var(--space-sm)",
       minHeight: `calc(var(--text-sm) * var(--leading-normal) * ${lines})`,
     },
-    ".cm-line": { fontSize: "var(--text-sm)", padding: "0" },
+    ".cm-line": { fontSize: "var(--text-sm)" },
     // A checked line keeps room at its right end for its marks, which stand there.
     ".cm-line.cm-checked": { position: "relative" },
     ...Object.fromEntries(
       [1, 2, 3, 4].map((n) => [`.cm-line.cm-checked-${n}`, { paddingRight: `calc((var(--text-sm) + var(--space-xs) * 2 + var(--space-2xs)) * ${n})` }]),
     ),
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
-    ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
-    ".cm-placeholder": { color: "var(--color-mute)" },
   });
 const shortTheme = boxTheme(2);
 // The two moves stand beside the V, so they start as tall as it is.
 const tallTheme = boxTheme(4);
-
-// The Vim plugin ships its own Prec.highest theme for the block cursor in colours that
-// are not tokens; this one outranks it. Unfocused, the cursor is hollowed with an inset
-// shadow, because Safari clips the outline the plugin draws.
-const fatCursorTheme = Prec.highest(
-  EditorView.theme({
-    ".cm-fat-cursor": {
-      background: "var(--color-accent) !important",
-      color: "var(--color-accent-text) !important",
-    },
-    "&:not(.cm-focused) .cm-fat-cursor": {
-      background: "none !important",
-      outline: "none !important",
-      color: "var(--color-ink) !important",
-      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
-    },
-  }),
-);
-
-const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
@@ -644,16 +618,8 @@ class ChoicePointCards extends LitElement {
     const { id, field } = spec;
     return [
       this.#keys(id, field),
-      // The Vim plugin must see a key before any keymap does.
-      this.#boxes.get(key).vim.of(vimExtensions(vimOn)),
-      // Vim hides the native selection, so its visual-mode range shows only through
-      // CodeMirror's own selection layer.
-      drawSelection(),
-      history(),
-      keymap.of(historyKeymap),
-      // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
-      keymap.of([{ key: "Enter", run: insertNewline }]),
-      EditorView.lineWrapping,
+      ...baseExtensions({ vim: vimOn }),
+      paragraphs(),
       field === "away" || field === "towards" ? tallTheme : shortTheme,
       this.#boxes.get(key).read.of(readOnly(spec)),
       EditorView.contentAttributes.of({ "aria-label": spec.label }),
@@ -666,14 +632,7 @@ class ChoicePointCards extends LitElement {
         const lines = leftLines(update);
         if (lines.length) this.#actor.send({ type: "_finish", id, field, lines });
       }),
-      EditorView.domEventHandlers({
-        blur: () => {
-          // WebKit keeps the document's selection inside a blurred editor, and a later
-          // key nobody cancels is typed there; dropping it leaves nothing to type into.
-          document.getSelection()?.removeAllRanges();
-          this.#actor.send({ type: "_blur", id, field });
-        },
-      }),
+      EditorView.domEventHandlers({ blur: () => this.#actor.send({ type: "_blur", id, field }) }),
     ];
   }
 
@@ -712,7 +671,7 @@ class ChoicePointCards extends LitElement {
       let box = this.#boxes.get(key);
       if (!box) {
         region.replaceChildren();
-        box = { region, vim: new Compartment(), vimOn, read: new Compartment(), readOn: spec.read, marksKey: spec.marksKey };
+        box = { region, vimOn, read: new Compartment(), readOn: spec.read, marksKey: spec.marksKey };
         this.#boxes.set(key, box);
         box.view = new EditorView({
           parent: region,
@@ -724,10 +683,8 @@ class ChoicePointCards extends LitElement {
         continue;
       }
       const effects = [];
-      if (box.vimOn !== vimOn) {
-        box.vimOn = vimOn;
-        effects.push(box.vim.reconfigure(vimExtensions(vimOn)));
-      }
+      box.vimOn = vimOn;
+      setVim(box.view, vimOn);
       // Yesterday's sheet open as its hour after midnight runs out turns read only in place.
       if (box.readOn !== spec.read) {
         box.readOn = spec.read;

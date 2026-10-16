@@ -2,7 +2,8 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // What only a browser shows: the New choice point row opens a sheet with the keyboard in Situation,
-// Escape folds it into a card that a reload keeps, with Vim keys on the first Escape
+// Escape folds it into a card that a reload keeps, Enter makes a paragraph with a gap and
+// Shift+Enter a line break, with Vim keys on the first Escape
 // only leaves insert mode, and on a narrow page the V stands above the boxes rather than
 // between them, and Jev's marks stand at the end of checked lines, coloured by the expected
 // answer, checked once the user moves on from a line, with the answer said in the status line, and an earlier day's choice point can
@@ -191,6 +192,37 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await cards.locator('.box[data-field="towards"] .cm-content').innerText(), "Paused", "the boxes cannot be typed in");
         await cards.locator(".close").click();
         await cards.locator(".card").waitFor();
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Enter starts a new line after a short gap, Shift+Enter one right under it; each is
+    // one item, so the card still shows them one after another.
+    test("Enter makes a paragraph and Shift+Enter a line break, and the card lists each line", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await page.click("choice-point-cards .new");
+        await until(async () => (await inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field)) === "situation");
+        await page.keyboard.type("Dinner");
+        await page.keyboard.press("Enter");
+        await page.keyboard.type("Late");
+        await page.keyboard.press("Shift+Enter");
+        await page.keyboard.type("Tired");
+        const box = () =>
+          inCards(page, (root) => {
+            const content = root.querySelector('.box[data-field="situation"] .cm-content');
+            return { text: content.cmView.view.state.doc.toString(), gaps: content.querySelectorAll(".cm-line.cm-gap").length };
+          });
+        assert.deepEqual(await box(), { text: "Dinner\n\nLate\nTired", gaps: 1 });
+        await page.keyboard.press("Escape");
+        const card = () => inCards(page, (root) => root.querySelector(".card .sit")?.innerText.trim() ?? null);
+        await until(async () => (await card()) === "Dinner · Late · Tired");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

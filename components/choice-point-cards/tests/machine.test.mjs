@@ -142,10 +142,11 @@ test("a line is finished for Jev on Enter or a move to another line, on blur, an
   clock.increment(400);
   assert.equal(saves(emitted).at(-1).finished, undefined, "a save while typing finishes nothing");
 
-  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone\n" });
-  actor.send({ type: "_finish", id, field: "away", lines: ["Checked my phone"] });
+  // Enter makes a paragraph (10): the line and a blank one before the new line.
+  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone\n\n" });
+  actor.send({ type: "_finish", id, field: "away", lines: ["Checked my phone", ""] });
   assert.deepEqual(saves(emitted).at(-1).finished, [{ field: "away", text: "Checked my phone" }]);
-  assert.equal(saves(emitted).at(-1).away, "Checked my phone\n", "saved at once with the new line");
+  assert.equal(saves(emitted).at(-1).away, "Checked my phone\n\n", "saved at once with the new line");
   const count = saves(emitted).length;
   clock.increment(400);
   assert.equal(saves(emitted).length, count, "the finish's save ended the wait");
@@ -153,7 +154,7 @@ test("a line is finished for Jev on Enter or a move to another line, on blur, an
   actor.send({ type: "_finish", id, field: "away", lines: ["   "] });
   assert.equal(saves(emitted).length, count, "an empty line finishes nothing");
 
-  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone\nSnapped" });
+  actor.send({ type: "_edit", id, field: "away", value: "Checked my phone\n\nSnapped" });
   actor.send({ type: "_edit", id, field: "towards", value: "Breathe" });
   actor.send({ type: "_blur", id, field: "away" });
   assert.deepEqual(saves(emitted).at(-1).finished, [

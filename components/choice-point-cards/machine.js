@@ -284,7 +284,8 @@ export const machine = setup({
       "written and take Vim's keys when Vim keys is on; Tab moves on to the next box or " +
       "button. What is written is saved a short time into typing and at once when a box loses " +
       "focus; the sheet does not say so. Jev checks a line once the user has finished it and " +
-      "moved on: Enter to a new line, the cursor moved to another line, the box losing focus, " +
+      "moved on: Enter to a new line, which stands after a short gap, or Shift+Enter to one " +
+      "right under it, the cursor moved to another line, the box losing focus, " +
       "or the sheet folding; the line being typed gets no mark until then. Done, or Escape, " +
       "folds that sheet into a card " +
       "showing the situation and the away and towards moves, one line each; with Vim keys on, " +

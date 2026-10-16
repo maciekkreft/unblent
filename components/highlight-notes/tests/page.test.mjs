@@ -268,8 +268,9 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
-    // Enter at the end of a comment keeps every empty line it makes.
-    test(`Enter at the end of a comment keeps each empty line in ${engine.name}`, async () => {
+    // With Vim keys on, Enter in insert mode is the editor's: it starts a paragraph, and the
+    // blank line before it is drawn as a gap.
+    test(`with Vim keys Enter in a comment starts a paragraph in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: VIM });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
@@ -279,10 +280,35 @@ for (const engine of ENGINES) {
       await until(async () => hnHas(page, ".cm-fat-cursor"));
       await page.keyboard.press("A");
       await page.keyboard.type("One");
-      for (let i = 0; i < 3; i++) await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
       await page.keyboard.type("Two");
       await page.keyboard.press("Escape");
-      await until(async () => (await hnDoc(page)).endsWith("One\n\n\nTwo"));
+      await until(async () => (await hnDoc(page)).endsWith("\nOne\n\nTwo"));
+      assert.ok(await hnHas(page, ".cm-line.cm-gap"), "the blank line is drawn as a gap");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // Enter starts a paragraph, drawn after a short gap; Shift+Enter breaks the line with
+    // none. The empty comment line under a quote, where a comment is typed, is never a gap.
+    test(`Enter makes a paragraph and Shift+Enter a line break in ${engine.name}`, async () => {
+      const { page, problems } = await open({ settings: PLAIN });
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length > 0);
+      const gaps = () =>
+        page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelectorAll(".cm-line.cm-gap").length);
+      assert.equal(await gaps(), 0, "the empty comment line under the quote is a full line");
+
+      await hnCaret(page, "end");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("Two");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type("Three");
+      await until(async () => (await hnDoc(page)).endsWith("\nOne\n\nTwo\nThree"));
+      assert.equal(await gaps(), 1, "one gap, from Enter; none from Shift+Enter");
+      await synced(page, (notes) => notes.some((n) => n.body === "One\n\nTwo\nThree"));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });

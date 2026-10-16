@@ -94,9 +94,9 @@ test("ordered sorts by chapter, then start block, then start offset", () => {
   assert.deepEqual(ordered([a, b, c, d]).map((f) => f.id), ["d", "b", "c", "a"]);
 });
 
-test("compose then split round-trips the bodies", () => {
+test("compose then split round-trips the bodies, paragraphs included", () => {
   const fragments = [
-    { id: H1, quote: { exact: "quote one" }, body: "line a\nline b" },
+    { id: H1, quote: { exact: "quote one" }, body: "line a\nline b\n\nnext paragraph" },
     { id: H2, quote: { exact: "multi\nline   quote" }, body: "" },
   ];
   const { doc, quotes } = compose(fragments);
@@ -106,9 +106,9 @@ test("compose then split round-trips the bodies", () => {
   assert.equal(lines[quotes[1].line], "multi line quote");
   // Every fragment keeps at least one comment line (the empty one under H2), so a quote
   // line is never directly followed by the next quote line or the end.
-  assert.equal(quotes[1].line - quotes[0].line, 3);
+  assert.equal(quotes[1].line - quotes[0].line, 5);
   const bodies = split(doc, quotes);
-  assert.equal(bodies[H1], "line a\nline b");
+  assert.equal(bodies[H1], "line a\nline b\n\nnext paragraph", "a paragraph's blank line is kept");
   assert.equal(bodies[H2], "");
 });
 

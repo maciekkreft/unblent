@@ -186,7 +186,9 @@ export const machine = setup({
     description:
       "The highlights editor: it shows every highlight of the book on the stage as one " +
       "document, the Highlights, with a quote line per highlight in reading order and the " +
-      "user's comment under it. The quote lines cannot be edited and the comments can; all " +
+      "user's comment under it. The quote lines cannot be edited and the comments can; in a " +
+      "comment Enter starts a new paragraph, drawn after a short gap, and Shift+Enter a new " +
+      "line. All " +
       "changes on the page are saved together a short time after typing stops. Deleting a quote " +
       "line whole, or `dd` on it with Vim keys on, removes that highlight after the undo " +
       "window. Each highlight is stored as its own note whose link to the book carries a place, " +
