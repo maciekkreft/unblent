@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR_JSON = json.loads((ROOT / "vendor" / "vendor.json").read_text())
 IMPORTMAP = VENDOR_JSON["importmap"]
-ALLOWED_BARE = set(IMPORTMAP["imports"]) | {"bus", "store", "icons"}
+ALLOWED_BARE = set(IMPORTMAP["imports"]) | {"bus", "store", "icons", "editor"}
 
 # Section 11: the fast phase runs after every edit within one second in total; a
 # test has its own budget, so the full run's length may grow with the system
@@ -243,7 +243,7 @@ def check_composer_imports() -> None:
                      "role member's /static/components/<name>/view.js")
             elif spec not in ALLOWED_BARE:
                 fail(path, "composer import check (11.2)",
-                     f'bare import "{spec}" is not a vendored name, bus, store, or icons')
+                     f'bare import "{spec}" is not a vendored name, bus, store, icons, or editor')
 
 
 def check_composer() -> None:
@@ -690,6 +690,34 @@ def check_kit(manifests: dict) -> None:
              f"the kit names {name!r}; a helper about one component lives in that component's tests")
 
 
+# --- Editor kit check (architecture.md 10, 11.2) ----------------------------------
+
+def editor_import_problems(src: str) -> list:
+    """The imports an editor-kit source may not make (10): only vendored CodeMirror
+    packages and files inside editor/, never the bus, the store, the icons or a
+    component, so the kit stays the same for every editor."""
+    text = _strip_comments(src)
+    problems = []
+    for spec in _STATIC_IMPORT.findall(text) + _DYNAMIC_IMPORT.findall(text):
+        if spec.startswith("."):
+            if ".." in spec.split("/"):
+                problems.append(f'relative import "{spec}" leaves editor/')
+        elif not (spec.startswith("@codemirror/") or spec == "@replit/codemirror-vim") or spec not in ALLOWED_BARE:
+            problems.append(f'import "{spec}" is not a vendored CodeMirror package')
+    return problems
+
+
+def check_editor(manifests: dict) -> None:
+    names = [Path(m).parent.name for m in manifests]
+    for path in sorted(glob.glob("editor/*.js", root_dir=ROOT)):
+        src = (ROOT / path).read_text()
+        for problem in editor_import_problems(src):
+            fail(path, "editor kit check (10)", problem)
+        for name in kit_mentions(src, names):
+            fail(path, "editor kit check (10)",
+                 f"the editor kit names {name!r}; what one editor alone needs stays in that editor")
+
+
 def check_imports() -> None:
     for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
         file = ROOT / path
@@ -710,7 +738,7 @@ def check_imports() -> None:
                      f'absolute import "{spec}" is not allowed; use a bare name or a local path')
             elif spec not in ALLOWED_BARE:
                 fail(path, "import check (11.2)",
-                     f'bare import "{spec}" is not a vendored name, bus, store, or icons')
+                     f'bare import "{spec}" is not a vendored name, bus, store, icons, or editor')
 
 
 # A server module (11.2) may import the standard library, the packages named in
@@ -1056,7 +1084,25 @@ def _scan_css(text: str, path: str, where: str) -> None:
         _check_declaration(prop, value, path, where)
 
 
+# An EditorView.theme is an object of camelCase properties, not a css template.
+_THEME_DECL = re.compile(r'\b([a-z][A-Za-z]*)\s*:\s*"([^"]*)"')
+
+
+def theme_declarations(src: str) -> list:
+    """The (css property, value) pairs of a source's object-literal styles, outside
+    comments: every camelCase key with a string value, in kebab case."""
+    text = _strip_comments(src)
+    return [(re.sub(r"[A-Z]", lambda m: "-" + m.group(0).lower(), k), v) for k, v in _THEME_DECL.findall(text)]
+
+
 def check_styles() -> None:
+    # The editor kit themes every editor (10), so it is held to the same tokens.
+    for path in sorted(glob.glob("editor/*.js", root_dir=ROOT)):
+        src = (ROOT / path).read_text()
+        for css in _CSS_TEMPLATE.findall(src):
+            _scan_css(css, path, "css template")
+        for prop, value in theme_declarations(src):
+            _check_declaration(prop, value, path, "editor theme")
     for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
         src = (ROOT / path).read_text()
         for css in _CSS_TEMPLATE.findall(src):
@@ -1352,7 +1398,7 @@ def serve(port: int) -> None:
 # change still runs everything. `affected` is None for the full run, or the set of
 # test files to run.
 
-_INFRA_DIRS = {"bus", "store", "checks", "vendor", "tokens", "server"}
+_INFRA_DIRS = {"bus", "store", "editor", "checks", "vendor", "tokens", "server"}
 _INFRA_FILES = {".env", "requirements.txt"}
 _TAG = re.compile(r"<([a-z][\w]*-[\w-]*)[\s>]")
 _ENTRY = re.compile(r"/static/components/([\w-]+)/(?:view|fact)\.js")
@@ -1704,7 +1750,7 @@ def run_tests(affected=None, webkit_only=False, pages=()) -> None:
         else:
             pure.append(f)
 
-    # The bus and the store are infrastructure, pure Node: their tests need neither
+    # The bus, the store and the editor kit are infrastructure, pure Node: their tests need neither
     # the venv nor the server, and only an infra change (a full run) reaches them.
     # The budget is per test (11), so a file must not count as one: without isolation,
     # node times each test alone rather than the file, whose lifetime includes the
@@ -1712,6 +1758,7 @@ def run_tests(affected=None, webkit_only=False, pages=()) -> None:
     node_tests = ([] if scoped else
                   sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
                   sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT)) +
+                  sorted(glob.glob("editor/tests/*.test.mjs", root_dir=ROOT)) +
                   sorted(glob.glob("checks/tests/*.test.mjs", root_dir=ROOT))) + pure
     if node_tests:
         failed = _run_node(node_tests)
@@ -1887,6 +1934,7 @@ def main() -> None:
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "imports", check_imports)
     _timed(timings, "kit", check_kit, manifests)
+    _timed(timings, "editor kit", check_editor, manifests)
     _timed(timings, "composer imports", check_composer_imports)
     _timed(timings, "composer", check_composer)
     _timed(timings, "python imports", check_python_imports)

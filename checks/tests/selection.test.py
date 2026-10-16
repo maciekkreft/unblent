@@ -75,6 +75,7 @@ class Affected(unittest.TestCase):
 
     def test_infrastructure_runs_everything(self):
         self.assertIsNone(check.affected_tests(["bus/bus.js"], self.manifests, self.tests))
+        self.assertIsNone(check.affected_tests(["editor/editor.js"], self.manifests, self.tests))
         self.assertIsNone(check.classify_changes(["requirements.txt"], self.manifests))
 
     def test_a_change_that_keeps_the_contract_reaches_own_tests_and_the_page_smoke_only(self):

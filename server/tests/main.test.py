@@ -55,6 +55,7 @@ class ServerEntry(unittest.TestCase):
             "/static/vendor/vendor.json",
             "/static/bus/bus.js",
             "/static/store/store.js",
+            "/static/editor/editor.js",
         ):
             res = _request(path)
             self.assertEqual(res.status, 200, path)
@@ -72,6 +73,8 @@ class ServerEntry(unittest.TestCase):
         self.assertEqual(_request("/static/bus/tests/bus.test.mjs").status, 404)
         # The store interface (11.1) hides its tests/ the same way.
         self.assertEqual(_request("/static/store/tests/store.test.mjs").status, 404)
+        # The editor kit (11.1) hides its tests/ the same way.
+        self.assertEqual(_request("/static/editor/tests/editor.test.mjs").status, 404)
 
     def test_component_routers_are_discovered(self):
         # Section 3.4: a component's server module is mounted at /api/<component>,

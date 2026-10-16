@@ -33,5 +33,30 @@ class Kit(unittest.TestCase):
         self.assertEqual(check.kit_mentions((ROOT / "checks" / "kit.mjs").read_text(), names), [])
 
 
+class EditorKit(unittest.TestCase):
+    # The editor kit (architecture.md 10) imports only vendored CodeMirror packages and
+    # knows no component, the same rule as the kit's.
+    def test_only_codemirror_imports_pass(self):
+        src = 'import { x } from "@codemirror/view";\nimport { vim } from "@replit/codemirror-vim";\nimport "./more.js";'
+        self.assertEqual(check.editor_import_problems(src), [])
+
+    def test_the_bus_another_library_or_a_parent_path_fails(self):
+        self.assertEqual(len(check.editor_import_problems('import { ask } from "bus"')), 1)
+        self.assertEqual(len(check.editor_import_problems('import { html } from "lit"')), 1)
+        self.assertEqual(len(check.editor_import_problems('import "../components/x/view.js"')), 1)
+        self.assertEqual(len(check.editor_import_problems('import("@codemirror/unvendored")')), 1)
+
+    def test_the_real_editor_kit_imports_and_names_nothing_it_may_not(self):
+        names = [p.parent.name for p in ROOT.glob("components/*/machine.js")]
+        for path in ROOT.glob("editor/*.js"):
+            src = path.read_text()
+            self.assertEqual(check.editor_import_problems(src), [], path)
+            self.assertEqual(check.kit_mentions(src, names), [], path)
+
+    def test_theme_objects_are_read_as_css_declarations(self):
+        src = '// fontSize: "12px"\nEditorView.theme({ ".cm-line": { fontSize: "var(--text-body)", paddingTop: "4px" } })'
+        self.assertEqual(check.theme_declarations(src), [("font-size", "var(--text-body)"), ("padding-top", "4px")])
+
+
 if __name__ == "__main__":
     unittest.main()

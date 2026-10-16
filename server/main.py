@@ -21,6 +21,7 @@ TOKENS = ROOT / "tokens"
 BUS = ROOT / "bus"
 STORE = ROOT / "store"
 COMPOSER = ROOT / "composer"
+EDITOR = ROOT / "editor"
 INDEX = ROOT / "pages" / "index.html"
 PAGES_DESIGN = ROOT / "pages" / "workshop" / "design"
 PAGES_APPS = ROOT / "pages" / "workshop" / "apps"
@@ -89,6 +90,8 @@ app.mount("/static/store", ComponentStaticFiles(directory=STORE), name="store")
 # The composer (3.6), the second shared infrastructure a page composes with; its
 # tests/ 404 the same way as the bus's.
 app.mount("/static/composer", ComponentStaticFiles(directory=COMPOSER), name="composer")
+# The editor kit (10, 11.1), served like the bus; its tests/ 404 the same way.
+app.mount("/static/editor", ComponentStaticFiles(directory=EDITOR), name="editor")
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
