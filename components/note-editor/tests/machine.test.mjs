@@ -884,6 +884,15 @@ test("parseBody and serialize round-trip every level", () => {
   }
 });
 
+test("a blank line is a paragraph gap, never a marker, and typed blank lines round-trip unchanged", () => {
+  assert.equal(serialize("T\n\nbody", ["title", "heading", "body"]), "# T\n\nbody");
+  const md = "## Title\n\nPara one\n\nPara two\n\n";
+  const { doc, levels } = parseBody(md);
+  assert.equal(doc, "Title\n\nPara one\n\nPara two\n\n");
+  assert.deepEqual(levels, ["heading", "body", "body", "body", "body", "body", "body"]);
+  assert.equal(serialize(doc, levels), md);
+});
+
 test("known edge: a Body line whose text begins with a marker re-parses as a heading", () => {
   assert.equal(serialize("# typed as body", ["body"]), "# typed as body");
   assert.deepEqual(parseBody("# typed as body"), { doc: "typed as body", levels: ["title"] });

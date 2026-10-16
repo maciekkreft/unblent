@@ -55,7 +55,7 @@ function booksStore() {
 
 const DAYS = [
   { id: OLD, day: "2025-12-31", text: "Last of the year.", editedAt: at(2025, 12, 31), version: 1 },
-  { id: RECENT, day: "2026-10-11", text: "# Sunday\n## Morning\n### Early\nA walk & <talk>.\n\nHome.", editedAt: at(2026, 10, 11), version: 1 },
+  { id: RECENT, day: "2026-10-11", text: "# Sunday\n## Morning\n### Early\nA walk & <talk>.\nBack.\n\nHome.", editedAt: at(2026, 10, 11), version: 1 },
 ];
 
 async function start({ days = DAYS, names = ["journal", "books"] } = {}) {
@@ -100,7 +100,7 @@ test("a journal chapter is the day's text as HTML, answered without the network"
     await until(() => actors.books.getSnapshot().context.journal !== null);
     assert.deepEqual(await query("chapter", { id: JOURNAL, chapter: 1 }), {
       title: "Sunday 11 October",
-      html: "<h1>Sunday</h1><h2>Morning</h2><h3>Early</h3><p>A walk &amp; &lt;talk&gt;.</p><p>Home.</p>",
+      html: "<h1>Sunday</h1><h2>Morning</h2><h3>Early</h3><p>A walk &amp; &lt;talk&gt;.<br>Back.</p><p>Home.</p>",
     });
     assert.deepEqual(await query("chapter", { id: JOURNAL, chapter: 2 }), { title: "Tuesday 13 October", html: "" });
     assert.deepEqual(await query("chapter", { id: JOURNAL, chapter: 3 }), { error: "not-found" });

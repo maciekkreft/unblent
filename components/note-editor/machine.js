@@ -57,9 +57,11 @@ export function parseBody(md) {
 // would pollute the one plain string that note-list and every reader also read.
 export function serialize(doc, levels) {
   if (doc === "") return ""; // a blank note is empty, never a lone "# " — so opening one never mints
+  // A blank line is a paragraph gap, always Body (architecture.md 10), so it never
+  // carries a marker.
   return doc
     .split("\n")
-    .map((text, i) => (PREFIX[levels[i]] ?? "") + text)
+    .map((text, i) => (text === "" ? "" : (PREFIX[levels[i]] ?? "") + text))
     .join("\n");
 }
 

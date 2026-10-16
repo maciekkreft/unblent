@@ -190,6 +190,14 @@ test("a day's text carries its levels as line prefixes, and the edited document 
   assert.equal(serialize("", ["title"]), "", "a blank page is empty, never a lone marker");
 });
 
+test("a blank line is a paragraph gap, never a marker, and typed blank lines round-trip unchanged", () => {
+  assert.equal(serialize("Monday\n\nRan", ["title", "title", "body"]), "# Monday\n\nRan");
+  const wire = "## Title\n\nPara one\n\nPara two\n\n";
+  const { doc, levels } = parseBody(wire);
+  assert.equal(doc, "Title\n\nPara one\n\nPara two\n\n");
+  assert.equal(serialize(doc, levels), wire);
+});
+
 // --- Following the journal book ----------------------------------------------------------
 
 const JOURNAL = "00000000000000000000000JRN";

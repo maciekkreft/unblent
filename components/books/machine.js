@@ -46,16 +46,27 @@ const escape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").repla
 
 // A day's text as the chapter's HTML, so the chat reads the journal like any book. The
 // levels ride the text as `# `, `## ` and `### ` line prefixes, the wire format of a note
-// body; every other line that holds something is a paragraph.
-export const htmlOf = (text) =>
-  text
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line) => {
-      const level = /^(#{1,3}) /.exec(line);
-      return level ? `<h${level[1].length}>${escape(line.slice(level[0].length))}</h${level[1].length}>` : `<p>${escape(line)}</p>`;
-    })
-    .join("");
+// body, and a heading is a block of its own. Paragraphs are apart by a blank line and a
+// single newline breaks the line inside one, the editor kit's text rule (10).
+export function htmlOf(text) {
+  const blocks = [];
+  let lines = [];
+  const close = () => {
+    if (lines.length) blocks.push(`<p>${lines.map(escape).join("<br>")}</p>`);
+    lines = [];
+  };
+  for (const line of text.split("\n")) {
+    const level = /^(#{1,3}) /.exec(line);
+    if (line.trim() === "") close();
+    else if (level) {
+      close();
+      const n = level[1].length;
+      blocks.push(`<h${n}>${escape(line.slice(level[0].length))}</h${n}>`);
+    } else lines.push(line);
+  }
+  close();
+  return blocks.join("");
+}
 
 // The journal book from journal: read's picture, or null when there is no journal to
 // show (no `journal` on the page answers no-answerer). texts holds each chapter's day

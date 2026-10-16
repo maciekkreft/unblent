@@ -2,10 +2,11 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { EditorState, StateField, StateEffect, RangeSetBuilder, Prec, Compartment } from "@codemirror/state";
-import { EditorView, Decoration, keymap, drawSelection } from "@codemirror/view";
-import { history, historyKeymap, insertNewline } from "@codemirror/commands";
-import { vim, Vim } from "@replit/codemirror-vim";
+import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode } from "@codemirror/state";
+import { EditorView, Decoration } from "@codemirror/view";
+import { history } from "@codemirror/commands";
+import { Vim } from "@replit/codemirror-vim";
+import { baseExtensions, setVim, paragraphs } from "editor";
 import { machine, parseBody, serialize, aboutTitleOf } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
@@ -15,8 +16,8 @@ import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 // string; the document the user edits is marker-free, and per-line level lives in a
 // StateField, so Vim motions never step over an invisible "#". parseBody/serialize
 // (machine.js) are the only bridge between the two forms; this file adds the CM6
-// half: the level field, the theme, the level bar, and Vim, in a compartment that the
-// "Vim keys" preference (12) turns on and off.
+// half: the level field, the level ladder and the level bar. The theme, Vim and the
+// paragraphs come from the editor kit (architecture.md 10).
 
 // The note this editor pinned under its own key (3.1) before `pins` owned the pin: read
 // once at start so a device keeps its pin, handed to `pins` by the machine, then
@@ -74,7 +75,7 @@ const setAllLevels = StateEffect.define();
 const levelField = StateField.define({
   create: () => Decoration.none,
   update(deco, tr) {
-    deco = deco.map(tr.changes); // a level rides with its line across split/join/delete
+    if (tr.docChanged) deco = follow(deco, tr);
     for (const e of tr.effects) {
       if (e.is(setAllLevels)) {
         const b = new RangeSetBuilder();
@@ -95,10 +96,42 @@ const levelField = StateField.define({
         deco = deco.update({ filterFrom: first.from, filterTo: last.to, filter: () => false, add });
       }
     }
-    return deco;
+    return tr.docChanged || tr.selection || tr.effects.length ? bodyGaps(deco, tr.state) : deco;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
+
+// A level rides with its line's text. Mapped alone, a line decoration stays put when
+// text is inserted at its line's start, so Enter before a Title would leave the level
+// on the blank line and the Title text bare; a level whose line had text and is now
+// blank moves to the line its text went to.
+function follow(deco, tr) {
+  const moved = [];
+  for (const it = deco.iter(); it.value; it.next()) {
+    if (tr.startState.doc.lineAt(it.from).length === 0) continue;
+    const stays = tr.changes.mapPos(it.from, -1, MapMode.TrackBefore);
+    if (stays === null || tr.state.doc.lineAt(stays).length > 0) continue;
+    const to = tr.state.doc.lineAt(tr.changes.mapPos(it.from, 1));
+    if (to.length > 0) moved.push({ from: stays, to: to.from, value: it.value });
+  }
+  deco = deco.map(tr.changes);
+  if (moved.length === 0) return deco;
+  const drop = new Set(moved.flatMap((m) => [m.from, m.to]));
+  return deco.update({ filter: (from) => !drop.has(from), add: moved.map((m) => m.value.range(m.to)), sort: true });
+}
+
+// A gap is always Body (architecture.md 10): a blank line keeps a level only while the
+// cursor is on it, so a level can be chosen before typing, and serialize never writes a
+// marker on a blank line.
+function bodyGaps(deco, state) {
+  const cursor = state.doc.lineAt(state.selection.main.head).number;
+  return deco.update({
+    filter: (from) => {
+      const line = state.doc.lineAt(from);
+      return line.length > 0 || line.number === cursor;
+    },
+  });
+}
 
 // The line levels of a state, in document order, for serialize().
 function levelsOf(state) {
@@ -125,16 +158,10 @@ for (const [key, level] of [["\\1", "title"], ["\\2", "heading"], ["\\3", "subhe
   Vim.mapCommand(key, "action", "setLineLevel", { level }, { context: "normal" });
 }
 
+// The kit's theme is the base; the note fills its region and scrolls inside it.
 const levelTheme = EditorView.theme({
-  "&": { height: "100%", color: "var(--color-ink)", backgroundColor: "transparent" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-scroller": { fontFamily: "var(--font-sans)", lineHeight: "var(--leading-normal)", overflow: "auto" },
-  // The caret at column 0 is drawn 0.6px left of the text, so .cm-content needs a
-  // sliver of side padding or the scroller's overflow clip eats it (an `o` cursor).
-  ".cm-content": { caretColor: "var(--color-accent)", padding: "0 var(--space-2xs)" },
-  ".cm-line": { fontSize: "var(--text-body)", padding: "0" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
-  ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
+  "&": { height: "100%" },
+  ".cm-scroller": { overflow: "auto" },
   // A modest Notes.app-style ladder: Title/Heading step down through the shared
   // heading tokens, and Subheading is body-sized, set apart by weight alone (7.4:
   // the type scale has no size between body and subtitle, so weight carries it).
@@ -160,31 +187,6 @@ const levelTheme = EditorView.theme({
     paddingTop: "var(--space-xs)",
   },
 });
-
-// The fat cursor. The vim plugin ships its own Prec.highest theme for it, so this
-// one both raises precedence and marks the competing properties !important to win
-// regardless of stylesheet order. Focused, it fills with the accent; unfocused, it
-// is hollowed from the inside with an inset shadow, which no edge clip can reach —
-// the plugin draws an outline outside an absolutely positioned span, and Safari
-// clips its top and left. The plugin's own colours are also not tokens.
-const fatCursorTheme = Prec.highest(
-  EditorView.theme({
-    ".cm-fat-cursor": {
-      background: "var(--color-accent) !important",
-      color: "var(--color-accent-text) !important",
-    },
-    "&:not(.cm-focused) .cm-fat-cursor": {
-      background: "none !important",
-      outline: "none !important",
-      color: "var(--color-ink) !important",
-      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
-    },
-  }),
-);
-
-// Vim and its block cursor, or nothing: what the Vim compartment holds for the
-// "Vim keys" preference (12).
-const vimExtensions = (on) => (on ? [vim(), fatCursorTheme] : []);
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -415,38 +417,21 @@ class NoteEditor extends LitElement {
   #level = "body";
   // The level a transaction just set, so its button flashes until animationend.
   #flashed = null;
-  // Vim lives in a compartment so the "Vim keys" preference (12) turns it on or off
-  // in place, keeping the text and the undo history. #vimOn is what it holds now.
-  #vim = new Compartment();
-  #vimOn = false;
   // Undo reaches only what was typed since this text arrived: a note loaded from
   // outside empties the history, or "u" would walk back into the notes shown before
   // it and save each of them over this one.
   #history = new Compartment();
 
   #extensions() {
-    this.#vimOn = this.#actor.snapshot?.context.vimKeys === true;
     return [
-      // First: the Vim plugin must see a key before any other keymap does.
-      this.#vim.of(vimExtensions(this.#vimOn)),
-      // Vim mode hides the native selection (its own theme paints ::selection
-      // transparent), so the visual-mode range is only visible through CM6's own
-      // selection layer; without this it selects but shows nothing.
-      drawSelection(),
+      ...baseExtensions({ vim: this.#actor.snapshot?.context.vimKeys === true, history: false }),
+      paragraphs(),
       levelField,
       levelTheme,
       this.#history.of(history()),
-      keymap.of(historyKeymap),
-      // Left to the browser, WebKit's own Enter drops repeated empty lines at the end.
-      keymap.of([{ key: "Enter", run: insertNewline }]),
-      EditorView.lineWrapping,
       EditorView.updateListener.of(this.#onUpdate),
-      // WebKit keeps the document's selection inside a blurred editor, and a later key
-      // whose default nobody cancels is typed there although the focus sits on a list
-      // row or the bare page; dropping it on blur leaves the editor nothing to type into.
       EditorView.domEventHandlers({
         blur: () => {
-          document.getSelection()?.removeAllRanges();
           this.#actor.send({ type: "_blurred" });
         },
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
@@ -504,10 +489,7 @@ class NoteEditor extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
     const { body, vimKeys } = snapshot.context;
-    if (vimKeys !== this.#vimOn) {
-      this.#vimOn = vimKeys;
-      this.#view.dispatch({ effects: this.#vim.reconfigure(vimExtensions(vimKeys)) });
-    }
+    setVim(this.#view, vimKeys);
     if (body === this.#shown) return; // never the user's own keystroke (set #shown first)
     const { doc, levels } = parseBody(body);
     this.#shown = body;

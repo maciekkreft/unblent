@@ -15,7 +15,7 @@ const entry = (page) => page.locator("journal-entry");
 const editor = (page) => entry(page).locator(".cm-content");
 // How many times the text appears on the page: once, in the editor.
 const times = (page, text) => entry(page).evaluate((el, t) => el.shadowRoot.textContent.split(t).length - 1, text);
-// Types into the editor as a user does, a line break as Enter.
+// Types into the editor as a user does: each "\n" presses Enter, which starts a paragraph.
 const write = async (page, text) => {
   await editor(page).click();
   await page.keyboard.type(text);
@@ -108,7 +108,7 @@ for (const engine of ENGINES) {
       await until(async () => (await entry(page).locator(".cm-fat-cursor").count()) === 1);
       await page.keyboard.press("i");
       await page.keyboard.type("Monday");
-      await page.keyboard.press("Enter");
+      await page.keyboard.press("Shift+Enter");
       await page.keyboard.type("Run");
       await page.keyboard.press("Escape");
       const levels = () => entry(page).evaluate((el) => [...el.shadowRoot.querySelectorAll(".cm-line")].map((l) => [l.textContent, l.dataset.level ?? "body"]));
@@ -142,6 +142,49 @@ for (const engine of ENGINES) {
           return all.map((d) => d.text);
         });
       await until(async () => (await stored())[0] === "# Monday\nRun");
+    });
+
+    run("Enter starts a paragraph drawn as a gap, Shift+Enter breaks the line, and the gap is Body", async (page) => {
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await editor(page).click();
+      await page.keyboard.type("Monday");
+      await entry(page).locator('button.level[data-level="title"]').click();
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("Ran");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type("Rested");
+      const shown = () =>
+        entry(page).evaluate((el) =>
+          [...el.shadowRoot.querySelectorAll(".cm-line")].map((l) => [l.textContent, l.dataset.level ?? "body", l.classList.contains("cm-gap")]),
+        );
+      await until(async () => (await shown()).length === 4);
+      assert.deepEqual(await shown(), [
+        ["Monday", "title", false],
+        ["", "body", true],
+        ["Ran", "body", false],
+        ["Rested", "body", false],
+      ]);
+      const gap = await entry(page).evaluate((el) => {
+        const [, gap, ran] = el.shadowRoot.querySelectorAll(".cm-line");
+        return { gap: gap.getBoundingClientRect().height, line: ran.getBoundingClientRect().height };
+      });
+      assert.ok(gap.gap > 0 && gap.gap < gap.line, `a gap is shorter than a line, saw ${gap.gap} vs ${gap.line}`);
+      await editor(page).blur();
+      const stored = () =>
+        page.evaluate(async () => {
+          const db = await new Promise((ok, no) => {
+            const r = indexedDB.open("journal");
+            r.onsuccess = () => ok(r.result);
+            r.onerror = () => no(r.error);
+          });
+          const all = await new Promise((ok) => {
+            const q = db.transaction("days").objectStore("days").getAll();
+            q.onsuccess = () => ok(q.result);
+          });
+          db.close();
+          return all.map((d) => d.text);
+        });
+      await until(async () => (await stored())[0] === "# Monday\n\nRan\nRested");
     });
   });
 }

@@ -50,9 +50,11 @@ export function parseBody(md) {
 
 export function serialize(doc, levels) {
   if (doc === "") return "";
+  // A blank line is a paragraph gap, always Body (architecture.md 10), so it never
+  // carries a marker.
   return doc
     .split("\n")
-    .map((text, i) => (PREFIX[levels[i]] ?? "") + text)
+    .map((text, i) => (text === "" ? "" : (PREFIX[levels[i]] ?? "") + text))
     .join("\n");
 }
 

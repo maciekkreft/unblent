@@ -150,7 +150,7 @@ for (const engine of ENGINES) {
       await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
       await page.keyboard.type("Alpha");
-      await page.keyboard.press("Enter");
+      await page.keyboard.press("Shift+Enter");
       await page.keyboard.type("Beta");
       await page.keyboard.press("Escape");
       await until(async () => (await lines(page)).map((l) => l.text).join("\n") === "Alpha\nBeta");
@@ -179,12 +179,12 @@ for (const engine of ENGINES) {
       });
       assert.ok(sizes.title > sizes.heading, `Title larger than Heading, saw ${sizes.title} vs ${sizes.heading}`);
 
-      // Enter at the end of the note keeps every empty line it makes, and they are Body.
+      // Enter after a Heading starts a paragraph: the gap and the new line are Body.
       await page.keyboard.type("GA");
-      for (let i = 0; i < 3; i++) await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
       await page.keyboard.type("Gamma");
       await page.keyboard.press("Escape");
-      await until(async () => (await lines(page)).map((l) => l.text).join("\n") === "Alpha\nBeta\n\n\nGamma");
+      await until(async () => (await lines(page)).map((l) => l.text).join("\n") === "Alpha\nBeta\n\nGamma");
       assert.ok(!(await lines(page)).slice(2).some((l) => l.className.includes("cm-level-")), "new lines are Body");
 
       await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
@@ -275,7 +275,10 @@ for (const engine of ENGINES) {
 
       await page.locator("note-editor .cm-content").click();
       await page.keyboard.press("i");
-      await page.keyboard.type("One\nTwo\nThree\nFour");
+      for (const [i, word] of ["One", "Two", "Three", "Four"].entries()) {
+        if (i > 0) await page.keyboard.press("Shift+Enter");
+        await page.keyboard.type(word);
+      }
       await page.keyboard.press("Escape");
       await until(async () => (await lines(page)).length === 4);
 
@@ -399,6 +402,53 @@ for (const engine of ENGINES) {
       assert.ok(fits, "the editor must not overflow sideways on the phone");
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `notes-editor-phone-${engine.name}.png`) });
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    test("Enter starts a paragraph drawn as a gap, Shift+Enter breaks the line, and a reload shows the gap again", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), NO_VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector("button.level"));
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.type("Plan");
+      await page.locator('note-editor button.level[data-level="heading"]').click();
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type("Two");
+      const shown = async () => (await lines(page)).map((l) => [l.text, l.className.includes("cm-level-"), l.className.includes("cm-gap")]);
+      const want = [
+        ["Plan", true, false],
+        ["", false, true],
+        ["One", false, false],
+        ["Two", false, false],
+      ];
+      await until(async () => (await shown()).length === 4);
+      assert.deepEqual(await shown(), want);
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      const body = await page.evaluate(
+        () =>
+          new Promise((res, rej) => {
+            const open = indexedDB.open("notes");
+            open.onerror = () => rej(open.error);
+            open.onsuccess = () => {
+              const all = open.result.transaction("notes", "readonly").objectStore("notes").getAll();
+              all.onsuccess = () => res(all.result.map((n) => n.body));
+            };
+          }),
+      );
+      assert.deepEqual(body, ["## Plan\n\nOne\nTwo"]);
+
+      // The editor reopens the newest note: the stored blank line is a gap again.
+      await page.reload();
+      await until(async () => (await lines(page))[2]?.text === "One");
+      assert.deepEqual(await shown(), want);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
