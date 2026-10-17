@@ -63,6 +63,9 @@
     <script type="module" src="/static/components/profile-switch/view.js"></script>
     <script type="module" src="/static/components/session-switch/view.js"></script>
     <script type="module" src="/static/components/settings-sheet/view.js"></script>
+    <script type="module" src="/static/components/settings-tabs/view.js"></script>
+    <script type="module" src="/static/components/people-list/view.js"></script>
+    <script type="module" src="/static/components/guest-limits/view.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
     <script type="module" src="/static/components/book-shelf/view.js"></script>
     <script type="module" src="/static/components/book-toc/view.js"></script>
@@ -101,7 +104,11 @@
       </list-then-item>
       <profile-switch control></profile-switch>
       <layout-switch control></layout-switch>
-      <settings-sheet label="Settings" button="gear" account></settings-sheet>
+      <settings-tabs label="Settings" button="gear">
+        <settings-sheet label="Settings" account></settings-sheet>
+        <people-list label="Administration" admin></people-list>
+        <guest-limits label="Administration" admin></guest-limits>
+      </settings-tabs>
       <session-switch control></session-switch>
     </dock-desk>
     <viewport-switch></viewport-switch>
