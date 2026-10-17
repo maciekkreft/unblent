@@ -12,7 +12,7 @@ const flush = async (n = 6) => {
 };
 
 function fakeApi(impl) {
-  const calls = { me: 0, register: 0, login: 0, logout: 0 };
+  const calls = { me: 0, register: 0, login: 0, logout: 0, guest: 0, people: 0 };
   const api = {};
   for (const name of Object.keys(calls)) {
     api[name] = async () => {
@@ -23,11 +23,11 @@ function fakeApi(impl) {
   return { api, calls, impl };
 }
 
-function start(stored, api) {
+function start(stored, api, { tryPage = false } = {}) {
   const saved = [];
   const events = [];
   const actor = createActor(machine, {
-    input: { stored: JSON.stringify(stored), save: (v) => saved.push(JSON.parse(v)), api },
+    input: { stored: JSON.stringify(stored), save: (v) => saved.push(JSON.parse(v)), api, tryPage },
   });
   actor.on("session.changed", (e) => events.push(e));
   actor.on("session.refused", (e) => events.push(e));
@@ -210,4 +210,83 @@ test("session.rejected while already signed out needs no round trip", async () =
   await flush();
   assert.equal(calls.me, 0, "no re-check when we already think we are signed out");
   assert.deepEqual(events, []);
+});
+
+let asked = 0;
+const ask = (actor, type) =>
+  new Promise((resolve) => actor.send({ type, cid: "c" + (asked += 1), payload: {}, reply: resolve }));
+
+test("a fresh browser on a try page becomes Guest 1 at its first server need, once (3.4)", async () => {
+  const guest = { userId: "g1", registrationOpen: true, guest: true, admin: false, name: "Guest 1" };
+  const { api, calls } = fakeApi({ guest });
+  const { actor, events, saved } = start(null, api, { tryPage: true });
+  // Two facts asking at once make one guest, and both get it.
+  const [a, b] = await Promise.all([ask(actor, "guest?"), ask(actor, "guest?")]);
+  const picture = { userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" };
+  assert.deepEqual(a, picture);
+  assert.deepEqual(b, picture);
+  assert.equal(calls.guest, 1);
+  assert.deepEqual(events, [{ type: "session.changed", ...picture }]);
+  assert.equal(saved.at(-1).name, "Guest 1");
+  assert.deepEqual(await ask(actor, "read?"), picture);
+  // A later ask is answered with the account held, with no request.
+  assert.deepEqual(await ask(actor, "guest?"), picture);
+  assert.equal(calls.guest, 1);
+});
+
+test("guest? never makes a guest off a try page, nor when an account is held (8)", async () => {
+  const { api, calls } = fakeApi({ guest: { userId: "g1", registrationOpen: true, guest: true } });
+  const off = start(null, api);
+  assert.deepEqual(await ask(off.actor, "guest?"), { error: "not-a-try-page" });
+  const held = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, api, { tryPage: true });
+  assert.deepEqual(await ask(held.actor, "guest?"), { userId: "u1", registrationOpen: false, admin: true, name: "Admin" });
+  assert.equal(calls.guest, 0);
+  assert.deepEqual([...off.events, ...held.events], []);
+});
+
+test("a guest the server could not make is unavailable, and the next ask tries again", async () => {
+  const { api, calls, impl } = fakeApi({ guest: { error: "unavailable" } });
+  const { actor, events } = start(null, api, { tryPage: true });
+  assert.deepEqual(await ask(actor, "guest?"), { error: "unavailable" });
+  assert.deepEqual(events, []);
+  impl.guest = { userId: "g2", registrationOpen: true, guest: true, name: "Guest 2" };
+  assert.equal((await ask(actor, "guest?")).userId, "g2");
+  assert.equal(calls.guest, 2);
+});
+
+test("a guest? that arrives while revalidating waits for the server's answer", async () => {
+  const { api, calls } = fakeApi({
+    me: { userId: null, registrationOpen: true },
+    guest: { userId: "g3", registrationOpen: true, guest: true, name: "Guest 3" },
+  });
+  const { actor } = start(null, api, { tryPage: true });
+  actor.send({ type: "_revalidate" });
+  const reply = await ask(actor, "guest?");
+  assert.equal(reply.userId, "g3");
+  assert.equal(calls.me, 1);
+  assert.equal(calls.guest, 1);
+});
+
+test("people? is answered by the server for the admin only (12)", async () => {
+  const people = { people: [] };
+  const { api, calls } = fakeApi({ people });
+  const nobody = start(null, api);
+  assert.deepEqual(await ask(nobody.actor, "people?"), { error: "not-admin" });
+  const guest = start({ userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" }, api);
+  assert.deepEqual(await ask(guest.actor, "people?"), { error: "not-admin" });
+  assert.equal(calls.people, 0);
+  const admin = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, api);
+  assert.deepEqual(await ask(admin.actor, "people?"), people);
+  assert.equal(calls.people, 1);
+});
+
+test("revalidate announces the account becoming the admin (3.4)", async () => {
+  const { api } = fakeApi({ me: { userId: "u1", registrationOpen: false, guest: false, admin: true, name: "Admin" }, logout: { userId: null } });
+  const { actor, events } = start({ userId: "u1", registrationOpen: false, logoutOwed: false }, api);
+  actor.send({ type: "_revalidate" });
+  await flush();
+  assert.deepEqual(events, [{ type: "session.changed", userId: "u1", registrationOpen: false, admin: true, name: "Admin" }]);
+  // Signing out forgets what the account was.
+  actor.send({ type: "signout.requested" });
+  assert.deepEqual(events.at(-1), { type: "session.changed", userId: null, registrationOpen: false });
 });

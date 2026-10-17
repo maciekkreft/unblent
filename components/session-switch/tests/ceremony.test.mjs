@@ -80,6 +80,34 @@ test("signs in, signs out, and refuses a ceremony with no authenticator (chromiu
     assert.ok(session, "the ceremony set a session cookie");
     assert.ok(session.expires > Date.now() / 1000 + 29 * 24 * 3600, "the cookie lasts ~30 days, not just the browser session");
 
+    // The first passkey account is the admin (3.4), and the cookie says so. Only the
+    // admin may list the people, with what was recorded about each visit; a guest made
+    // meanwhile from a phone in Kraków shows how a visit is read (Cloudflare sends the
+    // city in UTF-8).
+    const own = await page.evaluate(() => fetch("/api/session/me").then((r) => r.json()));
+    assert.equal(own.admin, true);
+    assert.equal(own.name, "Admin");
+    assert.match(session.value, new RegExp(`^${own.userId}\\|admin\\.`));
+    const guest = await (
+      await fetch(`${LOCAL_URL}/api/session/guest`, {
+        method: "POST",
+        headers: {
+          "cf-ipcountry": "PL",
+          "cf-ipcity": "KrakÃ³w",
+          "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
+        },
+      })
+    ).json();
+    const { people } = await page.evaluate(() => fetch("/api/session/people").then((r) => r.json()));
+    assert.equal(people[0].userId, own.userId);
+    assert.equal(people[0].device, "desk");
+    assert.ok(people[0].space >= 0);
+    const seen = people.find((p) => p.userId === guest.userId);
+    assert.deepEqual(
+      [seen.name, seen.guest, seen.country, seen.city, seen.browser, seen.system, seen.device],
+      [guest.name, true, "PL", "Kraków", "Chrome", "Android", "phone"],
+    );
+
     // Sign out flips back to the dashed anonymous control at once (local-first).
     await clickSwitch(page);
     await until(async () => (await switchState(page))?.cls === "anon");

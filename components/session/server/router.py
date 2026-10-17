@@ -19,9 +19,9 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from server.user import clear_session_cookie, current_user, set_session_cookie, sign, verify
+from server.user import clear_session_cookie, session_of, set_session_cookie, sign, space, verify
 
-from . import registry
+from . import registry, visitor
 
 router = APIRouter()
 
@@ -67,17 +67,60 @@ def _set_challenge_cookie(response: Response, request: Request, ticket: str) -> 
     )
 
 
+def _picture(user_id: str | None) -> dict:
+    """The session as session: read answers it (3.4): who, and whether a guest or
+    the admin, and the name people see. A cookie the registry does not hold (a
+    forged one in a test) is an ordinary account with no name."""
+    picture = {"userId": user_id, "registrationOpen": _registration_open()}
+    found = registry.account(user_id) if user_id else None
+    if found:
+        picture.update(guest=found["guest"], admin=found["admin"], name=found["name"])
+    return picture
+
+
 def _json(payload: dict, request: Request, *, user_id: str | None = None) -> Response:
     response = Response(content=json.dumps(payload), media_type="application/json")
     if user_id is not None:
-        set_session_cookie(response, request, user_id)
+        set_session_cookie(
+            response, request, user_id, guest=payload.get("guest", False), admin=payload.get("admin", False)
+        )
         response.delete_cookie(CHALLENGE_COOKIE, path="/")
     return response
 
 
 @router.get("/me")
 def me(request: Request):
-    return {"userId": current_user(request), "registrationOpen": _registration_open()}
+    held = session_of(request)
+    if not held:
+        return _json(_picture(None), request)
+    registry.seen(held["userId"], visitor.from_request(request))
+    picture = _picture(held["userId"])
+    # A cookie from before guests and the admin, or one whose account became the
+    # admin, is set again so server modules read the flags from it (3.4).
+    stale = (held["guest"], held["admin"]) != (picture.get("guest", False), picture.get("admin", False))
+    return _json(picture, request, user_id=held["userId"] if stale else None)
+
+
+@router.post("/guest")
+def guest(request: Request):
+    # Asked by session: guest on a try page (3.4, 8). A browser that already holds an
+    # account keeps it, so a second ask never makes a second guest.
+    held = session_of(request)
+    if held:
+        return _json(_picture(held["userId"]), request)
+    user_id = secrets.token_hex(16)
+    registry.create_guest(id=user_id, details=visitor.from_request(request))
+    return _json(_picture(user_id), request, user_id=user_id)
+
+
+@router.get("/people")
+def people(request: Request):
+    # Only the admin sees across accounts (12); the registry decides, not the cookie.
+    held = session_of(request)
+    found = registry.account(held["userId"]) if held else None
+    if not found or not found["admin"]:
+        raise HTTPException(status_code=403, detail="not-admin")
+    return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
 
 
 @router.post("/register/begin")
@@ -121,7 +164,7 @@ async def register_finish(request: Request):
         expected_rp_id=rp_id,
         expected_origin=origin,
     )
-    registry.create_user(id=user_id, handle=bytes.fromhex(user_id), label=label)
+    registry.create_user(id=user_id, handle=bytes.fromhex(user_id), label=label, details=visitor.from_request(request))
     registry.add_credential(
         id=bytes_to_base64url(verification.credential_id),
         user_id=user_id,
@@ -129,7 +172,7 @@ async def register_finish(request: Request):
         sign_count=verification.sign_count,
         transports=json.dumps(credential.get("response", {}).get("transports")),
     )
-    return _json({"userId": user_id, "registrationOpen": _registration_open()}, request, user_id=user_id)
+    return _json(_picture(user_id), request, user_id=user_id)
 
 
 @router.post("/login/begin")
@@ -162,7 +205,8 @@ async def login_finish(request: Request):
         credential_current_sign_count=record["sign_count"],
     )
     registry.update_sign_count(credential_id=record["id"], sign_count=verification.new_sign_count)
-    return _json({"userId": record["user_id"], "registrationOpen": _registration_open()}, request, user_id=record["user_id"])
+    registry.seen(record["user_id"], visitor.from_request(request))
+    return _json(_picture(record["user_id"]), request, user_id=record["user_id"])
 
 
 @router.post("/logout")

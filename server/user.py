@@ -33,6 +33,23 @@ def user_dir(user_id: str) -> Path:
     return directory
 
 
+def space(user_id: str) -> int:
+    """Bytes the user's own directory takes (5), for Administration's People list
+    (12); 0 when nothing was saved yet. Never creates the directory."""
+    directory = DATA / user_id
+    if not directory.is_dir():
+        return 0
+    total = 0
+    for path in directory.rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+        except OSError:
+            # A file removed while counting (a database's journal) counts as nothing.
+            continue
+    return total
+
+
 def _secret() -> bytes:
     # Section 3.4: losing the secret only forces a re-login; it never breaks the
     # user-to-database link. Absent, it must fail loudly rather than sign with ""
@@ -57,12 +74,17 @@ def verify(token: str | None) -> str | None:
     return payload if hmac.compare_digest(mac, expected) else None
 
 
-def set_session_cookie(response: Response, request: Request, user_id: str) -> None:
+def set_session_cookie(
+    response: Response, request: Request, user_id: str, *, guest: bool = False, admin: bool = False
+) -> None:
     # Secure only under https, so the cookie still rides http://localhost in tests;
     # SameSite=strict because no cross-site flow ever needs it (3.4).
+    # The cookie also says whether the account is a guest or the admin (3.4), so a
+    # server module can tell without asking session; a bare id is an ordinary account.
+    payload = "|".join([user_id] + (["guest"] if guest else []) + (["admin"] if admin else []))
     response.set_cookie(
         SESSION_COOKIE,
-        sign(user_id),
+        sign(payload),
         max_age=SESSION_MAX_AGE,
         httponly=True,
         secure=request.url.scheme == "https",
@@ -75,9 +97,20 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
 
 
+def session_of(request: Request) -> dict | None:
+    """Who the cookie names (3.4): {"userId", "guest", "admin"}, or None when
+    anonymous. Which flags a cookie carries is set by session's server module."""
+    payload = verify(request.cookies.get(SESSION_COOKIE))
+    if not payload:
+        return None
+    user_id, *flags = payload.split("|")
+    return {"userId": user_id, "guest": "guest" in flags, "admin": "admin" in flags}
+
+
 def current_user(request: Request) -> str | None:
     """FastAPI dependency: the signed-in user's id, or None when anonymous."""
-    return verify(request.cookies.get(SESSION_COOKIE))
+    session = session_of(request)
+    return session["userId"] if session else None
 
 
 def require_user(request: Request) -> str:

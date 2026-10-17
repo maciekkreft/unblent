@@ -56,3 +56,45 @@ test("login/begin issues options, and logout is a 200 even with no session", asy
   assert.equal((await post("/login/begin", { Origin: ORIGIN })).status, 200);
   assert.equal((await post("/logout")).status, 200);
 });
+
+// A guest is one registry row plus the cookie (3.4). Each request below carries its
+// own cookie by hand, so the tests share nothing but the throwaway registry.
+const cookieOf = (res) => (res.headers.get("set-cookie") || "").split(";")[0];
+const me = async (cookie) =>
+  (await fetch(`${BASE_URL}/api/session/me`, { headers: cookie ? { Cookie: cookie } : {} })).json();
+
+test("POST /guest makes a numbered guest with a cookie, outside MAX_USERS", async () => {
+  const before = (await me()).registrationOpen;
+  const res = await post("/guest", {
+    "cf-ipcountry": "PL",
+    "cf-ipcity": "KrakÃ³w",
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.guest, true);
+  assert.equal(body.admin, false);
+  assert.match(body.name, /^Guest \d+$/);
+  const cookie = cookieOf(res);
+  assert.match(cookie, /^unblent_session=/);
+  const again = await me(cookie);
+  assert.equal(again.userId, body.userId);
+  assert.equal(again.name, body.name);
+  // Guests never close registration (3.4).
+  assert.equal((await me()).registrationOpen, before);
+
+  // A browser that already holds an account keeps it: no second guest.
+  const second = await fetch(`${BASE_URL}/api/session/guest`, { method: "POST", headers: { Cookie: cookie } });
+  assert.equal((await second.json()).userId, body.userId);
+  assert.equal(second.headers.get("set-cookie"), null);
+
+  // Guests are numbered in the order they arrive.
+  const next = await (await post("/guest")).json();
+  assert.equal(next.name, `Guest ${Number(body.name.split(" ")[1]) + 1}`);
+});
+
+test("GET /people is refused to anyone but the admin (12)", async () => {
+  assert.equal((await fetch(`${BASE_URL}/api/session/people`)).status, 403);
+  const cookie = cookieOf(await post("/guest"));
+  assert.equal((await fetch(`${BASE_URL}/api/session/people`, { headers: { Cookie: cookie } })).status, 403);
+});

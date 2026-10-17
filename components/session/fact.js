@@ -4,7 +4,6 @@ import { openStore } from "./store.js";
 import changed from "./events/session.changed.json" with { type: "json" };
 import refused from "./events/session.refused.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
-// Planned (9, step 1): the try-links contracts, registered so the bus knows them.
 import peopleChanged from "./events/people.changed.json" with { type: "json" };
 import guest from "./queries/guest.json" with { type: "json" };
 import people from "./queries/people.json" with { type: "json" };
@@ -119,6 +118,23 @@ const api = {
       return { error: "unavailable" };
     }
   },
+  async guest() {
+    try {
+      const res = await post("/guest");
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
+  async people() {
+    try {
+      const res = await fetch("/api/session/people", { credentials: "same-origin", headers: { Accept: "application/json" } });
+      if (res.status === 403) return { error: "not-admin" };
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
   async logout() {
     try {
       const res = await post("/logout");
@@ -130,7 +146,8 @@ const api = {
 };
 
 const actor = mount(machine, {
-  input: { stored: store.read(), save: store.write, api },
+  // A try page is known by its address (8), read once: the page never changes it.
+  input: { stored: store.read(), save: store.write, api, tryPage: location.pathname.startsWith("/try/") },
   events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged },
   queries: { read, guest, people },
 });

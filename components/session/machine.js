@@ -20,8 +20,31 @@ const clean = (value) => {
     // The one thing that must survive a reload while offline (5): a sign-out the
     // server has not yet acknowledged, so the next revalidation retries it.
     logoutOwed: v.logoutOwed === true,
+    // What the account is (3.4), kept with the id so a reload shows it offline.
+    guest: v.userId != null && v.guest === true,
+    admin: v.userId != null && v.admin === true,
+    name: v.userId != null && typeof v.name === "string" ? v.name : null,
   };
 };
+
+// What the account is, from a server answer: absent flags read as false (3.4).
+const account = (answer) => ({
+  guest: answer.userId != null && answer.guest === true,
+  admin: answer.userId != null && answer.admin === true,
+  name: answer.userId != null && typeof answer.name === "string" ? answer.name : null,
+});
+
+// The session as session: read answers it and session.changed carries it. guest,
+// admin and name ride only when they say something, so an ordinary account's
+// picture is the same as before guests existed.
+const picture = (c) => ({
+  userId: c.userId,
+  registrationOpen: c.registrationOpen,
+  ...(c.guest ? { guest: true } : {}),
+  ...(c.admin ? { admin: true } : {}),
+  ...(c.name ? { name: c.name } : {}),
+});
+const changed = (c) => ({ type: "session.changed", ...picture(c) });
 
 const parse = (stored) => {
   try {
@@ -37,6 +60,9 @@ const persist = ({ context }) =>
       userId: context.userId,
       registrationOpen: context.registrationOpen,
       logoutOwed: context.logoutOwed,
+      guest: context.guest,
+      admin: context.admin,
+      name: context.name,
     }),
   );
 
@@ -56,6 +82,8 @@ export const machine = setup({
       if (recoverable && input.registrationOpen) return input.api.register();
       return result;
     }),
+    // Make a guest on the server (3.4). Returns the session picture or { error }.
+    makeGuest: fromPromise(({ input }) => input.api.guest()),
     // Clear the session on the server. Returns { error } when it could not (offline).
     logout: fromPromise(({ input }) => input.api.logout()),
     // Who am I, per the server. When a sign-out is owed, retry it first and report
@@ -74,28 +102,70 @@ export const machine = setup({
       "cookie the browser code never sees, so this fact asks its own server who the user is. " +
       "Instead of an outbox it keeps a copy of the answer on the device and owes the server a " +
       "sign-out made while offline. Registration closes once the number of users reaches " +
-      "`MAX_USERS`, and a refused sign-in or registration is announced so a notice can show it.",
+      "`MAX_USERS`, and a refused sign-in or registration is announced so a notice can show it. " +
+      "On a try page, the first thing that needs the server makes a guest: an account with no " +
+      "passkey, named Guest 1, Guest 2 and so on, which does not count toward `MAX_USERS`. The " +
+      "account registered first with a passkey is the admin, named Admin; only the admin may " +
+      "list the people, with when each was first and last seen, where from and on what, and " +
+      "the space their work takes.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
     owns: "the signed-in user",
   },
-  context: ({ input }) => ({ ...parse(input.stored), api: input.api, save: input.save }),
+  context: ({ input }) => ({
+    ...parse(input.stored),
+    api: input.api,
+    save: input.save,
+    // Only a try page may make a guest (3.4, 8); fact.js reads it from the address.
+    tryPage: input.tryPage === true,
+    // Replies owed to guest? asks, answered together once the guest exists, so two
+    // facts asking at once make one guest.
+    guestAsks: [],
+  }),
   initial: "ready",
   on: {
-    // Planned (9, step 1): the try-links contracts, which do nothing until they are built.
-    "guest?": { actions: () => {} },
-    "people?": { actions: () => {} },
+    // Planned (9, step 1): View as is a later step, and does nothing until it is built.
     "viewas.requested": { actions: () => {} },
     // Query for the starting picture (4.3): answered from the cache at once, before
     // any network, so a view mounts without waiting on the server.
     "read?": {
-      actions: ({ context, event }) =>
-        event.reply({ userId: context.userId, registrationOpen: context.registrationOpen }),
+      actions: ({ context, event }) => event.reply(picture(context)),
+    },
+    // Asked by the fact that first needs the server on a try page (3.4). An account
+    // already held is the answer; otherwise the ask waits until ready can make one.
+    "guest?": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (context.userId) return event.reply(picture(context));
+        if (!context.tryPage) return event.reply({ error: "not-a-try-page" });
+        enqueue.assign({ guestAsks: [...context.guestAsks, event.reply] });
+      }),
+    },
+    // Only the admin sees across accounts (12). The server decides; the cache only
+    // spares everyone else a request that would be refused.
+    "people?": {
+      actions: ({ context, event }) => {
+        if (!context.userId || !context.admin) return event.reply({ error: "not-admin" });
+        Promise.resolve()
+          .then(() => context.api.people())
+          .then(event.reply, () => event.reply({ error: "unavailable" }));
+      },
     },
   },
   states: {
     ready: {
+      // Asks that waited while a ceremony or a revalidation ran: answered with the
+      // account it found, or a guest is made now.
+      always: [
+        {
+          guard: ({ context }) => context.guestAsks.length > 0 && Boolean(context.userId),
+          actions: [
+            ({ context }) => context.guestAsks.forEach((reply) => reply(picture(context))),
+            assign({ guestAsks: [] }),
+          ],
+        },
+        { guard: ({ context }) => context.guestAsks.length > 0, target: "guesting" },
+      ],
       on: {
         // The gesture from session-switch (4.3, fifth rule).
         "signin.requested": { target: "authing" },
@@ -104,13 +174,9 @@ export const machine = setup({
         "signout.requested": {
           guard: ({ context }) => Boolean(context.userId),
           actions: [
-            assign({ userId: null, logoutOwed: true }),
+            assign({ userId: null, logoutOwed: true, guest: false, admin: false, name: null }),
             persist,
-            emit(({ context }) => ({
-              type: "session.changed",
-              userId: null,
-              registrationOpen: context.registrationOpen,
-            })),
+            emit(({ context }) => changed(context)),
           ],
           target: "deauthing",
         },
@@ -140,23 +206,58 @@ export const machine = setup({
           {
             target: "ready",
             actions: [
-              assign({
-                userId: ({ event }) => event.output.userId,
-                registrationOpen: ({ event }) => event.output.registrationOpen === true,
+              assign(({ event }) => ({
+                userId: event.output.userId,
+                registrationOpen: event.output.registrationOpen === true,
                 logoutOwed: false,
-              }),
-              persist,
-              emit(({ context }) => ({
-                type: "session.changed",
-                userId: context.userId,
-                registrationOpen: context.registrationOpen,
+                ...account(event.output),
               })),
+              persist,
+              emit(({ context }) => changed(context)),
             ],
           },
         ],
         onError: {
           target: "ready",
           actions: emit({ type: "session.refused", reason: "unavailable" }),
+        },
+      },
+    },
+    guesting: {
+      invoke: {
+        src: "makeGuest",
+        input: ({ context }) => ({ api: context.api }),
+        onDone: [
+          {
+            guard: ({ event }) => Boolean(event.output.error) || !event.output.userId,
+            target: "ready",
+            actions: [
+              ({ context }) => context.guestAsks.forEach((reply) => reply({ error: "unavailable" })),
+              assign({ guestAsks: [] }),
+            ],
+          },
+          {
+            target: "ready",
+            actions: [
+              assign(({ event }) => ({
+                userId: event.output.userId,
+                registrationOpen: event.output.registrationOpen === true,
+                logoutOwed: false,
+                ...account(event.output),
+              })),
+              persist,
+              emit(({ context }) => changed(context)),
+              ({ context }) => context.guestAsks.forEach((reply) => reply(picture(context))),
+              assign({ guestAsks: [] }),
+            ],
+          },
+        ],
+        onError: {
+          target: "ready",
+          actions: [
+            ({ context }) => context.guestAsks.forEach((reply) => reply({ error: "unavailable" })),
+            assign({ guestAsks: [] }),
+          ],
         },
       },
     },
@@ -189,6 +290,7 @@ export const machine = setup({
             // Offline or 5xx: keep the cached picture untouched (no news).
             if (me.error) return;
             const registrationOpen = me.registrationOpen === true;
+            const now = account(me);
             if (context.logoutOwed) {
               // A sign-out is owed: never adopt a still-signed-in answer. If the
               // retry was acknowledged, stop owing; otherwise keep owing. userId is
@@ -202,12 +304,14 @@ export const machine = setup({
             // a different user (a sign-in or sign-out on another device, 5) or a
             // registrationOpen the switch must relabel on (a full install seen for
             // the first time: "Create account" → "Sign in", 4.3 fourth rule).
+            // An account turning into the admin, or its name arriving, is news too.
             const userChanged = me.userId !== context.userId;
             const regChanged = registrationOpen !== context.registrationOpen;
-            enqueue.assign({ registrationOpen });
-            if (userChanged) enqueue.assign({ userId: me.userId });
-            if (userChanged || regChanged) {
-              enqueue.emit({ type: "session.changed", userId: me.userId, registrationOpen });
+            const accountChanged =
+              now.guest !== context.guest || now.admin !== context.admin || now.name !== context.name;
+            enqueue.assign({ registrationOpen, userId: me.userId, ...now });
+            if (userChanged || regChanged || accountChanged) {
+              enqueue.emit(changed({ userId: me.userId, registrationOpen, ...now }));
             }
             enqueue(persist);
           }),
