@@ -7,11 +7,14 @@ logged: the body may hold the user's own writing.
 """
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
 
-_URL = "https://api.typesafe.ai/v1/systemone"
+# UNBLENT_JEV_URL points a throwaway server at a local stand-in for Jev, so a guest's
+# Run can be tried by hand without spending money or using a real key.
+_URL = os.environ.get("UNBLENT_JEV_URL") or "https://api.typesafe.ai/v1/systemone"
 # Jev answers in about 300 ms, so a request with no answer after 5 s has stalled; one
 # stall is retried once, which keeps the worst wait near 10 s instead of one long hang.
 _TIMEOUT = 5

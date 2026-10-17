@@ -194,3 +194,21 @@ test("decide refuses a pick question with too few or too many options, an empty 
   // A well-formed pick question gets past validation and stops at the missing key.
   assert.deepEqual(await (await decide(pick(many(255)), cookie)).json(), { error: "no-key" });
 });
+
+test("a guest reads freeUse and only the providers with a guest key; only the admin reads spending", async () => {
+  const guest = cookieFor(`${freshUser()}|guest`);
+  const picture = await (await read(guest)).json();
+  assert.equal(picture.freeUse.left, 1, "a new guest has all its free use");
+  assert.deepEqual(picture.providers.map((p) => p.id).filter((id) => id !== "echo"), picture.freeUse.paused.includes("anthropic") ? [] : ["anthropic"]);
+  assert.equal((await edit({ jevKey: "mine" }, guest)).status, 403, "a guest has no keys of its own");
+  const spending = (cookie) => fetch(`${BASE_URL}/api/llm/spending`, { headers: { Cookie: cookie } });
+  assert.deepEqual(await (await spending(guest)).json(), { error: "not-admin" });
+  const admin = cookieFor(`${freshUser()}|admin`);
+  const summary = await (await spending(admin)).json();
+  assert.equal(summary.guest, 1);
+  assert.equal(summary.allGuests.limit, 10);
+  const limits = (cookie) =>
+    fetch(`${BASE_URL}/api/llm/limits`, { method: "PUT", headers: { "content-type": "application/json", Cookie: cookie }, body: "{}" });
+  assert.equal((await limits(guest)).status, 403);
+  assert.equal((await limits(admin)).status, 200);
+});

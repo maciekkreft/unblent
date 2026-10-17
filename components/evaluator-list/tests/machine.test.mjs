@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, belongs, bookOf, request, lines, score, results, errorKind } from "../machine.js";
+import { machine, rows, subtitle, belongs, bookOf, request, lines, score, results, errorKind, freeStop, notice } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -24,7 +24,7 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts } = {}) => {
+const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts, freeUse } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
@@ -35,6 +35,7 @@ const start = async ({ subject = book(A), following = true, fail, kept = KEPT, v
         if (target === "subject") return Promise.resolve({ subject });
         if (target === "pins") return Promise.resolve({ note: null, chat: null, evaluators: pinned });
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
+        if (target === "llm" && name === "read") return Promise.resolve(freeUse ? { signedIn: true, freeUse } : { signedIn: false });
         if (target === "llm") return decide(payload);
         return Promise.resolve(fail ?? { evaluators: kept[payload.book] ?? [] });
       },
@@ -226,7 +227,7 @@ test("pins.changed unpinning elsewhere follows the stage; pinning the shown book
 test("without `subject` nothing is asked and it says to open a book", async () => {
   const { actor, asked } = await start({ following: false });
   assert.ok(actor.getSnapshot().matches("idle"));
-  assert.deepEqual(asked.filter(([t]) => t !== "settings" && t !== "session"), []);
+  assert.deepEqual(asked.filter(([t, n]) => t !== "settings" && t !== "session" && !(t === "llm" && n === "read")), []);
 });
 
 test("the Vim keys preference is read at start and followed after; without settings it is off", async () => {
@@ -359,7 +360,8 @@ test("error replies come in the kinds the user tells apart", () => {
   assert.equal(errorKind("bad-key"), "key");
   for (const e of ["rate-limited", "overloaded", "busy"]) assert.equal(errorKind(e), "busy");
   for (const e of ["invalid", "unavailable", "no-answerer", undefined]) assert.equal(errorKind(e), "failed");
-  for (const e of ["no-key", "bad-key", "used-up", "paused", "blocked"]) assert.equal(errorKind(e, true), "guest");
+  assert.equal(errorKind("used-up", true), "used-up");
+  for (const e of ["no-key", "bad-key", "paused", "blocked"]) assert.equal(errorKind(e, true), "paused");
   assert.equal(errorKind("busy", true), "busy", "a guest is told busy like anyone");
 });
 
@@ -374,12 +376,13 @@ const ANSWERS = {
 };
 
 // Jev answers each request when the test settles it, in the order asked.
-const runner = async (replies = () => ANSWERS) => {
+const runner = async (replies = () => ANSWERS, freeUse) => {
   const pending = [];
   const decided = [];
   let open = 0;
   let most = 0;
   const s = await start({
+    freeUse,
     kept: { [A]: MIXED, [B]: [] },
     decide: (payload) => {
       decided.push(payload);
@@ -463,14 +466,14 @@ test("a failed line keeps the lines before it, leaves the rest unasked, and Run 
   assert.deepEqual(decided[2], request("One", MIXED));
 });
 
-test("a guest made by this Run is told free checks are not open, not to add a key", async () => {
+test("a guest made by this Run without a guest key is told trials are paused, not to add a key", async () => {
   const { actor, ctx, settle } = await runner(() => ({ error: "no-key" }));
   actor.send({ type: "_type", text: "One" });
   actor.send({ type: "_run" });
   // session.changed reaches the list before llm's reply, since llm makes the guest first.
   actor.send({ type: "session.changed", userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" });
   await settle();
-  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "guest"]]);
+  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "paused"]]);
 });
 
 test("a request that throws fails its line as one Jev could not answer", async () => {
@@ -578,4 +581,31 @@ test("the Run text is kept per book and comes back after a reload", async () => 
   assert.equal(again.ctx().text, "One\n\nTwo", "a reload shows the text last typed");
   again.actor.send({ type: "_type", text: "" });
   assert.deepEqual(kept, { [B]: "Other" }, "an emptied box keeps nothing");
+});
+
+test("a guest out of free use, or paused, cannot Run, and the message under Run says why", async () => {
+  assert.equal(freeStop(null), null);
+  assert.equal(freeStop({ left: 0.66, blocked: false, paused: [] }), null);
+  assert.equal(freeStop({ left: 0, blocked: false, paused: ["jev"] }), "used-up");
+  assert.equal(freeStop({ left: 0.4, blocked: false, paused: ["jev"] }), "paused");
+  assert.equal(freeStop({ left: 0.4, blocked: false, paused: ["anthropic"] }), null, "another provider paused leaves Jev");
+  assert.equal(freeStop({ left: 0.4, blocked: true, paused: [] }), "paused");
+
+  const { actor, ctx, decided } = await runner(undefined, { left: 0, blocked: false, paused: [] });
+  actor.send({ type: "_type", text: "One" });
+  actor.send({ type: "_run" });
+  await flush();
+  assert.deepEqual(decided, [], "Run is off");
+  assert.equal(notice(ctx()), "used-up");
+  actor.send({ type: "llm.changed", signedIn: true, freeUse: { left: 0.5, blocked: false, paused: [] } });
+  assert.equal(notice(ctx()), null, "a picture with use left clears it");
+});
+
+test("a Run refused as used up says so under Run, not on the line", async () => {
+  const { actor, ctx, settle } = await runner(() => ({ error: "used-up" }), { left: 0.01, blocked: false, paused: [] });
+  actor.send({ type: "_type", text: "One" });
+  actor.send({ type: "_run" });
+  await settle();
+  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "used-up"]]);
+  assert.equal(notice(ctx()), "used-up");
 });

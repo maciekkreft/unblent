@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // The Evaluators try page (8): a visitor sees the Journal's evaluators with nothing made
 // on the server, and the first Run makes the guest (3.4), whose Run is told that free
-// checks are not open yet, with nothing failing in the console.
+// trials are paused (no guest key here), with nothing failing in the console.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
 
@@ -44,7 +44,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
         await page.getByPlaceholder("Type or paste a text to judge…").fill("Walk for ten minutes after lunch.");
         await page.getByRole("button", { name: "Run" }).click();
-        await until(async () => (await listText(page)).includes("Free checks are not open yet."));
+        await until(async () => (await listText(page)).includes("Free trials are paused for now."));
         assert.equal(writes[0], "/api/session/guest", "the first Run makes the guest");
         const me = await (await context.request.get(`${BASE_URL}/api/session/me`)).json();
         assert.equal(me.guest, true);

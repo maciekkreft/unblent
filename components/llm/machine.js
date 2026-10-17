@@ -41,6 +41,26 @@ const patchOf = (event) => {
   return patch;
 };
 
+// Why a guest's request to this provider is refused before it reaches the server, or
+// null (7.7): blocked, its own allowance used up, or paused for every guest. The server
+// decides again, so this only saves a request the picture already says is refused.
+export const refusal = (picture, provider) => {
+  const free = picture.freeUse;
+  if (!free) return null;
+  if (free.blocked) return "blocked";
+  if (free.left <= 0) return "used-up";
+  if (free.paused.includes(provider)) return "paused";
+  return null;
+};
+
+// Only the fields a gesture of the admin's may carry, never the event `type`; a guest
+// key rides through to the server from here and never enters context.
+const fieldsOf = (event, names) => {
+  const out = {};
+  for (const field of names) if (field in event) out[field] = event[field];
+  return out;
+};
+
 // One streamed piece folded into the run: text and thinking are deltas the server
 // sends, accumulated into the whole-so-far the event carries (4.3); a call is added
 // as `conversations` will store it, without a label (llm is never told labels, 7.7).
@@ -96,6 +116,10 @@ export const machine = setup({
     // Signed out, the first decide makes a guest when the page is a try page (3.4):
     // session answers with the new account, or not-a-try-page anywhere else.
     guest: fromPromise(({ input }) => input.guest()),
+    // What guests spent, for the admin (llm: spending), and the admin's two gestures
+    // reaching the server, each answered with the whole spending picture.
+    spending: fromPromise(({ input }) => input.spending()),
+    editSpending: fromPromise(({ input }) => input.edit(input.what, input.fields)),
   },
   actions: {
     // Held read? replies are answered with the picture once a load lands (4.2), the
@@ -144,6 +168,17 @@ export const machine = setup({
     }),
     emitEnd: emit(({ context, event }) => ended(context.run, event.piece)),
     emitStopped: emit(({ context }) => progress(context.run, { done: true, status: "stopped" })),
+    // After a guest's request, or one that made the guest, the picture is read again so
+    // freeUse shows what is left (7.7); an account's own picture does not change.
+    rereadMaybe: enqueueActions(({ context, enqueue }) => {
+      if (!context.picture.signedIn || context.picture.freeUse) enqueue.raise({ type: "_reread" });
+    }),
+    holdSpending: assign({ spendingPending: ({ context, event }) => [...context.spendingPending, event.reply] }),
+    replySpending: enqueueActions(({ context, event, enqueue }) => {
+      const reply = event.output && typeof event.output === "object" ? event.output : { error: "unavailable" };
+      for (const r of context.spendingPending) r(reply);
+      enqueue.assign({ spendingPending: [] });
+    }),
   },
   guards: {
     signedIn: ({ event }) => event.userId != null,
@@ -158,7 +193,15 @@ export const machine = setup({
       "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
       "server and never sent back to the browser. A chat answer streams back piece by piece as " +
       "events, one answer at a time; `decide` asks Jev yes-or-no and pick-one questions and " +
-      "returns the answers in the reply, on the account's own Jev key. Signed out on a try page, the first `decide` makes a guest and is asked as that guest. The settings belong to the account, so they are the " +
+      "returns the answers in the reply, on the account's own Jev key. Signed out on a try page, the first `decide` makes a guest and is asked as that guest. " +
+      "A guest spends only on the guest keys, one per provider, which the admin enters; a provider without a guest key is " +
+      "not offered to guests. Every use costs the tokens the provider reports at that provider's published price (Jev $42 " +
+      "per billion tokens read; Anthropic each model's price), kept as running totals per guest and per provider since the " +
+      "start. A guest is refused as used-up once its own $1.00 is spent, as paused once all guests together reach $10.00 or " +
+      "a provider's own limit, or has no guest key, and as blocked when the admin blocked it; the last request may go a " +
+      "little over, because its cost is known only after. A guest's picture carries the share of its allowance left, never " +
+      "an amount, and is read again after each of its requests. Only the admin reads what guests spent and changes the " +
+      "limits and guest keys. The settings belong to the account, so they are the " +
       "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call.",
@@ -181,15 +224,15 @@ export const machine = setup({
     run: null, // the answer being streamed: { id, text, thinking, calls, dirty }
     decided: null, // the reply of the decide? in flight
     asked: null, // the payload of the decide? in flight
+    spending: input.spending,
+    edit: input.edit,
+    spendingPending: [], // spending? replies held while a read or an edit is in flight
   }),
   type: "parallel",
   on: {
-    // Planned (9, step 1): the try-links contracts, which do nothing until they are built.
-    "spending?": { actions: () => {} },
+    // Planned (9, step 1): Block and Reset use come with People's actions (S6).
     "guest.blocked": { actions: () => {} },
     "use.reset": { actions: () => {} },
-    "limits.edited": { actions: () => {} },
-    "guestkeys.edited": { actions: () => {} },
   },
   states: {
     account: {
@@ -217,7 +260,11 @@ export const machine = setup({
           },
         },
         readingPicture: {
-          on: { "read?": { actions: "hold" } },
+          on: {
+            "read?": { actions: "hold" },
+            // A read already in flight may predate the spend, so it starts over.
+            _reread: { target: "readingPicture", reenter: true, actions: assign({ announce: true }) },
+          },
           invoke: {
             src: "picture",
             input: ({ context }) => ({ read: context.read }),
@@ -234,6 +281,7 @@ export const machine = setup({
           on: {
             "read?": { actions: ({ context, event }) => event.reply(context.picture) },
             "llm.edited": { target: "saving" },
+            _reread: { target: "readingPicture", actions: assign({ announce: true }) },
           },
         },
         saving: {
@@ -254,6 +302,10 @@ export const machine = setup({
           on: {
             "complete?": [
               { guard: ({ context }) => !context.picture.signedIn, actions: ({ event }) => event.reply({ error: "signed-out" }) },
+              {
+                guard: ({ context }) => context.picture.provider !== "echo" && refusal(context.picture, context.picture.provider) != null,
+                actions: ({ context, event }) => event.reply({ error: refusal(context.picture, context.picture.provider) }),
+              },
               { guard: ({ context }) => needsKey(context.picture), actions: ({ event }) => event.reply({ error: "no-key" }) },
               { target: "running", actions: ({ event }) => event.reply({ id: event.payload.id }) },
             ],
@@ -271,7 +323,7 @@ export const machine = setup({
             // stops the stream actor and so cancels the provider call.
             "turn.steered": { guard: "stopping", target: "idle", actions: "emitStopped" },
             _piece: [
-              { guard: "isEnd", target: "idle", actions: "emitEnd" },
+              { guard: "isEnd", target: "idle", actions: ["emitEnd", "rereadMaybe"] },
               { actions: "onPiece" },
             ],
             _flush: { actions: "onFlush" },
@@ -291,6 +343,15 @@ export const machine = setup({
                 guard: ({ context }) => !context.picture.signedIn,
                 target: "guesting",
                 actions: assign({ decided: ({ event }) => event.reply, asked: ({ event }) => event.payload }),
+              },
+              {
+                guard: ({ context }) => refusal(context.picture, "jev") != null,
+                actions: ({ context, event }) => event.reply({ error: refusal(context.picture, "jev") }),
+              },
+              // A guest without a guest Jev key is paused, not told to add a key (7.7).
+              {
+                guard: ({ context }) => Boolean(context.picture.freeUse) && !context.picture.jev?.keySet,
+                actions: ({ event }) => event.reply({ error: "paused" }),
               },
               { guard: ({ context }) => !context.picture.jev?.keySet, actions: ({ event }) => event.reply({ error: "no-key" }) },
               {
@@ -334,14 +395,64 @@ export const machine = setup({
               actions: [
                 ({ context, event }) => context.decided(event.output),
                 assign({ decided: null, asked: null }),
+                "rereadMaybe",
               ],
             },
             onError: {
               target: "idle",
-              actions: [({ context }) => context.decided({ error: "unavailable" }), assign({ decided: null, asked: null })],
+              actions: [({ context }) => context.decided({ error: "unavailable" }), assign({ decided: null, asked: null }), "rereadMaybe"],
             },
           },
           on: { "decide?": { actions: ({ event }) => event.reply({ error: "busy" }) } },
+        },
+      },
+    },
+    // What guests spent (7.7), for the admin only; the server answers not-admin to
+    // anyone else. An edit answers held asks with the new picture and announces it.
+    spending: {
+      initial: "idle",
+      states: {
+        idle: {
+          on: {
+            "spending?": { target: "reading", actions: "holdSpending" },
+            "limits.edited": { target: "editing" },
+            "guestkeys.edited": { target: "editing" },
+          },
+        },
+        reading: {
+          on: { "spending?": { actions: "holdSpending" } },
+          invoke: {
+            src: "spending",
+            input: ({ context }) => ({ spending: context.spending }),
+            onDone: { target: "idle", actions: "replySpending" },
+            onError: { target: "idle", actions: "replySpending" },
+          },
+        },
+        editing: {
+          // A second gesture before the first is answered is sent too; the server
+          // applies both, and the answer to the last is the picture adopted.
+          on: {
+            "spending?": { actions: "holdSpending" },
+            "limits.edited": { target: "editing", reenter: true },
+            "guestkeys.edited": { target: "editing", reenter: true },
+          },
+          // The gesture arrives through input, so a guest key never enters context.
+          invoke: {
+            src: "editSpending",
+            input: ({ context, event }) =>
+              event.type === "limits.edited"
+                ? { edit: context.edit, what: "limits", fields: fieldsOf(event, ["guest", "allGuests", "providers"]) }
+                : { edit: context.edit, what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) },
+            onDone: [
+              {
+                guard: ({ event }) => Array.isArray(event.output?.providers),
+                target: "idle",
+                actions: ["replySpending", emit(({ event }) => ({ type: "spending.changed", ...event.output }))],
+              },
+              { target: "idle", actions: "replySpending" },
+            ],
+            onError: { target: "idle", actions: "replySpending" },
+          },
         },
       },
     },

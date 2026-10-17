@@ -21,7 +21,9 @@ const loadNdjson = (name) =>
 const EVENTS = {
   "llm.changed": load("events/llm.changed.json"),
   "completion.progressed": load("events/completion.progressed.json"),
+  "spending.changed": load("events/spending.changed.json"),
 };
+const SPENDING = load("queries/spending.json");
 const READ = load("queries/read.json");
 const COMPLETE = load("queries/complete.json");
 const DECIDE = load("queries/decide.json");
@@ -60,8 +62,8 @@ const completePayload = (over = {}) => ({
 const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
-function start({ userId = "u1", picture = PICTURE, save, decide, guest } = {}) {
-  const calls = { read: 0, save: [], decide: [], guest: 0 };
+function start({ userId = "u1", picture = PICTURE, save, decide, guest, spending, edit } = {}) {
+  const calls = { read: 0, save: [], decide: [], guest: 0, edit: [] };
   const streamer = {};
   const input = {
     session: () => {
@@ -70,7 +72,12 @@ function start({ userId = "u1", picture = PICTURE, save, decide, guest } = {}) {
     },
     read: () => {
       calls.read += 1;
-      return Promise.resolve(picture);
+      return Promise.resolve(typeof picture === "function" ? picture(calls.read) : picture);
+    },
+    spending: () => Promise.resolve(spending ? spending() : { error: "not-admin" }),
+    edit: (what, fields) => {
+      calls.edit.push([what, fields]);
+      return Promise.resolve(edit ? edit(what, fields) : { error: "not-admin" });
     },
     save: (patch) => {
       calls.save.push(patch);
@@ -436,4 +443,81 @@ test("every payload matches its schema", () => {
       `${JSON.stringify(value).slice(0, 120)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`,
     );
   }
+});
+
+// A guest's picture as the server returns it (7.7): only providers with a guest key,
+// the guest Jev key, and freeUse.
+const guestPicture = (freeUse, jev = true) => ({
+  ...PICTURE,
+  providers: [{ id: "echo", label: "Echo", keySet: true, needsKey: false }],
+  jev: { keySet: jev },
+  freeUse,
+});
+const SPENT = {
+  allGuests: { spent: 0.5, limit: 10 },
+  guest: 1,
+  providers: [
+    { id: "jev", label: "Jev by typesafe.ai", spent: 0.5, limit: null, guestKeySet: true, price: "$42 per billion tokens read" },
+    { id: "anthropic", label: "Anthropic", spent: 0, limit: null, guestKeySet: false, price: "Each model's published price per million tokens" },
+  ],
+  guests: [{ userId: "g1", spent: 0.5, blocked: false }],
+};
+
+test("a guest's decide? is refused from the picture: blocked, used-up, paused, or no guest Jev key", async () => {
+  const cases = [
+    [{ left: 0.5, blocked: true, paused: [] }, true, "blocked"],
+    [{ left: 0, blocked: false, paused: [] }, true, "used-up"],
+    [{ left: 0.5, blocked: false, paused: ["jev"] }, true, "paused"],
+    [{ left: 0.5, blocked: false, paused: [] }, false, "paused"],
+  ];
+  for (const [freeUse, jev, error] of cases) {
+    const h = start({ userId: "g1", picture: guestPicture(freeUse, jev) });
+    await ready(h.actor);
+    assert.deepEqual(await query(h.actor, "decide?", DECISION, DECIDE.reply), { error });
+    assert.equal(h.calls.decide.length, 0, `${error}: nothing is sent`);
+  }
+});
+
+test("after a guest's decide the picture is read again and announced, so the bar goes down", async () => {
+  const h = start({
+    userId: "g1",
+    picture: (n) => guestPicture({ left: n === 1 ? 1 : 0.9, blocked: false, paused: [] }),
+    decide: () => Promise.resolve({ answers: [{ id: "q", p: 0.5 }], inputTokens: 100, ms: 3 }),
+  });
+  await ready(h.actor);
+  await query(h.actor, "decide?", DECISION, DECIDE.reply);
+  await until(() => h.emitted.some((e) => e.type === "llm.changed" && e.freeUse?.left === 0.9));
+  assert.equal(h.calls.read, 2);
+
+  // An account's own decide changes nothing it reads.
+  const own = start({ picture: { ...PICTURE, jev: { keySet: true } } });
+  await ready(own.actor);
+  await query(own.actor, "decide?", DECISION, DECIDE.reply);
+  await flush();
+  assert.equal(own.calls.read, 1);
+});
+
+test("a guest's complete? is refused from the picture, except on Echo", async () => {
+  const h = start({ userId: "g1", picture: { ...guestPicture({ left: 0, blocked: false, paused: [] }), provider: "anthropic" } });
+  await ready(h.actor);
+  assert.deepEqual(await query(h.actor, "complete?", completePayload(), COMPLETE.reply), { error: "used-up" });
+  const echo = start({ userId: "g2", picture: guestPicture({ left: 0, blocked: false, paused: [] }) });
+  await ready(echo.actor);
+  assert.deepEqual(await query(echo.actor, "complete?", completePayload(), COMPLETE.reply), { id: TURN });
+});
+
+test("spending? answers what the server says; an admin's edit replies and announces spending.changed", async () => {
+  const h = start({ spending: () => SPENT, edit: (what, fields) => ({ ...SPENT, guest: fields.guest ?? 1 }) });
+  await ready(h.actor);
+  assert.deepEqual(await query(h.actor, "spending?", {}, SPENDING.reply), SPENT);
+  h.actor.send({ type: "limits.edited", guest: 2 });
+  h.actor.send({ type: "guestkeys.edited", jev: "secret" });
+  await until(() => h.emitted.some((e) => e.type === "spending.changed"));
+  assert.deepEqual(h.calls.edit, [["limits", { guest: 2 }], ["guestkeys", { jev: "secret" }]]);
+  assert.deepEqual(h.emitted.filter((e) => e.type === "spending.changed").at(-1), { type: "spending.changed", ...SPENT }, "the answer to the last gesture is announced");
+  assert.ok(!JSON.stringify(h.actor.getSnapshot().context).includes("secret"), "a guest key never enters context");
+
+  const someone = start();
+  await ready(someone.actor);
+  assert.deepEqual(await query(someone.actor, "spending?", {}, SPENDING.reply), { error: "not-admin" });
 });

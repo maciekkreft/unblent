@@ -5,7 +5,6 @@ import progressed from "./events/completion.progressed.json" with { type: "json"
 import read from "./queries/read.json" with { type: "json" };
 import complete from "./queries/complete.json" with { type: "json" };
 import decide from "./queries/decide.json" with { type: "json" };
-// Planned (9, step 1): the try-links contracts, registered so the bus knows them.
 import spendingChanged from "./events/spending.changed.json" with { type: "json" };
 import spending from "./queries/spending.json" with { type: "json" };
 
@@ -147,6 +146,36 @@ const decideOnce = async (payload) => {
   }
 };
 
+// GET what guests spent, for the admin (7.7); anyone else gets not-admin in the body.
+// A failure (offline, a lapsed session) is unavailable.
+const readSpending = async () => {
+  try {
+    const res = await fetch("/api/llm/spending", { credentials: "same-origin", headers: json });
+    if (!res.ok) return { error: "unavailable" };
+    return await res.json();
+  } catch {
+    return { error: "unavailable" };
+  }
+};
+
+// PUT one of the admin's gestures, limits or guest keys, and adopt the spending picture
+// the server answers with. A guest key goes only to the server and never comes back.
+const editSpending = async (what, fields) => {
+  try {
+    const res = await fetch(`/api/llm/${what}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...json },
+      body: JSON.stringify(fields),
+    });
+    if (res.status === 403) return { error: "not-admin" };
+    if (!res.ok) return { error: "unavailable" };
+    return await res.json();
+  } catch {
+    return { error: "unavailable" };
+  }
+};
+
 mount(machine, {
   input: {
     session: () => ask(machine, "session", "read", {}),
@@ -155,6 +184,8 @@ mount(machine, {
     save: savePatch,
     stream,
     decide: decideOnce,
+    spending: readSpending,
+    edit: editSpending,
   },
   events: { "llm.changed": changed, "completion.progressed": progressed, "spending.changed": spendingChanged },
   queries: { read, complete, decide, spending },

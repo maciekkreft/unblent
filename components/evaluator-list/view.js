@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, rows, subtitle, askable, lines, UNTITLED } from "./machine.js";
+import { machine, rows, subtitle, askable, lines, UNTITLED, freeStop, notice } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 
@@ -73,7 +73,8 @@ const drafts = {
 const ERRORS = {
   "signed-out": "Sign in to run evaluators.",
   key: "Add a Jev key in Settings.",
-  guest: "Free checks are not open yet. Try again later.",
+  "used-up": "You have used all your free use.",
+  paused: "Free trials are paused for now.",
   busy: "Jev is busy. Try again in a moment.",
   failed: "Jev could not answer. Try again.",
 };
@@ -262,6 +263,19 @@ class EvaluatorList extends LitElement {
       color: var(--color-mute);
       background: var(--color-border);
       cursor: default;
+    }
+    /* The free-use message under Run (try-links screen 2): danger when this guest is
+       out, warning while trials are paused for everyone. */
+    .notice {
+      margin: 0;
+      padding: var(--space-sm) var(--space-md);
+      border-radius: var(--radius-sm);
+      font-size: var(--text-sm);
+      color: var(--color-ink);
+      background: var(--color-warning-subtle);
+    }
+    .notice.used-up {
+      background: var(--color-danger-subtle);
     }
     .error {
       margin: 0;
@@ -512,7 +526,8 @@ class EvaluatorList extends LitElement {
   }
 
   #runBox(snapshot) {
-    const { text, evaluators, runs, running } = snapshot.context;
+    const { text, evaluators, runs, running, freeUse } = snapshot.context;
+    const stop = notice(snapshot.context);
     const n = askable(evaluators).length;
     const m = lines(text).length;
     const cost =
@@ -534,10 +549,11 @@ class EvaluatorList extends LitElement {
         <div class="actions">
           <span class="cost">${cost}</span>
           ${runs.length > 0 ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
-          <button class="go" type="button" ?disabled=${running || n === 0 || text.trim() === ""} @click=${() => this.#actor.send({ type: "_run" })}>
+          <button class="go" type="button" ?disabled=${running || n === 0 || text.trim() === "" || freeStop(freeUse) != null} @click=${() => this.#actor.send({ type: "_run" })}>
             ${running ? "Running…" : "Run"}
           </button>
         </div>
+        ${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}
         ${this.#lines(runs, evaluators)}
       </div>
     `;
@@ -555,7 +571,9 @@ class EvaluatorList extends LitElement {
           <p class="said">
             ${r.status === "asking" ? html`<i class="dot" role="img" aria-label="Asking Jev"></i>` : nothing}<span>${r.line}</span>
           </p>
-          ${r.status === "failed" ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>` : nothing}
+          ${r.status === "failed" && r.error !== "used-up" && r.error !== "paused"
+            ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>`
+            : nothing}
           ${Object.entries(r.results).map(([id, result]) => this.#verdict(names.get(id) ?? UNTITLED, result))}
         </li>`,
       )}

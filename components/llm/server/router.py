@@ -9,6 +9,12 @@ adds); PUT "" changes settings and the keys; POST "/complete" streams one answer
 newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
 questions and returns its answers, on the account's own Jev key. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
+
+A guest (3.4) spends only on the guest keys, within the limits, counted in
+spending.py (7.7): its picture offers only the providers with a guest key and
+carries freeUse, and its requests are refused with used-up, paused or blocked.
+The admin alone reads what guests spent (GET "/spending") and changes the limits
+(PUT "/limits") and the guest keys (PUT "/guestkeys").
 """
 
 import json
@@ -22,9 +28,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from server.user import require_user, user_dir
+from server.user import require_user, session_of, user_dir
 
-from . import anthropic_adapter, crypto, jev_adapter
+from . import anthropic_adapter, crypto, jev_adapter, spending
 from .adapters import complete
 
 router = APIRouter()
@@ -68,10 +74,6 @@ def _key(connection: sqlite3.Connection, provider: str) -> str | None:
     return crypto.decrypt(row["cipher"]) if row else None
 
 
-def _jev(connection: sqlite3.Connection) -> dict:
-    return {"keySet": _key(connection, "jev") is not None}
-
-
 def _models(user_id: str, provider: str, key: str | None) -> list[dict]:
     if provider == "echo":
         return [{"id": "echo", "label": "Echo"}]
@@ -96,30 +98,53 @@ def _pick_default(models: list[dict]) -> str:
     return models[0]["id"] if models else ""
 
 
-def _picture(user_id: str, connection: sqlite3.Connection) -> dict:
+def _key_for(connection: sqlite3.Connection, provider: str, guest: bool) -> str | None:
+    # A guest spends only on the guest key; the admin's own keys are never spent on a
+    # guest (7.7).
+    return spending.guest_key(provider) if guest else _key(connection, provider)
+
+
+def _picture(user_id: str, connection: sqlite3.Connection, guest: bool = False) -> dict:
     settings = _settings(connection)
-    provider = settings["provider"]
-    models = _models(user_id, provider, _key(connection, provider))
+    providers = [
+        {"id": "anthropic", "label": "Anthropic", "keySet": _key_for(connection, "anthropic", guest) is not None, "needsKey": True},
+        {"id": "echo", "label": "Echo", "keySet": True, "needsKey": False},
+    ]
+    if guest:
+        # A provider without a guest key is not offered to guests (7.7).
+        providers = [p for p in providers if p["keySet"]]
+    provider = settings["provider"] if any(p["id"] == settings["provider"] for p in providers) else providers[0]["id"]
+    models = _models(user_id, provider, _key_for(connection, provider, guest))
     ids = {model["id"] for model in models}
-    return {
+    picture = {
         "provider": provider,
-        "providers": [
-            {"id": "anthropic", "label": "Anthropic", "keySet": _key(connection, "anthropic") is not None, "needsKey": True},
-            {"id": "echo", "label": "Echo", "keySet": True, "needsKey": False},
-        ],
+        "providers": providers,
         "model": settings["model"] if settings["model"] in ids else _pick_default(models),
         "models": models,
         "effort": settings["effort"],
         "efforts": list(_EFFORTS),
         "ttl": settings["ttl"],
-        "jev": _jev(connection),
+        "jev": {"keySet": _key_for(connection, "jev", guest) is not None},
     }
+    if guest:
+        picture["freeUse"] = spending.free_use(user_id)
+    return picture
+
+
+def _guest(request: Request) -> bool:
+    session = session_of(request)
+    return bool(session and session["guest"])
+
+
+def _admin(request: Request) -> bool:
+    session = session_of(request)
+    return bool(session and session["admin"])
 
 
 @router.get("")
-def read(user_id: str = Depends(require_user)) -> dict:
+def read(request: Request, user_id: str = Depends(require_user)) -> dict:
     with _connect(user_id) as connection:
-        return _picture(user_id, connection)
+        return _picture(user_id, connection, _guest(request))
 
 
 @router.put("")
@@ -129,7 +154,11 @@ async def edit(request: Request, user_id: str = Depends(require_user)):
     if fields is None:
         # Never echo the body: it may hold the key (unlike FastAPI's default 422).
         return JSONResponse({"error": "bad-request"}, status_code=400)
-    return await run_in_threadpool(_apply, user_id, fields)
+    guest = _guest(request)
+    if guest and (fields["key"] is not None or fields["jevKey"] is not None):
+        # A guest has no keys of its own; it spends on the guest keys (7.7).
+        return JSONResponse({"error": "guest"}, status_code=403)
+    return await run_in_threadpool(_apply, user_id, fields, guest)
 
 
 def _valid(payload) -> dict | None:
@@ -156,7 +185,7 @@ def _valid(payload) -> dict | None:
     return {"provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key}
 
 
-def _apply(user_id: str, fields: dict) -> dict:
+def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
     with _connect(user_id) as connection:
         current = _settings(connection)
         provider = fields["provider"] or current["provider"]
@@ -193,15 +222,15 @@ def _apply(user_id: str, fields: dict) -> dict:
                 (crypto.encrypt(jev_key), int(time.time() * 1000)),
             )
         _models_cache.pop(user_id, None)
-        return _picture(user_id, connection)
+        return _picture(user_id, connection, guest)
 
 
-def _for_completion(user_id: str) -> tuple[dict, str | None]:
+def _for_completion(user_id: str, guest: bool = False) -> tuple[dict, str | None]:
     # The model is resolved the same way the read picture resolves it, so a completion
     # uses the default the account sees rather than an unset stored model.
     with _connect(user_id) as connection:
         settings = _settings(connection)
-        key = _key(connection, settings["provider"])
+        key = _key_for(connection, settings["provider"], guest)
     models = _models(user_id, settings["provider"], key)
     if settings["model"] not in {model["id"] for model in models}:
         settings["model"] = _pick_default(models)
@@ -211,14 +240,24 @@ def _for_completion(user_id: str) -> tuple[dict, str | None]:
 @router.post("/complete")
 async def do_complete(request: Request, user_id: str = Depends(require_user)):
     body = await request.json()
-    settings, key = await run_in_threadpool(_for_completion, user_id)
+    guest = _guest(request)
+    settings, key = await run_in_threadpool(_for_completion, user_id, guest)
     provider = settings["provider"]
+    # A guest's request is refused before it is sent once a limit is reached (7.7);
+    # Echo costs nothing and needs no key, so it is never refused.
+    refused = guest and provider != "echo" and await run_in_threadpool(spending.refusal, user_id, provider)
 
     async def lines():
+        if refused:
+            yield json.dumps({"type": "end", "status": "failed", "error": refused, "provider": provider, "model": settings["model"]}) + "\n"
+            return
         try:
             async for piece in complete(provider, settings, key, body):
                 if piece["type"] == "end":
                     piece = {**piece, "provider": provider, "model": settings["model"]}
+                    if guest and provider == "anthropic":
+                        cost = spending.anthropic_cost(settings["model"], piece.get("usage"))
+                        await run_in_threadpool(spending.add, user_id, provider, cost)
                 yield json.dumps(piece) + "\n"
         except Exception:
             # A failure while streaming rides the turn to the chat, not a separate
@@ -229,7 +268,19 @@ async def do_complete(request: Request, user_id: str = Depends(require_user)):
     return StreamingResponse(lines(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _decide(user_id: str, state: dict, questions: list) -> dict:
+def _decide(user_id: str, state: dict, questions: list, guest: bool = False) -> dict:
+    if guest:
+        refused = spending.refusal(user_id, "jev")
+        if refused:
+            return {"error": refused}
+        key = spending.guest_key("jev")
+        if key is None:
+            # A guest key that cannot be read (a rotated secret) is no guest key.
+            return {"error": "paused"}
+        reply = jev_adapter.decide(key, state, questions)
+        if "answers" in reply:
+            spending.add(user_id, "jev", spending.jev_cost(reply["inputTokens"]))
+        return reply
     with _connect(user_id) as connection:
         key = _key(connection, "jev")
     if key is None:
@@ -283,4 +334,36 @@ async def do_decide(request: Request, user_id: str = Depends(require_user)):
     if parsed is None:
         return JSONResponse({"error": "bad-request"}, status_code=400)
     state, questions = parsed
-    return await run_in_threadpool(_decide, user_id, state, questions)
+    return await run_in_threadpool(_decide, user_id, state, questions, _guest(request))
+
+
+@router.get("/spending")
+async def read_spending(request: Request, user_id: str = Depends(require_user)):
+    # Only the admin sees what guests spent (12); anyone else is told so in the reply.
+    if not _admin(request):
+        return {"error": "not-admin"}
+    return await run_in_threadpool(spending.summary)
+
+
+async def _admin_edit(request: Request, valid, apply):
+    if not _admin(request):
+        return JSONResponse({"error": "not-admin"}, status_code=403)
+    try:
+        body = valid(await request.json())
+    except ValueError:
+        body = None
+    if body is None:
+        # Never echoed: a guest key may be in it.
+        return JSONResponse({"error": "bad-request"}, status_code=400)
+    await run_in_threadpool(apply, body)
+    return await run_in_threadpool(spending.summary)
+
+
+@router.put("/limits")
+async def edit_limits(request: Request, user_id: str = Depends(require_user)):
+    return await _admin_edit(request, spending.valid_limits, spending.set_limits)
+
+
+@router.put("/guestkeys")
+async def edit_guest_keys(request: Request, user_id: str = Depends(require_user)):
+    return await _admin_edit(request, spending.valid_keys, spending.set_keys)
