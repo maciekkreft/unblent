@@ -656,6 +656,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - The model in a chat looking things up by asking the queries fact components already answer, each one opted in by its owner and switched on by the user.
 - Sending a note's text to the chat as the next message, so a note that holds a useful question can be used again with any book.
 - A second model provider, OpenAI.
+- SubQ (subq.ai) as a second provider of decisions beside Jev, its decision service having the same shape as Jev's but its own model name, price and errors, to be designed rather than switched in through server settings (sketch: `~/.claude/plans/subq-provider.md`).
 - A pinned chat that stays while the subject changes, learning what is open now from what is added at the end of the conversation, never from a change to its beginning.
 - A command overlay opened from the keyboard, where the user types what they want (open a book, show a note, move a tab) and it is carried out through commands the views declare, each argument chosen from a list a fact provides (sketch: `~/.claude/plans/command-overlay.md`).
 - A fast decision model such as Jev (typesafe.ai), which writes no text and picks one of up to 255 options or answers yes or no with a probability, for understanding a typed command in the overlay and for choosing among tools if they become many (sketch: `~/.claude/plans/command-overlay.md`).
