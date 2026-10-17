@@ -38,6 +38,10 @@ const question = (q) =>
 
 const questionsOf = (list) => (Array.isArray(list) ? list : []).map(question).filter(Boolean);
 
+// The try pages (8) an admin's evaluator is a starter for, by name, each once and in one
+// order, so two copies of the same ticks compare equal.
+const pagesOf = (list) => [...new Set((Array.isArray(list) ? list : []).filter((p) => typeof p === "string" && p))].sort();
+
 const record = (r) => ({
   id: r.id,
   book: r.book,
@@ -47,6 +51,7 @@ const record = (r) => ({
   questions: questionsOf(r.questions),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   removing: r.removing === true,
+  starterFor: pagesOf(r.starterFor),
   ...(typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {}),
   ...(r.deleted === true ? { deleted: true } : {}),
 });
@@ -57,15 +62,24 @@ const bare = (questions) =>
 
 // What a write carries, and what decides whether a change is a new version. The marks
 // belong to this tab's undo window, so setting or clearing one is not a change.
-const content = (r) => ({ book: r.book, name: r.name, on: r.on, journal: r.journal, questions: bare(r.questions) });
+const content = (r) => ({
+  book: r.book,
+  name: r.name,
+  on: r.on,
+  journal: r.journal,
+  questions: bare(r.questions),
+  starterFor: pagesOf(r.starterFor),
+});
 const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b));
 
 // A tombstone is kept for the sync (5) but never listed or announced as a change.
 const visible = (r) => r && !r.deleted;
 
+// starterFor rides only on an evaluator that is a starter somewhere, so everyone else's
+// evaluators are announced as before.
 const announce = (context, r) => {
-  const { deleted, ...rest } = r;
-  return { ...rest, pending: context.outbox.has(r.id) };
+  const { deleted, starterFor, ...rest } = r;
+  return { ...rest, ...(starterFor?.length ? { starterFor } : {}), pending: context.outbox.has(r.id) };
 };
 
 function replyList(context, book, reply) {
@@ -158,6 +172,48 @@ function applySave(context, event, enqueue) {
   commit(context, enqueue, next);
 }
 
+// The admin ticked or unticked an evaluator as a starter for a try page (8). Only the
+// admin's sheet shows the ticks; the server keeps starterFor only from the admin (5).
+function applyTick(context, { evaluator, page, on }, enqueue) {
+  const was = live(context, evaluator);
+  if (!was) return;
+  const starterFor = pagesOf(on ? [...was.starterFor, page] : was.starterFor.filter((p) => p !== page));
+  if (JSON.stringify(starterFor) === JSON.stringify(was.starterFor)) return;
+  commit(context, enqueue, { ...was, starterFor });
+}
+
+// --- Starters on a try page (8) --------------------------------------------------------
+
+// One starter as the visitor's own: new ids for it, its questions and their options, so
+// nothing of the admin's is shared; kept with the Journal, switched on as every new
+// evaluator is, and a starter for nothing. Later changes by the admin never reach it.
+const copyOf = (starter, journal, newId) =>
+  record({
+    id: newId(),
+    book: journal,
+    name: starter.name,
+    on: true,
+    journal: false,
+    questions: questionsOf(starter.questions).map((q) => ({
+      ...q,
+      id: newId(),
+      removing: false,
+      options: q.options.map((o) => ({ ...o, id: newId(), removing: false })),
+    })),
+  });
+
+// The copies are made only once the Journal's id is known and the starters have come;
+// without either nothing is copied, and the page works as it would with no starters.
+function seed(context, enqueue) {
+  const starters = context.seeds ?? [];
+  if (!context.journal || starters.length === 0) return;
+  for (const starter of starters) commit(context, enqueue, copyOf(starter, context.journal, context.newId));
+}
+
+// How long the try page waits for the starters and the Journal before it shows the
+// evaluators without them.
+const SEED_WAIT_MS = 4000;
+
 function applySwitch(context, { id, on }, enqueue) {
   const was = live(context, id);
   if (!was || was.on === on) return;
@@ -209,6 +265,7 @@ function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.payload.book, message.reply);
   else if (message.type === "evaluator.saved") applySave(context, message, enqueue);
   else if (message.type === "evaluator.switched") applySwitch(context, message, enqueue);
+  else if (message.type === "starter.ticked") applyTick(context, message, enqueue);
   else if (message.type === "removal.started") applyMark(context, message, true, enqueue);
   else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
   else if (message.type === "removal.settled") applySettle(context, message, enqueue);
@@ -216,8 +273,30 @@ function flush(context, message, enqueue) {
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "evaluator.saved", "evaluator.switched", "removal.started", "removal.undone", "removal.settled"].map((t) => [t, { actions: queue }]),
+  ["list?", "evaluator.saved", "evaluator.switched", "starter.ticked", "removal.started", "removal.undone", "removal.settled"].map((t) => [t, { actions: queue }]),
 );
+
+// A visitor on a try page (8) with nothing in this browser yet gets the page's
+// starters. A signed-in account, a guest among them, sees the page as itself.
+const seedable = (context, userId) =>
+  Boolean(context.tryPage) &&
+  userId == null &&
+  context.evaluators.size === 0 &&
+  context.outbox.size === 0 &&
+  typeof context.api?.starters === "function";
+
+// Who is signed in is known: leftover marks settle, a try page's copies are made when
+// they were fetched, what waited is replayed in order, and a signed-in tab syncs.
+function settle(context, enqueue, seeding = false) {
+  settleAll(context, enqueue);
+  if (seeding) {
+    seed(context, enqueue);
+    enqueue.assign({ seeds: null });
+  }
+  for (const message of context.queued) flush(context, message, enqueue);
+  enqueue.assign({ queued: [] });
+  if (context.userId) enqueue.raise({ type: "_sync", pull: true });
+}
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
 const SYNC_IDLE_MS = 2000;
@@ -229,6 +308,8 @@ export const machine = setup({
     // The browser is changing account (12): empty the local copy once nothing is left
     // to upload.
     leftover: ({ context }) => context.leaving && context.outbox.size === 0,
+    // Both have come: the starters, and the Journal's id unless there is nothing to copy.
+    seedsIn: ({ context }) => context.seeds !== null && (context.seeds.length === 0 || context.journal !== null),
   },
   actors: {
     load: fromPromise(async ({ input }) => {
@@ -243,6 +324,10 @@ export const machine = setup({
     }),
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
+    // The try page's starters from the server, which needs no account (8).
+    starters: fromPromise(({ input }) => input.api.starters(input.page)),
+    // The Journal is the book books marks written; it may come later, on book.changed.
+    books: fromPromise(({ input }) => input.ask("books", "list", {})),
     // Empties the local copy in one transaction, outbox and cache together (12).
     empty: fromPromise(({ input }) => input.store.empty()),
     // One sync: drain the outbox in id order, then pull what changed since the cursor
@@ -292,12 +377,17 @@ export const machine = setup({
       "left by a closed tab ends at the next load. An evaluator reads what it is given: the " +
       "book's Run box asks the switched-on evaluators about a typed text, and " +
       "choice-point-checks asks the one chosen for a choice point box about each of its " +
-      "lines, whether it is switched on or not.",
+      "lines, whether it is switched on or not. The admin ticks evaluators as starters for a try " +
+      "page (`starterFor`, by the page's name); the server keeps a copy of the ticked ones for " +
+      "visitors. On a try page, a visitor whose browser holds no evaluators yet gets a copy of " +
+      "each of that page's starters before anything is listed, with new ids, switched on and " +
+      "kept with the Journal; the copies are the visitor's own and upload with the rest once " +
+      "the guest is made, and later changes by the admin do not reach them.",
     kind: "fact",
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
     owns: "the evaluators kept with each book",
-    asks: ["session: read"],
+    asks: ["session: read", "books: list"],
   },
   context: ({ input }) => ({
     evaluators: new Map(),
@@ -306,6 +396,11 @@ export const machine = setup({
     api: input.api,
     ask: input.ask,
     now: input.now ?? (() => new Date().toISOString()),
+    // The try page this tab is on (8), by name, or null; and how a copy gets its ids.
+    tryPage: input.tryPage ?? null,
+    newId: input.newId,
+    seeds: null,
+    journal: null,
     userId: null,
     cursor: 0,
     queued: [],
@@ -319,8 +414,9 @@ export const machine = setup({
     // While loading, only whether the browser is leaving is kept (12); the rest of the
     // news is read from session once the store is loaded.
     "session.changed": { actions: assign({ leaving: ({ event }) => event.leaving === true }) },
-    // Planned (9, step 1): the try-links contracts, which do nothing until they are built.
-    "starter.ticked": { actions: () => {} },
+    // The Journal's id matters only while a try page copies its starters (seeding).
+    "book.changed": { actions: () => {} },
+    "book.deleted": { actions: () => {} },
   },
   states: {
     loading: {
@@ -352,28 +448,57 @@ export const machine = setup({
       invoke: {
         src: "session",
         input: ({ context }) => ({ ask: context.ask }),
-        onDone: {
-          target: "ready.idle",
-          actions: enqueueActions(({ context, event, enqueue }) => {
-            context.userId = event.output?.userId ?? null;
-            enqueue.assign({ userId: context.userId });
-            settleAll(context, enqueue);
-            for (const message of context.queued) flush(context, message, enqueue);
-            enqueue.assign({ queued: [] });
-            if (context.userId) enqueue.raise({ type: "_sync", pull: true });
-          }),
-        },
-        onError: {
-          target: "ready.idle",
-          actions: enqueueActions(({ context, enqueue }) => {
-            settleAll(context, enqueue);
-            for (const message of context.queued) flush(context, message, enqueue);
-            enqueue.assign({ queued: [] });
-            if (context.userId) enqueue.raise({ type: "_sync", pull: true });
-          }),
-        },
+        onDone: [
+          {
+            guard: ({ context, event }) => seedable(context, event.output?.userId ?? null),
+            target: "seeding",
+            actions: assign({ userId: null }),
+          },
+          {
+            target: "ready.idle",
+            actions: enqueueActions(({ context, event, enqueue }) => {
+              context.userId = event.output?.userId ?? null;
+              enqueue.assign({ userId: context.userId });
+              settle(context, enqueue);
+            }),
+          },
+        ],
+        onError: [
+          { guard: ({ context }) => seedable(context, context.userId), target: "seeding" },
+          { target: "ready.idle", actions: enqueueActions(({ context, enqueue }) => settle(context, enqueue)) },
+        ],
       },
       on: QUEUED,
+    },
+    // A visitor on a try page (8) with nothing here yet: the page's starters and the
+    // Journal's id are fetched while queries and gestures wait, so the first list
+    // already holds the copies.
+    seeding: {
+      invoke: [
+        {
+          src: "starters",
+          input: ({ context }) => ({ api: context.api, page: context.tryPage }),
+          onDone: { actions: assign({ seeds: ({ event }) => (Array.isArray(event.output?.evaluators) ? event.output.evaluators : []) }) },
+          onError: { actions: assign({ seeds: [] }) },
+        },
+        {
+          src: "books",
+          input: ({ context }) => ({ ask: context.ask }),
+          onDone: {
+            actions: assign({
+              journal: ({ context, event }) =>
+                (Array.isArray(event.output?.books) ? event.output.books.find((b) => b?.written === true)?.id : null) ?? context.journal,
+            }),
+          },
+          onError: { actions: [] },
+        },
+      ],
+      always: { guard: "seedsIn", target: "ready.idle", actions: enqueueActions(({ context, enqueue }) => settle(context, enqueue, true)) },
+      after: { [SEED_WAIT_MS]: { target: "ready.idle", actions: enqueueActions(({ context, enqueue }) => settle(context, enqueue, true)) } },
+      on: {
+        ...QUEUED,
+        "book.changed": { guard: ({ event }) => event.written === true, actions: assign({ journal: ({ event }) => event.id }) },
+      },
     },
     ready: {
       initial: "idle",
@@ -381,6 +506,7 @@ export const machine = setup({
         "list?": { actions: ({ context, event }) => replyList(context, event.payload.book, event.reply) },
         "evaluator.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "evaluator.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySwitch(context, event, enqueue)) },
+        "starter.ticked": { actions: enqueueActions(({ context, event, enqueue }) => applyTick(context, event, enqueue)) },
         "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, true, enqueue)) },
         "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
         "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => applySettle(context, event, enqueue)) },

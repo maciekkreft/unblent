@@ -78,7 +78,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.deepEqual(await slotted(page), ["settings-sheet"], "Settings is shown first");
 
         await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
-        assert.deepEqual(await slotted(page), ["people-list", "guest-limits"]);
+        assert.deepEqual(await slotted(page), ["people-list", "guest-limits", "evaluator-starters"]);
         await until(async () => (await page.locator("people-list tbody tr").count()) === 3);
         const people = await text(page, "people-list");
         for (const said of ["$1.32 of $10.00", "Jev by typesafe.ai", "no guest key", "1 today · 1 blocked", "You · admin", "own keys", "Guest 1 · blocked", "Berlin, DE", "Chrome · Android · phone", "$0.32", "12 KB"]) {

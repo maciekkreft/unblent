@@ -1,4 +1,5 @@
 import { mount, ask } from "bus";
+import { monotonicFactory } from "ulid";
 import { machine } from "./machine.js";
 import { openEvaluators } from "./store.js";
 import changed from "./events/evaluator.changed.json" with { type: "json" };
@@ -40,10 +41,27 @@ const api = {
     if (!res.ok) throw new Error(`evaluators pull ${res.status}`);
     return await res.json();
   },
+  // A try page's starters (8), which the server gives to anyone, account or not.
+  async starters(page) {
+    const res = await fetch(`/api/evaluators/starters/${encodeURIComponent(page)}`, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(`evaluators starters ${res.status}`);
+    return await res.json();
+  },
 };
 
+// The try page this tab is on (8), read from its address, `/try/<name>`; null elsewhere.
+const tryPage = /^\/try\/([^/]+)$/.exec(location.pathname)?.[1] ?? null;
+
 const actor = mount(machine, {
-  input: { store, api, ask: (target, name, payload) => ask(machine, target, name, payload), now: () => new Date().toISOString() },
+  input: {
+    store,
+    api,
+    ask: (target, name, payload) => ask(machine, target, name, payload),
+    now: () => new Date().toISOString(),
+    tryPage,
+    // Monotonic, so the copies list in the starters' own order.
+    newId: monotonicFactory(),
+  },
   events: { "evaluator.changed": changed, "evaluator.deleted": deleted },
   queries: { list },
 });

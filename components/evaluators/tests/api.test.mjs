@@ -128,3 +128,41 @@ test("users never see each other's evaluators", async () => {
   await put(ID, body(), a);
   assert.deepEqual((await (await pull(0, b)).json()).evaluators, []);
 });
+
+// Starters (5, 8): each test ticks for a page of its own, so the shared file's other rows
+// never meet it.
+const starters = (page) => fetch(`${BASE_URL}/api/evaluators/starters/${page}`);
+const freshPage = () => `api-${Date.now()}-${counter++}`;
+
+test("the admin's ticked evaluators are copied to the shared file, which anyone can read", async () => {
+  const admin = cookieFor(`${freshUser()}|admin`);
+  const page = freshPage();
+  const ticked = await (await put(ID, body({ starterFor: [page, page] }), admin)).json();
+  assert.deepEqual([ticked.starterFor, ticked.version], [[page], 1]);
+  await put(ID2, body({ name: "Not ticked" }), admin);
+  const res = await starters(page);
+  assert.equal(res.status, 200, "no account is needed");
+  assert.deepEqual(await res.json(), { evaluators: [{ name: "Goals", questions: [QUESTION] }] });
+
+  // A save the admin makes reaches the copy; a save leaving starterFor out keeps the tick.
+  await put(ID, body({ name: "Clear goal" }), admin);
+  assert.deepEqual((await (await starters(page)).json()).evaluators.map((e) => e.name), ["Clear goal"]);
+  // Unticking, or deleting, takes it out.
+  const off = await (await put(ID, body({ name: "Clear goal", starterFor: [] }), admin)).json();
+  assert.equal("starterFor" in off, false, "an evaluator that is a starter for nothing does not carry it");
+  assert.deepEqual((await (await starters(page)).json()).evaluators, []);
+  await put(ID2, body({ name: "Not ticked", starterFor: [page] }), admin);
+  assert.equal((await (await starters(page)).json()).evaluators.length, 1);
+  await put(ID2, body({ deleted: true }), admin);
+  assert.deepEqual((await (await starters(page)).json()).evaluators, []);
+});
+
+test("only the admin's evaluators are starters", async () => {
+  const cookie = freshCookie();
+  const page = freshPage();
+  const saved = await (await put(ID, body({ starterFor: [page] }), cookie)).json();
+  assert.equal("starterFor" in saved, false);
+  assert.deepEqual((await (await starters(page)).json()).evaluators, []);
+  const bad = await put(ID, body({ starterFor: "evaluators" }), cookie);
+  assert.equal(bad.status, 400);
+});

@@ -1,0 +1,12 @@
+-- The shared copy of the admin's starters (architecture.md 5): one row per try page and
+-- ticked evaluator, rewritten whole whenever the admin saves an evaluator, and read by
+-- any visitor of that try page (8). page is the try page's name, such as "evaluators";
+-- questions is the evaluator's questions as a JSON array; owner is the admin's id.
+CREATE TABLE IF NOT EXISTS starters (
+    owner     TEXT NOT NULL,
+    page      TEXT NOT NULL,
+    id        TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    questions TEXT NOT NULL,
+    PRIMARY KEY (owner, page, id)
+);
