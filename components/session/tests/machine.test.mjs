@@ -290,3 +290,99 @@ test("revalidate announces the account becoming the admin (3.4)", async () => {
   actor.send({ type: "signout.requested" });
   assert.deepEqual(events.at(-1), { type: "session.changed", userId: null, registrationOpen: false });
 });
+
+// Changing who the browser belongs to (12), with a simulated clock: `pending` says
+// whether an outbox still holds a row, `go` stands for opening the other account's page.
+function handing(stored, impl, pendingAnswers = [false]) {
+  let t = 0;
+  const went = [];
+  const saved = [];
+  const events = [];
+  const calls = { viewAs: [], back: 0 };
+  const api = {
+    viewAs: async (user) => (calls.viewAs.push(user), impl.viewAs),
+    back: async () => (calls.back++, impl.back),
+    me: async () => ({ error: "unavailable" }),
+  };
+  const actor = createActor(machine, {
+    input: {
+      stored: JSON.stringify(stored),
+      save: (v) => saved.push(JSON.parse(v)),
+      api,
+      pending: async () => (pendingAnswers.length > 1 ? pendingAnswers.shift() : pendingAnswers[0]),
+      sleep: async (ms) => void (t += ms),
+      now: () => t,
+      go: (picture) => went.push(picture),
+      waitMs: 1000,
+    },
+  });
+  actor.on("session.changed", (e) => events.push(e));
+  actor.on("session.refused", (e) => events.push(e));
+  actor.start();
+  return { actor, went, saved, events, calls };
+}
+
+const ADMIN = { userId: "a1", registrationOpen: false, admin: true, name: "Admin" };
+const GUEST_VIEW = { userId: "g14", registrationOpen: false, guest: true, name: "Guest 14", viewingAs: "Guest 14" };
+
+test("View as tells the facts the browser is leaving, waits for the outboxes, then opens the guest's page", async () => {
+  const h = handing(ADMIN, { viewAs: GUEST_VIEW }, [true, true, false]);
+  h.actor.send({ type: "viewas.requested", user: "g14" });
+  await flush(12);
+  assert.deepEqual(h.events, [{ type: "session.changed", ...ADMIN, leaving: true }], "leaving, and nothing more is announced");
+  assert.deepEqual(h.calls.viewAs, ["g14"], "the cookie changes only once no outbox holds a row");
+  assert.deepEqual(h.went, [{ userId: "g14", registrationOpen: false, guest: true, name: "Guest 14", viewingAs: "Guest 14" }]);
+  assert.equal(h.saved.at(-1).viewingAs, "Guest 14", "the reloaded page starts as the guest");
+});
+
+test("an outbox that cannot be emptied in time changes nothing and says so (12)", async () => {
+  const h = handing(ADMIN, { viewAs: GUEST_VIEW }, [true]);
+  h.actor.send({ type: "viewas.requested", user: "g14" });
+  await flush(40);
+  assert.deepEqual(h.calls.viewAs, [], "the server is never asked");
+  assert.deepEqual(h.went, []);
+  assert.deepEqual(h.events, [
+    { type: "session.changed", ...ADMIN, leaving: true },
+    { type: "session.changed", ...ADMIN },
+    { type: "session.refused", reason: "unsaved" },
+  ]);
+  assert.equal(context(h.actor).userId, "a1");
+});
+
+test("a server that refuses the change leaves the admin where they were", async () => {
+  const h = handing(ADMIN, { viewAs: { error: "unavailable" } });
+  h.actor.send({ type: "viewas.requested", user: "g14" });
+  await flush(12);
+  assert.deepEqual(h.events.at(-1), { type: "session.refused", reason: "unavailable" });
+  assert.deepEqual(h.went, []);
+});
+
+test("Back to you needs no passkey and opens the admin's own page", async () => {
+  const h = handing(GUEST_VIEW, { back: ADMIN });
+  h.actor.send({ type: "viewas.requested", user: null });
+  await flush(12);
+  assert.equal(h.calls.back, 1);
+  assert.deepEqual(h.went, [ADMIN]);
+  assert.equal(h.saved.at(-1).viewingAs, null);
+});
+
+test("only the admin may view as someone, and Back to you only while viewing", async () => {
+  for (const [stored, user] of [
+    [{ userId: "g1", registrationOpen: false, guest: true, name: "Guest 1" }, "g2"],
+    [ADMIN, "a1"],
+    [GUEST_VIEW, "g2"],
+    [ADMIN, null],
+  ]) {
+    const h = handing(stored, {});
+    h.actor.send({ type: "viewas.requested", user });
+    await flush(6);
+    assert.deepEqual(h.events, [], `${stored.userId} → ${user} is not allowed`);
+  }
+});
+
+test("read? says whom the admin is viewing as, and never that they are the admin", () => {
+  const h = handing(GUEST_VIEW, {});
+  let reply;
+  h.actor.send({ type: "read?", cid: "c", payload: {}, reply: (v) => (reply = v) });
+  assert.deepEqual(reply, GUEST_VIEW);
+});

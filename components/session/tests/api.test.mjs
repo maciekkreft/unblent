@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 
 // The server module is the far end of the same component (section 3), tested from
 // here against the live check server, which runs with RP_ID=localhost and
@@ -97,4 +98,58 @@ test("GET /people is refused to anyone but the admin (12)", async () => {
   assert.equal((await fetch(`${BASE_URL}/api/session/people`)).status, 403);
   const cookie = cookieOf(await post("/guest"));
   assert.equal((await fetch(`${BASE_URL}/api/session/people`, { headers: { Cookie: cookie } })).status, 403);
+});
+
+// View as and Back to you (12). The admin's cookie is forged the way session's server
+// module sets it, so no passkey ceremony is needed; the guest is a real registry row.
+const forged = (payload) => {
+  const secret = process.env.SESSION_SECRET;
+  assert.ok(secret, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
+  assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory");
+  return `unblent_session=${payload}.${createHmac("sha256", secret).update(payload).digest("hex")}`;
+};
+const postJson = (path, cookie, body) =>
+  fetch(`${BASE_URL}/api/session${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+test("only the admin may view as a guest, and Back to you returns without a passkey (12)", async () => {
+  const adminId = `admin-${Date.now()}`;
+  const admin = forged(`${adminId}|admin`);
+  const guestRes = await post("/guest");
+  const guest = await guestRes.json();
+  const guestCookie = cookieOf(guestRes);
+
+  // Nobody but the admin, and nobody who is not in the registry.
+  assert.equal((await postJson("/viewas", guestCookie, { user: guest.userId })).status, 403);
+  assert.equal((await postJson("/viewas", null, { user: guest.userId })).status, 403);
+  assert.equal((await postJson("/viewas", admin, { user: "nobody" })).status, 404);
+
+  const viewing = await postJson("/viewas", admin, { user: guest.userId });
+  assert.equal(viewing.status, 200);
+  const picture = await viewing.json();
+  assert.equal(picture.userId, guest.userId);
+  assert.equal(picture.viewingAs, guest.name);
+  assert.equal(picture.admin, false);
+  const viewCookie = cookieOf(viewing);
+  assert.match(viewCookie, new RegExp(`^unblent_session=${guest.userId}\\|guest\\|by:${adminId}\\.`));
+
+  // While viewing, the browser is the guest: no Administration, no second View as, and
+  // the guest's last visit is not the admin's.
+  const seenBefore = (await me(guestCookie)).userId;
+  assert.equal(seenBefore, guest.userId);
+  const asGuest = await me(viewCookie);
+  assert.deepEqual([asGuest.userId, asGuest.viewingAs, asGuest.admin], [guest.userId, guest.name, false]);
+  assert.equal((await fetch(`${BASE_URL}/api/session/people`, { headers: { Cookie: viewCookie } })).status, 403);
+  assert.equal((await postJson("/viewas", viewCookie, { user: guest.userId })).status, 403);
+
+  // Back to you only while viewing as someone.
+  assert.equal((await postJson("/back", admin)).status, 403);
+  const back = await postJson("/back", viewCookie);
+  assert.equal(back.status, 200);
+  const own = await back.json();
+  assert.deepEqual([own.userId, own.admin, own.viewingAs], [adminId, true, undefined]);
+  assert.match(cookieOf(back), new RegExp(`^unblent_session=${adminId}\\|admin\\.`));
 });

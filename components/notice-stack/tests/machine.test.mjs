@@ -256,3 +256,40 @@ test("leaving the page settles every open removal and keeps other notices", () =
   clock.increment(FADE_MS * 3);
   assert.equal(out.length, 2, "no second settle from a cancelled timer");
 });
+
+// --- The admin's actions on a guest (12) ------------------------------------------
+
+function startGuestActions() {
+  const out = [];
+  const clock = new SimulatedClock();
+  const actor = createActor(machine, { input: { fadeMs: FADE_MS }, clock });
+  actor.on("use.reset", (e) => out.push(e));
+  actor.on("guest.blocked", (e) => out.push(e));
+  actor.on("removal.settled", (e) => out.push(e));
+  actor.start();
+  return { actor, out, clock };
+}
+
+test("Reset use shows a dark notice whose Undo brings the use back, and nothing settles", () => {
+  const { actor, out, clock } = startGuestActions();
+  actor.send({ type: "use.reset", user: "g14" });
+  const n = notice(actor, "use.reset:g14");
+  assert.equal(n.undo, true, "drawn like a removal, with Undo");
+  actor.send({ type: "_act", key: "use.reset:g14", index: 0 });
+  clock.increment(FADE_MS * 3);
+  assert.deepEqual(out, [{ type: "use.reset", user: "g14", undone: true }]);
+  assert.equal(notices(actor).size, 0);
+  actor.send({ type: "use.reset", user: "g14", undone: true });
+  assert.equal(notices(actor).size, 0, "an Undo is no news to show");
+});
+
+test("Block and Unblock each offer an Undo that does the opposite, and pass on their own", () => {
+  const { actor, out, clock } = startGuestActions();
+  actor.send({ type: "guest.blocked", user: "g9", blocked: true });
+  actor.send({ type: "_act", key: "guest.blocked:g9", index: 0 });
+  actor.send({ type: "guest.blocked", user: "g9", blocked: false });
+  assert.ok(notice(actor, "guest.blocked:g9"));
+  clock.increment(FADE_MS);
+  assert.equal(notices(actor).size, 0);
+  assert.deepEqual(out, [{ type: "guest.blocked", user: "g9", blocked: false }]);
+});

@@ -75,13 +75,22 @@ def verify(token: str | None) -> str | None:
 
 
 def set_session_cookie(
-    response: Response, request: Request, user_id: str, *, guest: bool = False, admin: bool = False
+    response: Response,
+    request: Request,
+    user_id: str,
+    *,
+    guest: bool = False,
+    admin: bool = False,
+    viewer: str | None = None,
 ) -> None:
     # Secure only under https, so the cookie still rides http://localhost in tests;
     # SameSite=strict because no cross-site flow ever needs it (3.4).
     # The cookie also says whether the account is a guest or the admin (3.4), so a
     # server module can tell without asking session; a bare id is an ordinary account.
-    payload = "|".join([user_id] + (["guest"] if guest else []) + (["admin"] if admin else []))
+    # While the admin views as someone it also names the admin (12), so Back to you
+    # needs no passkey; the account it holds is then never the admin.
+    flags = (["guest"] if guest else []) + (["admin"] if admin and not viewer else [])
+    payload = "|".join([user_id] + flags + ([f"by:{viewer}"] if viewer else []))
     response.set_cookie(
         SESSION_COOKIE,
         sign(payload),
@@ -98,13 +107,15 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def session_of(request: Request) -> dict | None:
-    """Who the cookie names (3.4): {"userId", "guest", "admin"}, or None when
-    anonymous. Which flags a cookie carries is set by session's server module."""
+    """Who the cookie names (3.4): {"userId", "guest", "admin", "viewer"}, or None
+    when anonymous. viewer is the admin's id while the admin views as someone (12),
+    else None. Which flags a cookie carries is set by session's server module."""
     payload = verify(request.cookies.get(SESSION_COOKIE))
     if not payload:
         return None
     user_id, *flags = payload.split("|")
-    return {"userId": user_id, "guest": "guest" in flags, "admin": "admin" in flags}
+    viewer = next((f[3:] for f in flags if f.startswith("by:") and len(f) > 3), None)
+    return {"userId": user_id, "guest": "guest" in flags, "admin": "admin" in flags and not viewer, "viewer": viewer}
 
 
 def current_user(request: Request) -> str | None:

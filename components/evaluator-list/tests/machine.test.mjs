@@ -361,7 +361,8 @@ test("error replies come in the kinds the user tells apart", () => {
   for (const e of ["rate-limited", "overloaded", "busy"]) assert.equal(errorKind(e), "busy");
   for (const e of ["invalid", "unavailable", "no-answerer", undefined]) assert.equal(errorKind(e), "failed");
   assert.equal(errorKind("used-up", true), "used-up");
-  for (const e of ["no-key", "bad-key", "paused", "blocked"]) assert.equal(errorKind(e, true), "paused");
+  for (const e of ["no-key", "bad-key", "paused"]) assert.equal(errorKind(e, true), "paused");
+  assert.equal(errorKind("blocked", true), "blocked", "a blocked guest is told the trial has ended");
   assert.equal(errorKind("busy", true), "busy", "a guest is told busy like anyone");
 });
 
@@ -589,7 +590,8 @@ test("a guest out of free use, or paused, cannot Run, and the message under Run 
   assert.equal(freeStop({ left: 0, blocked: false, paused: ["jev"] }), "used-up");
   assert.equal(freeStop({ left: 0.4, blocked: false, paused: ["jev"] }), "paused");
   assert.equal(freeStop({ left: 0.4, blocked: false, paused: ["anthropic"] }), null, "another provider paused leaves Jev");
-  assert.equal(freeStop({ left: 0.4, blocked: true, paused: [] }), "paused");
+  assert.equal(freeStop({ left: 0.4, blocked: true, paused: [] }), "blocked");
+  assert.equal(freeStop({ left: 0, blocked: true, paused: ["jev"] }), "blocked", "blocked says so before anything else");
 
   const { actor, ctx, decided } = await runner(undefined, { left: 0, blocked: false, paused: [] });
   actor.send({ type: "_type", text: "One" });

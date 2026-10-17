@@ -521,3 +521,23 @@ test("spending? answers what the server says; an admin's edit replies and announ
   await ready(someone.actor);
   assert.deepEqual(await query(someone.actor, "spending?", {}, SPENDING.reply), { error: "not-admin" });
 });
+
+test("Block, Unblock, Reset use and its Undo reach the server and announce what guests spent (12)", async () => {
+  const h = start({ spending: () => SPENT, edit: () => SPENT });
+  await ready(h.actor);
+  h.actor.send({ type: "guest.blocked", user: "g1", blocked: true });
+  await until(() => h.calls.edit.length === 1);
+  h.actor.send({ type: "use.reset", user: "g1" });
+  await until(() => h.calls.edit.length === 2);
+  h.actor.send({ type: "use.reset", user: "g1", undone: true });
+  await until(() => h.calls.edit.length === 3);
+  h.actor.send({ type: "guest.blocked", user: "g1", blocked: false });
+  await until(() => h.calls.edit.length === 4);
+  assert.deepEqual(h.calls.edit, [
+    ["blocked", { user: "g1", blocked: true }],
+    ["reset", { user: "g1" }],
+    ["reset", { user: "g1", undone: true }],
+    ["blocked", { user: "g1", blocked: false }],
+  ]);
+  await until(() => h.emitted.filter((e) => e.type === "spending.changed").length >= 1);
+});

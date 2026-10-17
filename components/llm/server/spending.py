@@ -286,3 +286,55 @@ def set_keys(body: dict) -> None:
                     " ON CONFLICT(provider) DO UPDATE SET cipher = excluded.cipher, at = excluded.at",
                     (pid, crypto.encrypt(key), int(time.time() * 1000)),
                 )
+
+
+def valid_block(body) -> dict | None:
+    """guest.blocked as the server accepts it: a user and whether it is blocked."""
+    if not isinstance(body, dict) or set(body) != {"user", "blocked"}:
+        return None
+    if not isinstance(body["user"], str) or not body["user"] or not isinstance(body["blocked"], bool):
+        return None
+    return body
+
+
+def set_blocked(body: dict) -> None:
+    """Block or unblock a guest (12): a blocked guest's paid tools are refused (7.7)."""
+    with _connect() as connection:
+        if body["blocked"]:
+            connection.execute(
+                "INSERT OR IGNORE INTO blocked (user_id, at) VALUES (?, ?)", (body["user"], int(time.time() * 1000))
+            )
+        else:
+            connection.execute("DELETE FROM blocked WHERE user_id = ?", (body["user"],))
+
+
+def valid_reset(body) -> dict | None:
+    """use.reset as the server accepts it: a user, and undone when the admin pressed Undo."""
+    if not isinstance(body, dict) or "user" not in body or set(body) - {"user", "undone"}:
+        return None
+    if not isinstance(body["user"], str) or not body["user"] or not isinstance(body.get("undone", False), bool):
+        return None
+    return body
+
+
+def reset(body: dict) -> None:
+    """Reset use (12): the guest's totals go back to $0 and are kept aside, so Undo adds
+    them back to whatever the guest spent since."""
+    user_id = body["user"]
+    with _connect() as connection:
+        if body.get("undone"):
+            connection.execute(
+                "INSERT INTO spent (user_id, provider, dollars)"
+                " SELECT user_id, provider, dollars FROM before_reset WHERE user_id = ? AND true"
+                " ON CONFLICT(user_id, provider) DO UPDATE SET dollars = dollars + excluded.dollars",
+                (user_id,),
+            )
+            connection.execute("DELETE FROM before_reset WHERE user_id = ?", (user_id,))
+            return
+        connection.execute("DELETE FROM before_reset WHERE user_id = ?", (user_id,))
+        connection.execute(
+            "INSERT INTO before_reset (user_id, provider, dollars)"
+            " SELECT user_id, provider, dollars FROM spent WHERE user_id = ?",
+            (user_id,),
+        )
+        connection.execute("DELETE FROM spent WHERE user_id = ?", (user_id,))

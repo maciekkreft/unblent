@@ -1,4 +1,5 @@
 import { mount } from "bus";
+import { outboxesHoldRows } from "store";
 import { machine } from "./machine.js";
 import { openStore } from "./store.js";
 import changed from "./events/session.changed.json" with { type: "json" };
@@ -135,6 +136,24 @@ const api = {
       return { error: "unavailable" };
     }
   },
+  // View as and Back to you (12): the server changes the cookie and answers with the
+  // picture of the account the browser now holds.
+  async viewAs(user) {
+    try {
+      const res = await post("/viewas", { user });
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
+  async back() {
+    try {
+      const res = await post("/back");
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
   async logout() {
     try {
       const res = await post("/logout");
@@ -147,7 +166,19 @@ const api = {
 
 const actor = mount(machine, {
   // A try page is known by its address (8), read once: the page never changes it.
-  input: { stored: store.read(), save: store.write, api, tryPage: location.pathname.startsWith("/try/") },
+  input: {
+    stored: store.read(),
+    save: store.write,
+    api,
+    tryPage: location.pathname.startsWith("/try/"),
+    // Changing who the browser belongs to (12): session only looks at whether an
+    // outbox still holds a row (11.2), then opens the page that account would use: a
+    // guest's try page, or the product.
+    pending: () => outboxesHoldRows().catch(() => true),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+    go: (picture) => location.assign(picture.guest ? "/try/evaluators" : "/"),
+  },
   events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged },
   queries: { read, guest, people },
 });

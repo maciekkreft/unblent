@@ -16,6 +16,8 @@ export function openBooks() {
     outboxDelete: (id) => db.delete("outbox", id),
     metaGet: async (key) => (await db.get("meta", key))?.value,
     metaPut: (key, value) => db.put("meta", { key, value }),
+    // The browser is changing account (12): everything goes, outbox and cache together.
+    empty: () => db.empty(),
     // Signing out empties the library (Decision 5): the cache and the outbox go, the
     // meta (who was last signed in) stays, so the next load starts clean and honest.
     clear: async () => {

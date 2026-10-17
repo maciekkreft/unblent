@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise } from "xstate";
+import { setup, assign, emit, fromPromise } from "xstate";
 
 // A view component (3.1): the People part of Administration (12). It owns no fact: the
 // accounts belong to `session` and what guests spent to `llm`, each reached by one query
@@ -86,6 +86,9 @@ export const rowsOf = (people, spending, now) =>
     }
     return {
       userId: p.userId,
+      // Only a guest row offers View as, Reset use, and Block or Unblock (12).
+      guest: Boolean(p.guest) && !p.admin,
+      blocked,
       who: p.admin ? "You · admin" : blocked ? `${p.name} · blocked` : p.name,
       look: p.admin ? "you" : blocked ? "blocked" : "plain",
       firstSeen: whenOf(p.firstSeen, now),
@@ -148,6 +151,12 @@ export const machine = setup({
     ready: { on: { _shown: "reading" } },
   },
   on: {
+    // The admin's actions on a guest row (12), each the admin's own gesture (4.3, fifth
+    // rule): session hands the browser over, llm blocks or resets; notice-stack shows
+    // the Undo, and View as is reversed by Back to you.
+    _viewAs: { actions: emit(({ event }) => ({ type: "viewas.requested", user: event.user })) },
+    _reset: { actions: emit(({ event }) => ({ type: "use.reset", user: event.user })) },
+    _block: { actions: emit(({ event }) => ({ type: "guest.blocked", user: event.user, blocked: event.blocked })) },
     "people.changed": { actions: assign({ people: ({ event }) => event.people, failed: false }) },
     "spending.changed": {
       actions: assign({

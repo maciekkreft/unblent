@@ -24,6 +24,7 @@ const clean = (value) => {
     guest: v.userId != null && v.guest === true,
     admin: v.userId != null && v.admin === true,
     name: v.userId != null && typeof v.name === "string" ? v.name : null,
+    viewingAs: v.userId != null && typeof v.viewingAs === "string" ? v.viewingAs : null,
   };
 };
 
@@ -32,6 +33,7 @@ const account = (answer) => ({
   guest: answer.userId != null && answer.guest === true,
   admin: answer.userId != null && answer.admin === true,
   name: answer.userId != null && typeof answer.name === "string" ? answer.name : null,
+  viewingAs: answer.userId != null && typeof answer.viewingAs === "string" ? answer.viewingAs : null,
 });
 
 // The session as session: read answers it and session.changed carries it. guest,
@@ -43,6 +45,7 @@ const picture = (c) => ({
   ...(c.guest ? { guest: true } : {}),
   ...(c.admin ? { admin: true } : {}),
   ...(c.name ? { name: c.name } : {}),
+  ...(c.viewingAs ? { viewingAs: c.viewingAs } : {}),
 });
 const changed = (c) => ({ type: "session.changed", ...picture(c) });
 
@@ -63,8 +66,15 @@ const persist = ({ context }) =>
       guest: context.guest,
       admin: context.admin,
       name: context.name,
+      viewingAs: context.viewingAs,
     }),
   );
+
+// Who the browser may be handed to (12): View as only from the admin's own account,
+// to someone else; Back to you only while viewing as someone.
+const mayHand = ({ context, event }) =>
+  Boolean(context.userId) &&
+  (event.user == null ? Boolean(context.viewingAs) : context.admin && !context.viewingAs && event.user !== context.userId);
 
 export const machine = setup({
   actors: {
@@ -86,6 +96,20 @@ export const machine = setup({
     makeGuest: fromPromise(({ input }) => input.api.guest()),
     // Clear the session on the server. Returns { error } when it could not (offline).
     logout: fromPromise(({ input }) => input.api.logout()),
+    // Hand the browser to another account (12). The replicated facts were told
+    // `leaving` and upload their outboxes, then empty their local copies; this waits
+    // until no outbox in the browser holds a row, then has the server change the
+    // cookie. A first pause lets a fact with nothing to upload empty its copy before
+    // the first look. Returns the new picture, or { error }.
+    handOver: fromPromise(async ({ input }) => {
+      const deadline = input.now() + input.waitMs;
+      await input.sleep(input.firstMs);
+      while (await input.pending()) {
+        if (input.now() >= deadline) return { error: "unsaved" };
+        await input.sleep(input.stepMs);
+      }
+      return input.user == null ? input.api.back() : input.api.viewAs(input.user);
+    }),
     // Who am I, per the server. When a sign-out is owed, retry it first and report
     // whether it was acknowledged, so a still-signed-in answer can be ignored.
     revalidate: fromPromise(async ({ input }) => {
@@ -107,7 +131,11 @@ export const machine = setup({
       "passkey, named Guest 1, Guest 2 and so on, which does not count toward `MAX_USERS`. The " +
       "account registered first with a passkey is the admin, named Admin; only the admin may " +
       "list the people, with when each was first and last seen, where from and on what, and " +
-      "the space their work takes.",
+      "the space their work takes. The admin can view as someone: this browser becomes that " +
+      "account and opens the page they would use, and Back to you returns it to the admin " +
+      "without a passkey. Either way, what is not yet uploaded is uploaded and every local " +
+      "copy of the account's work is emptied first; device preferences stay. If that cannot " +
+      "be done within a few seconds, for example offline, nothing changes and a notice says so.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
@@ -122,11 +150,16 @@ export const machine = setup({
     // Replies owed to guest? asks, answered together once the guest exists, so two
     // facts asking at once make one guest.
     guestAsks: [],
+    // Changing who the browser belongs to (12): looking at the outboxes, the clock,
+    // and opening the other account's page, all from fact.js.
+    pending: input.pending,
+    sleep: input.sleep,
+    now: input.now,
+    go: input.go,
+    waitMs: input.waitMs ?? 5000,
   }),
   initial: "ready",
   on: {
-    // Planned (9, step 1): View as is a later step, and does nothing until it is built.
-    "viewas.requested": { actions: () => {} },
     // Query for the starting picture (4.3): answered from the cache at once, before
     // any network, so a view mounts without waiting on the server.
     "read?": {
@@ -169,12 +202,19 @@ export const machine = setup({
       on: {
         // The gesture from session-switch (4.3, fifth rule).
         "signin.requested": { target: "authing" },
+        // View as from People, or Back to you from the bar (12): every replicated fact
+        // is told the browser is leaving, so it uploads and empties its local copy.
+        "viewas.requested": {
+          guard: mayHand,
+          target: "handing",
+          actions: emit(({ context }) => ({ ...changed(context), leaving: true })),
+        },
         // Sign out is local-first (5): announce it at once so the UI flips, mark it
         // owed, then tell the server. An offline logout is retried on revalidation.
         "signout.requested": {
           guard: ({ context }) => Boolean(context.userId),
           actions: [
-            assign({ userId: null, logoutOwed: true, guest: false, admin: false, name: null }),
+            assign({ userId: null, logoutOwed: true, guest: false, admin: false, name: null, viewingAs: null }),
             persist,
             emit(({ context }) => changed(context)),
           ],
@@ -261,6 +301,51 @@ export const machine = setup({
         },
       },
     },
+    handing: {
+      invoke: {
+        src: "handOver",
+        input: ({ context, event }) => ({
+          api: context.api,
+          user: event.user ?? null,
+          pending: context.pending,
+          sleep: context.sleep,
+          now: context.now,
+          waitMs: context.waitMs,
+          firstMs: 100,
+          stepMs: 50,
+        }),
+        onDone: [
+          {
+            // The server changed the cookie: keep the new picture so the reloaded page
+            // starts as that account, and open its page. Nothing is announced: the
+            // facts' in-memory copies belong to the account being left.
+            guard: ({ event }) => !event.output?.error && Boolean(event.output?.userId),
+            actions: [
+              assign(({ event }) => ({
+                userId: event.output.userId,
+                registrationOpen: event.output.registrationOpen === true,
+                logoutOwed: false,
+                ...account(event.output),
+              })),
+              persist,
+              ({ context }) => context.go(picture(context)),
+            ],
+          },
+          // Nothing changes (12): the facts stop leaving, and a notice says why.
+          {
+            target: "ready",
+            actions: [
+              emit(({ context }) => changed(context)),
+              emit(({ event }) => ({ type: "session.refused", reason: event.output?.error === "unsaved" ? "unsaved" : "unavailable" })),
+            ],
+          },
+        ],
+        onError: {
+          target: "ready",
+          actions: [emit(({ context }) => changed(context)), emit({ type: "session.refused", reason: "unavailable" })],
+        },
+      },
+    },
     deauthing: {
       invoke: {
         src: "logout",
@@ -308,7 +393,10 @@ export const machine = setup({
             const userChanged = me.userId !== context.userId;
             const regChanged = registrationOpen !== context.registrationOpen;
             const accountChanged =
-              now.guest !== context.guest || now.admin !== context.admin || now.name !== context.name;
+              now.guest !== context.guest ||
+              now.admin !== context.admin ||
+              now.name !== context.name ||
+              now.viewingAs !== context.viewingAs;
             enqueue.assign({ registrationOpen, userId: me.userId, ...now });
             if (userChanged || regChanged || accountChanged) {
               enqueue.emit(changed({ userId: me.userId, registrationOpen, ...now }));

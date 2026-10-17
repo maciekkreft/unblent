@@ -5,6 +5,8 @@ import { machine } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import undone from "./events/removal.undone.json" with { type: "json" };
 import settled from "./events/removal.settled.json" with { type: "json" };
+import useReset from "./events/use.reset.json" with { type: "json" };
+import guestBlocked from "./events/guest.blocked.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's fade
 // window; the token is the one clock, shared with the timer bar's animation.
@@ -34,6 +36,8 @@ function describe(source) {
     const [noun, verb] = REMOVED[source.kind] ?? ["Item", "deleted"];
     return source.name ? `${noun} “${source.name}” ${verb}.` : `${noun} ${verb}.`;
   }
+  if (source.type === "use.reset") return "Use reset to $0.";
+  if (source.type === "guest.blocked") return source.blocked ? "Guest blocked." : "Guest unblocked.";
   if (source.type === "note.conflicted") {
     const title = source.theirs.title || "your note";
     return source.gone
@@ -61,6 +65,8 @@ function describe(source) {
       return "Registration is closed, so a new passkey cannot be created here.";
     case "unknown-credential":
       return "This passkey is not known here.";
+    case "unsaved":
+      return "Not switched: some changes are not saved yet. Try again when you are online.";
     default:
       return "That could not be done.";
   }
@@ -82,7 +88,13 @@ class ActorController {
     const fadeMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: { fadeMs },
-      events: { "note.saved": saved, "removal.undone": undone, "removal.settled": settled },
+      events: {
+        "note.saved": saved,
+        "removal.undone": undone,
+        "removal.settled": settled,
+        "use.reset": useReset,
+        "guest.blocked": guestBlocked,
+      },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
     // A closed tab completes its deletes (the facts also settle at load).
@@ -278,7 +290,7 @@ class NoticeStack extends LitElement {
             enter: () => this.#actor.send({ type: "_hold", key: n.key }),
             leave: () => this.#actor.send({ type: "_release", key: n.key }),
           };
-          if (n.settle)
+          if (n.undo)
             return html`
               <div
                 class="notice removal"

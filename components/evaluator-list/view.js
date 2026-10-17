@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, rows, subtitle, askable, lines, UNTITLED, freeStop, notice } from "./machine.js";
+import { machine, rows, subtitle, askable, lines, UNTITLED, freeStop, notice, STOPS } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 
@@ -75,6 +75,7 @@ const ERRORS = {
   key: "Add a Jev key in Settings.",
   "used-up": "You have used all your free use.",
   paused: "Free trials are paused for now.",
+  blocked: "This trial has ended.",
   busy: "Jev is busy. Try again in a moment.",
   failed: "Jev could not answer. Try again.",
 };
@@ -274,7 +275,8 @@ class EvaluatorList extends LitElement {
       color: var(--color-ink);
       background: var(--color-warning-subtle);
     }
-    .notice.used-up {
+    .notice.used-up,
+    .notice.blocked {
       background: var(--color-danger-subtle);
     }
     .error {
@@ -571,7 +573,7 @@ class EvaluatorList extends LitElement {
           <p class="said">
             ${r.status === "asking" ? html`<i class="dot" role="img" aria-label="Asking Jev"></i>` : nothing}<span>${r.line}</span>
           </p>
-          ${r.status === "failed" && r.error !== "used-up" && r.error !== "paused"
+          ${r.status === "failed" && !STOPS.includes(r.error)
             ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>`
             : nothing}
           ${Object.entries(r.results).map(([id, result]) => this.#verdict(names.get(id) ?? UNTITLED, result))}

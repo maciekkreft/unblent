@@ -95,3 +95,20 @@ test("a refusal leaves the part saying the people could not be read", async () =
   assert.equal(actor.getSnapshot().context.people, null);
   assert.equal(actor.getSnapshot().context.failed, true);
 });
+
+test("a guest row offers its actions, and each is the admin's gesture on the bus (12)", () => {
+  const rows = rowsOf(PEOPLE, SPENDING, NOW);
+  assert.deepEqual(rows.map((r) => r.guest), PEOPLE.map((p) => Boolean(p.guest) && !p.admin));
+  const out = [];
+  const actor = createActor(machine, { input: { ask: async () => ({ error: "not-admin" }) } });
+  for (const type of ["viewas.requested", "use.reset", "guest.blocked"]) actor.on(type, (e) => out.push(e));
+  actor.start();
+  actor.send({ type: "_viewAs", user: "g14" });
+  actor.send({ type: "_reset", user: "g14" });
+  actor.send({ type: "_block", user: "g14", blocked: true });
+  assert.deepEqual(out, [
+    { type: "viewas.requested", user: "g14" },
+    { type: "use.reset", user: "g14" },
+    { type: "guest.blocked", user: "g14", blocked: true },
+  ]);
+});

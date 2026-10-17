@@ -403,6 +403,14 @@ function handle(context, message, enqueue) {
       context.day = message.day;
       return checkDay(context, enqueue);
     case "session.changed":
+      // The browser is changing account (12): upload what is left, then empty the
+      // local copy. Any other news ends it, and syncing goes on as before.
+      if (message.leaving) {
+        enqueue.assign({ leaving: true });
+        enqueue.raise({ type: "_leave" });
+        return;
+      }
+      if (context.leaving) enqueue.assign({ leaving: false });
       return applySession(context, message.userId ?? null, enqueue);
   }
 }
@@ -447,7 +455,10 @@ const listed = (reply, name) => (Array.isArray(reply?.[name]) ? reply[name] : []
 export const machine = setup({
   guards: {
     syncable: ({ context }) => Boolean(context.userId) && context.api != null,
-    needed: ({ context, event }) => Boolean(event.pull) || context.outbox.size > 0,
+    needed: ({ context, event }) => Boolean(event.pull) || context.outbox.size > 0 || context.leaving,
+    // The browser is changing account (12): empty the local copy once nothing is left
+    // to upload.
+    leftover: ({ context }) => context.leaving && context.outbox.size === 0,
     hasJob: ({ context }) => context.jobs.some((j) => wanted(context, j)),
   },
   actors: {
@@ -482,6 +493,8 @@ export const machine = setup({
     }),
     // decide is superseded by nothing, so nothing is held for it.
     decide: fromPromise(({ input }) => input.ask("llm", "decide", input.payload)),
+    // Empties the local copy in one transaction, outbox and cache together (12).
+    empty: fromPromise(({ input }) => input.store.empty()),
     // One sync: drain the outbox in id order, then pull what changed since the cursor when
     // asked to. It returns a summary the machine applies; it never emits (4.3). A network
     // error stops it with what it had; 401 reports the session is gone.
@@ -563,6 +576,8 @@ export const machine = setup({
     userId: null,
     cursor: 0,
     queued: [],
+    // The browser is changing account (12), from session.changed until it is over.
+    leaving: false,
     resync: false,
     pull: false,
   }),
@@ -649,8 +664,29 @@ export const machine = setup({
         sync: {
           initial: "idle",
           states: {
-            idle: {
+            // Leaving (12): what is left is uploaded at once, then the local copy is emptied.
+            emptying: {
+              invoke: {
+                src: "empty",
+                input: ({ context }) => ({ store: context.store }),
+                onDone: { target: "left" },
+                onError: { target: "left" },
+              },
+            },
+            // Emptied; a change made meanwhile is uploaded and emptied again. When the
+            // change of account is called off, syncing goes on as before.
+            left: {
+              always: { guard: ({ context }) => !context.leaving, target: "idle" },
               on: {
+                _drain: { guard: "syncable", target: "syncing" },
+                _sync: { guard: "syncable", target: "syncing" },
+                _leave: { guard: "syncable", target: "syncing" },
+              },
+            },
+            idle: {
+              always: { guard: "leftover", target: "emptying" },
+              on: {
+                _leave: { guard: "syncable", target: "syncing" },
                 _drain: { guard: "syncable", target: "debouncing" },
                 _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
               },
@@ -660,6 +696,7 @@ export const machine = setup({
             debouncing: {
               on: {
                 _drain: { target: "debouncing", reenter: true },
+                _leave: { guard: "syncable", target: "syncing" },
                 _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
               },
               after: {
@@ -676,7 +713,7 @@ export const machine = setup({
                   store: context.store,
                   rows: [...context.outbox.values()],
                   cursor: context.cursor,
-                  pull: Boolean(event.pull),
+                  pull: Boolean(event.pull) && !context.leaving,
                 }),
                 onDone: {
                   target: "idle",
@@ -691,6 +728,7 @@ export const machine = setup({
                 onError: { target: "idle" },
               },
               on: {
+                _leave: { actions: assign({ resync: true }) },
                 _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
               },
             },

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openStore } from "../store.js";
+import { openStore, outboxesHoldRows } from "../store.js";
 
 // The store needs IndexedDB, absent in Node (3.2), so these tests cover only the
 // surface — the shape and its argument rule. Behaviour (get/put/all round-trips)
@@ -11,15 +11,19 @@ test("openStore refuses a name that is not a string (11.2, one owner per fact)",
   assert.throws(() => openStore(undefined, { notes: "id" }), TypeError);
 });
 
-test("openStore returns exactly the six store methods", () => {
+test("openStore returns exactly the seven store methods", () => {
   const db = openStore("store-probe", { notes: "id, updatedAt" });
   try {
     assert.deepEqual(
       Object.keys(db).sort(),
-      ["all", "close", "delete", "get", "put", "transaction"],
+      ["all", "close", "delete", "empty", "get", "put", "transaction"],
     );
     for (const name of Object.keys(db)) assert.equal(typeof db[name], "function");
   } finally {
     db.close();
   }
+});
+
+test("outboxesHoldRows is the one look across databases, and answers a promise", () => {
+  assert.equal(typeof outboxesHoldRows, "function");
 });

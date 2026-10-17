@@ -132,12 +132,13 @@ export const results = (asked, answers) => {
 
 // The reply's error, in the kinds the user is told apart. A guest has no key of their
 // own and no Settings to add one in (8): a guest whose own allowance is spent is told
-// so, and any other refusal about free use or the guest key (blocked included) is told
-// as free trials being paused, which is true for them and asks nothing they cannot do.
+// so, a guest the admin blocked is told the trial has ended, and any other refusal about
+// free use or the guest key is told as free trials being paused, which is true for them
+// and asks nothing they cannot do.
 export const errorKind = (error, guest = false) =>
-  error === "used-up"
-    ? "used-up"
-    : error === "paused" || error === "blocked" || (guest && (error === "no-key" || error === "bad-key"))
+  error === "used-up" || error === "blocked"
+    ? error
+    : error === "paused" || (guest && (error === "no-key" || error === "bad-key"))
       ? "paused"
       : error === "signed-out"
         ? "signed-out"
@@ -147,15 +148,26 @@ export const errorKind = (error, guest = false) =>
             ? "busy"
             : "failed";
 
-// Why a guest cannot run now, from llm's freeUse (7.7), or null: used-up once its own
-// allowance is spent, paused while Jev is paused for every guest or it is blocked.
+// Why a guest cannot run now, from llm's freeUse (7.7), or null: blocked by the admin,
+// used-up once its own allowance is spent, paused while Jev is paused for every guest.
 export const freeStop = (freeUse) =>
-  !freeUse ? null : freeUse.left <= 0 ? "used-up" : freeUse.blocked || freeUse.paused.includes("jev") ? "paused" : null;
+  !freeUse
+    ? null
+    : freeUse.blocked
+      ? "blocked"
+      : freeUse.left <= 0
+        ? "used-up"
+        : freeUse.paused.includes("jev")
+          ? "paused"
+          : null;
 
 // The message under Run (try-links screen 2): what the picture says, else what the
 // last run was refused for.
 export const notice = (context) =>
-  freeStop(context.freeUse) ?? context.runs.find((r) => r.error === "used-up" || r.error === "paused")?.error ?? null;
+  freeStop(context.freeUse) ?? context.runs.find((r) => STOPS.includes(r.error))?.error ?? null;
+
+// The refusals told once under Run rather than on each line.
+export const STOPS = ["used-up", "paused", "blocked"];
 
 const asks = (evaluator) => JSON.stringify(request("", [evaluator]).questions);
 
@@ -301,7 +313,8 @@ export const machine = setup({
       "answered stay, the ones after it are not asked, and Run starts every line over. On a try page, " +
       "when a guest has used all its free use Run is off and under it says \"You have used all your free " +
       "use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's " +
-      "behalf, Run is off and it says \"Free trials are paused for now.\" Results " +
+      "behalf, Run is off and it says \"Free trials are paused for now.\"; a guest the admin " +
+      "blocked has Run off and reads \"This trial has ended.\" Results " +
       "are not saved: Clear removes them and stops a run, a change to an evaluator removes its " +
       "own from every line, and another book removes all of them. The text is kept per book in " +
       "this browser, so a reload or coming back to the book shows it again. With `subject`, a line at " +

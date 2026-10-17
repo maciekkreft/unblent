@@ -47,6 +47,23 @@ const TABLE = {
     actions: [{ label: "undo", emit: { type: "removal.undone", kind: p.kind, id: p.id } }],
     settle: { type: "removal.settled", kind: p.kind, id: p.id },
   }),
+  // The admin's actions on a guest in People (12) take effect at once; Undo sends the
+  // opposite gesture. An Undo of Reset use is itself no news to show.
+  "use.reset": (p) =>
+    p.undone
+      ? null
+      : {
+          key: `use.reset:${p.user}`,
+          standing: false,
+          undo: true,
+          actions: [{ label: "undo", emit: { type: "use.reset", user: p.user, undone: true } }],
+        },
+  "guest.blocked": (p) => ({
+    key: `guest.blocked:${p.user}`,
+    standing: false,
+    undo: true,
+    actions: [{ label: "undo", emit: { type: "guest.blocked", user: p.user, blocked: !p.blocked } }],
+  }),
 };
 
 // A Map with one entry replaced, or removed, as a new Map so assign sees a fresh
@@ -78,7 +95,16 @@ function end(context, key, enqueue) {
 
 function show(context, event, enqueue) {
   const row = TABLE[event.type](event);
-  const notice = { key: row.key, standing: row.standing, source: event, actions: row.actions, settle: row.settle ?? null, gone: false };
+  if (!row) return;
+  const notice = {
+    key: row.key,
+    standing: row.standing,
+    source: event,
+    actions: row.actions,
+    settle: row.settle ?? null,
+    undo: Boolean(row.settle || row.undo),
+    gone: false,
+  };
   enqueue.assign({ notices: ({ context }) => replaced(context.notices, notice) });
   fade(context, notice, enqueue);
 }
@@ -92,10 +118,15 @@ export const machine = setup({}).createMachine({
       "the user's copy again, because `notes` otherwise keeps the server's copy. Something the " +
       "user deleted or removed shows as a dark notice with Undo for the undo window; hovering or " +
       "focusing it holds the window, and when the window runs out or the notice is dismissed the " +
-      "removal is final. Leaving the page makes every open removal final. Notices are " +
+      "removal is final. Leaving the page makes every open removal final. Reset use, Block and " +
+      "Unblock on a guest in Administration take effect at once and show the same dark notice, " +
+      "whose Undo does the opposite. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
       "because `notes` does not keep conflicts.",
-    kind: "view", emits: ["note.saved", "removal.undone", "removal.settled"], attributes: [], asks: [],
+    kind: "view",
+    emits: ["note.saved", "removal.undone", "removal.settled", "use.reset", "guest.blocked"],
+    attributes: [],
+    asks: [],
   },
   context: ({ input }) => ({
     // How long a passing notice stays (the --duration-undo token, read in the view
@@ -110,6 +141,8 @@ export const machine = setup({}).createMachine({
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    "use.reset": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    "guest.blocked": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and
     // says so. notes emits note.conflicted before note.deleted, so the notice exists.

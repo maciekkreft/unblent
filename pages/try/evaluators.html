@@ -48,6 +48,7 @@
     <script type="module" src="/static/components/evaluators/fact.js"></script>
     <script type="module" src="/static/components/llm/fact.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
+    <script type="module" src="/static/components/viewas-bar/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/components/evaluator-list/view.js"></script>
@@ -55,6 +56,7 @@
     <script type="module" src="/static/components/free-use/view.js"></script>
   </head>
   <body>
+    <viewas-bar></viewas-bar>
     <dock-desk>
       <list-then-item id="evaluators" label="Evaluators" height="fill" shows-on="evaluator.selected">
         <evaluator-list subject label="Evaluators"></evaluator-list>

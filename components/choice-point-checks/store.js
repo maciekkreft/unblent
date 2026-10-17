@@ -16,5 +16,7 @@ export function openChoicePointChecks() {
     outboxDelete: (id) => db.delete("outbox", id),
     metaGet: async (key) => (await db.get("meta", key))?.value,
     metaPut: (key, value) => db.put("meta", { key, value }),
+    // The browser is changing account (12): everything goes, outbox and cache together.
+    empty: () => db.empty(),
   };
 }

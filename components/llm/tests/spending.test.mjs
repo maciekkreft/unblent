@@ -48,7 +48,18 @@ spending.set_limits({"providers": {"jev": None}, "allGuests": 0.2})
 out["allGuests"] = router._decide("g2", {"text": "hi"}, Q, guest=True)
 out["summary"] = spending.summary()
 out["keys"] = asked
-out["invalid"] = [spending.valid_limits({"guest": -1}), spending.valid_limits({"other": 1}), spending.valid_keys({"openai": "x"})]
+out["invalid"] = [spending.valid_limits({"guest": -1}), spending.valid_limits({"other": 1}), spending.valid_keys({"openai": "x"}),
+                  spending.valid_block({"user": "g1"}), spending.valid_reset({"user": "g1", "undone": "yes"})]
+spending.set_limits({"allGuests": 10})
+spending.set_blocked({"user": "g1", "blocked": True})
+out["blocked"] = [router._decide("g1", {"text": "hi"}, Q, guest=True), spending.free_use("g1")["blocked"]]
+spending.set_blocked({"user": "g1", "blocked": False})
+out["unblocked"] = spending.free_use("g1")["blocked"]
+spending.reset({"user": "g1"})
+out["reset"] = [spending.free_use("g1")["left"], spending.summary()["allGuests"]["spent"]]
+spending.add("g1", "jev", 0.05)
+spending.reset({"user": "g1", "undone": True})
+out["undone"] = round(spending.summary()["allGuests"]["spent"], 9)
 print(json.dumps(out))
 `;
 
@@ -88,7 +99,15 @@ test("guests spend on the guest key at the published prices, within the limits",
     assert.deepEqual(out.keys, ["guest-jev-key"], "only the guest key is spent, and only once");
     assert.deepEqual(out.summary.guests, [{ userId: "g1", spent: 0.21, blocked: false }]);
     assert.ok(Math.abs(out.summary.providers[0].spent - 0.21) < 1e-9);
-    assert.deepEqual(out.invalid, [null, null, null]);
+    assert.deepEqual(out.invalid, [null, null, null, null, null]);
+
+    // Block (12): the guest's paid tools are refused as blocked, and Unblock undoes it.
+    assert.deepEqual(out.blocked, [{ error: "blocked" }, true]);
+    assert.equal(out.unblocked, false);
+    // Reset use sets the guest back to $0; Undo adds the old total back to what was
+    // spent since.
+    assert.deepEqual(out.reset, [1, 0]);
+    assert.equal(out.undone, 0.26);
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

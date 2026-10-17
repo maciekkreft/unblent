@@ -13,8 +13,9 @@ with a fixed 400, never echoed, because it may carry the key.
 A guest (3.4) spends only on the guest keys, within the limits, counted in
 spending.py (7.7): its picture offers only the providers with a guest key and
 carries freeUse, and its requests are refused with used-up, paused or blocked.
-The admin alone reads what guests spent (GET "/spending") and changes the limits
-(PUT "/limits") and the guest keys (PUT "/guestkeys").
+The admin alone reads what guests spent (GET "/spending"), changes the limits
+(PUT "/limits") and the guest keys (PUT "/guestkeys"), blocks or unblocks a guest
+(PUT "/blocked") and resets a guest's use, or undoes that (PUT "/reset").
 """
 
 import json
@@ -367,3 +368,13 @@ async def edit_limits(request: Request, user_id: str = Depends(require_user)):
 @router.put("/guestkeys")
 async def edit_guest_keys(request: Request, user_id: str = Depends(require_user)):
     return await _admin_edit(request, spending.valid_keys, spending.set_keys)
+
+
+@router.put("/blocked")
+async def edit_blocked(request: Request, user_id: str = Depends(require_user)):
+    return await _admin_edit(request, spending.valid_block, spending.set_blocked)
+
+
+@router.put("/reset")
+async def edit_reset(request: Request, user_id: str = Depends(require_user)):
+    return await _admin_edit(request, spending.valid_reset, spending.reset)

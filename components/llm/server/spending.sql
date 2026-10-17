@@ -4,7 +4,8 @@
 -- browser. limits holds the dollar limits by name ('guest', 'allGuests', and
 -- 'provider:<id>' for a provider's own limit; no row for a provider means none).
 -- spent is each guest's running total per provider since the start, in dollars.
--- blocked lists the guests the admin blocked.
+-- blocked lists the guests the admin blocked. before_reset keeps a guest's totals from
+-- before the admin's last Reset use, so Undo can bring them back.
 CREATE TABLE IF NOT EXISTS guest_keys (
     provider TEXT PRIMARY KEY,
     cipher   TEXT NOT NULL,
@@ -24,4 +25,10 @@ CREATE TABLE IF NOT EXISTS spent (
 CREATE TABLE IF NOT EXISTS blocked (
     user_id TEXT PRIMARY KEY,
     at      INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS before_reset (
+    user_id  TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    dollars  REAL NOT NULL,
+    PRIMARY KEY (user_id, provider)
 );

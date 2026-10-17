@@ -67,22 +67,31 @@ def _set_challenge_cookie(response: Response, request: Request, ticket: str) -> 
     )
 
 
-def _picture(user_id: str | None) -> dict:
+def _picture(user_id: str | None, viewer: str | None = None) -> dict:
     """The session as session: read answers it (3.4): who, and whether a guest or
     the admin, and the name people see. A cookie the registry does not hold (a
-    forged one in a test) is an ordinary account with no name."""
+    forged one in a test) is an ordinary account with no name. While the admin views
+    as someone (12) the account is never the admin, and viewingAs carries its name."""
     picture = {"userId": user_id, "registrationOpen": _registration_open()}
     found = registry.account(user_id) if user_id else None
     if found:
-        picture.update(guest=found["guest"], admin=found["admin"], name=found["name"])
+        picture.update(guest=found["guest"], admin=found["admin"] and not viewer, name=found["name"])
+    if user_id and viewer:
+        picture["admin"] = False
+        picture["viewingAs"] = (found or {}).get("name") or "someone"
     return picture
 
 
-def _json(payload: dict, request: Request, *, user_id: str | None = None) -> Response:
+def _json(payload: dict, request: Request, *, user_id: str | None = None, viewer: str | None = None) -> Response:
     response = Response(content=json.dumps(payload), media_type="application/json")
     if user_id is not None:
         set_session_cookie(
-            response, request, user_id, guest=payload.get("guest", False), admin=payload.get("admin", False)
+            response,
+            request,
+            user_id,
+            guest=payload.get("guest", False),
+            admin=payload.get("admin", False),
+            viewer=viewer,
         )
         response.delete_cookie(CHALLENGE_COOKIE, path="/")
     return response
@@ -93,12 +102,14 @@ def me(request: Request):
     held = session_of(request)
     if not held:
         return _json(_picture(None), request)
-    registry.seen(held["userId"], visitor.from_request(request))
-    picture = _picture(held["userId"])
+    # The admin looking at someone's account is not that person's visit (12).
+    if not held["viewer"]:
+        registry.seen(held["userId"], visitor.from_request(request))
+    picture = _picture(held["userId"], held["viewer"])
     # A cookie from before guests and the admin, or one whose account became the
     # admin, is set again so server modules read the flags from it (3.4).
     stale = (held["guest"], held["admin"]) != (picture.get("guest", False), picture.get("admin", False))
-    return _json(picture, request, user_id=held["userId"] if stale else None)
+    return _json(picture, request, user_id=held["userId"] if stale else None, viewer=held["viewer"])
 
 
 @router.post("/guest")
@@ -107,7 +118,7 @@ def guest(request: Request):
     # account keeps it, so a second ask never makes a second guest.
     held = session_of(request)
     if held:
-        return _json(_picture(held["userId"]), request)
+        return _json(_picture(held["userId"], held["viewer"]), request)
     user_id = secrets.token_hex(16)
     registry.create_guest(id=user_id, details=visitor.from_request(request))
     return _json(_picture(user_id), request, user_id=user_id)
@@ -121,6 +132,37 @@ def people(request: Request):
     if not found or not found["admin"]:
         raise HTTPException(status_code=403, detail="not-admin")
     return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
+
+
+@router.post("/viewas")
+async def view_as(request: Request):
+    # View as (12): only the admin, and not while already viewing as someone; the
+    # cookie, set by this module from the registry, says who the admin is (3.4). The
+    # browser then holds that account, and the cookie names the admin so Back to you
+    # needs no passkey.
+    held = session_of(request)
+    if not held or not held["admin"]:
+        raise HTTPException(status_code=403, detail="not-admin")
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    target = body.get("user") if isinstance(body, dict) else None
+    found = registry.account(target) if isinstance(target, str) and target else None
+    if not found or found["admin"] or target == held["userId"]:
+        raise HTTPException(status_code=404, detail="no-such-person")
+    return _json(_picture(target, held["userId"]), request, user_id=target, viewer=held["userId"])
+
+
+@router.post("/back")
+def back(request: Request):
+    # Back to you (12): the browser goes back to the admin the cookie names.
+    held = session_of(request)
+    if not held or not held["viewer"]:
+        raise HTTPException(status_code=403, detail="not-viewing")
+    picture = _picture(held["viewer"])
+    picture["admin"] = True
+    return _json(picture, request, user_id=held["viewer"])
 
 
 @router.post("/register/begin")

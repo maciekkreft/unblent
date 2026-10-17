@@ -19,6 +19,28 @@ export function openStore(name, tables, version = 1) {
     delete: (table, id) => db.table(table).delete(id),
     all: (table) => db.table(table).toArray(), // primary-key order (3.2)
     transaction: (tables, work) => db.transaction("rw", tables, work),
+    // Empties every table in one transaction, so a fact's outbox and its cache go
+    // together: nothing can see the outbox empty while the copy is still there (12).
+    empty: () => db.transaction("rw", db.tables, () => Promise.all(db.tables.map((t) => t.clear()))),
     close: () => db.close(),
   };
+}
+
+// Whether any outbox in this browser still holds a row: the one look `session` may
+// take across facts while the browser changes account (11.2, 12). It reads, never
+// writes, and finds the outboxes by their table name, so it knows no fact. A database
+// that cannot be read counts as holding a row, so nothing is assumed uploaded.
+export async function outboxesHoldRows() {
+  for (const name of await Dexie.getDatabaseNames()) {
+    const db = new Dexie(name);
+    try {
+      await db.open();
+      if (db.tables.some((t) => t.name === "outbox") && (await db.table("outbox").count()) > 0) return true;
+    } catch (error) {
+      if (error?.name !== "NoSuchDatabaseError") return true;
+    } finally {
+      db.close();
+    }
+  }
+  return false;
 }

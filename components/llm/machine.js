@@ -93,6 +93,15 @@ const ended = (run, end) => {
   return payload;
 };
 
+// Each of the admin's gestures about guests (7.7, 12): the route it is sent to and the
+// fields it carries. Block and Reset use come from People and their Undo.
+const EDITS = {
+  "limits.edited": (event) => ({ what: "limits", fields: fieldsOf(event, ["guest", "allGuests", "providers"]) }),
+  "guestkeys.edited": (event) => ({ what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) }),
+  "guest.blocked": (event) => ({ what: "blocked", fields: { user: event.user, blocked: event.blocked } }),
+  "use.reset": (event) => ({ what: "reset", fields: { user: event.user, ...(event.undone ? { undone: true } : {}) } }),
+};
+
 export const machine = setup({
   actors: {
     // The starting session (3.4): who is signed in decides whether the server is
@@ -229,11 +238,6 @@ export const machine = setup({
     spendingPending: [], // spending? replies held while a read or an edit is in flight
   }),
   type: "parallel",
-  on: {
-    // Planned (9, step 1): Block and Reset use come with People's actions (S6).
-    "guest.blocked": { actions: () => {} },
-    "use.reset": { actions: () => {} },
-  },
   states: {
     account: {
       // The picture depends on who is signed in (3.4); session.changed re-syncs it
@@ -417,6 +421,8 @@ export const machine = setup({
             "spending?": { target: "reading", actions: "holdSpending" },
             "limits.edited": { target: "editing" },
             "guestkeys.edited": { target: "editing" },
+            "guest.blocked": { target: "editing" },
+            "use.reset": { target: "editing" },
           },
         },
         reading: {
@@ -435,14 +441,13 @@ export const machine = setup({
             "spending?": { actions: "holdSpending" },
             "limits.edited": { target: "editing", reenter: true },
             "guestkeys.edited": { target: "editing", reenter: true },
+            "guest.blocked": { target: "editing", reenter: true },
+            "use.reset": { target: "editing", reenter: true },
           },
           // The gesture arrives through input, so a guest key never enters context.
           invoke: {
             src: "editSpending",
-            input: ({ context, event }) =>
-              event.type === "limits.edited"
-                ? { edit: context.edit, what: "limits", fields: fieldsOf(event, ["guest", "allGuests", "providers"]) }
-                : { edit: context.edit, what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) },
+            input: ({ context, event }) => ({ edit: context.edit, ...EDITS[event.type](event) }),
             onDone: [
               {
                 guard: ({ event }) => Array.isArray(event.output?.providers),

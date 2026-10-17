@@ -154,6 +154,32 @@ class PeopleList extends LitElement {
     .own {
       color: var(--color-body-mid);
     }
+    .actions {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      color: var(--color-body-mid);
+    }
+    .actions button {
+      padding: var(--space-2xs) var(--space-xs);
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--color-accent);
+      font: inherit;
+      font-weight: var(--weight-semibold);
+      cursor: pointer;
+    }
+    .actions button:hover {
+      background: var(--color-surface-hover);
+    }
+    .actions button:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .actions button.danger {
+      color: var(--color-danger);
+    }
     .hint {
       margin: 0;
       color: var(--color-body-mid);
@@ -167,6 +193,25 @@ class PeopleList extends LitElement {
     if (!used) return "—";
     if (used.own) return html`<span class="own">own keys</span>`;
     return html`<span class="mini track"><span class="fill ${used.out ? "out" : ""}" style="width: ${Math.round(used.share * 100)}%"></span></span>${used.spent}`;
+  }
+
+  // A guest row's actions (12): each takes effect at once; Reset use and Block show an
+  // Undo in the notices, and View as is reversed by Back to you on the bar.
+  #actions(r) {
+    const send = (type, extra = {}) => this.#actor.actor.send({ type, user: r.userId, ...extra });
+    const who = r.who.replace(/ · blocked$/, "");
+    return html`<span class="actions">
+      <button type="button" aria-label="View as ${who}" @click=${() => send("_viewAs")}>View as</button>
+      <span aria-hidden="true">·</span>
+      <button type="button" aria-label="Reset use of ${who}" @click=${() => send("_reset")}>Reset use</button>
+      <span aria-hidden="true">·</span>
+      <button
+        type="button"
+        class=${r.blocked ? "" : "danger"}
+        aria-label="${r.blocked ? "Unblock" : "Block"} ${who}"
+        @click=${() => send("_block", { blocked: !r.blocked })}
+      >${r.blocked ? "Unblock" : "Block"}</button>
+    </span>`;
   }
 
   render() {
@@ -196,7 +241,7 @@ class PeopleList extends LitElement {
       <div class="table">
         <table>
           <thead>
-            <tr><th>Who</th><th>First seen</th><th>Last seen</th><th>Where</th><th>Device</th><th>Used</th><th>Space</th></tr>
+            <tr><th>Who</th><th>First seen</th><th>Last seen</th><th>Where</th><th>Device</th><th>Used</th><th>Space</th><th aria-label="Actions"></th></tr>
           </thead>
           <tbody>
             ${rowsOf(people, spending, now).map(
@@ -209,6 +254,7 @@ class PeopleList extends LitElement {
                   <td>${r.device}</td>
                   <td>${this.#used(r.used)}</td>
                   <td>${r.space}</td>
+                  <td>${r.guest ? this.#actions(r) : nothing}</td>
                 </tr>
               `,
             )}

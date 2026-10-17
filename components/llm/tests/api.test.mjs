@@ -212,3 +212,27 @@ test("a guest reads freeUse and only the providers with a guest key; only the ad
   assert.equal((await limits(guest)).status, 403);
   assert.equal((await limits(admin)).status, 200);
 });
+
+test("only the admin blocks a guest or resets its use, and a blocked guest's Jev is refused (12)", async () => {
+  const guestId = freshUser();
+  const guest = cookieFor(`${guestId}|guest`);
+  const admin = cookieFor(`${freshUser()}|admin`);
+  const put = (path, cookie, body) =>
+    fetch(`${BASE_URL}/api/llm/${path}`, { method: "PUT", headers: { "content-type": "application/json", Cookie: cookie }, body: JSON.stringify(body) });
+  assert.equal((await put("blocked", guest, { user: guestId, blocked: true })).status, 403);
+  assert.equal((await put("reset", guest, { user: guestId })).status, 403);
+  assert.equal((await put("blocked", admin, { user: guestId })).status, 400);
+  const blocked = await (await put("blocked", admin, { user: guestId, blocked: true })).json();
+  assert.deepEqual(blocked.guests.find((g) => g.userId === guestId), { userId: guestId, spent: 0, blocked: true });
+  assert.equal((await (await read(guest)).json()).freeUse.blocked, true);
+  const refused = await fetch(`${BASE_URL}/api/llm/decide`, {
+    method: "POST",
+    headers: { "content-type": "application/json", Cookie: guest },
+    body: JSON.stringify({ state: { text: "hi" }, questions: [{ id: "q", kind: "yesno", instructions: "Is it kind?" }] }),
+  });
+  assert.deepEqual(await refused.json(), { error: "blocked" });
+  assert.equal((await put("reset", admin, { user: guestId })).status, 200);
+  assert.equal((await put("reset", admin, { user: guestId, undone: true })).status, 200);
+  const unblocked = await (await put("blocked", admin, { user: guestId, blocked: false })).json();
+  assert.equal(unblocked.guests.some((g) => g.userId === guestId), false);
+});
