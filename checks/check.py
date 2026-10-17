@@ -814,7 +814,7 @@ def check_store(manifests: dict) -> None:
 
 # The five page kinds of section 8; duplicated in the pages router, which the
 # check cannot import, so the two lists cannot share a definition.
-PAGE_KINDS = ("tokens", "contracts", "components", "stem", "app")
+PAGE_KINDS = ("tokens", "contracts", "components", "stem", "app", "try")
 
 
 class PageChecker(HTMLParser):

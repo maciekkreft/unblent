@@ -150,6 +150,7 @@ const decideOnce = async (payload) => {
 mount(machine, {
   input: {
     session: () => ask(machine, "session", "read", {}),
+    guest: () => ask(machine, "session", "guest", {}),
     read: readPicture,
     save: savePatch,
     stream,

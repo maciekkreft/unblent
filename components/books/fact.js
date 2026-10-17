@@ -1,5 +1,5 @@
 import { mount, ask } from "bus";
-import { machine } from "./machine.js";
+import { machine, JOURNAL } from "./machine.js";
 import { openBooks } from "./store.js";
 import changed from "./events/book.changed.json" with { type: "json" };
 import deleted from "./events/book.deleted.json" with { type: "json" };
@@ -17,7 +17,18 @@ import open from "./queries/open.json" with { type: "json" };
 // in Node. An import is an upload of the
 // picked file's bytes (Decision 2); a position and a delete are small JSON writes; a
 // chapter is a plain fetch the browser's HTTP cache answers on repeat.
-const store = openBooks();
+
+// On a try page (8) the Journal is always the open book, and opening a book there is
+// not kept: the try page reads the stored open book as the Journal, newer than any
+// pull, and never writes it, so this browser's own open book is left as it was.
+const cache = openBooks();
+const store = location.pathname.startsWith("/try/")
+  ? {
+      ...cache,
+      metaGet: (key) => (key === "open" ? Promise.resolve({ id: JOURNAL, at: Infinity }) : cache.metaGet(key)),
+      metaPut: (key, value) => (key === "open" ? Promise.resolve() : cache.metaPut(key, value)),
+    }
+  : cache;
 
 const api = {
   // Fetch the tab-local object URL for the picked bytes, PUT them, and always revoke

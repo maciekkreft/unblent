@@ -130,9 +130,14 @@ export const results = (asked, answers) => {
   return out;
 };
 
-// The reply's error, in the four kinds the user is told apart.
-export const errorKind = (error) =>
-  error === "signed-out"
+// The reply's error, in the kinds the user is told apart. A guest has no key of their
+// own and no Settings to add one in (8), so a refusal about the key or free use is
+// told as free checks not being open.
+const GUEST_REFUSALS = ["no-key", "bad-key", "used-up", "paused", "blocked"];
+export const errorKind = (error, guest = false) =>
+  guest && GUEST_REFUSALS.includes(error)
+    ? "guest"
+    : error === "signed-out"
     ? "signed-out"
     : error === "no-key" || error === "bad-key"
       ? "key"
@@ -253,6 +258,9 @@ export const machine = setup({
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the letters stay off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Whether the account is a guest, which changes how a refused Run is told;
+    // session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // decide is superseded by nothing, so nothing is held for it.
     decide: fromPromise(({ input }) => input.ask("llm", "decide", input.payload)),
   },
@@ -276,7 +284,8 @@ export const machine = setup({
       "is, and for evaluators with yes / no questions a score for that line, the geometric mean " +
       "of those answers; there is no score for the whole text. Typing during a run does not " +
       "change it. A failed line says why in one sentence and stops the run: the lines already " +
-      "answered stay, the ones after it are not asked, and Run starts every line over. Results " +
+      "answered stay, the ones after it are not asked, and Run starts every line over. A guest " +
+      "is told that free checks are not open yet when Jev cannot be asked on their behalf. Results " +
       "are not saved: Clear removes them and stops a run, a change to an evaluator removes its " +
       "own from every line, and another book removes all of them. The text is kept per book in " +
       "this browser, so a reload or coming back to the book shows it again. With `subject`, a line at " +
@@ -311,6 +320,7 @@ export const machine = setup({
     open: null,
     draft: input.mint(),
     vimKeys: false,
+    guest: false,
     // The Run box (UI state): the text, whether a run is in flight, the last run's lines
     // ({ at, line, status: waiting | asking | done | failed, results by evaluator id,
     // error }), and the evaluators and questions as the run took them.
@@ -332,6 +342,12 @@ export const machine = setup({
       src: "settings",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ guest: ({ event }) => event.output?.guest === true }) },
       onError: { actions: [] },
     },
     {
@@ -411,7 +427,7 @@ export const machine = setup({
               {
                 target: "waiting",
                 actions: assign(({ context, event }) => ({
-                  runs: settle(context.runs, { status: "failed", error: errorKind(event.output?.error) }),
+                  runs: settle(context.runs, { status: "failed", error: errorKind(event.output?.error, context.guest) }),
                   asked: [],
                 })),
               },
@@ -453,7 +469,7 @@ export const machine = setup({
     // Planned (9, step 1): the free-use messages under Run (try links), which do nothing
     // until they are built.
     "llm.changed": { actions: () => {} },
-    "session.changed": { actions: () => {} },
+    "session.changed": { actions: assign({ guest: ({ event }) => event.guest === true }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "evaluator.opened": { actions: assign({ open: ({ event }) => event.id }) },
     "subject.changed": follow(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),

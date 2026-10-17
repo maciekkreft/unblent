@@ -494,7 +494,8 @@ export const machine = setup({
       "presents the journal as the first book, signed in or out: its chapters are the days, " +
       "oldest first, with today's empty page last while no day has been started today, and " +
       "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
-      "opened but never renamed or deleted here.",
+      "opened but never renamed or deleted here. On a try page the Journal is always the open " +
+      "book, and this browser's own open book is left as it was.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],

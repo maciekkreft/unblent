@@ -39,13 +39,14 @@ export const visible = (pages, nav, current) => merge(pages, nav).filter((r) => 
 // The link groups, in architecture 8's composition order. The muted label is what
 // tells apart two pages of the same title (the `notes` stem from the notes app);
 // the user's order (nav) still holds within a group. A row of a kind in no group
-// falls to the last (Apps); the page check already rejects unknown kinds.
+// falls to Apps; the page check already rejects unknown kinds.
 const GROUPS = [
   { label: "Design", kinds: ["tokens", "contracts", "components"] },
   { label: "Stems", kinds: ["stem"] },
   { label: "Apps", kinds: ["app"] },
+  { label: "Try", kinds: ["try"] },
 ];
-const groupOf = (kind) => GROUPS.find((g) => g.kinds.includes(kind)) ?? GROUPS[GROUPS.length - 1];
+const groupOf = (kind) => GROUPS.find((g) => g.kinds.includes(kind)) ?? GROUPS[2];
 
 // The product profile (§8, §12) shows no page links at all: the bar stays, but the
 // only way on is the hidden door. Every other profile groups the pages as before.

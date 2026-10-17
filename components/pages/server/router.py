@@ -14,8 +14,8 @@ router = APIRouter()
 
 ROOT = Path(__file__).resolve().parents[3]
 
-# The five page kinds in composition order (architecture.md 8); the nav lists in it.
-KINDS = ("tokens", "contracts", "components", "stem", "app")
+# The six page kinds in the order of architecture.md 8; the nav lists in it.
+KINDS = ("tokens", "contracts", "components", "stem", "app", "try")
 
 
 class _Head(html.parser.HTMLParser):
@@ -65,6 +65,10 @@ def list_pages():
             pages.append(
                 {"path": f"/workshop/{file.parent.name}/{file.stem}", "title": head.title or file.stem, "kind": kind}
             )
+        # A try page (8) is served at /try/<name>, outside the workshop.
+        for file in sorted((ROOT / "pages" / "try").glob("*.html")):
+            head = _head(file)
+            pages.append({"path": f"/try/{file.stem}", "title": head.title or file.stem, "kind": head.kind or "try"})
         pages.sort(key=lambda p: (KINDS.index(p["kind"]) if p["kind"] in KINDS else len(KINDS), p["path"]))
         return {"pages": pages}
     except OSError:

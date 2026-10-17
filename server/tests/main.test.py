@@ -42,6 +42,14 @@ class ServerEntry(unittest.TestCase):
         self.assertEqual(_request("/workshop/apps/does-not-exist").status, 404)
         self.assertEqual(_request("/workshop/apps/foo%2F..%2Fbar").status, 404)
 
+    def test_try_page_serves_and_guards(self):
+        # Section 11.1: /try/<name> serves pages/try/<name>.html, 404 otherwise.
+        res = _request("/try/evaluators")
+        self.assertEqual(res.status, 200)
+        self.assertEqual(res.headers.get("Cache-Control"), "no-cache")
+        self.assertEqual(_request("/try/does-not-exist").status, 404)
+        self.assertEqual(_request("/try/foo%2F..%2Fbar").status, 404)
+
     def test_legacy_urls_404(self):
         # The workshop moved under /workshop/; the old flat URLs are gone (only the owner used them).
         self.assertEqual(_request("/design/tokens").status, 404)

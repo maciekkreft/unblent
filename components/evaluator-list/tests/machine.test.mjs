@@ -226,7 +226,7 @@ test("pins.changed unpinning elsewhere follows the stage; pinning the shown book
 test("without `subject` nothing is asked and it says to open a book", async () => {
   const { actor, asked } = await start({ following: false });
   assert.ok(actor.getSnapshot().matches("idle"));
-  assert.deepEqual(asked.filter(([t]) => t !== "settings"), []);
+  assert.deepEqual(asked.filter(([t]) => t !== "settings" && t !== "session"), []);
 });
 
 test("the Vim keys preference is read at start and followed after; without settings it is off", async () => {
@@ -353,12 +353,14 @@ test("the score is the geometric mean of the yes / no answers; none gives no sco
   assert.equal(results([{ id: id(2), questions: [pick(3, "C?", [option(1, "x"), option(2, "y")])] }], [{ id: qid(id(2), Q(3)), p: 0.7, choice: O(1) }])[id(2)].score, null);
 });
 
-test("error replies come in four kinds", () => {
+test("error replies come in the kinds the user tells apart", () => {
   assert.equal(errorKind("signed-out"), "signed-out");
   assert.equal(errorKind("no-key"), "key");
   assert.equal(errorKind("bad-key"), "key");
   for (const e of ["rate-limited", "overloaded", "busy"]) assert.equal(errorKind(e), "busy");
   for (const e of ["invalid", "unavailable", "no-answerer", undefined]) assert.equal(errorKind(e), "failed");
+  for (const e of ["no-key", "bad-key", "used-up", "paused", "blocked"]) assert.equal(errorKind(e, true), "guest");
+  assert.equal(errorKind("busy", true), "busy", "a guest is told busy like anyone");
 });
 
 const ANSWERS = {
@@ -459,6 +461,16 @@ test("a failed line keeps the lines before it, leaves the rest unasked, and Run 
   actor.send({ type: "_run" });
   assert.deepEqual(ctx().runs.map((r) => r.status), ["asking", "waiting", "waiting"]);
   assert.deepEqual(decided[2], request("One", MIXED));
+});
+
+test("a guest made by this Run is told free checks are not open, not to add a key", async () => {
+  const { actor, ctx, settle } = await runner(() => ({ error: "no-key" }));
+  actor.send({ type: "_type", text: "One" });
+  actor.send({ type: "_run" });
+  // session.changed reaches the list before llm's reply, since llm makes the guest first.
+  actor.send({ type: "session.changed", userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" });
+  await settle();
+  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "guest"]]);
 });
 
 test("a request that throws fails its line as one Jev could not answer", async () => {

@@ -73,6 +73,7 @@ const drafts = {
 const ERRORS = {
   "signed-out": "Sign in to run evaluators.",
   key: "Add a Jev key in Settings.",
+  guest: "Free checks are not open yet. Try again later.",
   busy: "Jev is busy. Try again in a moment.",
   failed: "Jev could not answer. Try again.",
 };

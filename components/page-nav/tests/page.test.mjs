@@ -16,9 +16,10 @@ const REPO = resolve(HERE, "..", "..", "..");
 const SCREENSHOTS = resolve(REPO, ".screenshots");
 const PAGES = resolve(REPO, "pages", "workshop");
 const INDEX = resolve(REPO, "pages", "index.html");
+const TRY = resolve(REPO, "pages", "try");
 
-// The five page kinds in composition order (architecture.md 8).
-const KINDS = ["tokens", "contracts", "components", "stem", "app"];
+// The six page kinds in the order of architecture.md 8.
+const KINDS = ["tokens", "contracts", "components", "stem", "app", "try"];
 
 // The expected links come from the filesystem, so the test tracks the pages. The
 // product at / is one of them (its URL is the root, not its directory).
@@ -31,6 +32,11 @@ function pageList() {
       const kind = html.match(/<meta name="kind" content="([^"]*)"/)?.[1];
       rows.push({ path: `/workshop/${dir.name}/${file.replace(/\.html$/, "")}`, kind });
     }
+  }
+  // The try pages, at /try/<name> (8, 11.1).
+  for (const file of readdirSync(TRY).filter((f) => f.endsWith(".html"))) {
+    const kind = readFileSync(resolve(TRY, file), "utf-8").match(/<meta name="kind" content="([^"]*)"/)?.[1];
+    rows.push({ path: `/try/${file.replace(/\.html$/, "")}`, kind });
   }
   const rank = (k) => (KINDS.includes(k) ? KINDS.indexOf(k) : KINDS.length);
   rows.sort((a, b) => rank(a.kind) - rank(b.kind) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -92,7 +98,7 @@ for (const engine of ENGINES) {
       );
       assert.deepEqual(await hrefs(page), PATHS);
       assert.equal(await currentHref(page), "/workshop/design/tokens");
-      assert.deepEqual(await labels(page), ["Design", "Stems", "Apps"], "grouped by kind (8)");
+      assert.deepEqual(await labels(page), ["Design", "Stems", "Apps", "Try"], "grouped by kind (8)");
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `page-nav-${engine.name}.png`) });

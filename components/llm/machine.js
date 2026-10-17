@@ -93,6 +93,9 @@ export const machine = setup({
     // One Jev request (llm: decide): the server module answers with Jev's answers or an
     // error code, so a failure rides the reply to the asker.
     decide: fromPromise(({ input }) => input.decide(input.payload)),
+    // Signed out, the first decide makes a guest when the page is a try page (3.4):
+    // session answers with the new account, or not-a-try-page anywhere else.
+    guest: fromPromise(({ input }) => input.guest()),
   },
   actions: {
     // Held read? replies are answered with the picture once a load lands (4.2), the
@@ -155,7 +158,7 @@ export const machine = setup({
       "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
       "server and never sent back to the browser. A chat answer streams back piece by piece as " +
       "events, one answer at a time; `decide` asks Jev yes-or-no and pick-one questions and " +
-      "returns the answers in the reply, on the account's own Jev key. The settings belong to the account, so they are the " +
+      "returns the answers in the reply, on the account's own Jev key. Signed out on a try page, the first `decide` makes a guest and is asked as that guest. The settings belong to the account, so they are the " +
       "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call.",
@@ -170,12 +173,14 @@ export const machine = setup({
     save: input.save,
     stream: input.stream,
     session: input.session,
+    guest: input.guest,
     decide: input.decide,
     picture: SIGNED_OUT,
     pending: [], // read? replies held while a load is in flight (4.2)
     announce: false, // emit llm.changed when the next picture load lands (a re-sync)
     run: null, // the answer being streamed: { id, text, thinking, calls, dirty }
     decided: null, // the reply of the decide? in flight
+    asked: null, // the payload of the decide? in flight
   }),
   type: "parallel",
   on: {
@@ -282,26 +287,58 @@ export const machine = setup({
         idle: {
           on: {
             "decide?": [
-              { guard: ({ context }) => !context.picture.signedIn, actions: ({ event }) => event.reply({ error: "signed-out" }) },
+              {
+                guard: ({ context }) => !context.picture.signedIn,
+                target: "guesting",
+                actions: assign({ decided: ({ event }) => event.reply, asked: ({ event }) => event.payload }),
+              },
               { guard: ({ context }) => !context.picture.jev?.keySet, actions: ({ event }) => event.reply({ error: "no-key" }) },
-              { target: "running", actions: assign({ decided: ({ event }) => event.reply }) },
+              {
+                target: "running",
+                actions: assign({ decided: ({ event }) => event.reply, asked: ({ event }) => event.payload }),
+              },
             ],
           },
+        },
+        // Nobody is signed in: on a try page this request is the first that needs the
+        // server, so it makes the guest (3.4) and goes on as that guest; anywhere else
+        // it stays signed out.
+        guesting: {
+          invoke: {
+            src: "guest",
+            input: ({ context }) => ({ guest: context.guest }),
+            onDone: [
+              { guard: ({ event }) => event.output?.userId != null, target: "running" },
+              {
+                target: "idle",
+                actions: [
+                  ({ context, event }) =>
+                    context.decided({ error: event.output?.error === "unavailable" ? "unavailable" : "signed-out" }),
+                  assign({ decided: null, asked: null }),
+                ],
+              },
+            ],
+            onError: {
+              target: "idle",
+              actions: [({ context }) => context.decided({ error: "unavailable" }), assign({ decided: null, asked: null })],
+            },
+          },
+          on: { "decide?": { actions: ({ event }) => event.reply({ error: "busy" }) } },
         },
         running: {
           invoke: {
             src: "decide",
-            input: ({ context, event }) => ({ decide: context.decide, payload: event.payload }),
+            input: ({ context }) => ({ decide: context.decide, payload: context.asked }),
             onDone: {
               target: "idle",
               actions: [
                 ({ context, event }) => context.decided(event.output),
-                assign({ decided: null }),
+                assign({ decided: null, asked: null }),
               ],
             },
             onError: {
               target: "idle",
-              actions: [({ context }) => context.decided({ error: "unavailable" }), assign({ decided: null })],
+              actions: [({ context }) => context.decided({ error: "unavailable" }), assign({ decided: null, asked: null })],
             },
           },
           on: { "decide?": { actions: ({ event }) => event.reply({ error: "busy" }) } },

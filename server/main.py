@@ -25,6 +25,7 @@ EDITOR = ROOT / "editor"
 INDEX = ROOT / "pages" / "index.html"
 PAGES_DESIGN = ROOT / "pages" / "workshop" / "design"
 PAGES_APPS = ROOT / "pages" / "workshop" / "apps"
+PAGES_TRY = ROOT / "pages" / "try"
 
 # Section 11.1: source and tests never reach the browser.
 _BLOCKED_SEGMENTS = {"server", "tests"}
@@ -113,5 +114,14 @@ async def design_page(name: str) -> FileResponse:
 async def app_page(name: str) -> FileResponse:
     page = PAGES_APPS / f"{name}.html"
     if not page.is_file() or page.parent != PAGES_APPS:
+        raise HTTPException(status_code=404)
+    return FileResponse(page, headers={"Cache-Control": "no-cache"})
+
+
+# A try page (8, 11.1): one tool shared by a link with someone who has no account.
+@app.api_route("/try/{name}", methods=["GET", "HEAD"])
+async def try_page(name: str) -> FileResponse:
+    page = PAGES_TRY / f"{name}.html"
+    if not page.is_file() or page.parent != PAGES_TRY:
         raise HTTPException(status_code=404)
     return FileResponse(page, headers={"Cache-Control": "no-cache"})

@@ -12,9 +12,10 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const PAGES = resolve(REPO, "pages", "workshop");
 const INDEX = resolve(REPO, "pages", "index.html");
+const TRY = resolve(REPO, "pages", "try");
 
-// The five page kinds in composition order (architecture.md 8).
-const KINDS = ["tokens", "contracts", "components", "stem", "app"];
+// The six page kinds in the order of architecture.md 8.
+const KINDS = ["tokens", "contracts", "components", "stem", "app", "try"];
 
 // The expected list comes from the filesystem, so adding a page never breaks it.
 function expected() {
@@ -34,6 +35,14 @@ function expected() {
       const kind = html.match(/<meta name="kind" content="([^"]*)"/)?.[1];
       rows.push({ path: `/workshop/${dir.name}/${stem}`, title, kind });
     }
+  }
+  // The try pages, served at /try/<name> (8, 11.1).
+  for (const file of readdirSync(TRY).filter((f) => f.endsWith(".html"))) {
+    const stem = file.replace(/\.html$/, "");
+    const html = readFileSync(resolve(TRY, file), "utf-8");
+    const title = html.match(/<title>([^<]*)<\/title>/)?.[1].trim() || stem;
+    const kind = html.match(/<meta name="kind" content="([^"]*)"/)?.[1];
+    rows.push({ path: `/try/${stem}`, title, kind });
   }
   const rank = (k) => (KINDS.includes(k) ? KINDS.indexOf(k) : KINDS.length);
   return rows.sort((a, b) => rank(a.kind) - rank(b.kind) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));

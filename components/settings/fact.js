@@ -17,11 +17,14 @@ const profile = openStore("settings", "profile");
 // /workshop/design/, is always workshop (§12), read from the URL like dock reads
 // location.pathname.
 const onProduct = !location.pathname.startsWith("/workshop/design/");
+// A try page is always in the product (8): the stored switch is not read there, so a
+// device left in the workshop still shows a visitor's page as the visitor sees it.
+const onTry = location.pathname.startsWith("/try/");
 
 mount(machine, {
   input: {
     product: onProduct,
-    stored: { workshop: workshop.read(), product: product.read(), profile: profile.read() },
+    stored: { workshop: workshop.read(), product: product.read(), profile: onTry ? null : profile.read() },
     save: { workshop: workshop.write, product: product.write, profile: profile.write },
   },
   events: { "settings.changed": changed },

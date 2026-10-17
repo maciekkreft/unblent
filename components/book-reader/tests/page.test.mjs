@@ -762,7 +762,7 @@ for (const engine of ENGINES) {
       const labels = await page.evaluate(() =>
         [...document.querySelector("page-nav").shadowRoot.querySelectorAll(".label")].map((l) => l.textContent.trim()),
       );
-      assert.deepEqual(labels, ["Design", "Stems", "Apps"], "the nav groups the workshop pages");
+      assert.deepEqual(labels, ["Design", "Stems", "Apps", "Try"], "the nav groups the workshop pages");
 
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     } finally {

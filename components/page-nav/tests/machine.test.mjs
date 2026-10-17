@@ -49,14 +49,15 @@ test("visible drops hidden pages but always keeps the current one", () => {
 });
 
 test("grouped bins pages by kind in composition order, with a label each", () => {
-  const groups = grouped(PAGES, [], "/workshop/design/tokens");
+  const TRY = { path: "/try/evaluators", title: "Evaluators", kind: "try" };
+  const groups = grouped([...PAGES, TRY], [], "/workshop/design/tokens");
   assert.deepEqual(
     groups.map((g) => g.label),
-    ["Design", "Stems", "Apps"],
+    ["Design", "Stems", "Apps", "Try"],
   );
   assert.deepEqual(
     groups.map((g) => g.rows.map((r) => r.path)),
-    [["/workshop/design/tokens"], ["/workshop/design/notes"], ["/workshop/apps/notes"]],
+    [["/workshop/design/tokens"], ["/workshop/design/notes"], ["/workshop/apps/notes"], ["/try/evaluators"]],
   );
 });
 

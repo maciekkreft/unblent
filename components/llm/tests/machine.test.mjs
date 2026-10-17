@@ -60,8 +60,8 @@ const completePayload = (over = {}) => ({
 const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
-function start({ userId = "u1", picture = PICTURE, save, decide } = {}) {
-  const calls = { read: 0, save: [], decide: [] };
+function start({ userId = "u1", picture = PICTURE, save, decide, guest } = {}) {
+  const calls = { read: 0, save: [], decide: [], guest: 0 };
   const streamer = {};
   const input = {
     session: () => {
@@ -84,6 +84,11 @@ function start({ userId = "u1", picture = PICTURE, save, decide } = {}) {
         streamer.cancelled = true;
       };
     },
+  };
+  // Outside a try page session refuses to make a guest (session: guest).
+  input.guest = () => {
+    calls.guest += 1;
+    return Promise.resolve(guest ? guest() : { error: "not-a-try-page" });
   };
   input.decide = (payload) => {
     calls.decide.push(payload);
@@ -390,6 +395,23 @@ test("decide? refuses honestly: signed-out, no-key and busy; a failure is unavai
   const broken = start({ picture: withJev, decide: () => Promise.reject(new Error("offline")) });
   await ready(broken.actor);
   assert.deepEqual(await query(broken.actor, "decide?", DECISION, DECIDE.reply), { error: "unavailable" });
+});
+
+test("decide? signed out on a try page makes the guest, then asks the server as that guest", async () => {
+  const h = start({
+    userId: null,
+    guest: () => ({ userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" }),
+    decide: () => Promise.resolve({ error: "no-key" }),
+  });
+  await ready(h.actor);
+  assert.deepEqual(await query(h.actor, "decide?", DECISION, DECIDE.reply), { error: "no-key" });
+  assert.equal(h.calls.guest, 1, "the first Run makes the guest");
+  assert.deepEqual(h.calls.decide, [DECISION], "the request goes on to the server as the guest");
+
+  const away = start({ userId: null, guest: () => ({ error: "unavailable" }) });
+  await ready(away.actor);
+  assert.deepEqual(await query(away.actor, "decide?", DECISION, DECIDE.reply), { error: "unavailable" });
+  assert.equal(away.calls.decide.length, 0, "no guest, nothing sent");
 });
 
 test("llm.edited carries the Jev key through to the server and never into context", async () => {
