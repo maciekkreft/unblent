@@ -308,6 +308,10 @@ export const machine = setup({
     pull: false,
   }),
   initial: "loading",
+  on: {
+    // Planned (9, step 1): the try-links contracts, which do nothing until they are built.
+    "starter.ticked": { actions: () => {} },
+  },
   states: {
     loading: {
       invoke: {

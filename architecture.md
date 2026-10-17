@@ -115,6 +115,8 @@ Not special. It is the far end of the fact components that chose to have a serve
 
 Authentication is one more fact component: `session`. Its server module runs the passkey (WebAuthn) ceremonies and sets an HttpOnly cookie; its browser actor never sees the cookie, it queries its own server module for "who am I" and emits `session.changed`. Nothing else in the system knows authentication exists.
 
+Some accounts are **guests**: accounts without a passkey. A guest is made the first time a visitor on a try page (section 8) does something that needs the server, such as the first Run of an evaluator; opening a try page makes nothing on the server. The fact that first needs the server asks `session: guest`, and `session` makes the account and sets the cookie. For each guest it keeps when the guest was first and last seen, the country and city Cloudflare's visitor location headers report, and the browser, the system, and phone or desk, read from the user agent. Guests do not count toward `MAX_USERS`. The account registered first with a passkey is the **admin**. The session cookie says which account the browser holds and whether it is a guest or the admin, and while the admin views as someone (12) it also names the admin, so Back to you needs no passkey. `server/user.py` reads this from the cookie, so a server module can tell a guest or the admin without asking `session`.
+
 A request whose browser goes away before the whole request has arrived is dropped without a reply and without an error in the log. Nothing arrived, so there is nothing to save, and no one is waiting for an answer. This is how a save ends when its tab is closed while the save is still being sent. Every other error still prints.
 
 ### 3.5 Pages
@@ -185,6 +187,8 @@ For replicated fact components:
 On the server, each replicated fact component has **one SQLite file per user**: `data/<user>/<component>.db`. The session resolves the user, the component's router resolves the file, and neither the schema nor the browser ever mentions users. The backend is written as if for a single user. Litestream streams every file continuously to object storage; the architecture never sees it, and restoring is one command.
 
 `session` is the exception: it keeps one shared file `data/session.db`, the identity registry, because it defines users and so cannot be per-user. While no user is signed in a replicated fact's outbox does not drain; signing in starts draining, so what was written anonymously becomes the account's, and what was not acknowledged before sign-out uploads at the next sign-in.
+
+`llm` keeps, beside each user's own file, one shared file `data/llm.db` for what guests spend: the guest keys, encrypted like an account's own keys; the limits; every guest's running total for each provider; and which guests are blocked. It is shared because the limit for all guests adds up many accounts. `evaluators` keeps one shared file `data/evaluators.db` with a copy of the admin's evaluators ticked as starters, rewritten whenever the admin saves one, so a try page can show them to a visitor who has no account.
 
 While anonymous, `notes` mints versions in the browser and the server adopts the client's number on first upload, so the anonymous note carries its history into the account. `session` keeps no outbox but a localStorage cache plus an owed sign-out, because identity has no records to version, and it closes registration once `MAX_USERS` accounts exist.
 
@@ -371,19 +375,22 @@ Two gates stand between the model and a lookup. The owner opts the query in (the
 
 Because a model's proposed tool input is untrusted, `llm`'s server module validates every tool input against the query's own payload schema before it reaches the browser; an input that fails is marked and answered with an error result rather than being asked.
 
+**Spending.** Every use of a provider costs the tokens the provider reports multiplied by that provider's published price, counted in `llm`'s server (Jev: $42 per billion input tokens; Anthropic: each model's published price). A guest spends only on the guest keys, one per provider, which the admin enters in Administration; a provider without a guest key is not offered to guests, and the admin's own keys are never spent on a guest. Running totals are kept per guest and per provider. Before a guest's request `llm` checks the limits, all counted since the start and not per day: the guest's own total across all providers ($1.00 at first), the total of all guests ($10.00), and an optional total per provider for all guests (none at first). It refuses a request that would go over one, and every request of a blocked guest. A guest sees only the share of their own allowance that is left, never an amount in dollars. While the admin views as a guest, what the admin runs is spent and counted as that guest's.
+
 ---
 
 ## 8. Pages
 
-A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` whose `src` is a built component's browser entry, `view.js` or `fact.js`, under `/static/components/`, or the composer under `/static/composer/`, with no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). The tags are the page's default composition; where a tag fills a role (7.3) and the page loads the composer, the composer (3.6) may mount a different implementation the user chose, in place, and a role's default tag needs only its own `view.js` loaded — the composer imports other members on demand. Five kinds, in increasing order of composition:
+A page is an HTML file: an import map plus component tags with attributes. Nothing else. Precisely, a page may contain only: the `<!doctype html>` declaration; `html`, `head` and `body`; `meta` and `title`; `link[rel=stylesheet]` whose `href` is under `/static/tokens/`; one `script[type=importmap]` whose JSON equals `vendor/vendor.json`'s importmap; `script[type=module][src]` whose `src` is a built component's browser entry, `view.js` or `fact.js`, under `/static/components/`, or the composer under `/static/composer/`, with no inline body; and custom-element tags (a hyphen in the tag name) with any attributes. Anything else — a `div`, a class, inline logic — fails the page check (section 11.2). The tags are the page's default composition; where a tag fills a role (7.3) and the page loads the composer, the composer (3.6) may mount a different implementation the user chose, in place, and a role's default tag needs only its own `view.js` loaded — the composer imports other members on demand. Six kinds, the first five in increasing order of composition:
 
 1. **Tokens page.** Shows the design tokens and the icons, so the visual vocabulary can be reviewed before anything uses it.
 2. **Contracts page.** The event, command, and query vocabulary, drawn from the running components: each contract with its schema, who emits or answers it, who consumes or asks. This is where the shared language is reviewed.
 3. **Components page.** Every component, built or planned, drawn from its manifest: its description, kind, shape, what it emits and consumes, what it answers, what it owns, and the computed list of components it interacts with. This is where you stand in front of the slip-box and think about which notes could point at which. The components page is the stem page of `catalog`.
 4. **Stem pages.** One per root component with its related components wired together: a fact component with its views, or a container view with the views it composes; `python3 checks/show.py pages` lists them. A stem page is the test bed for its root.
 5. **App pages.** Things created so far composed around a purpose: a journal, a chat with the language model, a book reader, or combinations of these. An app page is a book: a path through the box. The product is the app page at `/` (`pages/index.html`).
+6. **Try pages.** One tool shared by a link, `/try/<name>` (`pages/try/<name>.html`), for someone who has no account; a guest needs no key of their own, because a guest spends on the guest keys (7.7). A try page has no page links, no Books panel, no workshop switch and no sign-in; its one control is the free-use bar, shown only to a guest or a visitor not yet a guest, while a signed-in account sees the page as itself. A try page is in the `product` profile. When a fact that keeps starters finds its browser copy empty on a try page, it fills it with copies of the admin's starters for that page, so the visitor sees them before the first Run; each copy is the visitor's own, and later changes by the admin do not reach it.
 
-Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others: it groups its links by kind and shows none in the product profile (§12). A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`; `pages: list` returns pages in that order, then by path.
+Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others: it groups its links by kind and shows none in the product profile (§12). A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`, `try`; `pages: list` returns pages in that order, then by path.
 
 The contracts page and the components page show the same data in two arrangements. Neither is hand-written, so they cannot diverge.
 
@@ -484,14 +491,14 @@ server/          FastAPI entry (named "server", not "app", so it never clashes w
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
 tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
-pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design/<name>.html
+pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design/<name>.html, and pages/try/<name>.html, the try pages
 checks/          check.py, the one check command; show.py, prints the components, contracts and pages the server reports (7.1); tests/ its own unit tests, never served
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
 editor/          the editor kit (10); tests/ never served
 store/           the store interface; tests/ never served
 deploy/          systemd unit, litestream.yml (section 5) and the rclone units that copy the files (section 5) and anything else the host needs; never served
-data/            per-user SQLite files (section 5) and `books/`, the imported files, gitignored
+data/            per-user SQLite files (section 5), the shared files `session.db`, `llm.db` and `evaluators.db`, and `books/`, the imported files, gitignored
 .env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
 ```
 
@@ -506,6 +513,7 @@ Static serving is namespaced so the future app can own `/`:
 | `/static/editor/…` | the editor kit, `Cache-Control: no-cache`; its `tests/` are never served |
 | `/workshop/design/<name>` | `pages/workshop/design/<name>.html`, 404 if missing |
 | `/workshop/apps/<name>` | `pages/workshop/apps/<name>.html`, 404 if missing |
+| `/try/<name>` | `pages/try/<name>.html`, 404 if missing |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
 | `/` | `pages/index.html`, the product |
 
@@ -529,8 +537,8 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | Secrets stay out of the trace | The bus replaces the value of any event, query, or reply field whose schema marks it `x-secret` (7.2) with a fixed marker before the tap sees it, so no secret reaches the trace, the console, or another tab; the message delivered to the receiver still carries the real value |
 | Only marked queries are tools | The bus lets an `asks` of `"*: tool"` reach a query only when that query's registered schema carries a `tool` entry (7.7); any other query is refused as an undeclared ask, and the contract check requires a query's `tool` entry to be a non-empty `description` and `label` |
 | Contracts only grow | Schema compatibility check of the working tree against `HEAD`, over every `events/`, `queries/` and `commands/` schema: fails on a removed or renamed field, a new required field, a narrowed `type`, a removed `enum`/`const` value, a removed `oneOf`/`anyOf` branch, `additionalProperties` closing, or a schema file removed while its component remains, unless it is an event's schema and either no component consumes that event or the component no longer lists the event in its `emits`; names the path inside the schema and the components affected, from the manifests |
-| One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none |
-| Pages contain no logic | Page check: only an import map and tags, and exactly one `meta[name=kind]` naming one of the five kinds of section 8 |
+| One owner per fact | Store check: a fact component may open only the database bearing its own name; view components open none. While the browser changes account (12), `session` may only look, through the store interface, at whether any outbox in this browser still holds a row |
+| Pages contain no logic | Page check: only an import map and tags, and exactly one `meta[name=kind]` naming one of the six kinds of section 8 |
 | Tokens only | Style check: views use no colour, spacing, size, or type value that is not a token, in both `css` templates and the inline `style` attributes of `html` templates. Size means any property that places or sizes a box: width, height, inset, grid tracks, border width. Percentages, `fr`, and unitless factors in `calc()` are relative and allowed |
 | Icons are used and known | Icon check: every name in `tokens/icons.js` is used by some view as a literal `icon("name")`, and every `icon("name")` in a view exists. Names are literals in views, so the check stays static |
 | Vendored code is what it claims | Vendor check: every file under `vendor/` is listed in `vendor.json` with a matching sha256, every listed file exists, and every `sourceMappingURL` resolves |
@@ -560,9 +568,13 @@ The architecture document describes the rules; the checks are what make them rea
 - **Ordering across components.** The bus delivers in order within a tab, but two components reacting to the same event finish in any order. The read-then-event race is closed by the hold (4.2): `note-reader` reacts to `note.selected` by querying `notes: read(id)`, and a `note.changed` that lands while that read is open is held for the reader and delivered right after the reply, in order, so the reader never adopts the old body and then misses the new one. What remains an edge is reactions to the *same* event finishing in any order: nothing may assume another component reacted first (section 4, fourth rule). A later change from elsewhere — another device's edit pulled by `notes`, long after the hold closed — is still caught by version comparison.
 - **Remote-only facts fail offline.** That is by design: `llm`'s `complete` query replies at once with an error, and a failure that happens while an answer is arriving rides the turn to the chat through `completion.progressed`, where the user is looking, rather than through a separate event.
 - **Three shared vocabularies.** The event registry, the design tokens and the icons are global schemas in disguise. All are kept small: events are additive-only, tokens are minimal, icons grow one glyph at a time, each approved by sight. All change only with permission, and all are reviewed on a page before use.
-- **No cross-user features.** One database per user per component means the server never sees two users at once. For this app that is a feature.
+- **One place sees across accounts.** One database per user per component means a feature never sees two users at once. Administration is the one exception: shown only to the admin, it reads `session`'s registry and `llm`'s shared spending file. No user ever sees another's work.
 
 - **One user per browser.** Signing in adopts everything cached anonymously in that browser, so `notes` enqueues its whole cache to the account; a second account on the same browser is not a goal.
+
+- **Changing who the browser belongs to.** View as and Back to you hand the browser to another account, always the same way. `session` announces `session.changed` with `leaving`; every replicated fact then uploads its outbox and, once it is empty, empties its own local copy. `session` waits until no outbox in the browser holds a row, then has its server change the cookie and reloads the page as the other account. If an outbox cannot be emptied within a few seconds, for example offline, nothing changes and a notice says the change could not be saved yet. Device preferences stay; only the account's data is emptied. While the admin views as someone, a bar fixed above every page says whose account it is and offers Back to you; what the admin changes meanwhile is saved to that account.
+
+- **Administration lives in the gear's sheet.** The sheet the gear opens shows two tabs, Settings and Administration, only to the admin; everyone else sees Settings alone, with no tabs. Administration is not a workshop page, and it is hidden while the admin views as someone. Its actions on a guest (Reset use, Block, View as) each offer Undo, except View as, which Back to you reverses.
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
@@ -612,6 +624,11 @@ The architecture document describes the rules; the checks are what make them rea
 - **Evaluator**: a name and a list of yes / no or pick-one questions Jev can answer about a text, kept with one book and switched on or off; owned by `evaluators`. What it reads and when it runs is not decided yet.
 - **Journal**: the one book the user writes, one chapter per day, only today's page editable. Its days are owned by `journal`, and `books` presents them as a book.
 - **Choice point**: one worksheet from acceptance and commitment therapy, kept with one journal day: a situation, the thoughts and feelings it brought, what the user did or would do when hooked (away) and when unhooked (towards); owned by `choice-points`.
+- **Guest**: an account without a passkey, made for a visitor of a try page at its first use of the server; it spends only on the guest keys, within the limits (7.7).
+- **Admin**: the account registered first with a passkey; the only one that sees Administration.
+- **Try page**: a page that shares one tool by a link, `/try/<name>`, with someone who has no account (8).
+- **Starter**: one of the admin's things (for now an evaluator) ticked to be copied to every new guest of a try page.
+- **Free use**: the share of a guest's own allowance that is left, shown as a bar.
 
 ---
 
@@ -620,7 +637,12 @@ The architecture document describes the rules; the checks are what make them rea
 Where the product is heading. Nothing here is designed or built; each line is one sentence, and a proposal says how it leaves every line open.
 
 - Evaluators that trigger tools, where an evaluator notices something in what the user writes (a yes / no or pick-one judgment by Jev), a tool does something, and a tool can be set to run when an evaluator fires; these tools act, unlike the chat's tools of 7.7, which only look things up.
-- Using evaluators signed out, on the owner's Jev key for up to 100 requests and then asking for a key, leaving open how a signed-out visitor is counted and how all signed-out use together is capped, how a signed-out visitor gives a key, and whether signing up keeps the count.
+- Try pages for Chats, Books and the Journal, each one more page under `/try/`, made as the try-page skill describes (sketch: `~/.claude/plans/try-links.md`).
+- Money limits for chats, so an account can cap what its own key spends.
+- A guest putting their trial back to the starters, with Undo, without resetting what they have spent.
+- A guest keeping their work by adding a passkey, which turns the guest into an ordinary account.
+- A record of every use and what it cost, for audit, beside the running totals.
+- Telegram notifications to the owner, for example when a new guest arrives or a limit is reached.
 - The side-dock chat, now being built, knowing more of what the reader is looking at: the open book and the chapter being read.
 - Every chat able to draw on the whole library — every book, note and highlight — so that what the reader marked and wrote shapes the answers.
 - Chats linked to books, so a book shows its notes and its chats.
@@ -645,3 +667,11 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - A written tool run on a passage the user selects, not only on typed text (sketch: `~/.claude/plans/book-tools.md`).
 - A built-in tool that fills a new tool's page from the passage being read, and another that scores how well a tool's questions and criteria match what the book says (sketch: `~/.claude/plans/book-tools.md`).
 - Optional questions and weights in a written tool's score, only if a real tool asks for them (sketch: `~/.claude/plans/book-tools.md`).
+
+---
+
+## 15. To do
+
+Work that is decided but not done yet. Remove a line when its work is done.
+
+- On the product page, signed out, Chats and Evaluators disagree. Chats hides the chats, which is the right behaviour, but says "Chats need a connection.", which blames the network instead of asking the user to sign in. Evaluators says the right thing, "Sign in to run evaluators.", but shows the evaluators and says it only when the user tries to run one. Both should behave like Chats and speak like Evaluators: signed out, the panel shows no chats or evaluators and asks the user to sign in.

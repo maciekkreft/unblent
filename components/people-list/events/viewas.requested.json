@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin pressed View as on a person, or Back to you (user null): session hands the browser to that account (12).",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "user"
+  ],
+  "additionalProperties": false
+}

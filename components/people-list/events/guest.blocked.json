@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin blocked or unblocked a guest in People: a blocked guest's paid tools are refused (7.7). Undo is the opposite.",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "string"
+    },
+    "blocked": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "user",
+    "blocked"
+  ],
+  "additionalProperties": false
+}

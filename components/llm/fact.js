@@ -5,6 +5,9 @@ import progressed from "./events/completion.progressed.json" with { type: "json"
 import read from "./queries/read.json" with { type: "json" };
 import complete from "./queries/complete.json" with { type: "json" };
 import decide from "./queries/decide.json" with { type: "json" };
+// Planned (9, step 1): the try-links contracts, registered so the bus knows them.
+import spendingChanged from "./events/spending.changed.json" with { type: "json" };
+import spending from "./queries/spending.json" with { type: "json" };
 
 // The browser entry (3.2): the one place this component touches the network, and
 // only to reach its own server module (section 3). All fetch and streaming lives
@@ -152,6 +155,6 @@ mount(machine, {
     stream,
     decide: decideOnce,
   },
-  events: { "llm.changed": changed, "completion.progressed": progressed },
-  queries: { read, complete, decide },
+  events: { "llm.changed": changed, "completion.progressed": progressed, "spending.changed": spendingChanged },
+  queries: { read, complete, decide, spending },
 });

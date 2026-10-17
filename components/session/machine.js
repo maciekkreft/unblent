@@ -77,12 +77,16 @@ export const machine = setup({
       "`MAX_USERS`, and a refused sign-in or registration is announced so a notice can show it.",
     kind: "fact",
     shape: "replicated",
-    emits: ["session.changed", "session.refused"],
+    emits: ["session.changed", "session.refused", "people.changed"],
     owns: "the signed-in user",
   },
   context: ({ input }) => ({ ...parse(input.stored), api: input.api, save: input.save }),
   initial: "ready",
   on: {
+    // Planned (9, step 1): the try-links contracts, which do nothing until they are built.
+    "guest?": { actions: () => {} },
+    "people?": { actions: () => {} },
+    "viewas.requested": { actions: () => {} },
     // Query for the starting picture (4.3): answered from the cache at once, before
     // any network, so a view mounts without waiting on the server.
     "read?": {

@@ -43,7 +43,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Jev's answers, with the request's input tokens and time; or an error. For a yesno question p is the probability the answer is yes. For a pick question choice is the id of the option Jev picked, p its probability, probabilities the probability of every option, and confidence how sure Jev is, from how the probabilities are spread.",
+    "description": "Jev's answers, with the request's input tokens and time; or an error. For a yesno question p is the probability the answer is yes. For a pick question choice is the id of the option Jev picked, p its probability, probabilities the probability of every option, and confidence how sure Jev is, from how the probabilities are spread. For a guest (7.7): used-up when the guest's own allowance is spent, paused when a limit for all guests is reached, blocked when the admin blocked the guest.",
     "oneOf": [
       {
         "type": "object",
@@ -84,7 +84,7 @@
       {
         "type": "object",
         "properties": {
-          "error": { "enum": ["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable"] }
+          "error": { "enum": ["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable", "used-up", "paused", "blocked"] }
         },
         "required": ["error"],
         "additionalProperties": false

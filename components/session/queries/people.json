@@ -1,0 +1,107 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "people takes nothing. Answered only to the admin (12).",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every account, the admin first and then guests newest first, with what the server recorded about each (3.4); or not-admin, or unavailable.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "userId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "guest": {
+                  "type": "boolean"
+                },
+                "admin": {
+                  "type": "boolean"
+                },
+                "firstSeen": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Milliseconds since the epoch."
+                },
+                "lastSeen": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Milliseconds since the epoch."
+                },
+                "country": {
+                  "type": "string",
+                  "description": "Two-letter country code from Cloudflare's visitor location headers; empty when unknown."
+                },
+                "city": {
+                  "type": "string",
+                  "description": "Empty when unknown."
+                },
+                "browser": {
+                  "type": "string"
+                },
+                "system": {
+                  "type": "string"
+                },
+                "device": {
+                  "enum": [
+                    "phone",
+                    "desk"
+                  ]
+                },
+                "space": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Bytes the account's files take, for display only."
+                }
+              },
+              "required": [
+                "userId",
+                "name",
+                "guest",
+                "admin",
+                "firstSeen",
+                "lastSeen",
+                "space"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "people"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "enum": [
+              "not-admin",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": [
+    "people.changed"
+  ]
+}

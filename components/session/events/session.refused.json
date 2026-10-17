@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A sign-in or sign-out gesture could not be honoured. notice-stack surfaces it (12).",
+  "description": "A sign-in or sign-out gesture could not be honoured. notice-stack surfaces it (12). unsaved: the browser could not change account because a change could not be uploaded yet (12).",
   "type": "object",
   "properties": {
-    "reason": { "enum": ["cancelled", "registration-closed", "unknown-credential", "unavailable"] }
+    "reason": { "enum": ["cancelled", "registration-closed", "unknown-credential", "unavailable", "unsaved"] }
   },
   "required": ["reason"],
   "additionalProperties": false

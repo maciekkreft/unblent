@@ -138,6 +138,13 @@
             "removing": {
               "type": "boolean",
               "description": "The evaluator waits out its undo window (removal.started)."
+            },
+            "starterFor": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The try pages (8) whose new guests get a copy of this evaluator, by name, such as \"evaluators\"; empty or absent for none. Only the admin's evaluators carry it."
             }
           },
           "required": [

@@ -1,0 +1,136 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "spending takes nothing. Answered only to the admin (7.7, 12).",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What guests spent, in dollars, since the start: in total, per provider and per guest, with the limits and whether each guest key is saved; or not-admin, or unavailable.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "allGuests": {
+            "type": "object",
+            "properties": {
+              "spent": {
+                "type": "number",
+                "minimum": 0
+              },
+              "limit": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "spent",
+              "limit"
+            ],
+            "additionalProperties": false
+          },
+          "guest": {
+            "type": "number",
+            "minimum": 0,
+            "description": "The limit for each guest, in dollars, across all providers."
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "spent": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Dollars all guests spent on this provider's guest key."
+                },
+                "limit": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "This provider's own limit for all guests; null for none."
+                },
+                "guestKeySet": {
+                  "type": "boolean",
+                  "description": "Whether a guest key is saved. Never the key."
+                },
+                "price": {
+                  "type": "string",
+                  "description": "The price used, as people read it, such as \"$42 per billion tokens read\"."
+                }
+              },
+              "required": [
+                "id",
+                "label",
+                "spent",
+                "limit",
+                "guestKeySet",
+                "price"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "guests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "userId": {
+                  "type": "string"
+                },
+                "spent": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "blocked": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "userId",
+                "spent",
+                "blocked"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "allGuests",
+          "guest",
+          "providers",
+          "guests"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "enum": [
+              "not-admin",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": [
+    "spending.changed"
+  ]
+}

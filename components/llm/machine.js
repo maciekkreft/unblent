@@ -162,8 +162,8 @@ export const machine = setup({
     kind: "fact",
     shape: "remote-only",
     owns: "access to the language model",
-    emits: ["llm.changed", "completion.progressed"],
-    asks: ["session: read"],
+    emits: ["llm.changed", "completion.progressed", "spending.changed"],
+    asks: ["session: read", "session: guest"],
   },
   context: ({ input }) => ({
     read: input.read,
@@ -178,6 +178,14 @@ export const machine = setup({
     decided: null, // the reply of the decide? in flight
   }),
   type: "parallel",
+  on: {
+    // Planned (9, step 1): the try-links contracts, which do nothing until they are built.
+    "spending?": { actions: () => {} },
+    "guest.blocked": { actions: () => {} },
+    "use.reset": { actions: () => {} },
+    "limits.edited": { actions: () => {} },
+    "guestkeys.edited": { actions: () => {} },
+  },
   states: {
     account: {
       // The picture depends on who is signed in (3.4); session.changed re-syncs it

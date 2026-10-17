@@ -1,0 +1,78 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "guest takes nothing. Asked by the fact that first needs the server on a try page (3.4): when nobody is signed in, session makes a guest account and sets the cookie; when an account is already held, it answers with that one.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The session once this browser holds a guest account, as session: read answers it; or why no guest was made: not-a-try-page outside a try page (8), unavailable when the server cannot be reached.",
+    "oneOf": [
+      {
+        "description": "The signed-in user's id or null, and whether a passkey may still be registered (registry has room, MAX_USERS).",
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "registrationOpen": {
+            "type": "boolean"
+          },
+          "guest": {
+            "type": "boolean",
+            "description": "The account is a guest: no passkey, made on a try page (3.4). False when absent."
+          },
+          "admin": {
+            "type": "boolean",
+            "description": "The account is the admin, the first registered with a passkey (3.4). False when absent, and false while the admin views as someone."
+          },
+          "name": {
+            "type": "string",
+            "description": "The account's name as people see it, such as \"Guest 14\"."
+          },
+          "viewingAs": {
+            "type": "string",
+            "description": "Only while the admin views as someone (12): the name of the account the browser holds."
+          },
+          "startedOverAt": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "When this account last started over, in milliseconds since the epoch, so the page can offer Undo during the undo window after the reload (12)."
+          },
+          "leaving": {
+            "type": "boolean",
+            "description": "The browser is about to change account (12): every replicated fact uploads its outbox and then empties its local copy."
+          }
+        },
+        "required": [
+          "userId",
+          "registrationOpen"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "enum": [
+              "not-a-try-page",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": [
+    "session.changed"
+  ]
+}

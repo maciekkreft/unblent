@@ -4,7 +4,12 @@
   "type": "object",
   "properties": {
     "userId": { "type": ["string", "null"] },
-    "registrationOpen": { "type": "boolean" }
+    "registrationOpen": { "type": "boolean" },
+    "guest": { "type": "boolean", "description": "The account is a guest: no passkey, made on a try page (3.4). False when absent." },
+    "admin": { "type": "boolean", "description": "The account is the admin, the first registered with a passkey (3.4). False when absent, and false while the admin views as someone." },
+    "name": { "type": "string", "description": "The account's name as people see it, such as \"Guest 14\"." },
+    "viewingAs": { "type": "string", "description": "Only while the admin views as someone (12): the name of the account the browser holds." },
+    "leaving": { "type": "boolean", "description": "The browser is about to change account (12): every replicated fact uploads its outbox and then empties its local copy." }
   },
   "required": ["userId"],
   "additionalProperties": false

@@ -91,7 +91,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Accepted, echoing the turn id; or an honest refusal (4.2). The answer follows as `completion.progressed` events.",
+    "description": "Accepted, echoing the turn id; or an honest refusal (4.2). The answer follows as `completion.progressed` events. For a guest (7.7): used-up when the guest's own allowance is spent, paused when a limit for all guests is reached, blocked when the admin blocked the guest.",
     "oneOf": [
       {
         "type": "object",
@@ -101,7 +101,7 @@
       },
       {
         "type": "object",
-        "properties": { "error": { "enum": ["busy", "signed-out", "no-key", "unavailable"] } },
+        "properties": { "error": { "enum": ["busy", "signed-out", "no-key", "unavailable", "used-up", "paused", "blocked"] } },
         "required": ["error"],
         "additionalProperties": false
       }

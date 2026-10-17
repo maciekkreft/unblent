@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin ticked or unticked one of their evaluators as a starter for a try page (8): new guests of that page get a copy of each ticked one.",
+  "type": "object",
+  "properties": {
+    "evaluator": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "page": {
+      "type": "string",
+      "minLength": 1
+    },
+    "on": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "evaluator",
+    "page",
+    "on"
+  ],
+  "additionalProperties": false
+}

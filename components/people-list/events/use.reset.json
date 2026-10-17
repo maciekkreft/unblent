@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin pressed Reset use on a guest: the guest's spending goes back to $0. undone: the admin pressed Undo, and llm brings back the totals from before the reset.",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "string"
+    },
+    "undone": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "user"
+  ],
+  "additionalProperties": false
+}

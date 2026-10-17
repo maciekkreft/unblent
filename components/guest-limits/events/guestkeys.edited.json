@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin saved or removed a guest key in Administration (7.7). Only the keys that changed are present; an empty string removes that key. Each key is marked secret (7.2), so the bus keeps it out of the trace.",
+  "type": "object",
+  "properties": {
+    "jev": {
+      "type": "string",
+      "x-secret": true
+    },
+    "anthropic": {
+      "type": "string",
+      "x-secret": true
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

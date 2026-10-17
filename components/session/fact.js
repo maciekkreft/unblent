@@ -4,6 +4,10 @@ import { openStore } from "./store.js";
 import changed from "./events/session.changed.json" with { type: "json" };
 import refused from "./events/session.refused.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
+// Planned (9, step 1): the try-links contracts, registered so the bus knows them.
+import peopleChanged from "./events/people.changed.json" with { type: "json" };
+import guest from "./queries/guest.json" with { type: "json" };
+import people from "./queries/people.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the localStorage
 // cache and the passkey `api` — and mounts it, so machine.js stays importable in
@@ -127,8 +131,8 @@ const api = {
 
 const actor = mount(machine, {
   input: { stored: store.read(), save: store.write, api },
-  events: { "session.changed": changed, "session.refused": refused },
-  queries: { read },
+  events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged },
+  queries: { read, guest, people },
 });
 
 // On mount and whenever the tab regains focus, reconcile with the server (5): this

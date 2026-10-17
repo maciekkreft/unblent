@@ -64,7 +64,7 @@ for (const engine of ENGINES) {
       assert.match(list, /askers component-list/);
 
       const pagesList = await cardText(page, "pages: list");
-      assert.match(pagesList, /askers page-nav/);
+      assert.match(pagesList, /askers [a-z, -]*\bpage-nav\b/);
 
       // A field a schema marks x-secret (7.2) wears a "secret" badge, and only that
       // field does, so a reviewer sees which values the bus keeps out of the trace.

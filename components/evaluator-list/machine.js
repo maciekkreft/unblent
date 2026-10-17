@@ -288,7 +288,7 @@ export const machine = setup({
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list", "pins: read"],
+    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list", "pins: read", "llm: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -450,6 +450,10 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    // Planned (9, step 1): the free-use messages under Run (try links), which do nothing
+    // until they are built.
+    "llm.changed": { actions: () => {} },
+    "session.changed": { actions: () => {} },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "evaluator.opened": { actions: assign({ open: ({ event }) => event.id }) },
     "subject.changed": follow(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),

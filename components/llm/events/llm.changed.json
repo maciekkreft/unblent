@@ -43,6 +43,17 @@
       },
       "required": ["keySet"],
       "additionalProperties": false
+    },
+    "freeUse": {
+      "type": "object",
+      "description": "Only for a guest (7.7): the share of the guest's own allowance left, whether the guest is blocked, and the providers no guest may use now because a limit for all guests is reached. Never an amount.",
+      "properties": {
+        "left": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blocked": { "type": "boolean" },
+        "paused": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["left", "blocked", "paused"],
+      "additionalProperties": false
     }
   },
   "required": ["signedIn", "provider", "providers", "model", "models", "effort", "efforts", "ttl"],
