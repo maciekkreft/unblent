@@ -136,7 +136,8 @@ function askQuery(actor, name, payload = {}) {
 test("queued queries are answered in order after the store loads (anonymous)", async () => {
   let resolveAll;
   const store = fakeStore();
-  store.all = () => new Promise((r) => (resolveAll = () => r([{ id: ID, title: "T", body: "B", version: 3, updatedAt: 5 }])));
+  const gate = new Promise((r) => (resolveAll = r));
+  store.all = () => gate.then(() => [{ id: ID, title: "T", body: "B", version: 3, updatedAt: 5 }]);
   const { actor } = start(store);
   assert.equal(actor.getSnapshot().value, "loading");
   const order = [];
@@ -686,7 +687,8 @@ test("a 409 whose server copy is a tombstone adopts the delete and surfaces the 
 test("a discard queued while the store is loading is applied once ready", async () => {
   let resolveAll;
   const store = fakeStore();
-  store.all = () => new Promise((r) => (resolveAll = () => r([{ id: ID, title: "A", body: "a", version: 1, updatedAt: 5 }])));
+  const gate = new Promise((r) => (resolveAll = r));
+  store.all = () => gate.then(() => [{ id: ID, title: "A", body: "a", version: 1, updatedAt: 5 }]);
   const { actor, deleted } = start(store);
   actor.send({ type: "note.discarded", id: ID });
   resolveAll();
@@ -768,7 +770,8 @@ test("open? follows the subject for the Highlights, and answers nothing when the
 test("open? waits for the store, and a deleted open note is not answered", async () => {
   let resolveAll;
   const store = fakeStore();
-  store.all = () => new Promise((r) => (resolveAll = () => r([{ id: ID, title: "T", body: "B", version: 1, updatedAt: 5 }])));
+  const gate = new Promise((r) => (resolveAll = r));
+  store.all = () => gate.then(() => [{ id: ID, title: "T", body: "B", version: 1, updatedAt: 5 }]);
   const { actor } = start(store);
   actor.send({ type: "note.opened", id: ID });
   const early = askOpen(actor);

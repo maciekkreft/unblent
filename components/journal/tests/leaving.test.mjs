@@ -14,14 +14,14 @@ const flush = async (n = 30) => {
   for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0));
 };
 
-function fakeStore(rows = []) {
+function fakeStore(rows = [], kept = undefined) {
   const outbox = new Map(rows.map((r) => [r.key ?? r.id, r]));
   const log = [];
   const known = {
     outboxAll: async () => [...outbox.values()],
     outboxPut: async (r) => void outbox.set(r.key ?? r.id, r),
     outboxDelete: async (k) => void outbox.delete(k),
-    metaGet: async () => undefined,
+    metaGet: async (key) => (key === "userId" ? kept : undefined),
     empty: async () => {
       log.push("empty");
       outbox.clear();
@@ -54,8 +54,8 @@ function fakeApi({ offline = false } = {}) {
 
 const ask = async (target, name) => (target === "session" ? { userId: "u1", registrationOpen: false } : empty());
 
-function start(rows, apiOptions) {
-  const { store, outbox, log } = fakeStore(rows);
+function start(rows, apiOptions, kept) {
+  const { store, outbox, log } = fakeStore(rows, kept);
   const { api, calls } = fakeApi(apiOptions);
   const actor = createActor(machine, { input: { store, api, ask, now: () => 1000, revoke: () => {} } });
   actor.start();
@@ -87,4 +87,23 @@ test("offline, leaving keeps the outbox and the copy; news without leaving ends 
   assert.equal(actor.getSnapshot().context.leaving, false);
   assert.deepEqual(log, []);
   actor.stop();
+});
+
+// A copy left behind by a change of account made while this fact was not on the page
+// (12) is emptied when the fact starts; its own account's copy, or one with rows still
+// to upload, is kept.
+test("a copy kept for another account is emptied when the fact starts", async () => {
+  const { actor, log } = start([], undefined, "u0");
+  await flush();
+  assert.deepEqual(log, ["empty"]);
+  actor.stop();
+});
+
+test("the account's own copy, or one still to upload, is kept when the fact starts", async () => {
+  for (const [rows, kept] of [[[], "u1"], [[], undefined], [[ROW], "u0"]]) {
+    const { actor, log } = start(rows, { offline: true }, kept);
+    await flush();
+    assert.deepEqual(log, [], `kept ${kept} with ${rows.length} rows`);
+    actor.stop();
+  }
 });

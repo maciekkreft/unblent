@@ -423,6 +423,17 @@ const SYNC_IDLE_MS = 2000;
 
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
+// The browser changed account while this fact was not on the page (12): a copy kept for
+// another account, with nothing of it left to upload, is emptied before it is read, so
+// none of it is shown to the account now signed in or uploaded as its own.
+async function claim(store, ask) {
+  const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
+  const userId = typeof session?.userId === "string" ? session.userId : null;
+  if (!userId) return;
+  const [kept, outbox] = await Promise.all([store.metaGet("userId"), store.outboxAll()]);
+  if (kept && kept !== userId && outbox.length === 0) await store.empty();
+}
+
 export const machine = setup({
   guards: {
     syncable: ({ context }) => Boolean(context.userId) && context.api != null,
@@ -433,7 +444,8 @@ export const machine = setup({
   },
   actors: {
     load: fromPromise(async ({ input }) => {
-      const { store } = input;
+      const { store, ask } = input;
+      await claim(store, ask);
       const [books, outbox, cursor, userId, open] = await Promise.all([
         store.all(),
         store.outboxAll(),
@@ -547,7 +559,7 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ store: context.store }),
+        input: ({ context }) => ({ store: context.store, ask: context.ask }),
         onDone: {
           target: "checkingSession",
           actions: assign({

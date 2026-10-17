@@ -452,6 +452,17 @@ const HANDLED = Object.fromEntries(
 // A list another fact answered, or [] when it is not on the page or could not answer.
 const listed = (reply, name) => (Array.isArray(reply?.[name]) ? reply[name] : []);
 
+// The browser changed account while this fact was not on the page (12): a copy kept for
+// another account, with nothing of it left to upload, is emptied before it is read, so
+// none of it is shown to the account now signed in or uploaded as its own.
+async function claim(store, ask) {
+  const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
+  const userId = typeof session?.userId === "string" ? session.userId : null;
+  if (!userId) return;
+  const [kept, outbox] = await Promise.all([store.metaGet("userId"), store.outboxAll()]);
+  if (kept && kept !== userId && outbox.length === 0) await store.empty();
+}
+
 export const machine = setup({
   guards: {
     syncable: ({ context }) => Boolean(context.userId) && context.api != null,
@@ -466,6 +477,7 @@ export const machine = setup({
     // lines to check. Missing asks (a Node test) read as signed out with nothing listed.
     load: fromPromise(async ({ input }) => {
       const { store, ask } = input;
+      await claim(store, ask);
       const asked = (target, name, payload, fallback) =>
         ask ? ask(target, name, payload).catch(() => fallback) : Promise.resolve(fallback);
       const [boxes, answers, outbox, cursor, userId] = await Promise.all([

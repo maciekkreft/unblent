@@ -301,7 +301,8 @@ test("a gesture or query that lands while the store loads waits for it", async (
   let release;
   const store = fakeStore();
   const all = store.all;
-  store.all = () => new Promise((r) => (release = () => r(all())));
+  const gate = new Promise((r) => (release = r));
+  store.all = () => gate.then(() => all());
   const { actor, changed } = start(store);
   actor.send(saved());
   const answer = list(actor);
