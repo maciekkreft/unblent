@@ -17,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -1864,6 +1865,31 @@ def _timed(timings: list, name: str, func, *args):
     return result
 
 
+class _Background:
+    """A rule that mostly waits on another program (Node, systemctl, journalctl) runs in
+    a thread while the other rules run, so the fast phase (11) pays for the wait once.
+    A failure inside it, fail()'s exit included, is raised where its result is taken,
+    so it still fails the check."""
+
+    def __init__(self, func, *args):
+        self._result = None
+        self._error = None
+        self._thread = threading.Thread(target=self._run, args=(func, *args), daemon=True)
+        self._thread.start()
+
+    def _run(self, func, *args):
+        try:
+            self._result = func(*args)
+        except BaseException as error:
+            self._error = error
+
+    def result(self):
+        self._thread.join()
+        if self._error is not None:
+            raise self._error
+        return self._result
+
+
 def _enforce_budget(timings: list, budget: float, phase: str) -> None:
     total = sum(t for t, _ in timings)
     if total > budget:
@@ -1923,29 +1949,34 @@ def main() -> None:
     changed = "--changed" in argv
     only = _only_value(argv)
     timings = []
+    # The two slow rules wait on other programs, so they start first and the rules
+    # that need no manifests run meanwhile. Each timing is the main thread's own time,
+    # waits included, so the timings still add up to the phase's wall time (11).
+    manifests_reader = _Background(read_manifests)
+    backup = _Background(check_backup)
     _timed(timings, "vendor", check_vendor)
     _timed(timings, "layout", check_layout)
-    manifests = _timed(timings, "manifests", read_manifests)
+    _timed(timings, "imports", check_imports)
+    _timed(timings, "composer imports", check_composer_imports)
+    _timed(timings, "composer", check_composer)
+    _timed(timings, "python imports", check_python_imports)
+    parsed_pages = _timed(timings, "pages", check_pages)
+    _timed(timings, "document", check_document_writes)
+    _timed(timings, "styles", check_styles)
+    _timed(timings, "icons", check_icons)
+    manifests = _timed(timings, "manifests (wait)", manifests_reader.result)
     _timed(timings, "manifest check", check_manifests, manifests)
     _timed(timings, "role check", check_roles, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
     _timed(timings, "contract check", check_contracts, manifests)
     _timed(timings, "supersession check", check_supersession, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
-    _timed(timings, "imports", check_imports)
     _timed(timings, "kit", check_kit, manifests)
     _timed(timings, "editor kit", check_editor, manifests)
-    _timed(timings, "composer imports", check_composer_imports)
-    _timed(timings, "composer", check_composer)
-    _timed(timings, "python imports", check_python_imports)
     _timed(timings, "store check", check_store, manifests)
-    parsed_pages = _timed(timings, "pages", check_pages)
     _timed(timings, "shows-on", check_shows_on, manifests, parsed_pages)
     _timed(timings, "page components", check_page_components, manifests)
-    _timed(timings, "document", check_document_writes)
-    _timed(timings, "styles", check_styles)
-    _timed(timings, "icons", check_icons)
-    _timed(timings, "backup", check_backup)
+    _timed(timings, "backup (wait)", backup.result)
     _enforce_budget(timings, STATIC_BUDGET_S, "the fast phase")
     if static_only:
         return
