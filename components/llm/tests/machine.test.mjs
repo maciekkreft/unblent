@@ -541,3 +541,17 @@ test("Block, Unblock, Reset use and its Undo reach the server and announce what 
   ]);
   await until(() => h.emitted.filter((e) => e.type === "spending.changed").length >= 1);
 });
+
+// S8: a guest key saved while Administration was reading what guests spent was lost.
+test("an admin's edit made while what guests spent is being read still reaches the server", async () => {
+  let answer;
+  const h = start({ spending: () => new Promise((r) => (answer = r)), edit: () => SPENT });
+  await ready(h.actor);
+  const held = query(h.actor, "spending?", {}, SPENDING.reply);
+  assert.equal(h.actor.getSnapshot().value.spending, "reading");
+  h.actor.send({ type: "guestkeys.edited", jev: "secret" });
+  await until(() => h.calls.edit.length === 1);
+  assert.deepEqual(h.calls.edit, [["guestkeys", { jev: "secret" }]]);
+  assert.deepEqual(await held, SPENT, "the held asker gets the picture after the edit");
+  answer?.({ error: "unavailable" });
+});

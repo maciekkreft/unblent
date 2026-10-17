@@ -78,6 +78,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       ["10% or less", { left: 0.08, blocked: false, paused: [] }, "Free use 8% left", null],
       ["used up", { left: 0, blocked: false, paused: [] }, "Free use used up", "You have used all your free use."],
       ["paused for every guest", { left: 0.4, blocked: false, paused: ["jev", "anthropic"] }, "Free use 40% left", "Free trials are paused for now."],
+      ["blocked", { left: 0.4, blocked: true, paused: [] }, "Free use ended", "This trial has ended."],
     ]) {
       test(`${name}: the bar says "${said}"${notice ? " and Run is off" : ""}`, async () => {
         const { context, page, problems } = await guestPage(browser, () => freeUse);

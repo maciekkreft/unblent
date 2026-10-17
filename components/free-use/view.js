@@ -61,14 +61,15 @@ class FreeUse extends LitElement {
       border-radius: var(--radius-full);
       background: var(--color-accent);
     }
-    /* 10% or less: the warning colour; nothing left: the danger colour (screen 2). */
+    /* 10% or less: the warning colour; nothing left, or blocked: the danger colour (screen 2). */
     .low {
       color: var(--color-warning);
     }
     .low .fill {
       background: var(--color-warning);
     }
-    .out {
+    .out,
+    .ended {
       color: var(--color-danger);
     }
     .left {
@@ -80,12 +81,12 @@ class FreeUse extends LitElement {
 
   render() {
     const share = this.#actor.snapshot?.context.share ?? null;
-    const level = levelOf(share);
+    const level = levelOf(share, this.#actor.snapshot?.context.blocked === true);
     // Nothing for an account that is not a guest, so the strip keeps its own controls.
     this.hidden = level == null;
     if (level == null) return nothing;
-    const percent = percentOf(share);
-    const said = level === "out" ? "used up" : `${percent}% left`;
+    const percent = level === "ended" ? 0 : percentOf(share);
+    const said = level === "ended" ? "ended" : level === "out" ? "used up" : `${percent}% left`;
     return html`
       <span class="use ${level}">
         <span>Free use</span>

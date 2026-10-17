@@ -210,7 +210,8 @@ export const machine = setup({
       "a provider's own limit, or has no guest key, and as blocked when the admin blocked it; the last request may go a " +
       "little over, because its cost is known only after. A guest's picture carries the share of its allowance left, never " +
       "an amount, and is read again after each of its requests. Only the admin reads what guests spent and changes the " +
-      "limits and guest keys. The settings belong to the account, so they are the " +
+      "limits and guest keys; a change made while what guests spent is being read is still " +
+      "saved. The settings belong to the account, so they are the " +
       "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call.",
@@ -425,8 +426,17 @@ export const machine = setup({
             "use.reset": { target: "editing" },
           },
         },
+        // An edit made while the picture is read is never dropped: the read is left, the
+        // edit goes to the server, and every held asker gets the answer to the edit,
+        // which is the newer picture.
         reading: {
-          on: { "spending?": { actions: "holdSpending" } },
+          on: {
+            "spending?": { actions: "holdSpending" },
+            "limits.edited": { target: "editing" },
+            "guestkeys.edited": { target: "editing" },
+            "guest.blocked": { target: "editing" },
+            "use.reset": { target: "editing" },
+          },
           invoke: {
             src: "spending",
             input: ({ context }) => ({ spending: context.spending }),

@@ -14,10 +14,21 @@ export const PATH = `/try/${PAGE}`;
 
 export const UNTITLED = "Untitled evaluator";
 
+// A question Run would ask (the same rule as evaluator-list's; components never import
+// each other, 11.2): not being removed, switched on, written, and for a pick question
+// two live options with distinct names.
+const filled = (s) => typeof s === "string" && s.trim() !== "";
+const pickable = (question) => {
+  const names = (question.options ?? []).filter((o) => !o.removing).map((o) => (o.name ?? "").trim());
+  return names.length >= 2 && names.every((n) => n !== "") && new Set(names).size === names.length;
+};
+const askable = (question) =>
+  !question.removing && question.on !== false && filled(question.text) && (question.kind !== "pick" || pickable(question));
+
 // What a book's group lists: the admin's evaluators kept with each book, the books in
 // the order books lists them (the Journal first), each evaluator in id order with its
-// tick for this page and how many questions it has. One in its undo window, or of a
-// book no longer listed, is left out.
+// tick for this page and how many questions Run would ask. One in its undo window, or
+// of a book no longer listed, is left out.
 export const groupsOf = ({ books, evaluators }) =>
   books
     .map((book) => ({
@@ -29,7 +40,7 @@ export const groupsOf = ({ books, evaluators }) =>
         .map((e) => ({
           id: e.id,
           name: e.name || UNTITLED,
-          questions: (e.questions ?? []).filter((q) => !q.removing).length,
+          questions: (e.questions ?? []).filter(askable).length,
           ticked: Array.isArray(e.starterFor) && e.starterFor.includes(PAGE),
         })),
     }))
@@ -59,7 +70,8 @@ export const machine = setup({
     description:
       "The Evaluators group of Starters in Administration, shown only to the admin: the " +
       "try page's link with Copy link, which copies it ready to paste, and the admin's " +
-      "evaluators grouped by book, each with a tick. A new guest of the Evaluators try " +
+      "evaluators grouped by book, each with a tick and how many of its questions are " +
+      "written and switched on. A new guest of the Evaluators try " +
       "page gets a copy of each ticked evaluator as it is " +
       "then, kept with the guest's Journal. Each later try page adds its own group as a " +
       "view of its own.",

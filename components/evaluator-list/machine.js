@@ -33,13 +33,6 @@ export const rows = (evaluators) => live(evaluators);
 // A question switched off in the editor is kept but not asked; one without `on` is on.
 const switchedOn = (question) => question.on !== false;
 
-// The line under an evaluator's name: its switched-on questions, leaving out any being
-// removed, "· off" when its tick is off, and, for one shown in the journal from another
-// book, that book's title.
-export const subtitle = (evaluator, from = null) => {
-  const n = live(evaluator.questions).filter(switchedOn).length;
-  return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}${from == null ? "" : ` · ${from}`}`;
-};
 
 // The journal lists its own evaluators and every one marked "Show in journal"; any other
 // book lists only its own.
@@ -60,6 +53,14 @@ const pickable = (question) => {
 
 const askableQuestion = (question) =>
   !question.removing && switchedOn(question) && filled(question.text) && (question.kind !== "pick" || pickable(question));
+
+// The line under an evaluator's name: how many questions Run would ask (written,
+// switched on, and for a pick question two named options), "· off" when its tick is
+// off, and, for one shown in the journal from another book, that book's title.
+export const subtitle = (evaluator, from = null) => {
+  const n = evaluator.questions.filter(askableQuestion).length;
+  return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}${from == null ? "" : ` · ${from}`}`;
+};
 
 // What a run asks: each shown, switched-on evaluator with its askable, switched-on
 // questions, so its score uses only those; one with none is not run.
@@ -297,7 +298,7 @@ export const machine = setup({
       "Lists the evaluators kept with the open book. New evaluator is the first row and opens " +
       "an empty editor; the evaluator appears in the list once something is written in it. Each " +
       "row has a tick box that switches the evaluator on or off, its name, greyed when off, and " +
-      "how many of its questions are switched on. With `subject` it follows the book open on the stage, and " +
+      "how many of its questions Run would ask: those written and switched on. With `subject` it follows the book open on the stage, and " +
       "another book shows that book's evaluators; while no book is open, or without `subject`, " +
       "it says to open a book. While the Journal is open it lists the Journal's evaluators and " +
       "every evaluator of another book marked Show in journal, that book's title on the line " +

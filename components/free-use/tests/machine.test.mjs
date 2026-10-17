@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, shareOf, levelOf, percentOf } from "../machine.js";
+import { machine, shareOf, levelOf, percentOf, blockedOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -25,4 +25,16 @@ test("it reads llm at start and follows llm.changed after", async () => {
   assert.equal(actor.getSnapshot().context.share, 0.9);
   actor.send({ type: "llm.changed", signedIn: true });
   assert.equal(actor.getSnapshot().context.share, null);
+});
+
+test("a blocked guest's bar reads ended, whatever share is left", async () => {
+  assert.equal(levelOf(0.4, true), "ended");
+  assert.equal(levelOf(null, true), null, "nothing for an account that is not a guest");
+  assert.equal(blockedOf({ signedIn: true, freeUse: { left: 0.4, blocked: true, paused: [] } }), true);
+  assert.equal(blockedOf({ signedIn: false }), false);
+  const actor = createActor(machine, { input: { ask: async () => ({ signedIn: true, freeUse: { left: 0.4, blocked: true, paused: [] } }) } }).start();
+  await flush();
+  assert.deepEqual([actor.getSnapshot().context.share, actor.getSnapshot().context.blocked], [0.4, true]);
+  actor.send({ type: "llm.changed", signedIn: true, freeUse: { left: 0.4, blocked: false, paused: [] } });
+  assert.equal(actor.getSnapshot().context.blocked, false, "unblocked, the share shows again");
 });

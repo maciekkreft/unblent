@@ -35,6 +35,15 @@ const MARKS = [
   ["none", "None", "None"],
 ];
 
+// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
+// the token is the one clock, shared with the bar's animation.
+const toMs = (text, fallback = 3000) => {
+  const t = (text || "").trim();
+  const n = parseFloat(t);
+  if (Number.isNaN(n)) return fallback;
+  return t.endsWith("ms") ? n : n * 1000;
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -52,6 +61,9 @@ class ActorController {
         // The `account` attribute (7.7): read from the host's light DOM, so the
         // machine learns it through input and stays importable in Node.
         account: this.host.hasAttribute("account"),
+        // The undo window comes from --duration-undo, read off the host so a stylesheet
+        // or a test can shorten it.
+        undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
       },
       events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited },
     });
@@ -194,6 +206,35 @@ class SettingsSheet extends LitElement {
     .key input:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
+    }
+    /* A key waiting out the undo window: what is going, an Undo, and a bar draining the
+       window, as in the lists (note-list). Both read --duration-undo, so they cannot
+       disagree; the bar stays under reduced motion because it is the only sign of how
+       long is left. */
+    .key.removing {
+      position: relative;
+      padding-bottom: var(--space-xs);
+    }
+    .key.removing .saved {
+      color: var(--color-mute);
+      text-decoration: line-through;
+    }
+    .key .bar {
+      position: absolute;
+      inset-inline: 0;
+      inset-block-end: 0;
+      height: var(--space-2xs);
+      background: var(--color-accent);
+      transform-origin: left;
+      animation: drain var(--duration-undo) linear forwards;
+    }
+    @keyframes drain {
+      from {
+        transform: scaleX(1);
+      }
+      to {
+        transform: scaleX(0);
+      }
     }
     button.act,
     button.reset {
@@ -665,6 +706,7 @@ class SettingsSheet extends LitElement {
         </label>
         ${current?.needsKey
           ? this.#keyField({
+              field: "key",
               keySet: current.keySet,
               label: "API key",
               draftName: "keyDraft",
@@ -703,6 +745,7 @@ class SettingsSheet extends LitElement {
         <div class="judging">
           <span class="group">Evaluating</span>
           ${this.#keyField({
+            field: "jevKey",
             keySet: llm.jev?.keySet === true,
             label: "Jev key",
             draftName: "jevDraft",
@@ -840,23 +883,27 @@ class SettingsSheet extends LitElement {
   // A key field: the provider's API key, or the Jev key. A saved key reads as a plain
   // statement with Replace and Remove, so nothing on screen looks disabled; the box
   // appears only when a key is wanted, and Cancel or Escape closes it again without a
-  // change (forgiveness). `draftName` and `replacingName` name this field's own two
-  // state properties, so the two keys never share a draft.
-  #keyField({ keySet, label, draftName, replacingName, save: saveKey, remove }) {
+  // change (forgiveness). Remove waits out the undo window with an Undo in the row.
+  // `draftName` and `replacingName` name this field's own two state properties, so the
+  // two keys never share a draft; `field` names it to the machine ("key", "jevKey").
+  #keyField({ field, keySet: saved, label, draftName, replacingName, save: saveKey, remove }) {
     const draft = this[draftName];
+    const { removing: waiting, removed } = this.#actor.snapshot.context;
+    const keySet = saved && !removed.includes(field);
+    const removing = waiting.includes(field);
     const cancel = () => {
       this[draftName] = "";
       this[replacingName] = false;
     };
-    const save = () => {
-      saveKey(draft);
+    const save = (key = draft) => {
+      saveKey(key);
       cancel();
     };
-    const open = !keySet || this[replacingName];
+    const open = !removing && (!keySet || this[replacingName]);
     return html`
       <div class="field">
         <span>${label}</span>
-        <div class="key" data-key=${draftName}>
+        <div class="key ${removing ? "removing" : ""}" data-key=${draftName}>
           ${open
             ? html`
                 <input
@@ -866,12 +913,22 @@ class SettingsSheet extends LitElement {
                   .value=${draft}
                   @input=${(e) => (this[draftName] = e.target.value)}
                   @keydown=${(e) => {
-                    if (e.key === "Enter" && draft) save();
+                    // The box's own value, not the draft of the last render, so Enter
+                    // right after a paste saves what was pasted.
+                    if (e.key === "Enter" && e.target.value) save(e.target.value);
                     if (e.key === "Escape" && keySet) cancel();
                   }}
                 />
-                <button class="act" ?disabled=${draft.length === 0} @click=${save}>Save</button>
+                <button class="act" ?disabled=${draft.length === 0} @click=${() => save()}>Save</button>
                 ${keySet ? html`<button class="act" @click=${cancel}>Cancel</button>` : nothing}
+              `
+            : removing
+            ? html`
+                <span class="saved">Key removed</span>
+                <button class="act" aria-label="Undo remove ${label}" @click=${() => this.#actor.send({ type: "_undoRemove", field })}>
+                  Undo
+                </button>
+                <span class="bar" aria-hidden="true"></span>
               `
             : html`
                 <span class="saved">Key saved</span>
@@ -885,7 +942,17 @@ class SettingsSheet extends LitElement {
                 >
                   Replace
                 </button>
-                <button class="act" @click=${remove}>Remove</button>
+                <button
+                  class="act"
+                  @click=${async () => {
+                    remove();
+                    // The keyboard stays on the row: Undo takes the place of Remove.
+                    await this.updateComplete;
+                    this.renderRoot.querySelector(`.key[data-key="${draftName}"] button`)?.focus();
+                  }}
+                >
+                  Remove
+                </button>
               `}
         </div>
       </div>

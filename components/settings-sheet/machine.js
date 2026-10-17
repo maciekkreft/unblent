@@ -1,4 +1,4 @@
-import { setup, assign, emit, fromPromise } from "xstate";
+import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 
 // A view component (3.1): the sheet that edits the user's page preferences. It owns
 // no fact; the preferences belong to `settings`, reached by one query for the
@@ -45,6 +45,12 @@ const rowsOf = (context) => merge(context.pages, context.settings.nav);
 const indexOf = (context, path) => rowsOf(context).findIndex((r) => r.path === path);
 
 const edited = (settings) => ({ type: "settings.edited", ...settings });
+// Remove on a key field begins the undo window; nothing is emitted until it ends.
+const startRemoval = (field) =>
+  enqueueActions(({ context, enqueue }) => {
+    enqueue.assign({ removing: [...context.removing, field] });
+    enqueue.raise({ type: "_removeElapsed", field }, { delay: context.undoMs, id: `remove:${field}` });
+  });
 // An account gesture (7.7): the changed field only, which `llm` saves and announces.
 const llmEdited = (patch) => ({ type: "llm.edited", ...patch });
 // A tool switch gesture (7.7): the flipped switch only, which `conversations` merges
@@ -191,7 +197,10 @@ export const machine = setup({
       "gets. Every change saves the whole box at once and Jev checks the day on screen again. " +
       "Choosing an evaluator ticks all its questions with nothing expected; choosing a box's " +
       "earlier evaluator again while the sheet is open brings back its settings. The part is " +
-      "hidden on a page without `choice-point-checks`.",
+      "hidden on a page without `choice-point-checks`. Remove on the API key or the Jev key " +
+      "waits out the undo window: the row reads Key removed with an Undo and a draining " +
+      "bar, and the key is removed only when the window ends; leaving the page before then " +
+      "keeps it.",
     kind: "view",
     emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
@@ -232,6 +241,13 @@ export const machine = setup({
     checks: null,
     evaluators: [],
     past: {},
+    // A key removal waits out the undo window (12, forgiveness): `removing` names the
+    // key fields ("key", "jevKey") in their window, `removed` those whose removal went out
+    // and whose new llm picture has not come yet, so the row does not read Key saved in
+    // between.
+    undoMs: input.undoMs ?? 3000,
+    removing: [],
+    removed: [],
   }),
   initial: "loadingPages",
   states: {
@@ -409,10 +425,10 @@ export const machine = setup({
         _setProvider: { actions: emit(({ event }) => llmEdited({ provider: event.provider })) },
         _setModel: { actions: emit(({ event }) => llmEdited({ model: event.model })) },
         _saveKey: { actions: emit(({ event }) => llmEdited({ key: event.key })) },
-        _removeKey: { actions: emit(() => llmEdited({ key: "" })) },
+        _removeKey: { guard: ({ context }) => !context.removing.includes("key"), actions: startRemoval("key") },
         // The Jev key, the same two gestures as the provider's key, under its own field.
         _saveJevKey: { actions: emit(({ event }) => llmEdited({ jevKey: event.key })) },
-        _removeJevKey: { actions: emit(() => llmEdited({ jevKey: "" })) },
+        _removeJevKey: { guard: ({ context }) => !context.removing.includes("jevKey"), actions: startRemoval("jevKey") },
         _setEffort: { actions: emit(({ event }) => llmEdited({ effort: event.effort })) },
         _setTtl: { actions: emit(({ event }) => llmEdited({ ttl: event.ttl })) },
         // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
@@ -442,6 +458,24 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    _undoRemove: {
+      guard: ({ context, event }) => context.removing.includes(event.field),
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        enqueue.cancel(`remove:${event.field}`);
+        enqueue.assign({ removing: context.removing.filter((f) => f !== event.field) });
+      }),
+    },
+    // The window ended: now the empty key goes out, which removes it (llm.edited).
+    _removeElapsed: {
+      guard: ({ context, event }) => context.removing.includes(event.field),
+      actions: [
+        assign({
+          removing: ({ context, event }) => context.removing.filter((f) => f !== event.field),
+          removed: ({ context, event }) => [...context.removed, event.field],
+        }),
+        emit(({ event }) => llmEdited({ [event.field]: "" })),
+      ],
+    },
     "settings.changed": {
       actions: assign({
         settings: ({ event }) => adopt(event),
@@ -453,6 +487,7 @@ export const machine = setup({
     // dropped by taking them by name.
     "llm.changed": {
       actions: assign({
+        removed: [],
         llm: ({ event }) => ({
           signedIn: event.signedIn,
           provider: event.provider,

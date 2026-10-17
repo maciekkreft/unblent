@@ -10,7 +10,7 @@ const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5BK1";
 const E1 = "01ARZ3NDEKTSV4RRFFQ69G5EV1";
 const E2 = "01ARZ3NDEKTSV4RRFFQ69G5EV2";
 const E3 = "01ARZ3NDEKTSV4RRFFQ69G5EV3";
-const q = (removing = false) => ({ id: "01ARZ3NDEKTSV4RRFFQ69G5QQ1", removing });
+const q = (removing = false) => ({ id: "01ARZ3NDEKTSV4RRFFQ69G5QQ1", kind: "yesno", text: "Is it a goal?", removing });
 
 const evaluator = (id, book, over = {}) => ({ id, book, name: "Goals", on: true, journal: false, questions: [q()], version: 1, removing: false, pending: false, ...over });
 
@@ -75,4 +75,17 @@ test("a reply that is not the picture leaves the part saying so", async () => {
   actor.send({ type: "_shown" });
   await flush();
   assert.equal(actor.getSnapshot().context.failed, true);
+});
+
+test("a starter counts only the questions Run would ask", () => {
+  const groups = groupsOf({
+    books: [{ id: JOURNAL, title: "Journal" }],
+    evaluators: [
+      evaluator(E1, JOURNAL, {
+        questions: [q(), { ...q(), text: "" }, { ...q(), on: false }, { ...q(), kind: "pick", options: [{ id: "o1", name: "One" }] }],
+      }),
+    ],
+  });
+  assert.equal(groups[0].evaluators[0].questions, 1);
+  assert.equal(countText(0), "0 questions");
 });

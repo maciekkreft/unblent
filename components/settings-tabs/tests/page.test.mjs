@@ -101,6 +101,26 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await each.inputValue()) === "$2.00");
         assert.deepEqual(edits, [{ guest: 2 }]);
 
+        // Remove on a guest key waits out the undo window; Undo keeps the key (12).
+        const keys = [];
+        context.on("request", (req) => /\/api\/llm\/guestkeys$/.test(req.url()) && keys.push(req.postData()));
+        const jev = page.locator('guest-limits .key[data-key="jev"]');
+        await jev.getByRole("button", { name: "Remove" }).click();
+        await until(async () => (await jev.innerText()).replace(/\s+/g, " ").trim() === "Key removed Undo");
+        await jev.getByRole("button", { name: "Undo remove Jev key" }).click();
+        await until(async () => (await jev.innerText()).replace(/\s+/g, " ").trim() === "Key saved Replace Remove");
+        assert.deepEqual(keys, [], "nothing is removed inside the window");
+
+        // The Who column stays in view while People scrolls sideways.
+        const who = await page.evaluate(() => {
+          const frame = document.querySelector("people-list").shadowRoot.querySelector(".table");
+          frame.scrollLeft = frame.scrollWidth;
+          const cell = frame.querySelector("tbody td:first-child");
+          return { scrolled: frame.scrollLeft > 0, offset: cell.getBoundingClientRect().left - frame.getBoundingClientRect().left };
+        });
+        assert.ok(who.scrolled, "the table scrolls sideways in the sheet");
+        assert.ok(who.offset >= 0 && who.offset <= 2, `Who stays at the frame's left edge: ${who.offset}`);
+
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await context.close();

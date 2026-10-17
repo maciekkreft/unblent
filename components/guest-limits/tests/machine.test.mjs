@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createActor } from "xstate";
+import { createActor, SimulatedClock } from "xstate";
 import { machine, parseLimit, limitEdit, limitText, shortOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -52,11 +52,9 @@ test("it asks only once shown, emits the admin's gestures, and adopts spending.c
   actor.send({ type: "_setLimit", field: "guest", text: "nonsense" });
   actor.send({ type: "_saveKey", provider: "anthropic", key: "  sk-ant-x  " });
   actor.send({ type: "_saveKey", provider: "anthropic", key: "   " });
-  actor.send({ type: "_removeKey", provider: "jev" });
   assert.deepEqual(emitted, [
     { type: "limits.edited", guest: 2 },
     { type: "guestkeys.edited", anthropic: "sk-ant-x" },
-    { type: "guestkeys.edited", jev: "" },
   ]);
   assert.ok(!JSON.stringify(actor.getSnapshot().context).includes("sk-ant"), "a key never enters context");
 
@@ -70,4 +68,55 @@ test("an answer that is not the picture leaves the part saying so", async () => 
   await flush();
   assert.equal(actor.getSnapshot().context.spending, null);
   assert.equal(actor.getSnapshot().context.failed, true);
+});
+
+test("Remove waits out the undo window: Undo keeps the key, the end of the window removes it", async () => {
+  const clock = new SimulatedClock();
+  const emitted = [];
+  const actor = createActor(machine, { input: { ask: async () => SPENDING, undoMs: 3000 }, clock });
+  actor.on("*", (e) => emitted.push(e));
+  actor.start();
+  actor.send({ type: "_shown" });
+  await flush();
+
+  actor.send({ type: "_removeKey", provider: "jev" });
+  assert.deepEqual(actor.getSnapshot().context.removing, ["jev"]);
+  clock.increment(2999);
+  assert.deepEqual(emitted, [], "nothing is removed inside the window");
+  actor.send({ type: "_undoRemove", provider: "jev" });
+  clock.increment(5000);
+  assert.deepEqual(emitted, [], "Undo keeps the key");
+  assert.deepEqual(actor.getSnapshot().context.removing, []);
+
+  actor.send({ type: "_removeKey", provider: "jev" });
+  actor.send({ type: "_removeKey", provider: "jev" });
+  clock.increment(3000);
+  assert.deepEqual(emitted, [{ type: "guestkeys.edited", jev: "" }], "removed once, when the window ends");
+  assert.deepEqual(actor.getSnapshot().context.removing, []);
+  assert.deepEqual(actor.getSnapshot().context.removed, ["jev"], "shown as gone until the new picture comes");
+  actor.send({ type: "spending.changed", ...SPENDING });
+  assert.deepEqual(actor.getSnapshot().context.removed, []);
+});
+
+// S8: a Save right after the part came into view was lost. Coming into view reads the
+// data again, and a gesture sent while that read is out is applied all the same.
+test("a key saved while the part reads its data again is not dropped", async () => {
+  let answer;
+  const emitted = [];
+  const actor = createActor(machine, { input: { ask: () => new Promise((r) => (answer = r)) } });
+  actor.on("*", (e) => emitted.push(e));
+  actor.start();
+  actor.send({ type: "_shown" });
+  answer(SPENDING);
+  await flush();
+  actor.send({ type: "_shown" });
+  assert.equal(actor.getSnapshot().value, "reading");
+  actor.send({ type: "_saveKey", provider: "jev", key: "jev-key" });
+  actor.send({ type: "_setLimit", field: "guest", text: "3" });
+  assert.deepEqual(emitted, [
+    { type: "guestkeys.edited", jev: "jev-key" },
+    { type: "limits.edited", guest: 3 },
+  ]);
+  answer(SPENDING);
+  await flush();
 });

@@ -14,8 +14,13 @@ export const shareOf = (picture) => {
   return null;
 };
 
-// The three looks of the bar (try-links screen 2): plenty, 10% or less, used up.
-export const levelOf = (share) => (share == null ? null : share <= 0 ? "out" : share <= 0.1 ? "low" : "plenty");
+// Whether the admin blocked this guest (7.7): then the trial has ended, whatever is left.
+export const blockedOf = (picture) => Boolean(picture?.signedIn && picture?.freeUse?.blocked);
+
+// The looks of the bar (try-links screen 2): plenty, 10% or less, used up, and ended
+// for a blocked guest, so the bar never offers a share the guest cannot use.
+export const levelOf = (share, blocked = false) =>
+  share == null ? null : blocked === true ? "ended" : share <= 0 ? "out" : share <= 0.1 ? "low" : "plenty";
 
 // The percentage as people read it: whole numbers, and never 0% while something is
 // left, so the bar does not say nothing is left when a little is.
@@ -33,21 +38,23 @@ export const machine = setup({
       "share of the guest's own allowance that is left, never an amount. It shows 100% " +
       "until the guest first uses something. At 10% or less it turns to the warning " +
       "colour, and when nothing is left it reads \"used up\" in the danger colour. " +
-      "While a limit for all guests is reached it still shows the guest's own share. It " +
+      "While a limit for all guests is reached it still shows the guest's own share. " +
+      "While the admin has blocked the guest it reads \"ended\" in the danger colour, " +
+      "with an empty bar, beside \"This trial has ended.\" under Run. It " +
       "shows nothing for a signed-in account that is not a guest.",
     kind: "view",
     emits: [],
     attributes: [],
     asks: ["llm: read"],
   },
-  context: ({ input }) => ({ ask: input.ask, share: null }),
+  context: ({ input }) => ({ ask: input.ask, share: null, blocked: false }),
   invoke: {
     src: "llm",
     input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ share: ({ event }) => shareOf(event.output) }) },
+    onDone: { actions: assign({ share: ({ event }) => shareOf(event.output), blocked: ({ event }) => blockedOf(event.output) }) },
     onError: { actions: [] },
   },
   on: {
-    "llm.changed": { actions: assign({ share: ({ event }) => shareOf(event) }) },
+    "llm.changed": { actions: assign({ share: ({ event }) => shareOf(event), blocked: ({ event }) => blockedOf(event) }) },
   },
 });

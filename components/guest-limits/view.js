@@ -4,6 +4,15 @@ import { machine, shortOf, limitText } from "./machine.js";
 import limitsEdited from "./events/limits.edited.json" with { type: "json" };
 import guestkeysEdited from "./events/guestkeys.edited.json" with { type: "json" };
 
+// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
+// the token is the one clock, shared with the bar's animation.
+const toMs = (text, fallback = 3000) => {
+  const t = (text || "").trim();
+  const n = parseFloat(t);
+  if (Number.isNaN(n)) return fallback;
+  return t.endsWith("ms") ? n : n * 1000;
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -13,7 +22,12 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        // The undo window comes from --duration-undo, read off the host so a stylesheet
+        // or a test can shorten it.
+        undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
+      },
       events: { "limits.edited": limitsEdited, "guestkeys.edited": guestkeysEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -151,6 +165,35 @@ class GuestLimits extends LitElement {
       outline: none;
       box-shadow: var(--focus-ring);
     }
+    /* A key waiting out the undo window: what is going, an Undo, and a bar draining the
+       window, as in the lists (note-list). Both read --duration-undo, so they cannot
+       disagree; the bar stays under reduced motion because it is the only sign of how
+       long is left. */
+    .key.removing {
+      position: relative;
+      padding-bottom: var(--space-xs);
+    }
+    .key.removing .saved {
+      color: var(--color-mute);
+      text-decoration: line-through;
+    }
+    .bar {
+      position: absolute;
+      inset-inline: 0;
+      inset-block-end: 0;
+      height: var(--space-2xs);
+      background: var(--color-accent);
+      transform-origin: left;
+      animation: drain var(--duration-undo) linear forwards;
+    }
+    @keyframes drain {
+      from {
+        transform: scaleX(1);
+      }
+      to {
+        transform: scaleX(0);
+      }
+    }
   `;
 
   #actor = new ActorController(this);
@@ -209,16 +252,18 @@ class GuestLimits extends LitElement {
       setDraft("");
       setReplacing(false);
     };
-    const save = () => {
-      this.#actor.send({ type: "_saveKey", provider: id, key: draft });
+    const save = (key = draft) => {
+      this.#actor.send({ type: "_saveKey", provider: id, key });
       cancel();
     };
-    const keySet = provider.guestKeySet;
-    const open = !keySet || this.replacing.has(id);
+    const { removing: waiting, removed } = this.#actor.snapshot.context;
+    const keySet = provider.guestKeySet && !removed.includes(id);
+    const removing = waiting.includes(id);
+    const open = !removing && (!keySet || this.replacing.has(id));
     return html`
       <div class="field">
         <span>${label}</span>
-        <div class="key" data-key=${id}>
+        <div class="key ${removing ? "removing" : ""}" data-key=${id}>
           ${open
             ? html`
                 <input
@@ -228,12 +273,22 @@ class GuestLimits extends LitElement {
                   .value=${draft}
                   @input=${(e) => setDraft(e.target.value)}
                   @keydown=${(e) => {
-                    if (e.key === "Enter" && draft) save();
+                    // The box's own value, not the draft of the last render, so Enter
+                    // right after a paste saves what was pasted.
+                    if (e.key === "Enter" && e.target.value) save(e.target.value);
                     if (e.key === "Escape" && keySet) cancel();
                   }}
                 />
-                <button class="act" ?disabled=${draft.length === 0} @click=${save}>Save</button>
+                <button class="act" ?disabled=${draft.length === 0} @click=${() => save()}>Save</button>
                 ${keySet ? html`<button class="act" @click=${cancel}>Cancel</button>` : nothing}
+              `
+            : removing
+            ? html`
+                <span class="saved">Key removed</span>
+                <button class="act" aria-label="Undo remove ${label}" @click=${() => this.#actor.send({ type: "_undoRemove", provider: id })}>
+                  Undo
+                </button>
+                <span class="bar" aria-hidden="true"></span>
               `
             : html`
                 <span class="saved">Key saved</span>
@@ -247,7 +302,17 @@ class GuestLimits extends LitElement {
                 >
                   Replace
                 </button>
-                <button class="act" @click=${() => this.#actor.send({ type: "_removeKey", provider: id })}>Remove</button>
+                <button
+                  class="act"
+                  @click=${async () => {
+                    this.#actor.send({ type: "_removeKey", provider: id });
+                    // The keyboard stays on the row: Undo takes the place of Remove.
+                    await this.updateComplete;
+                    this.renderRoot.querySelector(`.key[data-key="${id}"] button`)?.focus();
+                  }}
+                >
+                  Remove
+                </button>
               `}
         </div>
         ${keySet ? nothing : html`<span class="help">Without a guest key, guests are not offered ${shortOf(provider.label)}.</span>`}

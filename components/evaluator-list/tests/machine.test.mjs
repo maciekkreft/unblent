@@ -16,7 +16,7 @@ const B = "01K7TEST000000000000000BB1";
 const D1 = "01K7TEST000000000000000N01";
 const D2 = "01K7TEST000000000000000N02";
 const id = (n) => `01K7TEST0000000000000E${String(n).padStart(4, "0")}`;
-const q = (n, removing = false) => ({ id: `01K7TEST0000000000000Q${String(n).padStart(4, "0")}`, removing });
+const q = (n, removing = false) => ({ id: `01K7TEST0000000000000Q${String(n).padStart(4, "0")}`, kind: "yesno", text: `Question ${n}?`, removing });
 const evaluator = (n, book, { on = true, removing = false, questions = [q(1)] } = {}) => ({
   id: id(n), book, name: `Evaluator ${n}`, on, removing, questions, version: 1, pending: false,
 });
@@ -610,4 +610,13 @@ test("a Run refused as used up says so under Run, not on the line", async () => 
   await settle();
   assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "used-up"]]);
   assert.equal(notice(ctx()), "used-up");
+});
+
+test("the line under a name counts only the questions Run would ask", () => {
+  const empty = { ...q(2), text: "  " };
+  const lonePick = { ...q(3), kind: "pick", options: [{ id: "o1", name: "Only" }] };
+  const pick = { ...q(4), kind: "pick", options: [{ id: "o1", name: "Yes" }, { id: "o2", name: "No" }] };
+  assert.equal(subtitle(evaluator(1, A, { questions: [empty] })), "0 questions", "an empty question is not counted");
+  assert.equal(subtitle(evaluator(1, A, { questions: [q(1), empty, lonePick, pick] })), "2 questions");
+  assert.equal(subtitle(evaluator(1, A, { questions: [q(1), { ...q(5), on: false }] })), "1 question");
 });

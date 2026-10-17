@@ -228,6 +228,12 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           return { off: q.classList.contains("off"), caption: getComputedStyle(q.querySelector(".caption")).color };
         });
       try {
+        // The list counts only questions Run would ask, so both are written first.
+        for (const [n, text] of [[0, "Is it a goal?"], [1, "Is it a value?"]]) {
+          await at(page, page.locator("evaluator-editor .question").nth(n).locator('[data-field="text"]'));
+          await page.keyboard.type(text);
+          await settle(page);
+        }
         await until(async () => (await sub.textContent().catch(() => "")).startsWith("2 questions"));
         const on = await look();
         await tick.click();
@@ -237,13 +243,13 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.notEqual(off.caption, on.caption, "the question is greyed");
         assert.equal(await tick.isChecked(), false);
         await at(page, second.locator('[data-field="text"]'));
-        await page.keyboard.type("Still editable?");
+        await page.keyboard.type(" Still editable?");
         await settle(page);
-        assert.equal(await secondText(page), "Still editable?");
+        assert.ok((await secondText(page)).includes("Still editable?"));
         await tick.click();
         await until(async () => (await sub.textContent()).startsWith("2 questions"));
         assert.deepEqual(await look(), on);
-        assert.equal(await secondText(page), "Still editable?");
+        assert.ok((await secondText(page)).includes("Still editable?"));
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

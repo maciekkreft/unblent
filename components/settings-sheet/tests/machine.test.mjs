@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { createActor } from "xstate";
+import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
 import { machine, merge } from "../machine.js";
 
@@ -76,7 +76,7 @@ const TOOLS = { tools: { "notes: list": false }, approval: "auto" };
 const start = (
   settings,
   current = "/a",
-  { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS, checks = { error: "no-answerer" }, evaluators = { evaluators: [] } } = {},
+  { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS, checks = { error: "no-answerer" }, evaluators = { evaluators: [] }, clock } = {},
 ) => {
   const ask = (target, name) =>
     Promise.resolve(
@@ -96,7 +96,7 @@ const start = (
               ? llm
               : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
     );
-  const actor = createActor(machine, { input: { ask, current, account } });
+  const actor = createActor(machine, { input: { ask, current, account, undoMs: 3000 }, ...(clock ? { clock } : {}) });
   const emitted = [];
   const emittedLlm = [];
   const emittedTools = [];
@@ -284,18 +284,14 @@ test("each account gesture emits only the field it changed (7.7)", async () => {
   assert.deepEqual(emittedLlm[0], { type: "llm.edited", provider: "anthropic" });
   actor.send({ type: "_saveKey", key: "sk-typed" });
   assert.deepEqual(emittedLlm[1], { type: "llm.edited", key: "sk-typed" });
-  actor.send({ type: "_removeKey" });
-  assert.deepEqual(emittedLlm[2], { type: "llm.edited", key: "" }, "an empty key removes it");
   actor.send({ type: "_setModel", model: "echo" });
-  assert.deepEqual(emittedLlm[3], { type: "llm.edited", model: "echo" });
+  assert.deepEqual(emittedLlm[2], { type: "llm.edited", model: "echo" });
 });
 
 test("the Jev key gestures emit only jevKey, and an empty one removes it", async () => {
   const { actor, emittedLlm } = await start(undefined, "/a", { account: true });
   actor.send({ type: "_saveJevKey", key: "jev-typed" });
   assert.deepEqual(emittedLlm[0], { type: "llm.edited", jevKey: "jev-typed" });
-  actor.send({ type: "_removeJevKey" });
-  assert.deepEqual(emittedLlm[1], { type: "llm.edited", jevKey: "" });
   actor.send({ type: "llm.changed", ...LLM_PICTURE, jev: { keySet: true } });
   assert.deepEqual(actor.getSnapshot().context.llm.jev, { keySet: true }, "whether a Jev key is saved is adopted");
 });
@@ -463,4 +459,22 @@ test("every payload matches its schema", () => {
     const result = new Validator(schema, "2020-12").validate(rest);
     assert.ok(result.valid, `${JSON.stringify(value)} against its schema: ${JSON.stringify(result.errors?.[0])}`);
   }
+});
+
+test("Remove on a key waits out the undo window; Undo keeps the key", async () => {
+  const clock = new SimulatedClock();
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, clock });
+  actor.send({ type: "_removeKey" });
+  actor.send({ type: "_removeJevKey" });
+  assert.deepEqual(actor.getSnapshot().context.removing, ["key", "jevKey"]);
+  clock.increment(2999);
+  assert.deepEqual(emittedLlm, [], "nothing is removed inside the window");
+  actor.send({ type: "_undoRemove", field: "key" });
+  clock.increment(1);
+  assert.deepEqual(emittedLlm, [{ type: "llm.edited", jevKey: "" }], "an empty key removes it when the window ends");
+  clock.increment(5000);
+  assert.equal(emittedLlm.length, 1, "Undo kept the API key");
+  assert.deepEqual(actor.getSnapshot().context.removed, ["jevKey"]);
+  actor.send({ type: "llm.changed", ...LLM_PICTURE, jev: { keySet: false } });
+  assert.deepEqual(actor.getSnapshot().context.removed, [], "the new picture shows the key gone");
 });

@@ -100,6 +100,7 @@ class PeopleList extends LitElement {
        itself never does. */
     .table {
       overflow-x: auto;
+      background: var(--color-canvas);
       border: var(--border-width) solid var(--color-border);
       border-radius: var(--radius-md);
     }
@@ -127,6 +128,19 @@ class PeopleList extends LitElement {
     td {
       color: var(--color-ink);
       font-variant-numeric: tabular-nums;
+    }
+    /* Who stays in view while the rest scrolls sideways: the first column sticks to the
+       frame's left edge over an opaque ground, with a line marking where the rest slides
+       under it. */
+    th:first-child,
+    td:first-child {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      box-shadow: inset calc(-1 * var(--border-width)) 0 0 var(--color-border);
+    }
+    td:first-child {
+      background: var(--color-canvas);
     }
     .pill {
       display: inline-block;

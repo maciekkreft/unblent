@@ -120,7 +120,7 @@ export const machine = setup({
       "small bar and in dollars, and the space their work takes. Each guest row offers " +
       "View as, Reset use, and Block or Unblock. Reset use and Block show an Undo for " +
       "the undo window; View as is reversed by Back to you. The table scrolls sideways " +
-      "on a narrow screen.",
+      "on a narrow screen, and the Who column stays in view while it does.",
     kind: "view",
     emits: ["viewas.requested", "guest.blocked", "use.reset"],
     attributes: [],
