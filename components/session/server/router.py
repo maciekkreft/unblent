@@ -19,7 +19,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from server.user import clear_session_cookie, session_of, set_session_cookie, sign, space, verify
+from server.user import clear_session_cookie, remove_files, session_of, set_session_cookie, sign, space, verify
 
 from . import registry, visitor
 
@@ -102,6 +102,12 @@ def me(request: Request):
     held = session_of(request)
     if not held:
         return _json(_picture(None), request)
+    # A deleted guest's browser (12) is signed out: the account is gone, and a try page
+    # makes a new guest at its next Run.
+    if registry.is_deleted(held["userId"]):
+        response = _json(_picture(None), request)
+        clear_session_cookie(response)
+        return response
     # The admin looking at someone's account is not that person's visit (12).
     if not held["viewer"]:
         registry.seen(held["userId"], visitor.from_request(request))
@@ -131,6 +137,21 @@ def people(request: Request):
     found = registry.account(held["userId"]) if held else None
     if not found or not found["admin"]:
         raise HTTPException(status_code=403, detail="not-admin")
+    return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
+
+
+@router.delete("/people/{target}")
+def delete_person(target: str, request: Request):
+    # Delete on a guest (12), sent once notice-stack's Undo window ended: only the
+    # admin, whom the cookie names as View as does (3.4), and only a live guest. The
+    # registry keeps the row marked deleted; the guest's files go; llm forgets what it
+    # spent on its own.
+    held = session_of(request)
+    if not held or not held["admin"]:
+        raise HTTPException(status_code=403, detail="not-admin")
+    if not registry.delete_guest(target):
+        raise HTTPException(status_code=404, detail="no-such-guest")
+    remove_files(target)
     return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
 
 

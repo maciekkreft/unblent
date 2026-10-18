@@ -165,6 +165,8 @@ const editSpending = async (what, fields) => {
     const res = await fetch(`/api/llm/${what}`, {
       method: "PUT",
       credentials: "same-origin",
+      // A delete settled as the page goes away (notice-stack) must still arrive.
+      keepalive: true,
       headers: { "content-type": "application/json", ...json },
       body: JSON.stringify(fields),
     });

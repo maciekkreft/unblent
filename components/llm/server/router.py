@@ -375,6 +375,11 @@ async def edit_blocked(request: Request, user_id: str = Depends(require_user)):
     return await _admin_edit(request, spending.valid_block, spending.set_blocked)
 
 
+@router.put("/forget")
+async def edit_forget(request: Request, user_id: str = Depends(require_user)):
+    return await _admin_edit(request, spending.valid_forget, spending.forget)
+
+
 @router.put("/reset")
 async def edit_reset(request: Request, user_id: str = Depends(require_user)):
     return await _admin_edit(request, spending.valid_reset, spending.reset)

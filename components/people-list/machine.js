@@ -102,6 +102,10 @@ export const rowsOf = (people, spending, now) =>
 
 const ok = (reply) => reply && !reply.error;
 
+// The accounts to show: a guest being deleted is left out while its Undo is offered,
+// so the row and the Guests count read as if it were already gone (12).
+export const shownOf = (people, deleting) => people && people.filter((p) => !deleting.includes(p.userId));
+
 export const machine = setup({
   actors: {
     read: fromPromise(({ input }) =>
@@ -118,15 +122,17 @@ export const machine = setup({
       "first, then guests newest first, each with when they were first and last seen, " +
       "where they are, their browser, system and phone or desk, what they used as a " +
       "small bar and in dollars, and the space their work takes. Each guest row offers " +
-      "View as, Reset use, and Block or Unblock. Reset use and Block show an Undo for " +
-      "the undo window; View as is reversed by Back to you. The table scrolls sideways " +
+      "View as, Reset use, Block or Unblock, and Delete. Reset use and Block show an " +
+      "Undo for the undo window; Delete hides the row at once and deletes the guest's " +
+      "account, work and spending only when its Undo window ends; View as is reversed " +
+      "by Back to you. The table scrolls sideways " +
       "on a narrow screen, and the Who column stays in view while it does.",
     kind: "view",
-    emits: ["viewas.requested", "guest.blocked", "use.reset"],
+    emits: ["viewas.requested", "guest.blocked", "use.reset", "removal.started"],
     attributes: [],
     asks: ["session: people", "llm: spending"],
   },
-  context: ({ input }) => ({ ask: input.ask, people: null, spending: null, failed: false }),
+  context: ({ input }) => ({ ask: input.ask, people: null, spending: null, failed: false, deleting: [] }),
   initial: "hidden",
   states: {
     hidden: { on: { _shown: "reading" } },
@@ -157,6 +163,18 @@ export const machine = setup({
     _viewAs: { actions: emit(({ event }) => ({ type: "viewas.requested", user: event.user })) },
     _reset: { actions: emit(({ event }) => ({ type: "use.reset", user: event.user })) },
     _block: { actions: emit(({ event }) => ({ type: "guest.blocked", user: event.user, blocked: event.blocked })) },
+    // Delete waits out the undo window in notice-stack like every delete; session and
+    // llm act on removal.settled, and an Undo brings the row back.
+    _delete: {
+      actions: [
+        assign({ deleting: ({ context, event }) => [...context.deleting, event.user] }),
+        emit(({ event }) => ({ type: "removal.started", kind: "guest", id: event.user, name: event.name })),
+      ],
+    },
+    "removal.undone": {
+      guard: ({ event }) => event.kind === "guest",
+      actions: assign({ deleting: ({ context, event }) => context.deleting.filter((id) => id !== event.id) }),
+    },
     "people.changed": { actions: assign({ people: ({ event }) => event.people, failed: false }) },
     "spending.changed": {
       actions: assign({

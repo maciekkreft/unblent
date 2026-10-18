@@ -23,6 +23,7 @@ _ADDED = (
     ("browser", "TEXT NOT NULL DEFAULT ''"),
     ("system", "TEXT NOT NULL DEFAULT ''"),
     ("device", "TEXT NOT NULL DEFAULT 'desk'"),
+    ("deleted_at", "INTEGER"),
 )
 _DETAILS = ("country", "city", "browser", "system", "device")
 
@@ -101,7 +102,9 @@ def account(user_id: str) -> dict | None:
     """{"guest", "admin", "name"} for a registered account, or None when the registry
     does not hold it (a cookie forged in a test, or a registry restored without it)."""
     with _connect() as connection:
-        row = connection.execute("SELECT id, guest, number FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = connection.execute(
+            "SELECT id, guest, number FROM users WHERE id = ? AND deleted_at IS NULL", (user_id,)
+        ).fetchone()
         if not row:
             return None
         admin_id = _admin_id(connection)
@@ -125,7 +128,7 @@ def people() -> list[dict]:
         admin_id = _admin_id(connection)
         rows = connection.execute(
             "SELECT id, guest, number, created_at, first_seen, last_seen, country, city, browser, system, device"
-            " FROM users ORDER BY guest, number DESC, created_at, rowid"
+            " FROM users WHERE deleted_at IS NULL ORDER BY guest, number DESC, created_at, rowid"
         ).fetchall()
     result = []
     for row in rows:
@@ -146,6 +149,23 @@ def people() -> list[dict]:
         result.append(person)
     result.sort(key=lambda p: not p["admin"])
     return result
+
+
+def delete_guest(user_id: str) -> bool:
+    """Delete a guest (12): the row stays, marked deleted, so create_guest's next number
+    still counts it and a cookie naming it is known to be gone. Never the admin or an
+    account with a passkey; False when there is no such live guest."""
+    with _connect() as connection:
+        changed = connection.execute(
+            "UPDATE users SET deleted_at = ? WHERE id = ? AND guest = 1 AND deleted_at IS NULL", (_now(), user_id)
+        ).rowcount
+        return changed == 1
+
+
+def is_deleted(user_id: str) -> bool:
+    with _connect() as connection:
+        row = connection.execute("SELECT deleted_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        return bool(row and row["deleted_at"] is not None)
 
 
 def add_credential(*, id: str, user_id: str, public_key: bytes, sign_count: int, transports: str | None) -> None:

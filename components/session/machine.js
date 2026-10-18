@@ -135,7 +135,10 @@ export const machine = setup({
       "account and opens the page they would use, and Back to you returns it to the admin " +
       "without a passkey. Either way, what is not yet uploaded is uploaded and every local " +
       "copy of the account's work is emptied first; device preferences stay. If that cannot " +
-      "be done within a few seconds, for example offline, nothing changes and a notice says so.",
+      "be done within a few seconds, for example offline, nothing changes and a notice says so. " +
+      "The admin can also delete a guest: once its Undo window ends the account and everything " +
+      "it saved are removed, its number is never given again, and its browser is signed out " +
+      "at its next visit.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
@@ -174,6 +177,17 @@ export const machine = setup({
         enqueue.assign({ guestAsks: [...context.guestAsks, event.reply] });
       }),
     },
+    // Delete on a guest in People (12), once notice-stack's Undo window ended: the
+    // server removes the account and its work, and the new list goes out. The server
+    // decides who may; the cache only spares everyone else a request.
+    "removal.settled": {
+      guard: ({ context, event }) => event.kind === "guest" && Boolean(context.userId && context.admin),
+      actions: ({ context, event, self }) =>
+        Promise.resolve()
+          .then(() => context.api.forget(event.id))
+          .then((reply) => reply && Array.isArray(reply.people) && self.send({ type: "_people", people: reply.people }), () => {}),
+    },
+    _people: { actions: emit(({ event }) => ({ type: "people.changed", people: event.people })) },
     // Only the admin sees across accounts (12). The server decides; the cache only
     // spares everyone else a request that would be refused.
     "people?": {

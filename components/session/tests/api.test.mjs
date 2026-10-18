@@ -153,3 +153,42 @@ test("only the admin may view as a guest, and Back to you returns without a pass
   assert.deepEqual([own.userId, own.admin, own.viewingAs], [adminId, true, undefined]);
   assert.match(cookieOf(back), new RegExp(`^unblent_session=${adminId}\\|admin\\.`));
 });
+
+test("only the admin may delete a guest: its work goes, its number stays taken, its browser is signed out (12)", async () => {
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const admin = forged(`admin-${Date.now()}|admin`);
+  const guestRes = await post("/guest");
+  const guest = await guestRes.json();
+  const guestCookie = cookieOf(guestRes);
+  // Something saved, so the guest has a directory of its own (5).
+  const saved = await fetch(`${BASE_URL}/api/evaluators/01K7TEST00000000000000DE00`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", Cookie: guestCookie },
+    body: JSON.stringify({ book: "00000000000000000000000JRN", name: "Mine", on: true, questions: [], baseVersion: null, deleted: false }),
+  });
+  assert.equal(saved.status, 200);
+  const dir = join(process.env.UNBLENT_DATA, guest.userId);
+  assert.ok(existsSync(dir));
+
+  const remove = (cookie, user) =>
+    fetch(`${BASE_URL}/api/session/people/${user}`, { method: "DELETE", headers: cookie ? { Cookie: cookie } : {} });
+  assert.equal((await remove(null, guest.userId)).status, 403);
+  assert.equal((await remove(guestCookie, guest.userId)).status, 403);
+  assert.equal((await remove(admin, "nobody")).status, 404);
+
+  const done = await remove(admin, guest.userId);
+  assert.equal(done.status, 200);
+  assert.ok(Array.isArray((await done.json()).people));
+  assert.equal(existsSync(dir), false, "everything the guest saved is gone");
+  assert.equal((await remove(admin, guest.userId)).status, 404, "a deleted guest cannot be deleted twice");
+
+  // The guest's browser is signed out, and the cookie is cleared.
+  const res = await fetch(`${BASE_URL}/api/session/me`, { headers: { Cookie: guestCookie } });
+  assert.equal((await res.json()).userId, null);
+  assert.match(res.headers.get("set-cookie") || "", /unblent_session=""|unblent_session=;/);
+
+  // The next guest gets a new number, never the deleted one's.
+  const next = await (await post("/guest")).json();
+  assert.ok(Number(next.name.split(" ")[1]) > Number(guest.name.split(" ")[1]));
+});

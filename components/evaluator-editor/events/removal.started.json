@@ -11,12 +11,14 @@
         "option",
         "case",
         "evaluator",
-        "choice-point"
+        "choice-point",
+        "guest"
       ]
     },
     "id": {
       "type": "string",
-      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{32})$",
+      "description": "A record's ULID, or an account id (32 hex) when kind is guest."
     },
     "name": {
       "type": "string",

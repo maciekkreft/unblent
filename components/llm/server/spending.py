@@ -317,6 +317,21 @@ def valid_reset(body) -> dict | None:
     return body
 
 
+def valid_forget(body) -> dict | None:
+    """A deleted guest as the server accepts it: the user alone."""
+    if not isinstance(body, dict) or set(body) != {"user"} or not isinstance(body["user"], str) or not body["user"]:
+        return None
+    return body
+
+
+def forget(body: dict) -> None:
+    """Delete on a guest (12): what it spent stops counting toward any limit, and its
+    block and a kept Reset use go with it."""
+    with _connect() as connection:
+        for table in ("spent", "blocked", "before_reset"):
+            connection.execute(f"DELETE FROM {table} WHERE user_id = ?", (body["user"],))
+
+
 def reset(body: dict) -> None:
     """Reset use (12): the guest's totals go back to $0 and are kept aside, so Undo adds
     them back to whatever the guest spent since."""

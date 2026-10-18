@@ -540,6 +540,12 @@ test("Block, Unblock, Reset use and its Undo reach the server and announce what 
     ["blocked", { user: "g1", blocked: false }],
   ]);
   await until(() => h.emitted.filter((e) => e.type === "spending.changed").length >= 1);
+
+  // A guest's Delete, once settled, forgets what it spent; any other removal passes by.
+  h.actor.send({ type: "removal.settled", kind: "evaluator", id: "01K7TEST00000000000000EV00" });
+  h.actor.send({ type: "removal.settled", kind: "guest", id: "g1" });
+  await until(() => h.calls.edit.length === 5);
+  assert.deepEqual(h.calls.edit.at(-1), ["forget", { user: "g1" }]);
 });
 
 // S8: a guest key saved while Administration was reading what guests spent was lost.

@@ -12,7 +12,7 @@ const flush = async (n = 6) => {
 };
 
 function fakeApi(impl) {
-  const calls = { me: 0, register: 0, login: 0, logout: 0, guest: 0, people: 0 };
+  const calls = { me: 0, register: 0, login: 0, logout: 0, guest: 0, people: 0, forget: 0 };
   const api = {};
   for (const name of Object.keys(calls)) {
     api[name] = async () => {
@@ -278,6 +278,23 @@ test("people? is answered by the server for the admin only (12)", async () => {
   const admin = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, api);
   assert.deepEqual(await ask(admin.actor, "people?"), people);
   assert.equal(calls.people, 1);
+});
+
+test("a guest's Delete, once its Undo window ended, reaches the server and announces the new list (12)", async () => {
+  const left = { people: [{ userId: "u1", name: "Admin", guest: false, admin: true }] };
+  const { api, calls } = fakeApi({ forget: left });
+  const changed = [];
+  const guest = start({ userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" }, api);
+  guest.actor.send({ type: "removal.settled", kind: "guest", id: "a".repeat(32) });
+  const admin = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, api);
+  admin.actor.on("people.changed", (e) => changed.push(e));
+  admin.actor.send({ type: "removal.settled", kind: "evaluator", id: "01K7TEST00000000000000EV00" });
+  await flush();
+  assert.equal(calls.forget, 0, "only the admin, and only a guest's removal");
+  admin.actor.send({ type: "removal.settled", kind: "guest", id: "a".repeat(32) });
+  await flush();
+  assert.equal(calls.forget, 1);
+  assert.deepEqual(changed, [{ type: "people.changed", ...left }]);
 });
 
 test("revalidate announces the account becoming the admin (3.4)", async () => {

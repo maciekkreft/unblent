@@ -60,6 +60,11 @@ out["reset"] = [spending.free_use("g1")["left"], spending.summary()["allGuests"]
 spending.add("g1", "jev", 0.05)
 spending.reset({"user": "g1", "undone": True})
 out["undone"] = round(spending.summary()["allGuests"]["spent"], 9)
+spending.set_blocked({"user": "g1", "blocked": True})
+spending.reset({"user": "g1"})
+out["validForget"] = [spending.valid_forget({"user": "g1"}), spending.valid_forget({"user": ""}), spending.valid_forget({"user": "g1", "x": 1})]
+spending.forget({"user": "g1"})
+out["forgotten"] = spending.summary()
 print(json.dumps(out))
 `;
 
@@ -108,6 +113,9 @@ test("guests spend on the guest key at the published prices, within the limits",
     // spent since.
     assert.deepEqual(out.reset, [1, 0]);
     assert.equal(out.undone, 0.26);
+    // Delete on a guest: what it spent no longer counts, and its block is gone.
+    assert.deepEqual(out.validForget, [{ user: "g1" }, null, null]);
+    assert.equal(out.forgotten.guests.some((g) => g.userId === "g1"), false);
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

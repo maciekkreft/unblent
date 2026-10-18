@@ -94,13 +94,19 @@ const ended = (run, end) => {
 };
 
 // Each of the admin's gestures about guests (7.7, 12): the route it is sent to and the
-// fields it carries. Block and Reset use come from People and their Undo.
+// fields it carries. Block and Reset use come from People and their Undo; a guest's
+// Delete arrives as removal.settled once its Undo window ended, and its spending is
+// forgotten.
 const EDITS = {
   "limits.edited": (event) => ({ what: "limits", fields: fieldsOf(event, ["guest", "allGuests", "providers"]) }),
   "guestkeys.edited": (event) => ({ what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) }),
   "guest.blocked": (event) => ({ what: "blocked", fields: { user: event.user, blocked: event.blocked } }),
   "use.reset": (event) => ({ what: "reset", fields: { user: event.user, ...(event.undone ? { undone: true } : {}) } }),
+  "removal.settled": (event) => ({ what: "forget", fields: { user: event.id } }),
 };
+
+// Only a guest's removal is llm's; every other removal passes by.
+const guestRemoved = ({ event }) => event.kind === "guest";
 
 export const machine = setup({
   actors: {
@@ -211,7 +217,7 @@ export const machine = setup({
       "little over, because its cost is known only after. A guest's picture carries the share of its allowance left, never " +
       "an amount, and is read again after each of its requests. Only the admin reads what guests spent and changes the " +
       "limits and guest keys; a change made while what guests spent is being read is still " +
-      "saved. The settings belong to the account, so they are the " +
+      "saved. When the admin deletes a guest, what it spent stops counting toward every limit. The settings belong to the account, so they are the " +
       "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call.",
@@ -424,6 +430,7 @@ export const machine = setup({
             "guestkeys.edited": { target: "editing" },
             "guest.blocked": { target: "editing" },
             "use.reset": { target: "editing" },
+            "removal.settled": { guard: guestRemoved, target: "editing" },
           },
         },
         // An edit made while the picture is read is never dropped: the read is left, the
@@ -436,6 +443,7 @@ export const machine = setup({
             "guestkeys.edited": { target: "editing" },
             "guest.blocked": { target: "editing" },
             "use.reset": { target: "editing" },
+            "removal.settled": { guard: guestRemoved, target: "editing" },
           },
           invoke: {
             src: "spending",
@@ -453,6 +461,7 @@ export const machine = setup({
             "guestkeys.edited": { target: "editing", reenter: true },
             "guest.blocked": { target: "editing", reenter: true },
             "use.reset": { target: "editing", reenter: true },
+            "removal.settled": { guard: guestRemoved, target: "editing", reenter: true },
           },
           // The gesture arrives through input, so a guest key never enters context.
           invoke: {

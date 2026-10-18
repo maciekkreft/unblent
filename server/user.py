@@ -9,6 +9,7 @@ construction.
 import hashlib
 import hmac
 import os
+import shutil
 from pathlib import Path
 
 from fastapi import HTTPException, Request, Response
@@ -48,6 +49,17 @@ def space(user_id: str) -> int:
             # A file removed while counting (a database's journal) counts as nothing.
             continue
     return total
+
+
+def remove_files(user_id: str) -> None:
+    """Remove everything the user saved (5): their directory and every component's files
+    in it, when the admin deletes a guest (12). An id that is not one plain name under
+    DATA is refused, so no path can reach outside it."""
+    directory = DATA / user_id
+    if not user_id or directory.parent != DATA or directory.name != user_id or user_id.startswith("."):
+        raise ValueError("not a user id")
+    if directory.is_dir() and not directory.is_symlink():
+        shutil.rmtree(directory)
 
 
 def _secret() -> bytes:

@@ -154,6 +154,21 @@ const api = {
       return { error: "unavailable" };
     }
   },
+  // Delete on a guest (12). keepalive: notice-stack settles every open removal as the
+  // page goes away, and the delete must still reach the server then.
+  async forget(user) {
+    try {
+      const res = await fetch(`/api/session/people/${encodeURIComponent(user)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+        keepalive: true,
+        headers: { Accept: "application/json" },
+      });
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
   async logout() {
     try {
       const res = await post("/logout");
