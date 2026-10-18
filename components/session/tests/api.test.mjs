@@ -183,6 +183,11 @@ test("only the admin may delete a guest: its work goes, its number stays taken, 
   assert.equal(existsSync(dir), false, "everything the guest saved is gone");
   assert.equal((await remove(admin, guest.userId)).status, 404, "a deleted guest cannot be deleted twice");
 
+  // Every other module refuses the old cookie, so nothing is saved for the account again (3.4).
+  assert.equal((await fetch(`${BASE_URL}/api/evaluators?since=0`, { headers: { Cookie: guestCookie } })).status, 401);
+  assert.equal((await fetch(`${BASE_URL}/api/journal?since=0`, { headers: { Cookie: guestCookie } })).status, 401);
+  assert.equal(existsSync(dir), false, "the old cookie brings no directory back");
+
   // The guest's browser is signed out, and the cookie is cleared.
   const res = await fetch(`${BASE_URL}/api/session/me`, { headers: { Cookie: guestCookie } });
   assert.equal((await res.json()).userId, null);

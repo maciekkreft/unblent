@@ -19,7 +19,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from server.user import clear_session_cookie, remove_files, session_of, set_session_cookie, sign, space, verify
+from server.user import SESSION_COOKIE, clear_session_cookie, remove_files, session_of, set_session_cookie, sign, space, verify
 
 from . import registry, visitor
 
@@ -100,10 +100,15 @@ def _json(payload: dict, request: Request, *, user_id: str | None = None, viewer
 @router.get("/me")
 def me(request: Request):
     held = session_of(request)
+    # A deleted guest's browser (12) is signed out: the account is gone, and a try page
+    # makes a new guest at its next Run. A cookie that is signed but names no one is a
+    # deleted account's (3.4).
+    if not held and verify(request.cookies.get(SESSION_COOKIE)):
+        response = _json(_picture(None), request)
+        clear_session_cookie(response)
+        return response
     if not held:
         return _json(_picture(None), request)
-    # A deleted guest's browser (12) is signed out: the account is gone, and a try page
-    # makes a new guest at its next Run.
     if registry.is_deleted(held["userId"]):
         response = _json(_picture(None), request)
         clear_session_cookie(response)

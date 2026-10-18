@@ -27,8 +27,21 @@ SESSION_COOKIE = "unblent_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 30
 
 
+# One empty file per deleted guest (3.4, 12), named by its id. A leading dot keeps it
+# apart from every user directory, since no user id starts with one.
+REMOVED = DATA / ".deleted"
+
+
+def removed(user_id: str) -> bool:
+    """Whether the admin deleted this account (12), so no request may act as it again."""
+    return bool(user_id) and not user_id.startswith(".") and (REMOVED / user_id).is_file()
+
+
 def user_dir(user_id: str) -> Path:
-    """The signed-in user's own directory (section 5), created on first use."""
+    """The signed-in user's own directory (section 5), created on first use. A deleted
+    account gets none back, whatever cookie its browser still holds (3.4)."""
+    if removed(user_id):
+        raise HTTPException(status_code=401, detail="Sign in required")
     directory = DATA / user_id
     directory.mkdir(parents=True, exist_ok=True)
     return directory
@@ -58,6 +71,8 @@ def remove_files(user_id: str) -> None:
     directory = DATA / user_id
     if not user_id or directory.parent != DATA or directory.name != user_id or user_id.startswith("."):
         raise ValueError("not a user id")
+    REMOVED.mkdir(parents=True, exist_ok=True)
+    (REMOVED / user_id).touch()
     if directory.is_dir() and not directory.is_symlink():
         shutil.rmtree(directory)
 
@@ -120,12 +135,15 @@ def clear_session_cookie(response: Response) -> None:
 
 def session_of(request: Request) -> dict | None:
     """Who the cookie names (3.4): {"userId", "guest", "admin", "viewer"}, or None
-    when anonymous. viewer is the admin's id while the admin views as someone (12),
-    else None. Which flags a cookie carries is set by session's server module."""
+    when anonymous or the account was deleted. viewer is the admin's id while the
+    admin views as someone (12), else None. Which flags a cookie carries is set by session's server module."""
     payload = verify(request.cookies.get(SESSION_COOKIE))
     if not payload:
         return None
     user_id, *flags = payload.split("|")
+    # A deleted account's cookie is no one's (3.4): every module sees the browser signed out.
+    if removed(user_id):
+        return None
     viewer = next((f[3:] for f in flags if f.startswith("by:") and len(f) > 3), None)
     return {"userId": user_id, "guest": "guest" in flags, "admin": "admin" in flags and not viewer, "viewer": viewer}
 
