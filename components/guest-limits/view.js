@@ -141,7 +141,10 @@ class GuestLimits extends LitElement {
       color: var(--color-body);
       margin-right: var(--space-xs);
     }
+    /* A plain text box drawn as dots: a password box would make the browser offer
+       to save the key as a password (macOS Passwords). */
     .key input {
+      -webkit-text-security: disc;
       flex: 1;
       min-width: 0;
     }
@@ -267,7 +270,10 @@ class GuestLimits extends LitElement {
           ${open
             ? html`
                 <input
-                  type="password"
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
                   aria-label=${label}
                   placeholder="Paste your ${label}"
                   .value=${draft}
