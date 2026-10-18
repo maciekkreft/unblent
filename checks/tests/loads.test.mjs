@@ -61,7 +61,7 @@ test("launches are counted and summed", () => {
   assert.deepEqual(tally.summary(), { launches: 2, launch_ms: 750.5 });
 });
 
-test("the reporter puts each test's loads on its row and ends with the launches", async () => {
+test("the reporter puts each test's loads on its row, then each file's time, then the launches", async () => {
   const tally = createTally();
   tally.launched("webkit", 300);
   tally.begin();
@@ -72,15 +72,17 @@ test("the reporter puts each test's loads on its row and ends with the launches"
   try {
     async function* events() {
       yield { type: "test:start", data: { name: "renders" } };
-      yield { type: "test:pass", data: { name: "renders", file: "/f.mjs", details: { duration_ms: 900 } } };
-      yield { type: "test:pass", data: { name: "suite", file: "/f.mjs", details: { type: "suite", duration_ms: 900 } } };
-      yield { type: "test:fail", data: { name: "breaks", file: "/f.mjs", details: { duration_ms: 20 } } };
+      yield { type: "test:pass", data: { name: "renders", file: "/f.mjs", nesting: 1, details: { duration_ms: 900 } } };
+      yield { type: "test:pass", data: { name: "suite", file: "/f.mjs", nesting: 0, details: { type: "suite", duration_ms: 950 } } };
+      yield { type: "test:fail", data: { name: "breaks", file: "/f.mjs", nesting: 0, details: { duration_ms: 20 } } };
     }
     const lines = [];
     for await (const line of durations(events())) lines.push(JSON.parse(line));
     assert.deepEqual(lines, [
       { name: "renders", file: "/f.mjs", ms: 900, failed: false, loads: [{ url: "http://x/", ms: 640 }], load_ms: 640 },
       { name: "breaks", file: "/f.mjs", ms: 20, failed: true },
+      // A file's time is its top-level tests and suites, hooks included, never a nested test again.
+      { files: { "/f.mjs": 970 } },
       { summary: { launches: 1, launch_ms: 300 } },
     ]);
   } finally {
@@ -88,11 +90,11 @@ test("the reporter puts each test's loads on its row and ends with the launches"
   }
 });
 
-test("without a tally the reporter writes rows as before and no summary", async () => {
+test("without a tally the reporter writes rows and file times but no summary", async () => {
   async function* events() {
-    yield { type: "test:pass", data: { name: "n", file: "/f.mjs", details: { duration_ms: 1 } } };
+    yield { type: "test:pass", data: { name: "n", file: "/f.mjs", nesting: 0, details: { duration_ms: 1 } } };
   }
   const lines = [];
   for await (const line of durations(events())) lines.push(JSON.parse(line));
-  assert.deepEqual(lines, [{ name: "n", file: "/f.mjs", ms: 1, failed: false }]);
+  assert.deepEqual(lines, [{ name: "n", file: "/f.mjs", ms: 1, failed: false }, { files: { "/f.mjs": 1 } }]);
 });

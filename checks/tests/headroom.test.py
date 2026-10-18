@@ -46,6 +46,36 @@ class Headroom(unittest.TestCase):
         self.assertEqual(warnings([]), [])
 
 
+class SlowFiles(unittest.TestCase):
+    LIMIT = check.FILE_WARN_S * 1000
+
+    def test_only_files_past_the_limit_warn_slowest_first(self):
+        a, b, c = (str(ROOT / f"components/{n}/tests/page.test.mjs") for n in "abc")
+        rows = [{"name": "t", "file": a, "ms": 10}, {"files": {a: self.LIMIT - 1, b: self.LIMIT + 1000, c: self.LIMIT + 5000}}]
+        self.assertEqual(check.slow_file_warnings(rows), [
+            f"warning: components/c/tests/page.test.mjs took {self.LIMIT / 1000 + 5:.1f}s, over the "
+            f"{check.FILE_WARN_S}s a browser test file may take (11)",
+            f"warning: components/b/tests/page.test.mjs took {self.LIMIT / 1000 + 1:.1f}s, over the "
+            f"{check.FILE_WARN_S}s a browser test file may take (11)",
+        ])
+
+    def test_a_file_split_across_rows_adds_up(self):
+        rows = [{"files": {"x": self.LIMIT / 2 + 1}}, {"files": {"x": self.LIMIT / 2}}]
+        self.assertEqual(len(check.slow_file_warnings(rows)), 1)
+
+    def test_rows_without_files_never_warn(self):
+        self.assertEqual(check.slow_file_warnings([{"name": "t", "file": "x", "ms": self.LIMIT * 2},
+                                                   {"summary": {"launches": 1}}]), [])
+
+
+class Engines(unittest.TestCase):
+    def test_the_two_passes_split_on_the_engine_named_in_a_test(self):
+        # The WebKit pass skips what names Chromium, the push run's Chromium pass runs
+        # only that, so the Chromium-only passkey test "(chromium)" runs once, in the first.
+        self.assertEqual(check.SKIP_CHROMIUM, "--test-skip-pattern=in chromium")
+        self.assertEqual(check.ONLY_CHROMIUM, "--test-name-pattern=in chromium")
+
+
 class Failed(unittest.TestCase):
     def test_only_failed_tests_are_named_with_their_file(self):
         rows = [

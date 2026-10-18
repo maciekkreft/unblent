@@ -36,9 +36,15 @@ STATIC_BUDGET_S = 1.0
 TEST_TIMEOUT_MS = 5000
 # Section 11: a test past half its budget has no headroom left for a loaded host.
 HEADROOM_MS = TEST_TIMEOUT_MS / 2
-# The task-end gate runs browser tests in WebKit (11). Every two-engine test names its
-# engine "in <engine>"; a Chromium-only test (the WebAuthn ceremony) does not, so it stays.
+# The task-end gate and the full run test the browser in WebKit (11). Every two-engine
+# test names its engine "in <engine>"; a Chromium-only test (the WebAuthn ceremony) does
+# not, so it stays in the WebKit pass, and the push run's Chromium pass, which runs only
+# what names Chromium, does not run it twice.
 SKIP_CHROMIUM = "--test-skip-pattern=in chromium"
+ONLY_CHROMIUM = "--test-name-pattern=in chromium"
+# Section 11: a browser test file past this is named in a warning, so a file that grows
+# slow is found by name before it dominates the run.
+FILE_WARN_S = 30
 
 
 def _dotenv() -> dict:
@@ -1668,6 +1674,19 @@ def headroom_warnings(rows: list) -> list:
     return lines
 
 
+def slow_file_warnings(rows: list) -> list:
+    """The warning line for every browser test file past FILE_WARN_S (11), slowest first.
+    A file's time is in the `files` row checks/durations.mjs writes last, the sum of its
+    top-level tests and suites, hooks included. Pure, like headroom_warnings."""
+    files = {}
+    for row in rows:
+        for file, ms in (row.get("files") or {}).items():
+            files[file] = files.get(file, 0) + (ms or 0)
+    return [f"warning: {_where({'file': file})} took {ms / 1000:.1f}s, over the {FILE_WARN_S}s "
+            f"a browser test file may take (11)"
+            for file, ms in sorted(files.items(), key=lambda item: -item[1]) if ms > FILE_WARN_S * 1000]
+
+
 def failed_tests(rows: list) -> list:
     """One line per failed test, so a red run ends by naming what broke instead of
     leaving it somewhere in the log. Pure over the rows, like headroom_warnings."""
@@ -1683,7 +1702,7 @@ def browser_summary(rows: list, wall_s: float) -> list:
     and the rest, then the slowest loads by name. The rows are a run's duration rows,
     each test's `loads` tallied by checks/browsers.mjs and the launches in the one
     `summary` row per node process. Pure, like headroom_warnings."""
-    tests = [row for row in rows if "summary" not in row]
+    tests = [row for row in rows if "summary" not in row and "files" not in row]
     summaries = [row["summary"] for row in rows if "summary" in row]
     launches = sum(s.get("launches") or 0 for s in summaries)
     launch_s = sum(s.get("launch_ms") or 0 for s in summaries) / 1000
@@ -1723,11 +1742,12 @@ def _run_node(files: list, env=None) -> list | None:
     return None if proc.returncode == 0 else rows
 
 
-def run_tests(affected=None, webkit_only=False, pages=()) -> None:
-    # affected is None for the full run (the definition of done); a set of test
-    # files narrows to the tests reachable from a change (11). A narrowed run never
-    # touches infrastructure tests, since any infra change runs everything. `pages`
-    # names the addresses the page smoke test loads; empty, it loads every page.
+def run_tests(affected=None, push=False, pages=()) -> None:
+    # affected is None for the full run; a set of test files narrows to the tests
+    # reachable from a change (11). A narrowed run never touches infrastructure tests,
+    # since any infra change runs everything. `push` adds the push run's second browser
+    # pass in Chromium. `pages` names the addresses the page smoke test loads; empty, it
+    # loads every page.
     scoped = affected is not None
     # Every test process, pure or browser, reaches the kit the way it reaches Playwright:
     # through a path in the environment, never an import across components (10).
@@ -1802,7 +1822,10 @@ def run_tests(affected=None, webkit_only=False, pages=()) -> None:
             if "PLAYWRIGHT_MODULE" not in env:
                 fail(".env", "browser tests",
                      "PLAYWRIGHT_MODULE is not set; add PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs to .env")
-            _run_browser(browser, env, webkit_only)
+            _run_browser(browser, env, SKIP_CHROMIUM)
+            if push:
+                print("browser tests again in Chromium (the push run, 11)", file=sys.stderr, flush=True)
+                _run_browser(browser, env, ONLY_CHROMIUM)
 
 
 def _run_python_test(test: str, rule: str, detail: str, env=None) -> None:
@@ -1819,7 +1842,7 @@ def _run_python_test(test: str, rule: str, detail: str, env=None) -> None:
         print(f"ok   {test:<52} {time.perf_counter() - started:5.1f}s", file=sys.stderr, flush=True)
 
 
-def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
+def _run_browser(files: list, env: dict, engine_pattern: str) -> None:
     # CHECK_BROWSER_WORKERS parallel node processes over the one server (10, 11).
     # Default 1 (serial): on this two-core host a second concurrent browser starves
     # the first of CPU and pushes the heaviest tests (dock, notes save, layout
@@ -1839,7 +1862,7 @@ def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
         # checks/browsers.mjs is the browser rule (11.2): one browser per engine for the
         # worker, and any test that leaves a context open fails and has it closed at once,
         # so a timed-out test cannot leak pages into the next and exhaust the host.
-        extra = ["--import", "./checks/browsers.mjs"] + ([SKIP_CHROMIUM] if webkit_only else [])
+        extra = ["--import", "./checks/browsers.mjs", engine_pattern]
         procs.append(_node_test(chunk, env, extra))
     failed = None
     seen = []
@@ -1850,7 +1873,7 @@ def _run_browser(files: list, env: dict, webkit_only: bool) -> None:
         if proc.returncode != 0:
             failed = (failed or []) + rows
     # Pass or fail, so a red run's time is understood too (11).
-    for line in browser_summary(seen, time.perf_counter() - started):
+    for line in browser_summary(seen, time.perf_counter() - started) + slow_file_warnings(seen):
         print(line, file=sys.stderr)
     if failed is not None:
         fail("components/*/tests", "browser tests", _failure_detail(failed))
@@ -1922,9 +1945,13 @@ USAGE = """The one check command (architecture.md 11).
   before done           python3 checks/check.py --changed
                         static + tests reachable from your changes, browser
                         tests in WebKit (or --only <components>)
-  before push           python3 checks/check.py
-                        every static rule + ALL tests, WebKit then Chromium;
-                        the pre-push hook in .githooks/ runs it
+  full run              python3 checks/check.py
+                        every static rule + ALL tests, browser tests in
+                        WebKit (the passkey test in Chromium)
+  push run              python3 checks/check.py --push
+                        the full run, then every browser test again in
+                        Chromium; the pre-push hook in .githooks/ runs it.
+                        Never in a session: the owner pushes by hand
   by hand               python3 checks/check.py --server [port]
                         the throwaway server the tests use (temporary data
                         directory, port 8090 unless given), until Ctrl-C; for
@@ -1932,6 +1959,8 @@ USAGE = """The one check command (architecture.md 11).
 
   Tests print one line per file, and a failure's reason under its name.
   --verbose prints every test instead; use it with --only <component>.
+  A test past half its 5s budget, and a browser test file past 30s, is named
+  in a warning.
 """
 
 
@@ -1948,6 +1977,9 @@ def main() -> None:
     static_only = "--static" in argv
     changed = "--changed" in argv
     only = _only_value(argv)
+    push = "--push" in argv
+    if push and (changed or only or static_only):
+        fail("checks/check.py", "--push", "is the whole push run (11); it takes no --changed, --only or --static")
     timings = []
     # The two slow rules wait on other programs, so they start first and the rules
     # that need no manifests run meanwhile. Each timing is the main thread's own time,
@@ -1981,9 +2013,9 @@ def main() -> None:
     if static_only:
         return
     report_unused_tokens()
-    # Bare check.py is the push gate: affected stays None, everything runs in both engines.
-    # --changed / --only are the task-end gate: the tests reachable from what changed, in
-    # WebKit (11).
+    # Bare check.py is the full run and --push the push run: affected stays None, so
+    # every test runs. --changed / --only are the task-end gate: the tests reachable from
+    # what changed (11). All three test the browser in WebKit; --push adds Chromium.
     affected = None
     pages = set()
     if changed or only:
@@ -2004,12 +2036,12 @@ def main() -> None:
         if picked is not None:
             affected, pages = picked
     with _test_lock():
-        _timed(timings, "tests", run_tests, affected, bool(changed or only), pages)
+        _timed(timings, "tests", run_tests, affected, push, pages)
     scope = "all" if affected is None else (
         ", ".join(sorted(f"{Path(f).parts[1]}/{Path(f).name.removesuffix('.test.mjs')}" for f in affected)) or "none")
     if pages:
         scope += "; pages: " + ", ".join(sorted(pages))
-    scope += "; webkit" if changed or only else "; webkit, chromium"
+    scope += "; webkit, then chromium" if push else "; webkit"
     print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s [tests: {scope}]")
 
 

@@ -51,8 +51,12 @@ class Summary(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(summary([], 0.0), ["browser: 0 tests 0.0s — launches 0 (0.0s), page loads 0 (0.0s), the rest 0.0s"])
 
+    def test_a_files_row_is_not_counted_as_a_test(self):
+        rows = [row("one"), {"files": {FILE: 1000}}]
+        self.assertTrue(summary(rows, 1.0)[0].startswith("browser: 1 tests "))
+
     def test_summary_rows_never_warn_or_fail(self):
-        rows = [{"summary": {"launches": 1, "launch_ms": 5000}}]
+        rows = [{"summary": {"launches": 1, "launch_ms": 5000}}, {"files": {FILE: 1000}}]
         self.assertEqual(check.headroom_warnings(rows), [])
         self.assertEqual(check.failed_tests(rows), [])
 
