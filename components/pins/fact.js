@@ -1,4 +1,4 @@
-import { mount } from "bus";
+import { mount, ask } from "bus";
 import { machine } from "./machine.js";
 import { openStore } from "./store.js";
 import changed from "./events/pins.changed.json" with { type: "json" };
@@ -9,7 +9,7 @@ import read from "./queries/read.json" with { type: "json" };
 const store = openStore("pins");
 
 mount(machine, {
-  input: { stored: store.read(), save: store.write },
+  input: { stored: store.read(), save: store.write, ask: (target, name, payload) => ask(machine, target, name, payload) },
   events: { "pins.changed": changed },
   queries: { read },
 });
