@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { machine, levelOf, percentOf } from "./machine.js";
+import removalStarted from "./events/removal.started.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -12,7 +13,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
-      events: {},
+      events: { "removal.started": removalStarted },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -43,13 +44,13 @@ class FreeUse extends LitElement {
       display: inline-flex;
       align-items: center;
       gap: var(--space-sm);
-      padding: 0 var(--space-sm);
+      padding-left: var(--space-sm);
       font-size: var(--text-caption);
       color: var(--color-body);
       white-space: nowrap;
     }
     .track {
-      width: calc(var(--space-2xl) + var(--space-lg));
+      width: var(--space-2xl);
       height: calc(var(--space-xs) + var(--space-2xs));
       background: var(--color-surface-active);
       border-radius: var(--radius-full);
@@ -75,6 +76,27 @@ class FreeUse extends LitElement {
     .left {
       font-variant-numeric: tabular-nums;
     }
+    /* A quiet text button in the strip's own ink, like the other header controls. */
+    button {
+      border: none;
+      background: none;
+      font: inherit;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+      cursor: pointer;
+      padding: var(--space-xs);
+      margin-left: var(--space-xs);
+      border-radius: var(--radius-full);
+      white-space: nowrap;
+    }
+    button:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-ink);
+    }
+    button:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
   `;
 
   #actor = new ActorController(this);
@@ -96,6 +118,7 @@ class FreeUse extends LitElement {
         </span>
         <span class="left">${said}</span>
       </span>
+      <button type="button" @click=${() => this.#actor.actor.send({ type: "_startOver" })}>Start over</button>
     `;
   }
 }

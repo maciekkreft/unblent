@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 // own picture, here reshaped by request routing, and Jev is answered the same way, so
 // nothing is spent; what a request costs is tested in llm's spending test.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, shortUndo } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -16,7 +16,8 @@ const JOURNAL = "00000000000000000000000JRN";
 const EVALUATOR = "01K7TEST0000000000000F0001";
 const QUESTION = "01K7TEST0000000000000F0Q01";
 
-const bar = (page) => page.evaluate(() => document.querySelector("free-use").shadowRoot.textContent.replace(/\s+/g, " ").trim());
+const bar = (page) => page.evaluate(() => document.querySelector("free-use").shadowRoot.querySelector(".use")?.textContent.replace(/\s+/g, " ").trim() ?? "");
+const listText = (page) => page.evaluate(() => document.querySelector("evaluator-list").shadowRoot.textContent.replace(/\s+/g, " "));
 const runBox = (page) =>
   page.evaluate(() => {
     const root = document.querySelector("evaluator-list").shadowRoot;
@@ -25,9 +26,10 @@ const runBox = (page) =>
 
 // A guest made the way a try page makes one (3.4), with one switched-on evaluator kept
 // with the Journal, and llm's picture answered with the given free use.
-async function guestPage(browser, freeUse) {
+async function guestPage(browser, freeUse, { undoMs = null } = {}) {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
+  if (undoMs != null) await shortUndo(context, undoMs);
   assert.ok((await context.request.post(`${BASE_URL}/api/session/guest`)).ok(), "the guest is made");
   const put = await context.request.put(`${BASE_URL}/api/evaluators/${EVALUATOR}`, {
     data: { book: JOURNAL, name: "Clear goal", on: true, questions: [{ id: QUESTION, kind: "yesno", text: "Is it a goal?", yes: "", no: "", options: [] }], baseVersion: null, deleted: false },
@@ -64,10 +66,32 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const { context, page, problems } = await guestPage(browser, (n) => ({ left: n === 1 ? 1 : 0.9, blocked: false, paused: [] }));
       try {
         await until(async () => (await bar(page)) === "Free use 100% left");
-        await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("Walk for ten minutes after lunch.");
+        await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
+        await page.keyboard.insertText("Walk for ten minutes after lunch.");
         await page.getByRole("button", { name: "Evaluate 1 line" }).click();
         await until(async () => (await bar(page)) === "Free use 90% left");
         assert.deepEqual(await runBox(page), { notice: null, off: false });
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // A gesture: Start over waits out its notice, then the guest's own evaluator gives way
+    // to the starters, and what was spent is left alone.
+    test("Start over replaces the guest's evaluators with the starters once its notice ends", async () => {
+      const { context, page, problems } = await guestPage(browser, () => ({ left: 0.5, blocked: false, paused: [] }), { undoMs: 600 });
+      try {
+        await context.route(/\/api\/evaluators\/starters\/evaluators$/, (route) =>
+          route.fulfill({ json: { evaluators: [{ name: "Therapy Goal", questions: [{ id: QUESTION, on: true, kind: "yesno", text: "Is it a goal?", yes: "", no: "", options: [] }] }] } }),
+        );
+        await until(async () => (await listText(page)).includes("Evaluated by Clear goal"));
+        await page.getByRole("button", { name: "Start over" }).click();
+        await until(async () => (await page.evaluate(() => document.querySelector("notice-stack").shadowRoot.textContent)).includes("Starting over."));
+        assert.ok((await listText(page)).includes("Evaluated by Clear goal"), "nothing changes while the notice is up");
+        await until(async () => (await listText(page)).includes("Evaluated by Therapy Goal"));
+        assert.ok(!(await listText(page)).includes("Clear goal"));
+        assert.equal(await bar(page), "Free use 50% left");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -84,7 +108,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const { context, page, problems } = await guestPage(browser, () => freeUse);
         try {
           await until(async () => (await bar(page)) === said);
-          await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("Walk.");
+          await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
+          await page.keyboard.insertText("Walk.");
           await until(async () => (await runBox(page)).notice === notice);
           assert.equal((await runBox(page)).off, notice != null);
           assert.deepEqual(problems, []);

@@ -12,13 +12,14 @@
         "case",
         "evaluator",
         "choice-point",
-        "guest"
+        "guest",
+        "trial"
       ]
     },
     "id": {
       "type": "string",
       "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|[0-9a-f]{32})$",
-      "description": "A record's ULID, or an account id (32 hex) when kind is guest."
+      "description": "A record's ULID, an account id (32 hex) when kind is guest, or a fixed id when kind is trial (a try page started over)."
     },
     "name": {
       "type": "string",

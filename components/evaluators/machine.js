@@ -275,6 +275,18 @@ function applySettle(context, { kind, id }, enqueue) {
   }
 }
 
+// Start over on a try page (8), once its Undo window ended: every evaluator here becomes
+// a tombstone, uploaded like any delete, and _restart fetches the starters again and
+// copies them in as on a first visit. Off a try page it means nothing.
+function startOver(context, enqueue) {
+  if (!context.tryPage) return;
+  for (const r of [...context.evaluators.values()].filter(visible)) commit(context, enqueue, { ...r, removing: false, deleted: true });
+  enqueue.raise({ type: "_restart" });
+}
+
+const settled = (context, message, enqueue) =>
+  message.kind === "trial" ? startOver(context, enqueue) : applySettle(context, message, enqueue);
+
 // At load no tab can undo anything any more, because the tab that showed the undo
 // notice is gone, so every leftover mark settles.
 function settleAll(context, enqueue) {
@@ -296,7 +308,7 @@ function flush(context, message, enqueue) {
   else if (message.type === "starter.ticked") applyTick(context, message, enqueue);
   else if (message.type === "removal.started") applyMark(context, message, true, enqueue);
   else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
-  else if (message.type === "removal.settled") applySettle(context, message, enqueue);
+  else if (message.type === "removal.settled") settled(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -426,7 +438,9 @@ export const machine = setup({
       "visitors. On a try page, a visitor whose browser holds no evaluators yet gets a copy of " +
       "each of that page's starters before anything is listed, with new ids, switched on and " +
       "kept with the Journal; the copies are the visitor's own and upload with the rest once " +
-      "the guest is made, and later changes by the admin do not reach them.",
+      "the guest is made, and later changes by the admin do not reach them. Start over on a " +
+      "try page, once its Undo window ends, deletes every evaluator in the browser and " +
+      "copies the starters in again the same way.",
     kind: "fact",
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
@@ -553,7 +567,8 @@ export const machine = setup({
         "starter.ticked": { actions: enqueueActions(({ context, event, enqueue }) => applyTick(context, event, enqueue)) },
         "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, true, enqueue)) },
         "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
-        "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => applySettle(context, event, enqueue)) },
+        "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => settled(context, event, enqueue)) },
+        _restart: { target: "#evaluators.seeding", actions: assign({ seeds: null }) },
         // Signing in enqueues the whole cache, tombstones included, so what was made
         // signed out becomes the account's (5); a different user resets the cursor.
         "session.changed": {

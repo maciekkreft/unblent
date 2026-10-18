@@ -1,9 +1,11 @@
-import { setup, assign, fromPromise } from "xstate";
+import { setup, assign, emit, fromPromise } from "xstate";
 
 // A view component (3.1): the guest's free-use bar on a try page (8). It owns no fact:
 // the share left belongs to `llm`, reached by one query for the starting picture and
 // llm.changed after (4.3, fourth rule). The ask arrives through `input`, so the
-// machine imports in Node.
+// machine imports in Node. Start over leaves as a gesture, removal.started (4.3, fifth
+// rule): notice-stack gives it its Undo window, and each fact that keeps starters starts
+// over once it settles (8).
 
 // What the bar shows for one llm picture (7.7): a visitor not yet a guest has all of
 // it; a guest its own share; a signed-in account that is not a guest nothing.
@@ -26,6 +28,10 @@ export const levelOf = (share, blocked = false) =>
 // left, so the bar does not say nothing is left when a little is.
 export const percentOf = (share) => (share <= 0 ? 0 : Math.max(1, Math.floor(share * 100)));
 
+// One fixed id, so pressing Start over again restarts its notice rather than stacking a
+// second one.
+export const TRIAL = "00000000000000000000000RST";
+
 export const machine = setup({
   actors: {
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
@@ -41,9 +47,12 @@ export const machine = setup({
       "While a limit for all guests is reached it still shows the guest's own share. " +
       "While the admin has blocked the guest it reads \"ended\" in the danger colour, " +
       "with an empty bar, beside \"This trial has ended.\" under Run. It " +
-      "shows nothing for a signed-in account that is not a guest.",
+      "shows nothing for a signed-in account that is not a guest. Beside the bar, Start over " +
+      "shows a notice, \"Starting over.\", with Undo; nothing changes until the notice ends, " +
+      "and then the visitor's evaluators are replaced with fresh copies of the starters, " +
+      "while what was spent stays.",
     kind: "view",
-    emits: [],
+    emits: ["removal.started"],
     attributes: [],
     asks: ["llm: read"],
   },
@@ -55,6 +64,7 @@ export const machine = setup({
     onError: { actions: [] },
   },
   on: {
+    _startOver: { actions: emit({ type: "removal.started", kind: "trial", id: TRIAL, name: "" }) },
     "llm.changed": { actions: assign({ share: ({ event }) => shareOf(event), blocked: ({ event }) => blockedOf(event) }) },
   },
 });

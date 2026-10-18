@@ -34,6 +34,7 @@ const REMOVED = {
 
 function describe(source) {
   if (source.type === "removal.started") {
+    if (source.kind === "trial") return "Starting over.";
     const [noun, verb] = REMOVED[source.kind] ?? ["Item", "deleted"];
     return source.name ? `${noun} “${source.name}” ${verb}.` : `${noun} ${verb}.`;
   }
