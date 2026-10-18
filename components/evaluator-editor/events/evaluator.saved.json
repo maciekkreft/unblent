@@ -69,6 +69,10 @@
                 "description": {
                   "type": "string",
                   "description": "What the option means; empty for none."
+                },
+                "icon": {
+                  "type": "string",
+                  "description": "The icon the option's mark gets on a choice point line, by its name in the icons (7.6); absent for none, so the mark is a check, or a warning when the option is not the one expected."
                 }
               },
               "required": [
@@ -79,6 +83,11 @@
               "additionalProperties": false
             },
             "description": "The options of a pick question; kept while the question is yesno, so switching back loses nothing."
+          },
+          "expect": {
+            "type": "string",
+            "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+            "description": "The answer expected: an option's id for a pick question, or yes or no for a yes / no question; absent when none is expected. A choice point mark is green when Jev gives it, red when not, uncoloured when absent."
           }
         },
         "required": [

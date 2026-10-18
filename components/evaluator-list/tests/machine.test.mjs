@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, belongs, bookOf, request, lines, score, results, errorKind, freeStop, notice } from "../machine.js";
+import { machine, rows, subtitle, belongs, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, foldLine, foldedAtStart, freeStop, notice } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -338,20 +338,83 @@ test("a run leaves out a question switched off, so the score uses only the switc
   assert.deepEqual(request("Hi", [evaluator(7, A, { questions: [yesno(14, "Off?", { on: false })] })]).questions, []);
 });
 
-test("the score is the geometric mean of the yes / no answers; none gives no score", () => {
-  assert.equal(score([]), null);
-  assert.equal(score([0.25, 1]).toFixed(2), "0.50");
-  assert.equal(score([0, 0.9]), 0);
-  const out = results(
-    [{ id: id(1), questions: [yesno(1, "A?"), yesno(2, "B?"), pick(3, "C?", [option(1, "x"), option(2, "y")])] }],
+test("a pick answer is told in words from every option's probability", () => {
+  const ranked = (...ps) => ps.map(([name, p]) => ({ name, p }));
+  assert.equal(sayPick(ranked(["Calm", 0.75], ["Angry", 0.25])), "Calm");
+  assert.equal(sayPick(ranked(["Calm", 0.5], ["Angry", 0.4], ["Sad", 0.1])), "Between: Calm and Angry");
+  assert.equal(sayPick(ranked(["Calm", 0.6], ["Angry", 0.3], ["Sad", 0.1])), "Probably: Calm");
+  assert.equal(sayPick(ranked(["Calm", 0.4], ["Angry", 0.2], ["Sad", 0.2], ["Gone", 0.2])), "Not clear, maybe: Calm");
+  assert.equal(sayPick(ranked(["a Name  as written", 0.9])), "a Name  as written", "names exactly as written");
+});
+
+test("a yes / no answer is told in words, an even chance as not clear", () => {
+  const said = [0.9, 0.75, 0.74, 0.56, 0.55, 0.5, 0.45, 0.44, 0.25, 0.24, 0].map(sayYesNo);
+  assert.deepEqual(said, ["Yes", "Yes", "Probably yes", "Probably yes", "Not clear", "Not clear", "Not clear", "Probably no", "Probably no", "No", "No"]);
+});
+
+test("an answer is green when it is the one expected, red when not, plain when none is", () => {
+  const icons = [option(1, "Calm", { icon: "brain" }), option(2, "Angry"), option(3, "Gone", { removing: true })];
+  const asked = [
+    {
+      id: id(1),
+      questions: [
+        yesno(1, "Kind?", { expect: "yes" }),
+        yesno(2, "Short?", { expect: "yes" }),
+        yesno(3, "Plain?"),
+        pick(4, "Tone?", icons, { expect: O(1) }),
+        pick(5, "Tone again?", icons, { expect: O(1) }),
+        pick(6, "Unsure tone?", icons, { expect: O(1) }),
+        pick(7, "Expects a gone one?", icons, { expect: O(3) }),
+      ],
+    },
+  ];
+  const out = results(asked, [
+    { id: qid(id(1), Q(1)), p: 0.9 },
+    { id: qid(id(1), Q(2)), p: 0.52 },
+    { id: qid(id(1), Q(3)), p: 0.1 },
+    { id: qid(id(1), Q(4)), p: 0.8, choice: O(1), probabilities: [{ id: O(1), p: 0.8 }, { id: O(2), p: 0.2 }] },
+    { id: qid(id(1), Q(5)), p: 0.9, choice: O(2), probabilities: [{ id: O(1), p: 0.1 }, { id: O(2), p: 0.9 }] },
+    { id: qid(id(1), Q(6)), p: 0.5, choice: O(2), probabilities: [{ id: O(1), p: 0.45 }, { id: O(2), p: 0.55 }] },
+    { id: qid(id(1), Q(7)), p: 0.9, choice: O(1) },
+  ])[id(1)].questions;
+  assert.deepEqual(
+    out.map((a) => [a.question, a.words, a.tone, a.glyph]),
     [
-      { id: qid(id(1), Q(1)), p: 0.81 },
-      { id: qid(id(1), Q(2)), p: 0.25 },
-      { id: qid(id(1), Q(3)), p: 0.01, choice: O(2) },
+      ["Kind?", "Yes", "right", "check"],
+      ["Short?", "Not clear", "right", "check"],
+      ["Plain?", "No", null, null],
+      ["Tone?", "Calm", "right", "brain"],
+      ["Tone again?", "Angry", "wrong", "warning"],
+      ["Unsure tone?", "Between: Angry and Calm", "wrong", "warning"],
+      ["Expects a gone one?", "Calm", null, "brain"],
     ],
   );
-  assert.equal(out[id(1)].score.toFixed(2), "0.45");
-  assert.equal(results([{ id: id(2), questions: [pick(3, "C?", [option(1, "x"), option(2, "y")])] }], [{ id: qid(id(2), Q(3)), p: 0.7, choice: O(1) }])[id(2)].score, null);
+  assert.deepEqual(out[5].probabilities, [{ id: O(2), p: 0.55 }, { id: O(1), p: 0.45 }], "every option's probability is kept, highest first");
+  const lone = results([{ id: id(2), questions: [pick(3, "C?", [option(1, "x"), option(2, "y")])] }], [{ id: qid(id(2), Q(3)), p: 0.7, choice: O(1) }]);
+  assert.equal(lone[id(2)].questions[0].question, null, "a lone pick question names itself");
+  assert.equal(lone[id(2)].questions[0].words, "Probably: x");
+  assert.equal("score" in lone[id(2)], false, "no score");
+});
+
+test("the Evaluate button and the fold line say what will happen", () => {
+  assert.equal(evaluateLabel(0, false), "Evaluate");
+  assert.equal(evaluateLabel(1, false), "Evaluate 1 line");
+  assert.equal(evaluateLabel(3, false), "Evaluate 3 lines");
+  assert.equal(evaluateLabel(3, true), "Evaluating…");
+  const said = (names, anyOn = true) => foldLine(names, anyOn).map(([t, b]) => (b ? `<b>${t}</b>` : t)).join("");
+  assert.equal(said([], false), "No evaluator is on");
+  assert.equal(said([], true), "No evaluator has a question yet");
+  assert.equal(said(["Kind"]), "Evaluated by <b>Kind</b>");
+  assert.equal(said(["Kind", "Short"]), "Evaluated by <b>Kind</b> and <b>Short</b>");
+  assert.equal(said(["Kind", "Short", "Clear"]), "Evaluated by 3 evaluators");
+});
+
+test("the list starts folded as the page says, unless this browser remembers the user's own fold", () => {
+  assert.equal(foldedAtStart(true, null), true);
+  assert.equal(foldedAtStart(false, null), false);
+  assert.equal(foldedAtStart(true, "false"), false);
+  assert.equal(foldedAtStart(false, "true"), true);
+  assert.equal(foldedAtStart(false, "nonsense"), false);
 });
 
 test("error replies come in the kinds the user tells apart", () => {
@@ -406,13 +469,23 @@ const lineResults = (status, line, at, extra = {}) => ({ at, line, status, resul
 
 const ONE = {
   [id(1)]: {
-    score: 0.93,
     questions: [
-      { id: Q(1), text: "Is it kind?", kind: "yesno", label: "Yes", p: 0.93 },
-      { id: Q(4), text: "Which tone?", kind: "pick", label: "Angry", p: 0.6 },
+      { id: Q(1), kind: "yesno", question: "Is it kind?", top: "yes", words: "Yes", tone: null, glyph: null, p: 0.93 },
+      {
+        id: Q(4),
+        kind: "pick",
+        question: "Which tone?",
+        top: O(2),
+        words: "Probably: Angry",
+        tone: null,
+        glyph: null,
+        probabilities: [{ id: O(2), p: 0.6 }, { id: O(1), p: 0.4 }],
+      },
     ],
   },
-  [id(5)]: { score: null, questions: [{ id: Q(10), text: "Which?", kind: "pick", label: "Left", p: 0.8 }] },
+  [id(5)]: {
+    questions: [{ id: Q(10), kind: "pick", question: null, top: O(8), words: "Left", tone: null, glyph: null, probabilities: [{ id: O(8), p: 0.8 }] }],
+  },
 };
 
 test("a text is judged line by line: blank lines are skipped and each keeps its line number", () => {

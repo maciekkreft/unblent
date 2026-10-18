@@ -96,6 +96,8 @@ export const answersOf = (q) =>
         { id: "no", name: "No" },
       ];
 
+// checks.edited still requires `expect` and `icons`; the evaluator holds both now, so a
+// new setting writes neither and a stored one passes through untouched.
 const unset = (id, show) => ({ id, show, expect: null, when: null, icons: {} });
 
 // One box as Settings shows and edits it: a setting for every live question of its
@@ -117,27 +119,16 @@ const shownBox = (context, field) => {
 const checksEdited = (field, b) => ({ type: "checks.edited", field, evaluator: b.evaluator, questions: b.questions });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-// One question's setting changed: the whole box, as checks.edited carries it. "auto" is
-// written by leaving the answer out, which the schema reads as auto.
+// One question's setting changed: the whole box, as checks.edited carries it.
+// Only Show and when it is shown are set here; the answer expected is the evaluator's.
 const patched = (context, event) => {
   const b = shownBox(context, event.field);
-  return {
-    ...b,
-    questions: b.questions.map((q) => {
-      if (q.id !== event.id) return q;
-      const next = { ...q, ...event.patch };
-      if (event.icon) {
-        const icons = { ...q.icons };
-        if (event.icon.icon === "auto") delete icons[event.icon.option];
-        else icons[event.icon.option] = event.icon.icon;
-        next.icons = icons;
-      }
-      return next;
-    }),
-  };
+  const { show, when } = event.patch ?? {};
+  const patch = { ...(typeof show === "boolean" ? { show } : {}), ...(when !== undefined ? { when } : {}) };
+  return { ...b, questions: b.questions.map((q) => (q.id === event.id ? { ...q, ...patch } : q)) };
 };
 
-// Choosing an evaluator for a box: every question shown, nothing expected; or, if this
+// Choosing an evaluator for a box: every question shown; or, if this
 // box had that evaluator earlier while the sheet was open, its settings then, so choosing
 // the previous evaluator again undoes the switch in one step (forgiveness).
 const chosen = (context, event) => {
@@ -193,9 +184,9 @@ export const machine = setup({
       "choice point checks, which `choice-point-checks` keeps, in a fold that starts closed: " +
       "for each box of a choice point, the evaluator whose questions Jev answers about each " +
       "line, and per question whether its answer is shown, when (always, or only when an " +
-      "earlier question got a given answer), the answer expected, and the icon each answer " +
-      "gets. Every change saves the whole box at once and Jev checks the day on screen again. " +
-      "Choosing an evaluator ticks all its questions with nothing expected; choosing a box's " +
+      "earlier question got a given answer); the answer expected and the icon a mark shows are " +
+      "the evaluator's own, chosen in the evaluator. Every change saves the whole box at once and Jev checks the day on screen again. " +
+      "Choosing an evaluator ticks all its questions; choosing a box's " +
       "earlier evaluator again while the sheet is open brings back its settings. The part is " +
       "hidden on a page without `choice-point-checks`. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +

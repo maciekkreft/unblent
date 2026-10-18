@@ -187,6 +187,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await focused(page), "2:text", "Escape leaves insert mode and stays in the box");
         await page.keyboard.press("Tab");
         await settle(page);
+        assert.equal(await focused(page), "2:select", "Tab moves on to the expected answer under the question");
+        await page.keyboard.press("Tab");
         assert.equal(await focused(page), "2:yes");
         assert.equal(await secondText(page), "Is it a goal?");
         assert.deepEqual(problems, []);
@@ -274,6 +276,53 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await secondText(page).catch(() => null)) === "Is it a goal?");
         // The reload aborting a pull the visibility nudges started is navigation, not a fault.
+        assert.deepEqual(problems.filter((p) => !/Load request cancelled|access control checks/.test(p)), []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // The option's icon button opens a panel; a choice saves at once, closes it and gives
+    // the keyboard back to the button; Escape closes it unchanged; a reload shows the icon.
+    test("an option's icon is chosen in a panel, saved, and there after a reload", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("evaluator-icons"));
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
+        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await page.click("evaluator-list .row.new .open");
+        const editor = page.locator("evaluator-editor");
+        await page.fill("evaluator-editor input.title", "Goal or value");
+        await editor.getByText("Pick one").click();
+        await editor.locator(".option input").first().fill("Goal");
+        const glyph = editor.locator(".option .glyph").first();
+        assert.equal(await glyph.getAttribute("aria-label"), "Icon for Goal: none");
+        await glyph.click();
+        const panel = editor.getByRole("group", { name: "Icon for Goal" });
+        assert.equal(await panel.locator('[aria-pressed="true"]').innerText(), "No icon");
+        await panel.getByRole("button", { name: "Heart" }).click();
+        await until(async () => (await panel.count()) === 0);
+        assert.equal(await glyph.getAttribute("aria-label"), "Icon for Goal: Heart");
+        assert.equal(await inEditor(page, (root) => root.activeElement?.classList.contains("glyph") ?? false), true, "the keyboard is back on the icon button");
+
+        await page.keyboard.press("Enter");
+        await panel.waitFor();
+        assert.equal(await inEditor(page, (root) => root.activeElement?.getAttribute("aria-label")), "Heart", "the panel opens on the current icon");
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("Escape");
+        await until(async () => (await panel.count()) === 0);
+        assert.equal(await glyph.getAttribute("aria-label"), "Icon for Goal: Heart", "Escape changes nothing");
+
+        await until(async () => {
+          await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+          const { evaluators } = await (await context.request.get(`${BASE_URL}/api/evaluators`)).json();
+          return evaluators.some((e) => e.questions.some((q) => q.options.some((o) => o.name === "Goal" && o.icon === "heart")));
+        });
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await glyph.getAttribute("aria-label").catch(() => null)) === "Icon for Goal: Heart");
         assert.deepEqual(problems.filter((p) => !/Load request cancelled|access control checks/.test(p)), []);
       } finally {
         await context.close();

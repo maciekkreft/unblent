@@ -71,6 +71,11 @@ const MARK_ICONS = {
   warning: () => icon("warning"),
   "person-simple-walk": () => icon("person-simple-walk"),
   brain: () => icon("brain"),
+  heart: () => icon("heart"),
+  trophy: () => icon("trophy"),
+  "hand-palm": () => icon("hand-palm"),
+  footprints: () => icon("footprints"),
+  question: () => icon("question"),
 };
 
 // A box on a day that cannot be written is shown, not edited (writable); it takes no

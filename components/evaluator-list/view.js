@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, rows, subtitle, askable, lines, UNTITLED, freeStop, notice, STOPS } from "./machine.js";
+import { machine, rows, subtitle, askable, lines, UNTITLED, freeStop, notice, STOPS, evaluateLabel, foldLine, foldedAtStart } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 
@@ -70,6 +70,38 @@ const drafts = {
   },
 };
 
+// Whether the user last hid the list of evaluators, kept in this browser (3.1) as "true" or
+// "false"; it wins over the page's `folded`. A browser refusing storage reads nothing.
+const FOLD_KEY = "evaluator-list.folded";
+const readFold = () => {
+  try {
+    return localStorage.getItem(FOLD_KEY);
+  } catch {
+    return null;
+  }
+};
+const writeFold = (folded) => {
+  try {
+    localStorage.setItem(FOLD_KEY, String(folded));
+  } catch {
+    // No persistence available; the fold lives only for this page.
+  }
+};
+
+// The glyphs an answer may start with, as literals so the icon check can read them (7.6):
+// the icons an evaluator may give an option, and the check and warning of an expected answer.
+const GLYPHS = {
+  footprints: () => icon("footprints"),
+  "person-simple-walk": () => icon("person-simple-walk"),
+  brain: () => icon("brain"),
+  heart: () => icon("heart"),
+  trophy: () => icon("trophy"),
+  "hand-palm": () => icon("hand-palm"),
+  question: () => icon("question"),
+  check: () => icon("check"),
+  warning: () => icon("warning"),
+};
+
 const ERRORS = {
   "signed-out": "Sign in to run evaluators.",
   key: "Add a Jev key in Settings.",
@@ -82,7 +114,8 @@ const ERRORS = {
 
 class EvaluatorList extends LitElement {
   // Follow the book open on the stage. Reflected so a page's bare `subject` reads as true.
-  static properties = { subject: { type: Boolean, reflect: true } };
+  // `folded`: the list of evaluators starts hidden under the Evaluate box.
+  static properties = { subject: { type: Boolean, reflect: true }, folded: { type: Boolean } };
 
   static styles = css`
     :host {
@@ -187,13 +220,12 @@ class EvaluatorList extends LitElement {
       line-height: var(--leading-tight);
       color: var(--color-body-mid);
     }
-    /* The Run box sits above the list, outside it, so its keys never reach the list's. */
+    /* The Evaluate box sits above the list, outside it, so its keys never reach the list's. */
     .run {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
       padding: var(--space-md) var(--space-md) var(--space-sm);
-      border-bottom: var(--border-width) solid var(--color-border);
     }
     .run label {
       font-size: var(--text-sm);
@@ -219,29 +251,65 @@ class EvaluatorList extends LitElement {
       outline: none;
       box-shadow: var(--focus-ring);
     }
+    /* The fold line and the buttons; on a narrow panel the buttons wrap under the fold line.
+       Every target is at least 44px tall, for a finger. */
     .actions {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: var(--space-sm);
     }
-    .cost {
-      flex: 1;
-      min-width: 0;
-      font-size: var(--text-caption);
-      color: var(--color-body-mid);
-    }
     .actions button {
-      flex: none;
       font: inherit;
       font-size: var(--text-sm);
-      min-height: var(--space-xl);
-      padding: var(--space-sm) var(--space-md);
+      min-height: calc(var(--space-xl) + var(--space-xs));
       border-radius: var(--radius-md);
       cursor: pointer;
     }
     .actions button:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
+    }
+    .fold {
+      flex: 0 1 auto;
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: 0 var(--space-xs);
+      margin-left: calc(var(--space-xs) * -1);
+      text-align: left;
+      color: var(--color-body);
+      background: none;
+      border: 0;
+    }
+    .fold:hover {
+      background: var(--color-surface-hover);
+    }
+    .fold svg {
+      flex: none;
+      transition: transform var(--duration-slide) ease;
+    }
+    .fold[aria-expanded="true"] svg {
+      transform: rotate(90deg);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .fold svg {
+        transition: none;
+      }
+    }
+    .fold b {
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    .buttons {
+      flex: none;
+      display: flex;
+      gap: var(--space-sm);
+      margin-left: auto;
+    }
+    .buttons button {
+      padding: var(--space-sm) var(--space-md);
     }
     .clear {
       color: var(--color-body);
@@ -265,8 +333,22 @@ class EvaluatorList extends LitElement {
       background: var(--color-border);
       cursor: default;
     }
-    /* The free-use message under Run (try-links screen 2): danger when this guest is
-       out, warning while trials are paused for everyone. */
+    /* The list of evaluators, when shown, between the box and the results. */
+    .list {
+      border-top: var(--border-width) solid var(--color-border);
+      border-bottom: var(--border-width) solid var(--color-border);
+    }
+    .out {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+      padding: var(--space-sm) var(--space-md) var(--space-md);
+    }
+    .out:empty {
+      display: none;
+    }
+    /* The free-use message (try-links screen 2): danger when this guest is out, warning
+       while trials are paused for everyone. */
     .notice {
       margin: 0;
       padding: var(--space-sm) var(--space-md);
@@ -290,25 +372,28 @@ class EvaluatorList extends LitElement {
       flex-direction: column;
       gap: var(--space-md);
       margin: 0;
-      padding: var(--space-xs) 0 0;
+      padding: 0;
       list-style: none;
     }
     .line {
       display: flex;
       flex-direction: column;
-      gap: var(--space-sm);
+      gap: var(--space-xs);
       padding-top: var(--space-sm);
       border-top: var(--border-width) solid var(--color-border);
+    }
+    .line:first-child {
+      border-top: 0;
+      padding-top: 0;
     }
     .said {
       display: flex;
       align-items: center;
       gap: var(--space-sm);
       margin: 0;
-      font-size: var(--text-sm);
+      font-size: var(--text-body);
       line-height: var(--leading-tight);
       color: var(--color-ink);
-      font-weight: var(--weight-semibold);
       overflow-wrap: anywhere;
     }
     /* The line being asked: the same pulsing dot as a choice point's pending check. */
@@ -333,71 +418,58 @@ class EvaluatorList extends LitElement {
     .verdict {
       display: flex;
       flex-direction: column;
-      gap: var(--space-xs);
+      gap: var(--space-2xs);
     }
-    .judge {
-      display: flex;
-      align-items: center;
-      gap: var(--space-sm);
-    }
-    .judge .name {
-      flex: 1;
-      min-width: 0;
-      font-size: var(--text-sm);
-    }
-    .score {
-      flex: none;
-      font-weight: var(--weight-semibold);
-      color: var(--color-ink);
-      background: var(--color-surface-hover);
-      border-radius: var(--radius-full);
-      padding: var(--space-2xs) var(--space-sm);
+    .by {
+      margin: var(--space-2xs) 0 0;
+      font-size: var(--text-caption);
+      color: var(--color-mute);
     }
     .answers {
       display: flex;
       flex-direction: column;
-      gap: var(--space-sm);
+      gap: var(--space-2xs);
       margin: 0;
       padding: 0;
       list-style: none;
     }
     .answer {
       display: flex;
-      flex-direction: column;
-      gap: var(--space-2xs);
+      align-items: baseline;
+      flex-wrap: wrap;
+      column-gap: var(--space-sm);
+      font-size: var(--text-sm);
+      line-height: var(--leading-normal);
     }
     .question {
-      font-size: var(--text-sm);
-      line-height: var(--leading-tight);
-      color: var(--color-body);
+      color: var(--color-body-mid);
     }
-    .meter {
-      display: flex;
-      align-items: center;
-      gap: var(--space-sm);
-    }
-    .track {
-      flex: 1;
-      height: calc(var(--space-xs) + var(--space-2xs));
-      background: var(--color-surface-active);
-      border-radius: var(--radius-full);
-      overflow: hidden;
-    }
-    .fill {
-      display: block;
-      height: 100%;
-      border-radius: var(--radius-full);
-      background: var(--color-success);
-    }
-    .fill.low {
-      background: var(--color-warning);
-    }
-    .label {
-      flex: none;
-      min-width: calc(var(--space-2xl) + var(--space-lg));
-      text-align: right;
-      font-size: var(--text-caption);
+    .words {
       color: var(--color-ink);
+      font-weight: var(--weight-semibold);
+    }
+    /* The answer's glyph, coloured as a choice point's marks: green when it is the answer
+       expected, red when not, plain when nothing is expected. */
+    .glyph {
+      flex: none;
+      align-self: center;
+      display: inline-grid;
+      place-items: center;
+      width: calc(var(--text-sm) + var(--space-xs) * 2);
+      height: calc(var(--text-sm) + var(--space-xs) * 2);
+      border-radius: var(--radius-sm);
+      color: var(--color-body-mid);
+    }
+    .glyph svg {
+      display: block;
+    }
+    .glyph.right {
+      color: var(--color-success);
+      background: var(--color-success-subtle);
+    }
+    .glyph.wrong {
+      color: var(--color-danger);
+      background: var(--color-danger-subtle);
     }
     .empty {
       margin: 0;
@@ -429,7 +501,9 @@ class EvaluatorList extends LitElement {
 
   // A panel's focus lands in what it shows (list-then-item, dock-desk): the roving row.
   focus(options) {
-    const target = this.renderRoot?.querySelector('.open[tabindex="0"]') ?? this.renderRoot?.querySelector(".open");
+    // With the list hidden, the fold line that shows it.
+    const target =
+      this.renderRoot?.querySelector('.open[tabindex="0"]') ?? this.renderRoot?.querySelector(".open") ?? this.renderRoot?.querySelector(".fold");
     if (target) target.focus(options);
     else super.focus(options);
   }
@@ -497,26 +571,45 @@ class EvaluatorList extends LitElement {
     }
   }
 
+  // Whether the list of evaluators is hidden: read once, from this browser's last fold or
+  // else the page's `folded`, then the user's own.
+  #folded = null;
+
+  #isFolded() {
+    if (this.#folded == null) this.#folded = foldedAtStart(this.folded, readFold());
+    return this.#folded;
+  }
+
+  #toggleFold() {
+    this.#folded = !this.#isFolded();
+    writeFold(this.#folded);
+    this.requestUpdate();
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
-    const { draft, open, evaluators, book, titles } = snapshot.context;
+    const { draft, open, evaluators, book, titles, runs } = snapshot.context;
     const shown = rows(evaluators);
     const ids = [draft, ...shown.map((e) => e.id)];
     const focusId = this.#focusRow(ids, open);
+    const stop = notice(snapshot.context);
     return html`
       ${this.#header(snapshot)}
       ${this.#runBox(snapshot)}
-      <ul class="list" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e, ids)} @focusin=${(e) => this.#focusin(e)}>
-        <li class="row new" data-id=${draft} @click=${(e) => this.#rowClick(e, draft)}>
-          <button class="open" type="button" tabindex=${draft === focusId ? 0 : -1}>
-            <span class="name draft">${icon("plus")}New evaluator</span>
-          </button>
-        </li>
-        ${shown.map((e) => this.#row(e, open, focusId, e.book === book ? null : (titles[e.book] ?? "Another book")))}
-      </ul>
+      ${this.#isFolded()
+        ? nothing
+        : html`<ul class="list" id="evaluators" aria-label="Evaluators" @keydown=${(e) => this.#keydown(e, ids)} @focusin=${(e) => this.#focusin(e)}>
+            <li class="row new" data-id=${draft} @click=${(e) => this.#rowClick(e, draft)}>
+              <button class="open" type="button" tabindex=${draft === focusId ? 0 : -1}>
+                <span class="name draft">${icon("plus")}New evaluator</span>
+              </button>
+            </li>
+            ${shown.map((e) => this.#row(e, open, focusId, e.book === book ? null : (titles[e.book] ?? "Another book")))}
+          </ul>`}
+      <div class="out">${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}${this.#lines(runs, evaluators)}</div>
     `;
   }
 
@@ -529,34 +622,36 @@ class EvaluatorList extends LitElement {
 
   #runBox(snapshot) {
     const { text, evaluators, runs, running, freeUse } = snapshot.context;
-    const stop = notice(snapshot.context);
-    const n = askable(evaluators).length;
-    const m = lines(text).length;
-    const cost =
-      n > 0
-        ? `Runs the ${n} switched-on evaluator${n === 1 ? "" : "s"} · ${m === 0 ? "one request per line" : `${m} request${m === 1 ? "" : "s"}`}`
-        : rows(evaluators).some((e) => e.on)
-          ? "Write a question in a switched-on evaluator to run it."
-          : "Switch an evaluator on to run it.";
+    const asked = askable(evaluators);
+    const names = asked.map((a) => evaluators.find((e) => e.id === a.id)?.name.trim() || UNTITLED);
+    const folded = this.#isFolded();
+    const parts = foldLine(names, rows(evaluators).some((e) => e.on));
     return html`
       <div class="run">
-        <label for="text">Try on a text</label>
+        <label for="text">Write one sentence per line</label>
         <textarea
           id="text"
           rows="3"
-          placeholder="Type or paste a text to judge…"
+          placeholder="Write or paste your text. Each line is evaluated on its own."
           .value=${text}
           @input=${(event) => this.#actor.send({ type: "_type", text: event.target.value })}
         ></textarea>
         <div class="actions">
-          <span class="cost">${cost}</span>
-          ${runs.length > 0 ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
-          <button class="go" type="button" ?disabled=${running || n === 0 || text.trim() === "" || freeStop(freeUse) != null} @click=${() => this.#actor.send({ type: "_run" })}>
-            ${running ? "Running…" : "Run"}
+          <button class="fold" type="button" aria-expanded=${folded ? "false" : "true"} aria-controls="evaluators" @click=${() => this.#toggleFold()}>
+            ${icon("caret-right")}<span>${parts.map(([part, bold]) => (bold ? html`<b>${part}</b>` : part))}</span>
           </button>
+          <span class="buttons">
+            ${runs.length > 0 ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
+            <button
+              class="go"
+              type="button"
+              ?disabled=${running || asked.length === 0 || text.trim() === "" || freeStop(freeUse) != null}
+              @click=${() => this.#actor.send({ type: "_run" })}
+            >
+              ${evaluateLabel(lines(text).length, running)}
+            </button>
+          </span>
         </div>
-        ${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}
-        ${this.#lines(runs, evaluators)}
       </div>
     `;
   }
@@ -568,39 +663,43 @@ class EvaluatorList extends LitElement {
     if (shown.length === 0) return nothing;
     const names = new Map(rows(evaluators).map((e) => [e.id, e.name.trim() || UNTITLED]));
     return html`<ol class="lines" aria-label="Results by line">
-      ${shown.map(
-        (r) => html`<li class="line ${r.status}" data-at=${r.at}>
+      ${shown.map((r) => {
+        const verdicts = Object.entries(r.results);
+        // One glyph on the line keeps a glyph's room on every answer, so they line up.
+        const room = verdicts.some(([, v]) => v.questions.some((q) => q.glyph));
+        return html`<li class="line ${r.status}" data-at=${r.at}>
           <p class="said">
             ${r.status === "asking" ? html`<i class="dot" role="img" aria-label="Asking Jev"></i>` : nothing}<span>${r.line}</span>
           </p>
-          ${r.status === "failed" && !STOPS.includes(r.error)
-            ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>`
-            : nothing}
-          ${Object.entries(r.results).map(([id, result]) => this.#verdict(names.get(id) ?? UNTITLED, result))}
-        </li>`,
-      )}
+          ${r.status === "failed" && !STOPS.includes(r.error) ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>` : nothing}
+          ${verdicts.map(([id, result]) => this.#verdict(names.get(id) ?? UNTITLED, result, verdicts.length > 1, room))}
+        </li>`;
+      })}
     </ol>`;
   }
 
-  // One evaluator's answers and score for one line.
-  #verdict(name, result) {
+  // One evaluator's answers for one line, under its name when more than one evaluated.
+  #verdict(name, result, named, room) {
     return html`<div class="verdict">
-      <span class="judge">
-        <span class="name">${name}</span>
-        ${result.score != null ? html`<span class="score">${result.score.toFixed(2)}</span>` : nothing}
-      </span>
+      ${named ? html`<p class="by">${name}</p>` : nothing}
       <ul class="answers" aria-label="Answers from ${name}">
-        ${result.questions.map(
-          (q) => html`<li class="answer">
-            <span class="question">${q.text}</span>
-            <span class="meter">
-              <span class="track"><span class="fill ${q.p < 0.5 ? "low" : ""}" style="width: ${Math.round(q.p * 100)}%"></span></span>
-              <span class="label">${q.label} ${q.p.toFixed(2)}</span>
-            </span>
-          </li>`,
-        )}
+        ${result.questions.map((q) => this.#answer(q, room))}
       </ul>
     </div>`;
+  }
+
+  #answer(q, room) {
+    const tone = q.tone ?? "";
+    const said = q.tone === "right" ? "As expected" : q.tone === "wrong" ? "Not as expected" : nothing;
+    return html`<li class="answer ${tone}">
+      ${q.glyph
+        ? html`<span class="glyph ${tone}" role="img" aria-label=${said}>${GLYPHS[q.glyph]?.()}</span>`
+        : room
+          ? html`<span class="glyph" aria-hidden="true"></span>`
+          : nothing}
+      ${q.question ? html`<span class="question">${q.question}</span>` : nothing}
+      <span class="words">${q.words}</span>
+    </li>`;
   }
 
   // from: the title of the book a row shown in the journal is kept with, or null.

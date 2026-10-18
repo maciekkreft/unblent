@@ -198,6 +198,45 @@ test("a question's switch is kept and announced: off is a change, and a question
   assert.equal(changed.length, 3, "a question without the switch is the same as one switched on");
 });
 
+test("an option's icon is kept, announced, listed and sent; a save without it takes it away", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  const withHeart = pick(Q2, [{ id: O1, name: "Goal", description: "", icon: "heart" }, { id: O2, name: "Value", description: "" }]);
+  actor.send(saved({ questions: [withHeart] }));
+  assert.deepEqual(changed.at(-1).questions[0].options.map((o) => o.icon), ["heart", undefined]);
+  assert.equal((await list(actor))[0].questions[0].options[0].icon, "heart");
+  await drain(clock);
+  assert.equal(api.puts[0].questions[0].options[0].icon, "heart");
+  actor.send(saved({ questions: [pick()] }));
+  assert.equal("icon" in changed.at(-1).questions[0].options[0], false, "No icon is the option without one");
+  actor.send(saved({ questions: [pick()] }));
+  assert.equal(changed.length, 3, "the same save again is no change");
+});
+
+test("a question's expected answer is kept while it names an answer it has, comes back on Undo, and goes when its option settles", async () => {
+  const { actor, changed } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved({ questions: [{ ...yesno(), expect: "no" }, { ...pick(), expect: O1 }] }));
+  assert.deepEqual(changed.at(-1).questions.map((q) => q.expect), ["no", O1]);
+  actor.send(saved({ questions: [{ ...yesno(), expect: O1 }, { ...pick(), expect: "01ARZ3NDEKTSV4RRFFQ69G50P9" }] }));
+  assert.deepEqual(changed.at(-1).questions.map((q) => q.expect), [undefined, undefined], "an answer the question does not have is none");
+  actor.send(saved({ questions: [yesno(), { ...pick(), kind: "yesno", expect: O1 }] }));
+  assert.equal(changed.at(-1).questions[1].expect, O1, "switched to yes / no, its options and their expectation are kept");
+  actor.send(saved({ questions: [yesno(), { ...pick(), expect: O1 }] }));
+  assert.equal(changed.at(-1).questions[1].expect, O1, "and switching back has it again");
+  actor.send(saved({ questions: [yesno(), { ...pick(), expect: O1 }] }));
+  actor.send({ type: "removal.started", kind: "option", id: O1, name: "Goal" });
+  actor.send(saved({ questions: [yesno(), { ...pick(Q2, [{ id: O2, name: "Value", description: "" }]), expect: O1 }] }));
+  assert.equal(changed.at(-1).questions[1].expect, O1, "kept while the option waits out its undo window");
+  actor.send({ type: "removal.undone", kind: "option", id: O1 });
+  assert.equal(changed.at(-1).questions[1].expect, O1);
+  actor.send({ type: "removal.started", kind: "option", id: O1, name: "Goal" });
+  actor.send({ type: "removal.settled", kind: "option", id: O1 });
+  assert.equal("expect" in changed.at(-1).questions[1], false, "the settled option took it away");
+});
+
 test("Show in journal: a new evaluator starts without it, a save sets or clears it, and a save leaving it out keeps it", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);

@@ -6,7 +6,7 @@ import { EditorState, Compartment, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, duplicateNames } from "./machine.js";
+import { machine, duplicateNames, OPTION_ICONS } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -28,6 +28,21 @@ const smallTheme = boxTheme("var(--text-sm)", "calc(var(--text-sm) * var(--leadi
 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
+
+// The icons an option may be given, in the machine's order, each with its name for a
+// screen reader. The names are literals so the icon check sees each one (11.2).
+const GLYPHS = {
+  footprints: ["Footprints", icon("footprints")],
+  "person-simple-walk": ["Walking person", icon("person-simple-walk")],
+  brain: ["Brain", icon("brain")],
+  heart: ["Heart", icon("heart")],
+  trophy: ["Trophy", icon("trophy")],
+  "hand-palm": ["Raised hand", icon("hand-palm")],
+  question: ["Question mark", icon("question")],
+  check: ["Check", icon("check")],
+  warning: ["Warning", icon("warning")],
+};
+const CHOICES = OPTION_ICONS.map((name) => [name, ...GLYPHS[name]]);
 
 // Which evaluator was open, and its book, kept per browser under the view's name (3.1);
 // losing it loses nothing but the place.
@@ -317,6 +332,31 @@ class EvaluatorEditor extends LitElement {
     .kind label:has(input:focus-visible) {
       box-shadow: var(--focus-ring);
     }
+    .expect {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    .expect select {
+      min-width: 0;
+      max-width: 100%;
+      font: inherit;
+      font-size: var(--text-sm);
+      color: var(--color-ink);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-xs);
+    }
+    .expect select:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .question.off .expect select {
+      color: var(--color-body-mid);
+      background: transparent;
+    }
     .options {
       display: flex;
       flex-direction: column;
@@ -324,8 +364,8 @@ class EvaluatorEditor extends LitElement {
     }
     .option {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-areas: "name rm" "desc desc";
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-areas: "name glyph rm" "panel panel panel" "desc desc desc";
       gap: var(--space-xs);
       align-items: center;
       padding-bottom: var(--space-xs);
@@ -337,8 +377,63 @@ class EvaluatorEditor extends LitElement {
     .option .box {
       grid-area: desc;
     }
-    .option button {
+    .option > .remove {
       grid-area: rm;
+    }
+    .option > .glyph {
+      grid-area: glyph;
+      font-size: var(--text-body);
+      color: var(--color-body);
+    }
+    .glyph svg {
+      display: block;
+    }
+    /* No icon yet: an empty dashed square the size of a glyph, so the button reads as a
+       place for one. */
+    .glyph .blank {
+      display: block;
+      box-sizing: border-box;
+      width: var(--text-body);
+      height: var(--text-body);
+      border: var(--border-width) dashed var(--color-border-strong);
+      border-radius: var(--radius-sm);
+    }
+    .option > .glyph[aria-expanded="true"] {
+      background: var(--color-surface-hover);
+    }
+    /* The icons in equal cells, as many to a row as fit, and No icon on a row of its own,
+       so the panel keeps one shape at any width. */
+    .picker {
+      grid-area: panel;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(calc(var(--text-body) + var(--space-xs) * 2 + var(--border-width) * 2), 1fr));
+      align-items: center;
+      gap: var(--space-2xs);
+      padding: var(--space-2xs);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-card);
+    }
+    .picker button {
+      border: var(--border-width) solid transparent;
+      font-size: var(--text-sm);
+    }
+    .picker button.icon {
+      font-size: var(--text-body);
+    }
+    .picker .none {
+      grid-column: 1 / -1;
+      justify-self: start;
+      white-space: nowrap;
+    }
+    .picker button svg {
+      display: block;
+    }
+    .picker button[aria-pressed="true"] {
+      color: var(--color-ink);
+      background: var(--color-accent-subtle);
+      border-color: var(--color-accent);
     }
     .warn {
       margin: 0;
@@ -417,6 +512,71 @@ class EvaluatorEditor extends LitElement {
 
   #send(event) {
     this.#actor.send(event);
+  }
+
+  // The option whose icon panel is open, or null. Only one is open at a time.
+  #picking = null;
+
+  #glyphButton(id) {
+    return this.renderRoot.querySelector(`.glyph[data-option="${id}"]`);
+  }
+
+  // A press anywhere but the panel or an icon button closes it unchanged.
+  #outside = (event) => {
+    const path = event.composedPath();
+    if (path.some((n) => n?.classList?.contains("picker") || n?.classList?.contains("glyph"))) return;
+    this.#closePicker(false);
+  };
+
+  async #openPicker(id) {
+    if (this.#picking === id) return this.#closePicker(true);
+    this.#picking = id;
+    document.addEventListener("pointerdown", this.#outside, true);
+    this.requestUpdate();
+    await this.updateComplete;
+    const panel = this.renderRoot.querySelector(".picker");
+    (panel?.querySelector('[aria-pressed="true"]') ?? panel?.querySelector("button"))?.focus({ preventScroll: true });
+  }
+
+  // Closing by a choice or by Escape hands the keyboard back to the icon button it came from.
+  async #closePicker(refocus) {
+    const id = this.#picking;
+    if (id == null) return;
+    this.#picking = null;
+    document.removeEventListener("pointerdown", this.#outside, true);
+    this.requestUpdate();
+    if (!refocus) return;
+    await this.updateComplete;
+    this.#glyphButton(id)?.focus({ preventScroll: true });
+  }
+
+  #choose(question, option, chosen) {
+    this.#send({ type: "_optionIcon", question, id: option, icon: chosen });
+    this.#closePicker(true);
+  }
+
+  // Arrow keys move between the panel's buttons, as in any row of choices; Escape closes it
+  // without a change and is not passed on, so the panel around the editor stays as it is.
+  #pickerKey(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#closePicker(true);
+      return;
+    }
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const buttons = [...event.currentTarget.querySelectorAll("button")];
+    const at = buttons.indexOf(event.composedPath()[0]);
+    buttons[(at + step + buttons.length) % buttons.length]?.focus();
+  }
+
+  // Tabbing out of the panel to anything but its icon button closes it, as a press outside does.
+  #pickerLeft(event) {
+    const to = event.relatedTarget;
+    if (!to || event.currentTarget.contains(to) || to.classList?.contains("glyph")) return;
+    this.#closePicker(false);
   }
 
   // Only while following the stage, where the pin means something: the book the tab
@@ -521,6 +681,8 @@ class EvaluatorEditor extends LitElement {
   }
 
   disconnectedCallback() {
+    document.removeEventListener("pointerdown", this.#outside, true);
+    this.#picking = null;
     for (const box of this.#boxes.values()) box.view.destroy();
     this.#boxes.clear();
     super.disconnectedCallback();
@@ -604,8 +766,34 @@ class EvaluatorEditor extends LitElement {
           <label><input type="radio" name="kind-${q.id}" value="pick" .checked=${q.kind === "pick"} @change=${() => kind("pick")} />Pick one</label>
         </div>
         ${this.#box(`${q.id}:text`, "text", { text: q.text, label: `Question ${n}`, hint: "Write the question", edit: (text) => edit({ text }) })}
+        ${this.#expected(q, n)}
         ${q.kind === "yesno" ? this.#yesno(q, edit) : this.#options(q)}
       </div>
+    `;
+  }
+
+  // The answer expected, from the question's own answers; an option waiting out its undo
+  // window is not offered, so the choice reads None until Undo brings it back.
+  #expected(q, n) {
+    const answers =
+      q.kind === "pick"
+        ? q.options.filter((o) => !o.removing).map((o, i) => [o.id, o.name.trim() || `Option ${i + 1}`])
+        : [
+            ["yes", "Yes"],
+            ["no", "No"],
+          ];
+    const current = answers.some(([id]) => id === q.expect) ? q.expect : "";
+    return html`
+      <label class="expect">
+        <span class="caption">Expected answer</span>
+        <select
+          aria-label="Expected answer for question ${n}"
+          @change=${(e) => this.#send({ type: "_expect", question: q.id, expect: e.target.value || null })}
+        >
+          <option value="" ?selected=${current === ""}>None</option>
+          ${answers.map(([id, name]) => html`<option value=${id} ?selected=${current === id}>${name}</option>`)}
+        </select>
+      </label>
     `;
   }
 
@@ -618,6 +806,34 @@ class EvaluatorEditor extends LitElement {
       <div class="field">
         <span class="caption" aria-hidden="true">No means <span class="mute">(optional)</span></span>
         ${this.#box(`${q.id}:no`, "no", { text: q.no, label: "No means (optional)", edit: (no) => edit({ no }) })}
+      </div>
+    `;
+  }
+
+  #picker(q, o) {
+    return html`
+      <div
+        class="picker"
+        role="group"
+        aria-label="Icon for ${o.name.trim() || "this option"}"
+        @keydown=${(e) => this.#pickerKey(e)}
+        @focusout=${(e) => this.#pickerLeft(e)}
+      >
+        ${CHOICES.map(
+          ([name, label, glyph]) => html`
+            <button
+              type="button"
+              class="quiet icon"
+              title=${label}
+              aria-label=${label}
+              aria-pressed=${o.icon === name ? "true" : "false"}
+              @click=${() => this.#choose(q.id, o.id, name)}
+            >
+              ${glyph}
+            </button>
+          `,
+        )}
+        <button type="button" class="quiet none" aria-pressed=${o.icon ? "false" : "true"} @click=${() => this.#choose(q.id, o.id, null)}>No icon</button>
       </div>
     `;
   }
@@ -648,13 +864,26 @@ class EvaluatorEditor extends LitElement {
                 })}
                 <button
                   type="button"
-                  class="quiet icon"
+                  class="quiet icon glyph"
+                  data-option=${o.id}
+                  title=${o.icon ? `Icon: ${GLYPHS[o.icon]?.[0] ?? o.icon}` : "Choose an icon"}
+                  aria-label="Icon for ${o.name.trim() || "this option"}: ${o.icon ? (GLYPHS[o.icon]?.[0] ?? o.icon) : "none"}"
+                  aria-haspopup="true"
+                  aria-expanded=${this.#picking === o.id ? "true" : "false"}
+                  @click=${() => this.#openPicker(o.id)}
+                >
+                  ${GLYPHS[o.icon]?.[1] ?? html`<span class="blank"></span>`}
+                </button>
+                <button
+                  type="button"
+                  class="quiet icon remove"
                   title="Remove option"
                   aria-label="Remove option ${o.name.trim()}"
                   @click=${() => this.#send({ type: "_removeOption", question: q.id, id: o.id })}
                 >
                   ${icon("x")}
                 </button>
+                ${this.#picking === o.id ? this.#picker(q, o) : nothing}
               </div>
             `,
           )}

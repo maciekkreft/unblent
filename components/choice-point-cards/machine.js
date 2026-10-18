@@ -12,7 +12,7 @@ import { setup, assign, enqueueActions, fromPromise, spawnChild, stopChild } fro
 // learns to remove one, so no event of its own is needed for that. It also asks
 // settings: read for the "Vim keys" preference (12) and follows settings.changed, and
 // choice-point-checks: read for Jev's marks, following lines.checked and checks.changed;
-// evaluators: list gives only the names of expected answers. The ask, the id
+// evaluators: list gives each question's expected answer, its options' names and icons. The ask, the id
 // minting, the clock and the throttle arrive through input, so the machine is importable
 // in Node.
 
@@ -147,7 +147,8 @@ const finishLines = enqueueActions(({ context, event, enqueue }) => {
 // --- Jev's marks ----------------------------------------------------------------------
 // What choice-point-checks announced is turned into marks here, so the view only draws
 // them. The fact sends every answer; which ones show is decided only here, from the box's
-// settings (show, when, expect, icons).
+// settings (show, when); its colour from the answer the evaluator's question expects, and
+// its glyph from the answer's option in the evaluator.
 
 const NO_BOX = { evaluator: null, questions: [] };
 
@@ -163,13 +164,27 @@ export const ERROR_SENTENCES = {
   unavailable: "Jev could not be reached. It tries again at your next change.",
 };
 
-// The name of an answer the box expects, for "You expect …": Yes or No, or the pick
-// option's name as the evaluator has it.
+// The box's evaluator's question as the evaluator has it now.
+const questionOf = (evaluators, box, questionId) => evaluators.find((e) => e.id === box.evaluator)?.questions?.find((x) => x.id === questionId);
+
+// A pick answer's option as the box's evaluator has it now; none for yes or no.
+const optionOf = (evaluators, box, questionId, option) => questionOf(evaluators, box, questionId)?.options?.find((o) => o.id === option);
+
+// The answer the evaluator's question expects, while it names one still offered: yes or
+// no, or an option not waiting out its undo window; null when none is expected.
+const expectOf = (evaluators, box, questionId) => {
+  const q = questionOf(evaluators, box, questionId);
+  const want = q?.expect;
+  if (want === "yes" || want === "no") return q.kind === "pick" ? null : want;
+  return q?.kind === "pick" && q.options?.some((o) => o.id === want && !o.removing) ? want : null;
+};
+
+// The name of the answer expected, for "You expect …": Yes or No, or the pick option's
+// name as the evaluator has it.
 const expectedName = (evaluators, box, questionId, option) => {
   if (option === "yes") return "Yes";
   if (option === "no") return "No";
-  const q = evaluators.find((e) => e.id === box.evaluator)?.questions?.find((x) => x.id === questionId);
-  return q?.options?.find((o) => o.id === option)?.name || "another answer";
+  return optionOf(evaluators, box, questionId, option)?.name || "another answer";
 };
 
 // How sure Jev is, as the mark's opacity: solid from 90% up, fading to a third at an even
@@ -177,10 +192,11 @@ const expectedName = (evaluators, box, questionId, option) => {
 export const sureOf = (p) => Math.round((1 / 3 + (2 / 3) * Math.min(1, Math.max(0, (p - 0.5) / 0.4))) * 100) / 100;
 
 // The marks one checked line gets in its box: a dot while Jev is checking, then one mark
-// per shown question whose "Only when" holds. The colour comes from the expected answer:
-// right, wrong, or plain when none is expected. An answer without a chosen icon (auto)
-// gets a warning when it is not the expected answer and a check otherwise, also when
-// nothing is expected, so every shown answer has a mark to point at; "none" shows nothing.
+// per shown question whose "Only when" holds. The colour comes from the answer the
+// evaluator's question expects: right, wrong, or plain when none is expected. The glyph is the icon the evaluator gives
+// the option answered; a yes / no answer, or an option without one, gets a warning when it
+// is not the expected answer and a check otherwise, also when nothing is expected, so every
+// shown answer has a mark to point at.
 export function marksOf(box, line, evaluators = []) {
   if (!box?.evaluator || !line) return [];
   if (line.status === "pending") return [{ pending: true }];
@@ -195,16 +211,16 @@ export function marksOf(box, line, evaluators = []) {
       const w = answer(q.when.question);
       if (!w || w.option !== q.when.option) continue;
     }
-    const tone = q.expect == null ? "plain" : a.option === q.expect ? "right" : "wrong";
-    const chosen = q.icons?.[a.option] ?? "auto";
-    if (chosen === "none") continue;
+    const expect = expectOf(evaluators, box, q.id);
+    const tone = expect == null ? "plain" : a.option === expect ? "right" : "wrong";
+    const chosen = optionOf(evaluators, box, q.id, a.option)?.icon;
     out.push({
       question: q.id,
       name: a.name,
       p: a.p,
       tone,
-      icon: chosen === "auto" ? (tone === "wrong" ? "warning" : "check") : chosen,
-      expected: q.expect == null ? null : expectedName(evaluators, box, q.id, q.expect),
+      icon: chosen || (tone === "wrong" ? "warning" : "check"),
+      expected: expect == null ? null : expectedName(evaluators, box, q.id, expect),
       sure: sureOf(a.p),
     });
   }
@@ -235,7 +251,7 @@ export function boxMarks(context, id, field) {
 }
 
 // The folded card's warning: for each move it shows, whether a line written there now is
-// not the answer the box expects.
+// not the answer its evaluator expects.
 export function cardWarnings(context, record) {
   const out = {};
   for (const field of ["situation", "away", "towards"]) {
@@ -275,7 +291,7 @@ export const machine = setup({
     checks: fromPromise(({ input }) =>
       input.ask("choice-point-checks", "read", { day: input.day }).then((reply) => ({ day: input.day, reply })),
     ),
-    // Only for the names of expected answers in the status line; every book's evaluators.
+    // Each question's expected answer and its options' names and icons; every book's evaluators.
     evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
   },
   delays: {
@@ -312,9 +328,11 @@ export const machine = setup({
       "has said. On a narrow width the V stands above the boxes. When Settings has an " +
       "evaluator check a box, Jev's marks stand at the right end of each checked line, inside " +
       "the box: a pulsing dot while Jev is checking, then a mark per shown answer, green when " +
-      "it is the answer expected, red when not, uncoloured when none is expected, solid when " +
-      "Jev is sure and faded when it is not; an answer given no icon in Settings gets a " +
-      "check, or a warning when it is not the expected one. A line edited since it was " +
+      "it is the answer the evaluator's question expects, red when not, uncoloured when it " +
+      "expects none, solid when " +
+      "Jev is sure and faded when it is not; the mark shows the icon the evaluator gives the " +
+      "option answered, and a yes / no answer or an option with no icon gets a check, or a " +
+      "warning when it is not the expected one. A line edited since it was " +
       "checked has no mark until it is checked again. The marks are not text: they do not " +
       "move the cursor or count for Vim. The answer's name, and for a red mark the expected " +
       "answer (\"Emotional Goal · you expect Behavioral Goal\"), is the mark's hint and is said " +

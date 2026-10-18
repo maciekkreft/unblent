@@ -395,7 +395,7 @@ test("without choice-point-checks the part's settings stay null, so it is hidden
   assert.ok(snapshot.matches("ready"));
 });
 
-test("choosing an evaluator emits the box with every question shown and nothing expected", async () => {
+test("choosing an evaluator emits the box with every question shown", async () => {
   const { actor, emittedChecks } = await start(undefined, "/a", withChecks);
   actor.send({ type: "_setChecker", field: "towards", evaluator: E1 });
   assert.deepEqual(emittedChecks, [
@@ -413,23 +413,31 @@ test("choosing an evaluator emits the box with every question shown and nothing 
   assert.equal(emittedChecks.length, 1, "choosing what the box already has emits nothing");
 });
 
-test("a question's change emits the whole box, and only a real change", async () => {
+test("a question's change emits the whole box, and only a real change; the answer expected is never set here", async () => {
   const { actor, emittedChecks } = await start(undefined, "/a", withChecks);
   adoptBox(actor, "towards", { evaluator: E1, questions: [{ id: Q1, show: true, expect: null, when: null, icons: {} }] });
-  actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { expect: BEH } });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { show: false } });
   assert.deepEqual(emittedChecks.at(-1).questions, [
-    { id: Q1, show: true, expect: BEH, when: null, icons: {} },
+    { id: Q1, show: false, expect: null, when: null, icons: {} },
     { id: Q2, show: false, expect: null, when: null, icons: {} },
   ], "a question the box holds no setting for is written as not shown");
   adoptBox(actor, "towards", { evaluator: E1, questions: emittedChecks.at(-1).questions });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { show: false } });
   actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { expect: BEH } });
-  assert.equal(emittedChecks.length, 1, "the same answer again emits nothing");
+  assert.equal(emittedChecks.length, 1, "the same setting again, or an expected answer, emits nothing");
   actor.send({ type: "_setQuestion", field: "towards", id: Q2, patch: { show: true, when: { question: Q1, option: BEH } } });
-  actor.send({ type: "_setQuestion", field: "towards", id: Q1, icon: { option: EMO, icon: "warning" } });
-  assert.deepEqual(emittedChecks.at(-1).questions[0].icons, { [EMO]: "warning" });
-  adoptBox(actor, "towards", { evaluator: E1, questions: emittedChecks.at(-1).questions });
-  actor.send({ type: "_setQuestion", field: "towards", id: Q1, icon: { option: EMO, icon: "auto" } });
-  assert.deepEqual(emittedChecks.at(-1).questions[0].icons, {}, "automatic is written by leaving the answer out");
+  assert.deepEqual(emittedChecks.at(-1).questions[1], { id: Q2, show: true, expect: null, when: { question: Q1, option: BEH }, icons: {} });
+  const stored = [{ id: Q1, show: true, expect: BEH, when: null, icons: { [EMO]: "warning" } }];
+  adoptBox(actor, "towards", { evaluator: E1, questions: stored });
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, patch: { show: false } });
+  assert.deepEqual(
+    [emittedChecks.at(-1).questions[0].expect, emittedChecks.at(-1).questions[0].icons],
+    [BEH, { [EMO]: "warning" }],
+    "what a box stored before passes through untouched",
+  );
+  const before = emittedChecks.length;
+  actor.send({ type: "_setQuestion", field: "towards", id: Q1, icon: { option: EMO, icon: "check" } });
+  assert.equal(emittedChecks.length, before, "Settings no longer sets an answer's icon");
 });
 
 test("choosing a box's earlier evaluator again brings back its settings", async () => {

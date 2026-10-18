@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isEmpty, duplicateNames, newest } from "../machine.js";
+import { machine, isEmpty, duplicateNames, newest, shownExpect } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -195,6 +195,64 @@ test("two options of one question named alike are noticed", () => {
   assert.equal(duplicateNames(q(["Goal", " goal "])), true);
   assert.equal(duplicateNames(q(["", ""])), false);
   assert.equal(duplicateNames({ options: [opt("a", "Goal"), opt("b", "Goal", "", true)] }), false);
+});
+
+test("choosing an option's icon saves at once, with what was typed; No icon takes it away; an unknown one is refused", async () => {
+  const { actor, emitted, ctx } = await start();
+  await select(actor, { id: R, book: P });
+  actor.send({ type: "_editOption", question: Q1, id: O1, patch: { name: "Goals" } });
+  actor.send({ type: "_optionIcon", question: Q1, id: O1, icon: "heart" });
+  assert.equal(saves(emitted).length, 1, "saved at once, not at the throttle");
+  assert.deepEqual(saves(emitted)[0].questions[0].options[0], { id: O1, name: "Goals", description: "", icon: "heart" });
+  assert.equal("icon" in saves(emitted)[0].questions[0].options[1], false, "an option without one carries none");
+  assert.ok(ctx().draft.questions[0].options[0].icon === "heart" && actor.getSnapshot().matches({ ready: { editing: "clean" } }));
+  actor.send({ type: "_optionIcon", question: Q1, id: O1, icon: "heart" });
+  actor.send({ type: "_optionIcon", question: Q1, id: O1, icon: "rocket" });
+  assert.equal(saves(emitted).length, 1, "the same icon again, or one not offered, is no change");
+  actor.send({ type: "_optionIcon", question: Q1, id: O1, icon: null });
+  assert.equal(saves(emitted).length, 2);
+  assert.equal("icon" in saves(emitted)[1].questions[0].options[0], false, "No icon leaves the option without one");
+  for (const name of ["footprints", "hand-palm"]) actor.send({ type: "_optionIcon", question: Q1, id: O1, icon: name });
+  assert.deepEqual(saves(emitted).slice(2).map((e) => e.questions[0].options[0].icon), ["footprints", "hand-palm"], "every offered icon is taken");
+});
+
+test("the expected answer is saved at once, None takes it away, and removing its option keeps it until the fact settles", async () => {
+  const { actor, emitted, ctx } = await start();
+  await select(actor, { id: R, book: P });
+  actor.send({ type: "_expect", question: Q1, expect: O2 });
+  actor.send({ type: "_expect", question: Q2, expect: "no" });
+  assert.deepEqual(saves(emitted).map((e) => e.questions.map((q) => q.expect)), [[O2, undefined], [O2, "no"]]);
+  actor.send({ type: "_expect", question: Q2, expect: O1 });
+  actor.send({ type: "_expect", question: Q1, expect: "yes" });
+  actor.send({ type: "_expect", question: Q1, expect: O2 });
+  assert.equal(saves(emitted).length, 2, "an answer the question does not have, or the same one, is no change");
+  actor.send({ type: "_expect", question: Q2, expect: null });
+  assert.equal("expect" in saves(emitted).at(-1).questions[1], false);
+  actor.send({ type: "_removeOption", question: Q1, id: O2 });
+  actor.send({ type: "_editQuestion", id: Q1, patch: { text: "Goal or value, really?" } });
+  actor.send({ type: "_blur" });
+  assert.equal(saves(emitted).at(-1).questions[0].expect, O2, "kept while its option waits out the undo window, so Undo brings it back");
+  assert.deepEqual(saves(emitted).at(-1).questions[0].options.map((o) => o.id), [O1]);
+  const settled = { ...EVALUATOR, questions: [{ ...EVALUATOR.questions[0], text: "Goal or value, really?", options: [opt(O1, "Goal")] }, EVALUATOR.questions[1]] };
+  actor.send(changed(settled));
+  assert.equal(ctx().draft.questions[0].expect, undefined, "the fact settled the removal and took it away");
+});
+
+test("switching a question's kind and back brings its expected answer back", async () => {
+  const { actor, emitted, ctx } = await start();
+  await select(actor, { id: R, book: P });
+  actor.send({ type: "_expect", question: Q1, expect: O2 });
+  actor.send({ type: "_kind", id: Q1, kind: "yesno" });
+  actor.send({ type: "_blur" });
+  assert.equal(saves(emitted).at(-1).questions[0].expect, O2, "kept, as the options are, while it is yes / no");
+  assert.equal(shownExpect(ctx().draft.questions[0]), null, "but the choice reads None");
+  actor.send({ type: "_kind", id: Q1, kind: "pick" });
+  actor.send({ type: "_blur" });
+  assert.equal(shownExpect(ctx().draft.questions[0]), O2, "switching back shows it again");
+  assert.equal(saves(emitted).at(-1).questions[0].expect, O2);
+  actor.send({ type: "_kind", id: Q1, kind: "yesno" });
+  actor.send({ type: "_expect", question: Q1, expect: "yes" });
+  assert.equal(saves(emitted).at(-1).questions[0].expect, "yes", "a new choice for the other kind replaces it");
 });
 
 test("removing an option, a question or the evaluator saves first, then emits removal.started and hides it", async () => {

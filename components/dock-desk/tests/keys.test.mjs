@@ -38,9 +38,9 @@ const rightTab = (page) =>
         ?.textContent.trim() ?? null,
   );
 
-async function open(engine, vimKeys) {
+async function open(engine, vimKeys, viewport = { width: 1400, height: 900 }) {
   const browser = await engine.launch();
-  const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  const context = await browser.newContext({ viewport });
   context.setDefaultTimeout(4000);
   await signedIn(context, forgeCookie("panel-keys"));
   await context.addInitScript((value) => {
@@ -123,6 +123,41 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Control+l");
       await new Promise((r) => setTimeout(r, 150));
       assert.equal((await focused(page)).panel, "book-stage");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
+  // Safari does not focus a pressed checkbox or button, so the press drops the focus on
+  // the page; landing the keyboard on the view then would scroll it to its top before the
+  // release, and the click would hit something else. The blur imitates Safari in any engine.
+  test(`with Vim keys on a press that drops the focus keeps the scroll and the click lands on / in ${engine.name}`, async () => {
+    const { browser, context, page, problems } = await open(engine, true, { width: 1280, height: 520 });
+    try {
+      const sheet = page.locator("settings-sheet");
+      await page.locator("dock-desk .controls .pill").first().click();
+      const box = sheet.locator(".tools input[type=checkbox]").last();
+      await box.scrollIntoViewIfNeeded();
+      const scrolled = () => page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelector('.body[data-side="stage"]').scrollTop);
+      const before = await scrolled();
+      assert.ok(before > 0, "the sheet is scrolled down to the box");
+      const was = await box.isChecked();
+      const at = await box.boundingBox();
+      await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+      await page.mouse.down();
+      await page.evaluate(() => {
+        let a = document.activeElement;
+        while (a?.shadowRoot?.activeElement) a = a.shadowRoot.activeElement;
+        a?.blur();
+      });
+      await new Promise((r) => setTimeout(r, 120));
+      assert.equal(await scrolled(), before, "nothing scrolls between press and release");
+      await page.mouse.up();
+      await until(async () => (await box.isChecked()) !== was);
+      await until(() => box.evaluate((el) => el.getRootNode().activeElement === el));
+      assert.equal(await scrolled(), before, "the sheet stays where it was");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();

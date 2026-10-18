@@ -684,6 +684,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - A summary of a note made in a chat, where the note is placed in the chat's history, the input box holds the default summary prompt from Settings for the user to change before sending, the user can first highlight and comment the passages the summary must keep, and the summary is saved only after the user confirms that it says what the note says.
 - Highlights and comments on past journal days, and summaries of journal days made the same way as a summary of a note.
 - A summary saved as the next version of the note or journal day it summarises, so opening that note or day shows the summary, with a switch to each earlier version.
+- A set of example goals for the Therapy Goal evaluator, each with the answer it should get, run again after a change to the evaluator's options to show which answers moved (sketch: `~/.claude/plans/evaluator-dataset.md`).
 - Copying a choice point, or any later kind of sheet, from an earlier day to today as the next version of the original, which stays unchanged, with a link in the bottom left corner of the copy that opens the version it continues.
 
 ---
@@ -697,5 +698,4 @@ Work that is decided but not done yet. Remove a line when its work is done.
 - Pinning a chat that has no messages yet does not work. Until the chat has its first message, the pin should be unavailable.
 - In a chat, the user can mark passages in the assistant's last answer and write a comment on each one, the way Redline does.
 - The tab and the list item the user is looking at are pinned by default, so that a note or a chat being written stays open when the user switches, for example, from the journal to a book.
-- In a choice point, where the user chooses what Jev checks, clicking an icon, Auto or None moves the page back to its top. The page should stay where it is, with the focus on what was clicked.
 - Make the tests fast again. The full run in WebKit takes about 9 minutes and the push about 15, almost all of it in browser tests. The keyboard journey on the product page shares one setup per topic instead of one per test, duplicate tests are deleted, browser tests that check only logic become Node tests, the full run uses WebKit only and the push adds Chromium, and new rules stop the duplicates from coming back (sketch: `~/.claude/plans/faster-tests.md`).

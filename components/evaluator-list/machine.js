@@ -17,7 +17,7 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // yet, so picking it opens an empty editor under that id; once the editor saves,
 // evaluator.changed brings the real row and a fresh draft is minted.
 //
-// The Run box asks llm: decide once per non-empty line of the text, for every askable
+// The Evaluate box asks llm: decide once per non-empty line of the text, for every askable
 // question of the switched-on evaluators, one line after another: the decide slot takes
 // one request at a time and tells a second asker "busy". Its results are UI state: kept
 // here per line, never emitted, never saved.
@@ -63,7 +63,7 @@ export const subtitle = (evaluator, from = null) => {
 };
 
 // What a run asks: each shown, switched-on evaluator with its askable, switched-on
-// questions, so its score uses only those; one with none is not run.
+// questions, so only those are asked; one with none is not run.
 export const askable = (evaluators) =>
   rows(evaluators)
     .filter((e) => e.on)
@@ -103,16 +103,71 @@ export const lines = (text) =>
     .map((line, i) => ({ at: i + 1, line: line.trim() }))
     .filter((l) => l.line !== "");
 
-// An evaluator's score: the geometric mean of its yes / no answers; a pick answer does
-// not count, so an evaluator with only pick questions has none.
-export const score = (ps) => {
-  if (ps.length === 0) return null;
-  if (ps.some((p) => p <= 0)) return 0;
-  return Math.exp(ps.reduce((sum, p) => sum + Math.log(p), 0) / ps.length);
+// --- The answers, in words ---------------------------------------------------------
+// A line's answers are told in words, never as numbers: how sure Jev is shows in the
+// wording, so a reader need not weigh a probability (Norman: one conceptual model).
+
+// A pick answer from every option's probability, highest first (names as written): sure
+// from 0.75 up; two close options are both named; otherwise how sure the top one is.
+export const sayPick = (ranked) => {
+  const [top, second] = ranked;
+  if (!top) return "";
+  if (top.p >= 0.75) return top.name;
+  if (second && top.p - second.p <= 0.15) return `Between: ${top.name} and ${second.name}`;
+  if (top.p >= 0.5) return `Probably: ${top.name}`;
+  return `Not clear, maybe: ${top.name}`;
 };
 
-// The answers mapped back onto the evaluators asked, keyed by evaluator id: each asked
-// question's text, its label (Yes, or the picked option's name) and p, and the score.
+// A yes / no answer from the probability of yes; an even chance is said to be one.
+export const sayYesNo = (p) =>
+  p >= 0.45 && p <= 0.55 ? "Not clear" : p >= 0.75 ? "Yes" : p >= 0.5 ? "Probably yes" : p >= 0.25 ? "Probably no" : "No";
+
+// The answer a question expects, while it names one still offered, as the choice point
+// marks read it: yes or no for a yes / no question, a live option's id for a pick one.
+export const expectOf = (question) => {
+  const want = question.expect;
+  if (question.kind === "pick") return live(question.options ?? []).some((o) => o.id === want) ? want : null;
+  return want === "yes" || want === "no" ? want : null;
+};
+
+// Right or wrong against what is expected, or null when nothing is; "Between" and "Not
+// clear" are compared by the top answer. The glyph is the top option's icon, else, only
+// when something is expected, a check or a warning, as on a choice point's marks.
+export const toneOf = (expect, top) => (expect == null ? null : top === expect ? "right" : "wrong");
+export const glyphOf = (icon, tone) => icon || (tone === "right" ? "check" : tone === "wrong" ? "warning" : null);
+
+// One question's answer for one line. A pick ranks every option by the probabilities Jev
+// gave (only the picked one when it gave none); a yes / no answer's top is yes from an
+// even chance up. The question's text is shown before a yes / no answer, and before a
+// pick when its evaluator asked more than one question, since a lone pick names itself.
+export const answerOf = (question, answer, asked = 1) => {
+  if (question.kind === "pick") {
+    const options = live(question.options ?? []);
+    const given = Array.isArray(answer.probabilities) && answer.probabilities.length ? answer.probabilities : [{ id: answer.choice, p: answer.p }];
+    const ranked = given
+      .map((g) => ({ ...g, option: options.find((o) => o.id === g.id) }))
+      .filter((g) => g.option)
+      .sort((a, b) => b.p - a.p)
+      .map((g) => ({ id: g.id, name: g.option.name, icon: g.option.icon ?? null, p: g.p }));
+    if (!ranked.length) return null;
+    const tone = toneOf(expectOf(question), ranked[0].id);
+    return {
+      id: question.id,
+      kind: "pick",
+      question: asked > 1 ? question.text : null,
+      top: ranked[0].id,
+      words: sayPick(ranked),
+      tone,
+      glyph: glyphOf(ranked[0].icon, tone),
+      probabilities: ranked.map(({ id, p }) => ({ id, p })),
+    };
+  }
+  const top = answer.p >= 0.5 ? "yes" : "no";
+  const tone = toneOf(expectOf(question), top);
+  return { id: question.id, kind: "yesno", question: question.text, top, words: sayYesNo(answer.p), tone, glyph: glyphOf(null, tone), p: answer.p };
+};
+
+// The answers mapped back onto the evaluators asked, keyed by evaluator id.
 export const results = (asked, answers) => {
   const byAnswer = new Map(answers.map((a) => [a.id, a]));
   const out = {};
@@ -120,16 +175,31 @@ export const results = (asked, answers) => {
     const questions = [];
     for (const q of e.questions) {
       const a = byAnswer.get(`${e.id}:${q.id}`);
-      if (!a) continue;
-      const label = q.kind === "pick" ? live(q.options).find((o) => o.id === a.choice)?.name : "Yes";
-      if (label == null) continue;
-      questions.push({ id: q.id, text: q.text, kind: q.kind === "pick" ? "pick" : "yesno", label, p: a.p });
+      const said = a && answerOf(q, a, e.questions.length);
+      if (said) questions.push(said);
     }
-    if (questions.length === 0) continue;
-    out[e.id] = { score: score(questions.filter((q) => q.kind === "yesno").map((q) => q.p)), questions };
+    if (questions.length > 0) out[e.id] = { questions };
   }
   return out;
 };
+
+// --- The Evaluate box ------------------------------------------------------------------
+
+// The button's words: how many lines it would evaluate, or that it is evaluating.
+export const evaluateLabel = (count, running) =>
+  running ? "Evaluating…" : count === 0 ? "Evaluate" : `Evaluate ${count} line${count === 1 ? "" : "s"}`;
+
+// The fold line's words, as [text, bold] parts: who evaluates, by name up to two.
+export const foldLine = (names, anyOn) => {
+  if (names.length === 0) return [[anyOn ? "No evaluator has a question yet" : "No evaluator is on", false]];
+  if (names.length === 1) return [["Evaluated by ", false], [names[0], true]];
+  if (names.length === 2) return [["Evaluated by ", false], [names[0], true], [" and ", false], [names[1], true]];
+  return [[`Evaluated by ${names.length} evaluators`, false]];
+};
+
+// Whether the list starts folded: the user's own last fold in this browser, stored as
+// "true" or "false", wins over the page's `folded`.
+export const foldedAtStart = (attribute, stored) => (stored === "true" ? true : stored === "false" ? false : Boolean(attribute));
 
 // The reply's error, in the kinds the user is told apart. A guest has no key of their
 // own and no Settings to add one in (8): a guest whose own allowance is spent is told
@@ -295,38 +365,50 @@ export const machine = setup({
   id: "evaluator-list",
   meta: {
     description:
-      "Lists the evaluators kept with the open book. New evaluator is the first row and opens " +
-      "an empty editor; the evaluator appears in the list once something is written in it. Each " +
-      "row has a tick box that switches the evaluator on or off, its name, greyed when off, and " +
-      "how many of its questions Run would ask: those written and switched on. With `subject` it follows the book open on the stage, and " +
-      "another book shows that book's evaluators; while no book is open, or without `subject`, " +
-      "it says to open a book. While the Journal is open it lists the Journal's evaluators and " +
-      "every evaluator of another book marked Show in journal, that book's title on the line " +
-      "under its name; its tick, opening it and Run work as for the Journal's own. The arrow keys move between the rows, and with Vim keys on so " +
-      "do j, k, gg and G; Enter opens the row. Above New evaluator, a text box and Run try " +
-      "the switched-on evaluators on each line of a text on its own, asking only their switched-on " +
-      "questions: blank lines are skipped, and each line is one request to Jev, sent one after " +
-      "another, never two at once. The lines appear under the box as they are answered, each " +
-      "with its text and, for each evaluator, every question with its answer and how likely it " +
-      "is, and for evaluators with yes / no questions a score for that line, the geometric mean " +
-      "of those answers; there is no score for the whole text. Typing during a run does not " +
-      "change it. A failed line says why in one sentence and stops the run: the lines already " +
-      "answered stay, the ones after it are not asked, and Run starts every line over. On a try page, " +
-      "when a guest has used all its free use Run is off and under it says \"You have used all your free " +
-      "use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's " +
-      "behalf, Run is off and it says \"Free trials are paused for now.\"; a guest the admin " +
-      "blocked has Run off and reads \"This trial has ended.\" Results " +
-      "are not saved: Clear removes them and stops a run, a change to an evaluator removes its " +
-      "own from every line, and another book removes all of them. The text is kept per book in " +
-      "this browser, so a reload or coming back to the book shows it again. With `subject`, a line at " +
-      "the top names the book shown. While the editor's pin is on, as `pins` says, the list " +
-      "stays on that book when another comes on the stage, and unpinning brings the stage's " +
-      "book back at once. The row of the evaluator the editor shows is marked, whether the user " +
-      "picked it or the editor opened it by itself on another book, after a reload or a pin, " +
-      "and the keyboard starts from it.",
+      "Lists the evaluators kept with the open book and tries them on a text. At the top a box labelled" +
+      " \"Write one sentence per line\" takes a text, and its button evaluates each line on its own with " +
+      "the switched-on evaluators, asking only their switched-on questions; the button says \"Evaluate\"," +
+      " or \"Evaluate 1 line\" or \"Evaluate N lines\" once there is text, and \"Evaluating…\" while it " +
+      "works. Blank lines are skipped, and each line is one request to Jev, sent one after another, " +
+      "never two at once. Typing during a run does not change it. Beside the button a line says who " +
+      "evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when " +
+      "there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of " +
+      "evaluators under it. With `folded` the list starts hidden, without it shown; the user's own " +
+      "showing or hiding is remembered in this browser and wins over the page. The list: New evaluator " +
+      "is the first row and opens an empty editor; the evaluator appears in the list once something is " +
+      "written in it. Each row has a tick box that switches the evaluator on or off, its name, greyed " +
+      "when off, and how many of its questions would be asked: those written and switched on. With " +
+      "`subject` it follows the book open on the stage, and another book shows that book's evaluators; " +
+      "while no book is open, or without `subject`, it says to open a book. While the Journal is open " +
+      "it lists the Journal's evaluators and every evaluator of another book marked Show in journal, " +
+      "that book's title on the line under its name; its tick, opening it and evaluating work as for " +
+      "the Journal's own. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and" +
+      " G; Enter opens the row. Under the list come the results, one block per line as it is answered: " +
+      "the line's text, then each answer in words, never as a number. A pick answer names the option " +
+      "when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, " +
+      "\"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes," +
+      " Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. An" +
+      " answer starts with its option's icon when the option has one, and with the question's text when" +
+      " the question is yes / no or its evaluator asks more than one. When the question expects an " +
+      "answer, the icon is green when Jev gave it and red when not, judged by the top answer for " +
+      "Between and Not clear, and an answer without an icon gets a check or a warning in the same " +
+      "colours; nothing expected, no colour. With more than one evaluator, each one's answers sit under" +
+      " its name. A failed line says why in one sentence and stops the run: the lines already answered " +
+      "stay, the ones after it are not asked, and the button starts every line over. On a try page, " +
+      "when a guest has used all its free use the button is off and under it says \"You have used all " +
+      "your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the " +
+      "guest's behalf, it is off and says \"Free trials are paused for now.\"; a guest the admin blocked " +
+      "has it off and reads \"This trial has ended.\" Results are not saved: Clear removes them and stops" +
+      " a run, a change to an evaluator removes its own from every line, and another book removes all " +
+      "of them. The text is kept per book in this browser, so a reload or coming back to the book shows" +
+      " it again. With `subject`, a line at the top names the book shown. While the editor's pin is on," +
+      " as `pins` says, the list stays on that book when another comes on the stage, and unpinning " +
+      "brings the stage's book back at once. The row of the evaluator the editor shows is marked, " +
+      "whether the user picked it or the editor opened it by itself on another book, after a reload or " +
+      "a pin, and the keyboard starts from it.",
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
-    attributes: ["subject"],
+    attributes: ["subject", "folded"],
     asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list", "pins: read", "llm: read", "session: read"],
   },
   context: ({ input }) => ({

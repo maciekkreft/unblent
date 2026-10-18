@@ -33,6 +33,8 @@ const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).font
 const PANEL_KEYS = new Set(["h", "j", "k", "l", ".", ","]);
 // The side Ctrl+Shift+<key> folds or unfolds.
 const FOLD_KEYS = { h: "left", l: "right", j: "bottom" };
+// What a press may hand the focus back to: what a browser other than Safari would have focused.
+const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 
 // A child's address (4.1): its role or tag name, with `#id` when the page gave it
 // one so two instances of a view on one page are distinct tabs.
@@ -651,6 +653,7 @@ class DockDesk extends LitElement {
       if (docks) this.#lastGroup = this.#focusedGroup(docks);
       this.#frame();
     });
+    this.addEventListener("pointerdown", (e) => this.#pressing(e), { capture: true });
     this.addEventListener("focusout", (e) => {
       this.#dropped(e);
       // Where the focus went is known once the focusout is over.
@@ -683,6 +686,13 @@ class DockDesk extends LitElement {
     setTimeout(() => {
       const active = document.activeElement;
       if ((active && active.localName !== "body") || this.#landing || !document.hasFocus() || !this.#vimOn()) return;
+      // A press inside a view: landing on the view would scroll it to its top between press
+      // and release, and the click would hit something else. The press puts the focus back
+      // itself once it ends (#released).
+      if (this.#press?.child) {
+        this.#press.dropped = true;
+        return;
+      }
       const { context } = this.#actor.snapshot;
       const group = this.#lastGroup === "stage" || context.docks[this.#lastGroup]?.open ? this.#lastGroup : "stage";
       const name = this.#shownIn(context, group);
@@ -690,6 +700,48 @@ class DockDesk extends LitElement {
       this.#landing = { group, name };
       this.requestUpdate();
     });
+  }
+
+  // The press under way inside a child view, with the path it went down, so a focus it
+  // drops on the page goes back to what was pressed rather than to the top of the view.
+  #press = null;
+
+  #pressing(event) {
+    const path = event.composedPath();
+    const child = [...this.children].find((c) => path.includes(c) && !c.hasAttribute("control"));
+    this.#press = child ? { path, child, dropped: false } : null;
+  }
+
+  // Read after the click, so the control the press went down on has done its work first;
+  // the focus moves only if it is still on the page, and never scrolls (Norman: the user's
+  // place is kept).
+  #released = () => {
+    const press = this.#press;
+    if (!press) return;
+    setTimeout(() => {
+      if (this.#press === press) this.#press = null;
+      if (!press.dropped) return;
+      const active = document.activeElement;
+      if (active && active.localName !== "body") return;
+      // The path up to the view is what was pressed inside it, across its shadow roots.
+      const inside = press.path.slice(0, press.path.indexOf(press.child));
+      const control = inside.find((n) => n instanceof Element && n.isConnected && n.matches(FOCUSABLE));
+      if (control) control.focus({ preventScroll: true });
+      if (!control || !press.child.contains(document.activeElement)) press.child.focus({ preventScroll: true });
+    });
+  };
+
+  connectedCallback() {
+    super.connectedCallback();
+    // On the window: the press may end outside the desk.
+    window.addEventListener("pointerup", this.#released, true);
+    window.addEventListener("pointercancel", this.#released, true);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    window.removeEventListener("pointerup", this.#released, true);
+    window.removeEventListener("pointercancel", this.#released, true);
   }
 
   // A tab clicked with "Vim keys" on puts the keyboard in the view it shows, as Ctrl+.

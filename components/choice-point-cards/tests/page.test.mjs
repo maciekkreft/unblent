@@ -127,15 +127,15 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
         const [evaluator, question, behavioral, emotional] = [id("E1"), id("Q1"), id("A0"), id("A1")];
         const options = [
-          { id: behavioral, name: "Behavioral Goal", description: "" },
+          { id: behavioral, name: "Behavioral Goal", description: "", icon: "person-simple-walk" },
           { id: emotional, name: "Emotional Goal", description: "" },
         ];
         const made = await context.request.put(`${BASE_URL}/api/evaluators/${evaluator}`, {
-          data: { book: id("B1"), name: "Therapy Goal", on: true, baseVersion: null, questions: [{ id: question, kind: "pick", text: "Which kind of goal?", yes: "", no: "", options }] },
+          data: { book: id("B1"), name: "Therapy Goal", on: true, baseVersion: null, questions: [{ id: question, kind: "pick", text: "Which kind of goal?", yes: "", no: "", options, expect: behavioral }] },
         });
         assert.equal(made.status(), 200);
         const box = await context.request.put(`${BASE_URL}/api/choice-point-checks/boxes/towards`, {
-          data: { baseVersion: null, evaluator, questions: [{ id: question, show: true, expect: behavioral, when: null, icons: { [behavioral]: "person-simple-walk" } }] },
+          data: { baseVersion: null, evaluator, questions: [{ id: question, show: true, expect: null, when: null, icons: {} }] },
         });
         assert.equal(box.status(), 200);
         const page = await context.newPage();

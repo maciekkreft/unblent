@@ -12,6 +12,7 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
+const EXPECT = /^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$/;
 const str = (v) => (typeof v === "string" ? v : "");
 
 // --- Records --------------------------------------------------------------------------
@@ -19,8 +20,18 @@ const str = (v) => (typeof v === "string" ? v : "");
 // Each part in one fixed shape and key order, so two copies of the same content compare
 // equal as text. `removing` marks an item in this tab's undo window; it is kept in the
 // cache (so a leftover mark settles at the next load) but never sent to the server.
+// An option's icon is kept only when it names one, and absent otherwise, so an option
+// that never had one compares equal to one kept from before icons were offered.
 const option = (o) =>
-  o && isId(o.id) ? { id: o.id, name: str(o.name), description: str(o.description), removing: o.removing === true } : null;
+  o && isId(o.id)
+    ? {
+        id: o.id,
+        name: str(o.name),
+        description: str(o.description),
+        ...(typeof o.icon === "string" && o.icon ? { icon: o.icon } : {}),
+        removing: o.removing === true,
+      }
+    : null;
 
 const question = (q) =>
   q && isId(q.id)
@@ -33,8 +44,20 @@ const question = (q) =>
         no: str(q.no),
         options: (Array.isArray(q.options) ? q.options : []).map(option).filter(Boolean),
         removing: q.removing === true,
+        ...(EXPECT.test(q.expect ?? "") ? { expect: q.expect } : {}),
       }
     : null;
+
+// The expected answer holds only while it names an answer the question has: yes or no,
+// or one of its options (marked ones too, so an Undo brings it back), whichever kind the
+// question is now; the options are kept across a switch of kind, and so is the
+// expectation, so switching back brings it back (a reader honours it only for its kind).
+// A settled removal of its option takes it away.
+const fitExpect = (q) => {
+  const { expect, ...rest } = q;
+  const holds = expect === "yes" || expect === "no" || q.options.some((o) => o.id === expect);
+  return holds ? { ...rest, expect } : rest;
+};
 
 const questionsOf = (list) => (Array.isArray(list) ? list : []).map(question).filter(Boolean);
 
@@ -110,7 +133,8 @@ const keepMarked = (old, incoming) => {
 // a new version: signed out it is minted here; signed in the record keeps the version
 // it holds, is queued in the outbox (coalesced by id, keeping the first unsynced base)
 // and a drain is asked for. A change of marks only is stored and announced, not synced.
-function commit(context, enqueue, next) {
+function commit(context, enqueue, given) {
+  const next = { ...given, questions: given.questions.map(fitExpect) };
   const current = context.evaluators.get(next.id);
   const changed = !current || !same(current, next) || Boolean(next.deleted) !== Boolean(current.deleted);
   // A change of content is stamped here, signed in or out, so the editor can open a
@@ -194,12 +218,16 @@ const copyOf = (starter, journal, newId) =>
     name: starter.name,
     on: true,
     journal: false,
-    questions: questionsOf(starter.questions).map((q) => ({
-      ...q,
-      id: newId(),
-      removing: false,
-      options: q.options.map((o) => ({ ...o, id: newId(), removing: false })),
-    })),
+    questions: questionsOf(starter.questions).map((q) => {
+      const ids = new Map(q.options.map((o) => [o.id, newId()]));
+      return {
+        ...q,
+        id: newId(),
+        removing: false,
+        options: q.options.map((o) => ({ ...o, id: ids.get(o.id), removing: false })),
+        ...(q.expect ? { expect: ids.get(q.expect) ?? q.expect } : {}),
+      };
+    }),
   });
 
 // The copies are made only once the Journal's id is known and the starters have come;
@@ -378,7 +406,9 @@ export const machine = setup({
     description:
       "Owns the evaluators kept with each book: an evaluator is a name and a list of questions, " +
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
-      "options, and it is switched on or off. Each question is switched on or off too: one " +
+      "options, each option with an optional icon its mark on a choice point line shows; a " +
+      "question may name the answer expected (an option, or yes or no), kept across a switch " +
+      "of kind and back, which a removed option takes with it once its removal settles; and it is switched on or off. Each question is switched on or off too: one " +
       "switched off is kept, with its wording, but not asked, and a question without the " +
       "switch counts as on. An evaluator marked \"Show in journal\" is " +
       "listed in the Journal's Evaluators tab as well as its own book's. `evaluators: list` answers one book's evaluators, " +

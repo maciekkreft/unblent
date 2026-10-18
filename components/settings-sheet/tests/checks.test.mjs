@@ -20,11 +20,12 @@ for (const engine of ENGINES) {
     });
 
     // The choice point checks on the product page, in one load: folded until asked for, a
-    // box's evaluator and expected answer as the account holds them, and choosing an
+    // box's evaluator as the account holds it, with no expected answer or icon to set (the
+    // evaluator holds both), and choosing an
     // evaluator for another box answered by its questions. The evaluator and the stored box
     // are made through the APIs under the test's own login; that a chosen box is kept and
     // synced is decided in choice-point-checks' Node tests (9).
-    test("the choice point checks fold open, show a box's stored evaluator and expected answer, and take a new one and an icon", async () => {
+    test("the choice point checks fold open, show a box's stored evaluator, and take a new one, with no expected answer or icon to set", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
@@ -60,30 +61,27 @@ for (const engine of ENGINES) {
         const sheet = page.locator("settings-sheet");
         const towards = sheet.locator('.box[data-field="towards"]');
         const away = sheet.locator('.box[data-field="away"]');
-        const expected = 'select[aria-label="Answer expected for question 1"]';
+        const shown = 'input[type="checkbox"]';
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await sheet.locator(".checks details.keys-fold").waitFor({ state: "attached" });
         await page.locator("dock-desk .controls .pill").click();
         assert.equal(await towards.isVisible(), false, "the boxes are folded away at first");
         await sheet.locator("summary", { hasText: "Choose what Jev checks" }).click();
-        await until(async () => (await towards.locator(expected).count()) === 1);
+        await until(async () => (await towards.locator(shown).count()) === 1);
         assert.equal(await towards.locator('select[aria-label="Evaluator for Towards · unhooked"]').inputValue(), evaluator);
-        assert.equal(await towards.locator(expected).inputValue(), options[0].id);
+        assert.equal(await towards.locator(shown).isChecked(), true);
 
-        assert.equal(await away.locator(expected).count(), 0);
+        assert.equal(await away.locator(shown).count(), 0);
         await away.locator('select[aria-label="Evaluator for Away · hooked"]').selectOption(evaluator);
-        await away.locator(expected).selectOption(options[1].id);
-        assert.equal(await away.locator(expected).inputValue(), options[1].id);
+        await until(async () => (await away.locator(shown).count()) === 1);
+        assert.equal(await away.locator(shown).isChecked(), true, "every question shown at first");
 
         const off = away.locator('.question[data-question="' + id("Q2") + '"]');
         assert.match(await off.innerText(), /Off in the evaluator/);
         assert.equal(await off.locator("input, select, button").count(), 0, "a question off in the evaluator has nothing to set");
 
-        const marks = away.locator('[role="group"][aria-label="Icon for Emotional Goal"]');
-        const pressed = () => marks.locator('button[aria-pressed="true"]').getAttribute("title");
-        assert.equal(await pressed(), "Auto");
-        await marks.locator('button[title="Brain"]').click();
-        await until(async () => (await pressed()) === "Brain");
+        assert.equal(await sheet.getByText(/^Icon for /).count(), 0, "an answer's icon is chosen in the evaluator, not here");
+        assert.equal(await sheet.locator('select[aria-label^="Answer expected"]').count(), 0, "and so is the answer expected");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

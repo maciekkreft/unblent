@@ -104,8 +104,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.match(await listText(page), /About: Journal/);
         assert.deepEqual(writes, [], "the copy is made in this browser, nothing on the server");
 
-        await page.getByPlaceholder("Type or paste a text to judge…").fill("You did your best today.");
-        await page.getByRole("button", { name: "Run" }).click();
+        await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("You did your best today.");
+        await page.getByRole("button", { name: "Evaluate 1 line" }).click();
         await until(async () => (await page.locator("evaluator-list .line.done").count()) === 1);
         assert.equal(writes[0], "/api/session/guest", "the first Run makes the guest");
 
@@ -123,6 +123,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.waitForLoadState("networkidle");
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await listText(page)).includes(NAME));
+        // The try page keeps the list folded under the box until it is shown.
+        await page.locator("evaluator-list button.fold").click();
+        await until(async () => (await page.locator("evaluator-list .row", { hasText: NAME }).count()) > 0);
         assert.equal(await page.locator("evaluator-list .row", { hasText: NAME }).count(), 1, "one copy, not a second one");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {

@@ -96,7 +96,7 @@ const list = (actor, payload = {}) =>
 const STARTER = {
   name: "Clear goal",
   questions: [
-    { id: Q1, on: true, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "" }] },
+    { id: Q1, on: true, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "", icon: "trophy" }], expect: O1 },
   ],
 };
 
@@ -136,6 +136,8 @@ test("on a try page, a visitor with nothing here gets copies of the starters bef
   assert.notEqual(copy.questions[0].id, Q1, "the copy's questions have their own ids");
   assert.notEqual(copy.questions[0].options[0].id, O1, "and so have their options");
   assert.equal(copy.questions[0].options[0].name, "Goal");
+  assert.equal(copy.questions[0].options[0].icon, "trophy", "and keep their icons");
+  assert.equal(copy.questions[0].expect, copy.questions[0].options[0].id, "the expected answer follows its option's new id");
   assert.equal(store.rows.size, 2, "the copies are kept in this browser");
   assert.equal(store.outbox.size, 0, "nothing is sent while there is no account");
 });

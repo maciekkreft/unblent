@@ -27,6 +27,18 @@ const blankOption = (id) => ({ id, name: "", description: "", removing: false })
 
 const live = (items) => items.filter((x) => !x.removing);
 
+// The icons an option may be given for its mark on a choice point line (choice-point-cards).
+export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning"];
+
+// The answer a question expects, while it names one the question has: yes or no, or one of
+// its options. An option waiting out its undo window still counts, so the expectation is
+// saved with it and comes back with Undo; `evaluators` drops it once the removal settles.
+// It is kept whichever kind the question is, as the options are, so switching kind and back
+// brings it back; the choice shows it only for the kind it fits (`shownExpect`).
+export const expectOf = (q) => (q.expect === "yes" || q.expect === "no" || q.options.some((o) => o.id === q.expect) ? q.expect : null);
+export const shownExpect = (q) =>
+  (q.kind === "pick" ? live(q.options).some((o) => o.id === q.expect) : q.expect === "yes" || q.expect === "no") ? q.expect : null;
+
 // The draft as evaluator.saved carries it, with "Show in journal" and each question's
 // switch: no on/off for the evaluator, which evaluator-list owns as a gesture, and no marked item, which `evaluators` keeps in place by itself while its
 // undo window runs.
@@ -42,7 +54,8 @@ export const wire = (d) => ({
     text: q.text,
     yes: q.yes,
     no: q.no,
-    options: live(q.options).map((o) => ({ id: o.id, name: o.name, description: o.description })),
+    options: live(q.options).map((o) => ({ id: o.id, name: o.name, description: o.description, ...(o.icon ? { icon: o.icon } : {}) })),
+    ...(expectOf(q) ? { expect: q.expect } : {}),
   })),
 });
 
@@ -148,6 +161,23 @@ const kinded = (draft, id, kind, mint) =>
 
 const liveQuestion = (context, id) => context.draft.questions.find((q) => q.id === id && !q.removing);
 const liveOption = (context, question, id) => liveQuestion(context, question)?.options.find((o) => o.id === id && !o.removing);
+
+// An option's icon, or null for none: an option with no icon carries no `icon` at all.
+const withIcon = (draft, question, id, chosen) => ({
+  ...draft,
+  questions: draft.questions.map((q) =>
+    q.id === question
+      ? {
+          ...q,
+          options: q.options.map((o) => {
+            if (o.id !== id) return o;
+            const { icon: _, ...rest } = o;
+            return chosen ? { ...rest, icon: chosen } : rest;
+          }),
+        }
+      : q,
+  ),
+});
 
 // The typing gestures, the same in clean and dirty; only the target differs.
 const edits = (target) => ({
@@ -317,7 +347,15 @@ export const machine = setup({
       "question has a tick box that switches it on or off: one switched off is greyed but stays " +
       "editable and is kept, but not asked, and ticking it again brings it back; a new question " +
       "starts switched on. Each question is Yes / no, with optional words for what yes and no mean, or Pick one, with " +
-      "options that each have a name and an optional description. Every edit is saved as the " +
+      "options that each have a name, an optional description and an optional icon. Under " +
+      "each question's text, Expected answer offers None and the question's answers (Yes and " +
+      "No, or its options by name), saved at once and kept across a switch of kind and back; removing the expected option takes the " +
+      "expectation with it, and Undo brings both back. A choice point mark is green when Jev " +
+      "gives the expected answer and red when not. The icon " +
+      "button after an option's name, a dashed square while it has none, opens a small panel " +
+      "of icons and No icon; choosing one saves it at once and closes the panel, and Escape or " +
+      "a press outside closes it unchanged. The icon is what the option's mark shows on a " +
+      "choice point line. Every edit is saved as the " +
       "whole evaluator a short time into typing and when a field loses focus, and a new " +
       "evaluator with nothing written in it is never saved. Removing a question or an option, " +
       "and deleting the evaluator, wait out the undo window, with Undo in a notice. The " +
@@ -517,6 +555,34 @@ export const machine = setup({
                 questions: d.questions.map((q) => (q.id === event.question ? { ...q, options: q.options.filter((o) => o.id !== event.id) } : q)),
               }),
             ),
+            // The expected answer is one choice, saved at once like the icon; None is null.
+            _expect: {
+              guard: ({ context, event }) => {
+                const q = liveQuestion(context, event.question);
+                if (!q || shownExpect(q) === event.expect) return false;
+                if (event.expect === null) return true;
+                return q.kind === "pick" ? live(q.options).some((o) => o.id === event.expect) : event.expect === "yes" || event.expect === "no";
+              },
+              target: ".clean",
+              actions: [
+                assign(({ context, event }) => {
+                  const { expect: _, ...rest } = liveQuestion(context, event.question);
+                  const next = event.expect === null ? rest : { ...rest, expect: event.expect };
+                  return { draft: { ...context.draft, questions: context.draft.questions.map((q) => (q.id === next.id ? next : q)) } };
+                }),
+                save,
+              ],
+            },
+            // Choosing an icon is one press, so it is saved at once with whatever was typed;
+            // choosing again is its undo.
+            _optionIcon: {
+              guard: ({ context, event }) =>
+                (event.icon === null || OPTION_ICONS.includes(event.icon)) &&
+                !!liveOption(context, event.question, event.id) &&
+                (liveOption(context, event.question, event.id).icon ?? null) !== event.icon,
+              target: ".clean",
+              actions: [assign(({ context, event }) => ({ draft: withIcon(context.draft, event.question, event.id, event.icon) })), save],
+            },
             // Only an evaluator the fact holds can be deleted; a New evaluator with nothing
             // in it offers no Delete, because leaving it already keeps nothing.
             _delete: {

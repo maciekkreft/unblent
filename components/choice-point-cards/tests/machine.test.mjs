@@ -323,6 +323,7 @@ test("the Vim keys preference is read at start and followed after; without setti
 const EV = "01K6TEST0000000000000000E1";
 const Q1 = "01K6TEST0000000000000000Q1";
 const Q2 = "01K6TEST0000000000000000Q2";
+const Q3 = "01K6TEST0000000000000000Q3";
 const BEH = "01K6TEST0000000000000000O1";
 const EMO = "01K6TEST0000000000000000O2";
 const OVERT = "01K6TEST0000000000000000O3";
@@ -331,18 +332,21 @@ const EVALUATORS = [
   {
     id: EV,
     questions: [
-      { id: Q1, kind: "pick", options: [{ id: BEH, name: "Behavioral Goal" }, { id: EMO, name: "Emotional Goal" }] },
-      { id: Q2, kind: "pick", options: [{ id: OVERT, name: "Overt behavior" }, { id: COVERT, name: "Covert behavior" }] },
+      { id: Q1, kind: "pick", expect: BEH, options: [{ id: BEH, name: "Behavioral Goal", icon: "person-simple-walk" }, { id: EMO, name: "Emotional Goal" }] },
+      { id: Q2, kind: "pick", options: [{ id: OVERT, name: "Overt behavior" }, { id: COVERT, name: "Covert behavior", icon: "brain" }] },
+      { id: Q3, kind: "yesno", expect: "yes", options: [] },
     ],
   },
 ];
-// Therapy Goal on Towards: the goal's kind expected to be behavioural, with the walking
-// person for it; the behaviour's kind shown only for a behavioural goal, nothing expected.
+// Therapy Goal on Towards: the evaluator expects the goal's kind to be behavioural, its
+// option drawn as the walking person; the behaviour's kind shown only for a behavioural
+// goal, nothing expected. A box's own `expect` and `icons`, from before the evaluator held
+// them, are ignored.
 const TOWARDS_BOX = {
   evaluator: EV,
   questions: [
-    { id: Q1, show: true, expect: BEH, when: null, icons: { [BEH]: "person-simple-walk" } },
-    { id: Q2, show: true, expect: null, when: { question: Q1, option: BEH }, icons: { [COVERT]: "brain" } },
+    { id: Q1, show: true, expect: EMO, when: null, icons: { [EMO]: "brain" } },
+    { id: Q2, show: true, expect: OVERT, when: { question: Q1, option: BEH }, icons: {} },
   ],
 };
 const NONE = { evaluator: null, questions: [] };
@@ -350,7 +354,7 @@ const SETTINGS = { away: NONE, towards: TOWARDS_BOX, situation: NONE, thoughts: 
 const ans = (question, option, name, p) => ({ question, option, name, p });
 const done = (text, answers) => ({ field: "towards", text, status: "done", answers });
 
-test("a line's marks follow the box's settings: shown, only when, expected, and the icon", () => {
+test("a line's marks follow the box's settings: shown, only when, expected; the glyph is the option's icon", () => {
   assert.deepEqual(marksOf(TOWARDS_BOX, { field: "towards", text: "x", status: "pending", answers: [] }), [{ pending: true }]);
   assert.deepEqual(marksOf(TOWARDS_BOX, { field: "towards", text: "x", status: "failed", answers: [] }), []);
   assert.deepEqual(marksOf(NONE, done("x", [ans(Q1, BEH, "Behavioral Goal", 0.9)])), [], "a box without an evaluator has no marks");
@@ -359,7 +363,7 @@ test("a line's marks follow the box's settings: shown, only when, expected, and 
   assert.deepEqual(
     call.map((m) => [m.icon, m.tone]),
     [["person-simple-walk", "right"], ["check", "plain"]],
-    "a chosen icon, then an answer given none: a check, uncoloured when nothing is expected",
+    "the option's icon, then an option given none: a check, uncoloured when nothing is expected",
   );
   const notice = marksOf(TOWARDS_BOX, done("Notice", [ans(Q1, BEH, "Behavioral Goal", 0.83), ans(Q2, COVERT, "Covert behavior", 0.88)]), EVALUATORS);
   assert.deepEqual(notice.map((m) => m.icon), ["person-simple-walk", "brain"]);
@@ -368,11 +372,37 @@ test("a line's marks follow the box's settings: shown, only when, expected, and 
   assert.deepEqual(
     calm.map((m) => [m.icon, m.tone, m.expected]),
     [["warning", "wrong", "Behavioral Goal"]],
-    "not the expected answer: a warning; the second question only when the first is behavioural",
+    "not the expected answer, with no icon of its own: a warning, whatever the box's old icons say; the second question only when the first is behavioural",
+  );
+  const withIcon = EVALUATORS.map((e) => ({ ...e, questions: e.questions.map((q) => (q.id === Q1 ? { ...q, options: q.options.map((o) => ({ ...o, icon: "heart" })) } : q)) }));
+  const wrong = marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.92)]), withIcon);
+  assert.deepEqual(wrong.map((m) => [m.icon, m.tone]), [["heart", "wrong"]], "an option's icon stands also when it is not the one expected, still red");
+  const feet = EVALUATORS.map((e) => ({ ...e, questions: e.questions.map((q) => (q.id === Q1 ? { ...q, options: q.options.map((o) => ({ ...o, icon: o.id === BEH ? "footprints" : "hand-palm" })) } : q)) }));
+  assert.deepEqual(
+    [ans(Q1, BEH, "Behavioral Goal", 0.9), ans(Q1, EMO, "Emotional Goal", 0.9)].map((a) => marksOf(TOWARDS_BOX, done("x", [a]), feet)[0].icon),
+    ["footprints", "hand-palm"],
   );
 
-  const hidden = { ...TOWARDS_BOX, questions: [{ ...TOWARDS_BOX.questions[0], show: false }, { ...TOWARDS_BOX.questions[1], when: null, icons: { [OVERT]: "none" } }] };
-  assert.deepEqual(marksOf(hidden, done("Call", [ans(Q1, BEH, "Behavioral Goal", 0.9), ans(Q2, OVERT, "Overt behavior", 0.9)])), [], "unticked, and an answer set to no icon");
+  const yesno = { evaluator: EV, questions: [{ id: Q3, show: true, expect: "no", when: null, icons: { yes: "brain", no: "trophy" } }] };
+  assert.deepEqual(
+    [ans(Q3, "yes", "Yes", 0.9), ans(Q3, "no", "No", 0.9)].map((a) => marksOf(yesno, done("Call", [a]), EVALUATORS).map((m) => [m.icon, m.tone])[0]),
+    [["check", "right"], ["warning", "wrong"]],
+    "a yes / no answer keeps the check and the warning",
+  );
+
+  const unexpected = EVALUATORS.map((e) => ({ ...e, questions: e.questions.map(({ expect, ...q }) => q) }));
+  assert.deepEqual(
+    marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.9)]), unexpected).map((m) => [m.tone, m.icon, m.expected]),
+    [["plain", "check", null]],
+    "an evaluator that expects nothing: uncoloured, whatever the box once held",
+  );
+  const switched = EVALUATORS.map((e) => ({ ...e, questions: e.questions.map((q) => (q.id === Q1 ? { ...q, kind: "yesno" } : q)) }));
+  assert.equal(marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, "no", "No", 0.9)]), switched)[0].tone, "plain", "an option kept as expected while the question is yes / no expects nothing");
+  const pending = EVALUATORS.map((e) => ({ ...e, questions: e.questions.map((q) => (q.id === Q1 ? { ...q, options: q.options.map((o) => (o.id === BEH ? { ...o, removing: true } : o)) } : q)) }));
+  assert.equal(marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.9)]), pending)[0].tone, "plain", "an expected option waiting out its removal expects nothing");
+
+  const hidden = { ...TOWARDS_BOX, questions: [{ ...TOWARDS_BOX.questions[0], show: false }, TOWARDS_BOX.questions[1]] };
+  assert.deepEqual(marksOf(hidden, done("Call", [ans(Q1, EMO, "Emotional Goal", 0.9), ans(Q2, OVERT, "Overt behavior", 0.9)])), [], "unticked, and only when unmet");
 });
 
 test("the status line names a line's answers, and how sure Jev is shows as the mark's opacity", () => {

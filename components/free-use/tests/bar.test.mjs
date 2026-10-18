@@ -64,8 +64,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const { context, page, problems } = await guestPage(browser, (n) => ({ left: n === 1 ? 1 : 0.9, blocked: false, paused: [] }));
       try {
         await until(async () => (await bar(page)) === "Free use 100% left");
-        await page.getByPlaceholder("Type or paste a text to judge…").fill("Walk for ten minutes after lunch.");
-        await page.getByRole("button", { name: "Run" }).click();
+        await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("Walk for ten minutes after lunch.");
+        await page.getByRole("button", { name: "Evaluate 1 line" }).click();
         await until(async () => (await bar(page)) === "Free use 90% left");
         assert.deepEqual(await runBox(page), { notice: null, off: false });
         assert.deepEqual(problems, []);
@@ -84,7 +84,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const { context, page, problems } = await guestPage(browser, () => freeUse);
         try {
           await until(async () => (await bar(page)) === said);
-          await page.getByPlaceholder("Type or paste a text to judge…").fill("Walk.");
+          await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("Walk.");
           await until(async () => (await runBox(page)).notice === notice);
           assert.equal((await runBox(page)).off, notice != null);
           assert.deepEqual(problems, []);

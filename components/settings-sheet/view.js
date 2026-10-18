@@ -23,18 +23,6 @@ const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
 const TTL_NOTE = "1 hour costs more to start and pays off from the third question within the hour.";
 
-// The icon an answer of a choice point check may get (checks.edited): Auto is a
-// check when the answer is the expected one and a warning when not. Each is a button that
-// shows what the mark will look like; Auto and None have no glyph of their own, so a word.
-const MARKS = [
-  ["auto", "Auto", "Auto"],
-  ["check", "Check", icon("check")],
-  ["warning", "Warning", icon("warning")],
-  ["person-simple-walk", "Walking person", icon("person-simple-walk")],
-  ["brain", "Brain", icon("brain")],
-  ["none", "None", "None"],
-];
-
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
 // the token is the one clock, shared with the bar's animation.
 const toMs = (text, fallback = 3000) => {
@@ -454,20 +442,6 @@ class SettingsSheet extends LitElement {
       font-size: var(--text-sm);
       justify-self: start;
     }
-    .marks {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-2xs);
-    }
-    .marks button.icon {
-      font-size: var(--text-sm);
-      border: var(--border-width) solid transparent;
-    }
-    .marks button.icon[aria-pressed="true"] {
-      color: var(--color-ink);
-      background: var(--color-accent-subtle);
-      border-color: var(--color-accent);
-    }
     .question.off > span {
       color: var(--color-mute);
     }
@@ -804,7 +778,7 @@ class SettingsSheet extends LitElement {
   }
 
   // One question of a box's evaluator: Show, then, while shown, when it is shown (for a
-  // question after the first), the answer expected, and the icon each answer gets. A
+  // question after the first). The answer expected is the evaluator's own. A
   // question switched off in the evaluator is not asked, so it has nothing to set here.
   #checkQuestion(field, q, i, setting, questions) {
     if (q.on === false) {
@@ -816,7 +790,6 @@ class SettingsSheet extends LitElement {
       `;
     }
     const set = (patch) => this.#actor.send({ type: "_setQuestion", field, id: q.id, patch });
-    const answers = answersOf(q);
     const when = setting.when ? `${setting.when.question} ${setting.when.option}` : "";
     const earlier = questions.slice(0, i).filter((p) => p.on !== false);
     return html`
@@ -825,57 +798,26 @@ class SettingsSheet extends LitElement {
           <input type="checkbox" .checked=${setting.show} @change=${(e) => set({ show: e.target.checked })} />
           <span>${i + 1}. ${q.text || "Untitled question"}</span>
         </label>
-        ${setting.show
+        ${setting.show && i > 0
           ? html`
               <div class="choices">
-                ${i > 0
-                  ? html`
-                      <span>Ask</span>
-                      <select
-                        aria-label="When question ${i + 1} is shown"
-                        @change=${(e) => {
-                          const [question, option] = e.target.value.split(" ");
-                          set({ when: question ? { question, option } : null });
-                        }}
-                      >
-                        <option value="" ?selected=${!when}>Always</option>
-                        ${earlier.flatMap((p) =>
-                          answersOf(p).map(
-                            (a) => html`<option value="${p.id} ${a.id}" ?selected=${when === `${p.id} ${a.id}`}>
-                              Only when question ${questions.indexOf(p) + 1} is ${a.name}
-                            </option>`,
-                          ),
-                        )}
-                      </select>
-                    `
-                  : nothing}
-                <span>Expect</span>
-                <select aria-label="Answer expected for question ${i + 1}" @change=${(e) => set({ expect: e.target.value || null })}>
-                  <option value="" ?selected=${!setting.expect}>Any answer, no colour</option>
-                  ${answers.map((a) => html`<option value=${a.id} ?selected=${a.id === setting.expect}>${a.name}</option>`)}
+                <span>Ask</span>
+                <select
+                  aria-label="When question ${i + 1} is shown"
+                  @change=${(e) => {
+                    const [question, option] = e.target.value.split(" ");
+                    set({ when: question ? { question, option } : null });
+                  }}
+                >
+                  <option value="" ?selected=${!when}>Always</option>
+                  ${earlier.flatMap((p) =>
+                    answersOf(p).map(
+                      (a) => html`<option value="${p.id} ${a.id}" ?selected=${when === `${p.id} ${a.id}`}>
+                        Only when question ${questions.indexOf(p) + 1} is ${a.name}
+                      </option>`,
+                    ),
+                  )}
                 </select>
-                ${answers.map(
-                  (a) => html`
-                    <span>Icon for ${a.name}</span>
-                    <div class="marks" role="group" aria-label="Icon for ${a.name}">
-                      ${MARKS.map(
-                        ([value, name, face]) => html`
-                          <button
-                            type="button"
-                            class="icon"
-                            title=${name}
-                            aria-label=${name}
-                            aria-pressed=${(setting.icons[a.id] ?? "auto") === value ? "true" : "false"}
-                            @click=${() =>
-                              this.#actor.send({ type: "_setQuestion", field, id: q.id, icon: { option: a.id, icon: value } })}
-                          >
-                            ${face}
-                          </button>
-                        `,
-                      )}
-                    </div>
-                  `,
-                )}
               </div>
             `
           : nothing}
