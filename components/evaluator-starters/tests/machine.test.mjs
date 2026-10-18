@@ -70,6 +70,34 @@ test("it asks only once shown, emits a tick, and follows the facts' news", async
   ]);
 });
 
+test("coming into view again reads only after a failed read, keeping what is shown", async () => {
+  const emitted = [];
+  let books = { error: "no-answerer" };
+  const actor = createActor(machine, { input: { ask: async (target) => (target === "books" ? books : REPLIES[target]) } });
+  actor.on("*", (e) => emitted.push(e));
+  actor.start();
+  assert.equal(actor.getSnapshot().context.read, false, "nothing to show before the first answer");
+  actor.send({ type: "_shown" });
+  await flush();
+  assert.equal(actor.getSnapshot().context.failed, true);
+  books = new Promise(() => {});
+  actor.send({ type: "_shown" });
+  await flush();
+  assert.equal(actor.getSnapshot().matches("reading"), true, "a failed read is tried again");
+  assert.equal(actor.getSnapshot().context.read, true, "the part keeps its content, so the sheet does not shrink");
+  actor.send({ type: "_tick", evaluator: E2, on: true });
+  assert.deepEqual(emitted, [{ type: "starter.ticked", evaluator: E2, page: "evaluators", on: true }]);
+
+  const asked = [];
+  const fresh = createActor(machine, { input: { ask: async (target, name) => (asked.push(`${target}: ${name}`), REPLIES[target]) } }).start();
+  fresh.send({ type: "_shown" });
+  await flush();
+  asked.length = 0;
+  fresh.send({ type: "_shown" });
+  await flush();
+  assert.deepEqual(asked, [], "a part that read once follows the events instead of reading again");
+});
+
 test("a reply that is not the picture leaves the part saying so", async () => {
   const actor = createActor(machine, { input: { ask: async (target) => (target === "evaluators" ? { error: "no-answerer" } : REPLIES[target]) } }).start();
   actor.send({ type: "_shown" });

@@ -179,7 +179,7 @@ class EvaluatorStarters extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("hidden") || snapshot.matches("reading")) return nothing;
+    if (!snapshot?.context.read) return nothing;
     const { context } = snapshot;
     const link = `${location.origin}${PATH}`;
     const groups = groupsOf(context);

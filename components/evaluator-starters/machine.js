@@ -80,7 +80,9 @@ export const machine = setup({
     attributes: [],
     asks: ["pages: list", "evaluators: list", "books: list"],
   },
-  context: ({ input }) => ({ ask: input.ask, title: null, books: [], evaluators: [], failed: false }),
+  // `read` turns true at the first answer: a later read, after one that failed, keeps
+  // what is shown, so the sheet never shrinks under a scrolling finger.
+  context: ({ input }) => ({ ask: input.ask, read: false, title: null, books: [], evaluators: [], failed: false }),
   initial: "hidden",
   states: {
     hidden: { on: { _shown: "reading" } },
@@ -92,8 +94,9 @@ export const machine = setup({
           target: "ready",
           actions: assign(({ event }) => {
             const { pages, evaluators, books } = event.output;
-            if (!ok(evaluators) || !ok(books)) return { failed: true };
+            if (!ok(evaluators) || !ok(books)) return { read: true, failed: true };
             return {
+              read: true,
               failed: false,
               title: ok(pages) ? (pages.pages.find((p) => p.path === PATH)?.title ?? null) : null,
               evaluators: evaluators.evaluators,
@@ -101,19 +104,20 @@ export const machine = setup({
             };
           }),
         },
-        onError: { target: "ready", actions: assign({ failed: true }) },
+        onError: { target: "ready", actions: assign({ read: true, failed: true }) },
       },
     },
-    ready: {
-      on: {
-        _shown: "reading",
-        _tick: {
-          actions: emit(({ event }) => ({ type: "starter.ticked", evaluator: event.evaluator, page: PAGE, on: event.on === true })),
-        },
-      },
-    },
+    // The first answer is the starting picture and the events keep it current (4.3), so
+    // coming into view again reads only after a read that failed; a second read could
+    // land after a tick and show the box as it was before it.
+    ready: { on: { _shown: { guard: ({ context }) => context.failed, target: "reading" } } },
   },
+  // A tick is handled in every state, so one made while the part reads its data again
+  // is never dropped.
   on: {
+    _tick: {
+      actions: emit(({ event }) => ({ type: "starter.ticked", evaluator: event.evaluator, page: PAGE, on: event.on === true })),
+    },
     "evaluator.changed": { actions: assign({ evaluators: ({ context, event }) => upsert(context.evaluators, event.evaluator) }) },
     "evaluator.deleted": { actions: assign({ evaluators: ({ context, event }) => context.evaluators.filter((e) => e.id !== event.id) }) },
     "book.changed": {

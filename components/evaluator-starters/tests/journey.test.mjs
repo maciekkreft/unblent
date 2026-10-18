@@ -119,6 +119,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal("starterFor" in mine[0], false, "the copy is a starter for nothing");
         assert.notEqual(mine[0].questions[0].id, QUESTION.id);
 
+        // A reload cuts a request still in flight, which the watch would count as a failure.
+        await page.waitForLoadState("networkidle");
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await listText(page)).includes(NAME));
         assert.equal(await page.locator("evaluator-list .row", { hasText: NAME }).count(), 1, "one copy, not a second one");
