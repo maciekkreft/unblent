@@ -117,7 +117,7 @@ const highlightOn = (book) => [{
 }];
 
 // The subject stem in a context of its own (11.2): the user's cookie, empty storage.
-const openPage = async (browser, cookie, { phone = false, route, undoMs } = {}) => {
+const openPage = async (browser, cookie, { phone = false, undoMs } = {}) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
@@ -134,7 +134,6 @@ const openPage = async (browser, cookie, { phone = false, route, undoMs } = {}) 
   const problems = [];
   watch(page, problems);
   if (phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-  if (route) await page.route(route.url, route.handler);
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
   await ready(page);
   return { page, problems };
@@ -182,18 +181,6 @@ const pinPressed = (page) =>
 const clickPin = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".pin")?.click());
 
-// Click a note-list row by its note id, the gesture that emits note.selected.
-const clickRow = (page, id) =>
-  page.evaluate((id) => document.querySelector("note-list").shadowRoot.querySelector(`.row[data-id="${id}"]`)?.click(), id);
-
-// The text of every notice showing in the stack (empty when none).
-const noticeText = (page) =>
-  page.evaluate(() =>
-    [...(document.querySelector("notice-stack")?.shadowRoot?.querySelectorAll(".notice p") ?? [])]
-      .map((p) => p.textContent)
-      .join(" "),
-  );
-
 // The titles the list actually shows (the next-note draft, the apart row and the fixed
 // Highlights row excluded).
 const shownTitles = (page) =>
@@ -202,19 +189,6 @@ const shownTitles = (page) =>
       r.querySelector(".name").textContent.trim(),
     ),
   );
-
-// The title of the row kept apart (the open note not about the subject), or null. Its
-// aria-selected tells whether it reads as the open row.
-const apartRow = (page) =>
-  page.evaluate(() => {
-    const r = document.querySelector("note-list").shadowRoot.querySelector(".row.apart");
-    return r ? { title: r.querySelector(".name").textContent.trim(), selected: r.getAttribute("aria-selected") } : null;
-  });
-
-// Whether the list is showing a scope switch at all. There is none any more: the list
-// shows the notes about the subject, with no "all notes" fallback.
-const hasSwitch = (page) =>
-  page.evaluate(() => Boolean(document.querySelector("note-list").shadowRoot.querySelector(".scope")));
 
 const sameSet = (a, b) => a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
 
@@ -348,19 +322,11 @@ const stagedTab = (page) =>
         ?.textContent.trim() ?? null,
   );
 
-// The Highlights document, and the text of each painted quote line: read through the
-// EditorView the .cm-content node carries, the way the reader tests read the strip.
-const hnDoc = (page) =>
-  page.evaluate(
-    () => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-content")?.cmView?.view?.state?.doc?.toString() ?? "",
-  );
+// The text of each painted quote line in the Highlights document.
 const hnQuotes = (page) =>
   page.evaluate(() =>
     [...document.querySelector("highlight-notes").shadowRoot.querySelectorAll(".cm-quote-text")].map((m) => m.textContent),
   );
-const hnHas = (page, selector) =>
-  page.evaluate((s) => document.querySelector("highlight-notes").shadowRoot.querySelector(s) != null, selector);
-
 // Nudge `notes` to sync now instead of after its idle window: it drains the outbox on a
 // visibilitychange (fact.js), so a test need not wait out the 2s debounce for a write to
 // reach the server. The tab stays "visible", so this is a drain and a pull, as a focus is.
@@ -373,15 +339,6 @@ const synced = (page, holds, timeout = 4000) =>
     await drain(page);
     return holds(await serverNotes(page));
   }, timeout);
-
-// Put the caret at the end (a comment line) or start (a quote line) of the document, the
-// only deterministic way to aim typing at the empty comment line or the fixed quote line.
-const hnCaret = (page, where) =>
-  page.evaluate((where) => {
-    const view = document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-content").cmView.view;
-    view.focus();
-    view.dispatch({ selection: { anchor: where === "end" ? view.state.doc.length : 0 } });
-  }, where);
 
 const ENGINES = [
   { name: "webkit", launch: () => webkit.launch() },
@@ -439,9 +396,9 @@ for (const engine of ENGINES) {
     });
   }
 
-  // Signed in, following the stage: the list shows only the notes about the open book,
-  // with no switch to all notes (D5, D6). One browser per engine; the launch is the
-  // costly part on a small host.
+  // Signed in, following the stage. Which notes the list shows and which the editor
+  // opens as the stage moves, with the pin, is decided together in note-list's bus test;
+  // here is what only the page shows across a reload. One browser per engine.
   describe(`the notes follow the stage in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     before(async () => {
@@ -463,84 +420,6 @@ for (const engine of ENGINES) {
           { id: NOTE_TWO, title: "About two", about: [{ kind: "book", id: BOOK_TWO }] },
         ],
       });
-
-    test("the list shows the subject's notes, following the stage, with no switch", async () => {
-      const { page, problems } = await openPage(browser, await twoBooks());
-      const [one, two] = [BOOK_ONE, BOOK_TWO];
-      await until(async () => (await tileIds(page)).length >= 2, 8000);
-      // No book open yet: both notes show (no subject to scope to). The list waits on the
-      // reload's pull to bring the seeded notes, which is the one slow step here.
-      await until(async () => sameSet(await shownTitles(page), ["About one", "About two"]), 8000);
-
-      // Open the first book: it is on the stage, so only its note shows — with no switch
-      // to all notes — and the editor follows the stage, opening that book's note (D6, D7).
-      await openTile(page, one);
-      await until(async () => sameSet(await shownTitles(page), ["About one"]));
-      assert.equal(await hasSwitch(page), false, "there is no scope switch");
-      await until(async () => (await editorBody(page)) === "About one");
-
-      // Switch the stage to the other book: the first note's row goes, the second's comes,
-      // and the editor follows to the second book's note.
-      await openTile(page, two);
-      await until(async () => sameSet(await shownTitles(page), ["About two"]));
-      await until(async () => (await editorBody(page)) === "About two");
-
-      // Pin the editor: now the stage may move but the pinned note stays (slice 5, D7).
-      await clickPin(page);
-      await until(async () => await pinPressed(page));
-      await openTile(page, one);
-      await until(async () => sameSet(await shownTitles(page), ["About one"]));
-      assert.equal(await editorBody(page), "About two", "the pinned note did not follow the stage");
-
-      // The pinned note is not about book one, so the list keeps it apart at the top,
-      // highlighted as the open row, while book one's note shows below it (12).
-      await until(async () => (await apartRow(page))?.title === "About two");
-      assert.equal((await apartRow(page)).selected, "true", "the apart row reads as the open one");
-
-      // Picking a different note while pinned opens it, with no notice (12): the pin
-      // belongs to the editor, so it stays on, now on the picked note, and the stage's
-      // own note is open, so nothing is apart.
-      await clickRow(page, NOTE_ONE);
-      await until(async () => (await editorBody(page)) === "About one");
-      assert.ok(await pinPressed(page), "the pin stays on after a pick");
-      assert.ok(!/pinned/i.test(await noticeText(page)), "and no notice is shown");
-      await until(async () => (await apartRow(page)) == null);
-
-      // Pinned on book one's note, the stage moves to book two: the note stays.
-      await openTile(page, two);
-      await until(async () => sameSet(await shownTitles(page), ["About two"]));
-      assert.equal(await editorBody(page), "About one", "the pinned note did not follow the stage");
-
-      // Unpin, and the next change of stage is followed again.
-      await clickPin(page);
-      await until(async () => !(await pinPressed(page)));
-      await openTile(page, one);
-      await until(async () => sameSet(await shownTitles(page), ["About one"]));
-      await openTile(page, two);
-      await until(async () => (await editorBody(page)) === "About two");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // A note that reaches this device after its book is opened opens in the editor (12):
-    // the load's pull is held back until the book is on the stage, so the editor first
-    // chooses the empty page, then the note arrives.
-    test("a note that arrives after its book is opened opens in the editor", async () => {
-      let release;
-      const held = new Promise((r) => (release = r));
-      const { page, problems } = await openPage(browser, await twoBooks(), {
-        route: { url: /\/api\/notes\?since=/, handler: async (r) => { await held; await r.continue(); } },
-      });
-      await until(async () => (await tileIds(page)).length >= 2, 8000);
-      await openTile(page, BOOK_ONE);
-      await until(async () => (await aboutText(page)) === "About: Sample Book");
-      assert.equal(await editorBody(page), "", "no note about the book is known yet: the empty page");
-
-      release();
-      await until(async () => (await editorBody(page)) === "About one", 8000);
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    });
 
     // The About line names a note's book after a reload (fault the reload race left blank),
     // and names the stage's book on a new note before anything is typed (12).
@@ -604,51 +483,6 @@ for (const engine of ENGINES) {
       });
       assert.deepEqual(stored.about, [{ kind: "book", id: first }], "the new note's book link reached the server");
 
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-  });
-
-  // The stage survives a reload (3.5): when the app is reopened and the staged book comes
-  // back on its own, the list must scope to that book, not flash every note while the
-  // subject-read reply (null, the book not open yet) races the slow notes pull. One
-  // browser per engine; the book and its notes are seeded in before, so the test is a
-  // fresh load and an assertion, well inside the budget.
-  describe(`the stage survives a reload in ${engine.name}`, { timeout: 120000 }, () => {
-    const NOTE_BOOK = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
-    const NOTE_NONE = "01ARZ3NDEKTSV4RRFFQ69G5FD4";
-    let browser;
-    before(async () => {
-      browser = await engine.launch();
-    }, { timeout: 30000 });
-    afterEach(async () => {
-      await Promise.all(browser.contexts().map((c) => c.close()));
-    });
-    after(async () => {
-      await browser?.close();
-    }, { timeout: 15000 });
-
-    test("the auto-reopened book scopes the list to its notes, not every note", async () => {
-      // The book is open on the server, with one note about it and one about nothing.
-      const cookie = await seedUser({
-        books: [BOOK_ONE],
-        open: BOOK_ONE,
-        notes: [
-          { id: NOTE_BOOK, title: "About the book", about: [{ kind: "book", id: BOOK_ONE }] },
-          { id: NOTE_NONE, title: "About nothing", about: [] },
-        ],
-      });
-      // A fresh load, nothing opened by hand: the book comes back on its own, so the
-      // subject resolves to it and the list shows only its note. Before the fix, the late
-      // notes reply re-applied the read's stale null and "About nothing" showed too.
-      const { page, problems } = await openPage(browser, cookie);
-      await until(async () => sameSet(await shownTitles(page), ["About the book"]), 8000);
-      // Let a clobber (the bug) flip the list back to every note before asserting it held.
-      await page.waitForTimeout(400);
-      assert.ok(
-        sameSet(await shownTitles(page), ["About the book"]),
-        `the list stayed scoped to the book; showed: ${(await shownTitles(page)).join(", ")}`,
-      );
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
@@ -758,11 +592,9 @@ for (const engine of ENGINES) {
     });
   });
 
-  // The Highlights tab (session 5): a highlight made in the book appears there as one
-  // document; typing under it saves the comment (the book mark gains its accent); a quote
-  // line cannot be edited; the bin removes with the same undo as note-list; a reload keeps
-  // both. Signed in, so the notes reach the server and the reload is deterministic. One
-  // browser per engine; the book import in `before` keeps the test itself inside budget.
+  // The Highlights tab (session 5) as the page composes it: the row in Notes, the document
+  // in the Notes pair, the book kept the subject. What the document does itself (a
+  // comment, the fixed quote line, removing with undo) is tested in highlight-notes.
   describe(`the highlights tab in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     before(async () => {
@@ -774,77 +606,9 @@ for (const engine of ENGINES) {
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
-    // The sample, open, for a test that makes its own highlight; and the same with one
-    // highlight already on it, commented, for the tests about the highlight itself.
-    const bookOnly = () => seedUser({ books: [BOOK_ONE], open: BOOK_ONE });
+    // The sample, open, with one highlight on it, commented.
     const withHighlight = () =>
       seedUser({ books: [BOOK_ONE], open: BOOK_ONE, notes: [{ id: HIGHLIGHT, body: "A thought about this", about: highlightOn(BOOK_ONE) }] });
-
-    // A highlight made in the book appears in the tab and takes a comment that reaches the
-    // server. Split from the checks below so each test — this one carries the drag and
-    // the save round-trip — stays inside budget.
-    test("a highlight made in the book appears in the tab and takes a comment", async () => {
-      const { page, problems } = await openPage(browser, await bookOnly());
-      await readerHasText(page);
-
-      // Drag over a run of text, then open the tab: the highlight is one document, its
-      // quote line the snapped text from the book.
-      await dragOver(page, await dragRect(page));
-      await until(async () => (await marks(page)).length > 0);
-      const quote = (await marks(page)).join("");
-      await showHighlights(page);
-      await until(async () => (await hnQuotes(page)).length > 0);
-      assert.equal((await hnQuotes(page)).join(""), quote, "the tab's quote line is the book's highlight");
-
-      // The highlight note must reach the server before its comment is written, so the
-      // comment's save is based on a real version, not the null of a note still being
-      // created (an immediate second write on the same id would come back a conflict).
-      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
-
-      // Type a comment on the line under the quote; once it saves, the book mark gains its
-      // commented accent (the round-trip through notes and back).
-      await hnCaret(page, "end");
-      await page.keyboard.type("A thought about this");
-      await until(async () => (await hnDoc(page)).includes("A thought about this"));
-      await until(
-        async () =>
-          page.evaluate(() => {
-            const m = document.querySelector("book-reader").shadowRoot.querySelector(".strip mark");
-            return m != null && m.classList.contains("commented");
-          }),
-        6000,
-      );
-
-      // The comment reaches the server.
-      await synced(page, (notes) => notes.some((n) => (n.body ?? "").includes("A thought about this")));
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // A fresh load brings a saved highlight and its comment; the quote line stays fixed
-    // against edits, and the bin removes with the same undo window as note-list.
-    test("a reload keeps the highlight, the quote line is fixed, and the bin removes with undo", async () => {
-      const { page, problems } = await openPage(browser, await withHighlight());
-      await showHighlights(page);
-      await until(async () => (await hnQuotes(page)).length > 0 && (await hnDoc(page)).includes("A thought about this"), 8000);
-
-      // The quote line cannot be edited: typing on it and Backspace change nothing.
-      const before = await hnDoc(page);
-      await hnCaret(page, "start");
-      await page.keyboard.type("ZZZ");
-      await page.keyboard.press("Backspace");
-      assert.equal(await hnDoc(page), before, "the quote line refused the edit");
-
-      // The bin starts the undo window (Undo shown, the lines dimmed); Undo brings it back.
-      await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-bin")?.click());
-      await until(async () => (await hnHas(page, ".cm-undo")) && (await hnHas(page, ".cm-discarding")));
-      await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-undo")?.click());
-      await until(async () => (await hnHas(page, ".cm-bin")) && !(await hnHas(page, ".cm-undo")));
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
 
     // The Highlights row opens the document inside the Notes pair (Decision 1, 2, 5, 7):
     // it stands in the list showing the count, picking it shows the document under the

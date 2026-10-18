@@ -40,7 +40,6 @@ const importBook = async (cookie, id, file) => {
 const REFUSED = /event book\.refused books → .*\bnotice-stack\b.* delivered/;
 const CHANGED = /event book\.changed books → .*\bbook-shelf\b.* delivered/;
 const DISCARDED = /event book\.discarded book-shelf → books delivered/;
-const DELETED = /event book\.deleted books → .*\bbook-shelf\b.* delivered/;
 
 async function until(fn, timeout = 4000) {
   const start = Date.now();
@@ -107,18 +106,6 @@ const clickUndo = (page, title) =>
       ?.querySelector(".undo")
       ?.click();
   }, title);
-// Shorten the undo window and remount the shelf so the actor reads the new value
-// (--duration-undo is read once, at mount); the book itself is kept by the fact, so
-// the remounted shelf re-queries books: list and shows it again.
-const shortUndo = (page, ms = 150) =>
-  page.evaluate((ms) => {
-    const el = document.querySelector("book-shelf");
-    el.style.setProperty("--duration-undo", `${ms}ms`);
-    const parent = el.parentNode;
-    const next = el.nextSibling;
-    el.remove();
-    parent.insertBefore(el, next);
-  }, ms);
 
 const forgeCookie = () => {
   const SECRET = process.env.SESSION_SECRET;
@@ -265,7 +252,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
-    test("delete offers undo, then commits when its window ends and stays gone", async () => {
+    test("the bin offers Undo, which brings the book back", async () => {
       const cookie = forgeCookie();
       await importBook(cookie, SAMPLE_ID, SAMPLE);
       const { page, problems, debug } = await open({ cookie });
@@ -284,33 +271,8 @@ for (const engine of ENGINES) {
       assert.ok(!debug.some((l) => DISCARDED.test(l)), "undo emits no discard");
       assert.ok((await tiles(page)).some((t) => t.title === "Sample Book"), "the book is still there");
 
-      // A short window, so the bar drains and the delete becomes a fact; the book is
-      // tombstoned and its files purged (the reader/image routes would 404 after).
-      await shortUndo(page);
-      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
-      // Wait for the tombstone's ack before reloading, so no write is left in flight to be
-      // torn down (that would surface as a fault), and so the reload's pull sees the
-      // tombstone on the server.
-      const deletedOk = page.waitForResponse(
-        (res) => /\/api\/books\/[^/]+\/deleted$/.test(res.url()) && res.ok(),
-        { timeout: 4000 },
-      );
-      await clickBin(page, "Sample Book");
-      await until(() => debug.some((l) => DISCARDED.test(l)) && debug.some((l) => DELETED.test(l)));
-      await until(async () => !(await tiles(page)).some((t) => t.title === "Sample Book"));
-      // A tab regaining focus drains at once (5), so the tombstone need not wait out its
-      // debounce window. It then pulls; that pull must land too, or the reload cancels it.
-      const pulled = page.waitForResponse((res) => /\/api\/books\?since=/.test(res.url()), { timeout: 4000 });
-      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-      await deletedOk;
-      await pulled;
-
-      // A reload pulls the tombstone: the book does not come back (5).
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
-      await until(async () => (await emptyText(page)) !== null || (await tiles(page)).length >= 0);
-      await new Promise((r) => setTimeout(r, 300));
-      assert.ok(!(await tiles(page)).some((t) => t.title === "Sample Book"), "it stays gone after a reload");
+      // That a window running out makes the delete a fact, which `books` tombstones and
+      // sends, and that it stays gone, is book-shelf's bus test.
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });

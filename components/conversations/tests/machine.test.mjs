@@ -570,6 +570,25 @@ test("a call the catalog does not list is rejected, not asked", async () => {
   assert.equal(stored.calls[0].label, "made: up", "the label is the literal tool name, not a made-up activity");
 });
 
+// A tool the user keeps off (7.7) is never offered; a model that asks for it anyway gets
+// a call `llm`'s server marks "unknown tool" (its api test), which is refused with an
+// error result and never asked.
+test("a tool switched off is not offered, and its call is refused", async () => {
+  const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, tools: { tools: { "subject: read": false }, approval: "auto" } });
+  await ready(h);
+  submit(h);
+  await flush();
+  assert.deepEqual(h.calls.completes[0].tools.map((t) => `${t.target}: ${t.name}`), ["books: chapter"], "the off tool is not offered");
+  await feed(h, [callAnswer(ANSWER, { ...subjectCall("off-1"), invalid: "unknown tool" })]);
+  await until(() => h.calls.completes.length === 2, "the round still runs");
+  assert.deepEqual(h.calls.tools, [], "the off tool was never asked");
+  const results = h.calls.completes[1].turns.find((t) => t.results)?.results;
+  assert.equal(results[0].isError, true);
+  assert.equal(results[0].content, "This tool could not be used: unknown tool.");
+  const stored = lastChange(h).turns.find((t) => t.role === "assistant" && t.calls);
+  assert.equal(stored.calls[0].invalid, "unknown tool", "the stored call stays marked, so the thread never names it as a lookup");
+});
+
 test("a tool that errors is fed back as an error result", async () => {
   const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ error: "not-found" }) });
   await ready(h);

@@ -151,6 +151,18 @@ test("a valid tool call carries the mapped target and name, no invalid", async (
   assert.ok(!("invalid" in call), "a valid input is not marked");
 });
 
+// A tool the user keeps off is never offered (conversations' machine test); a model that
+// asks for it anyway is answered with a call marked, so the loop refuses it.
+test("a tool call for a tool that was not offered is marked unknown", async () => {
+  const cookie = cookieFor(freshUser());
+  await edit({ provider: "echo" }, cookie);
+  const parts = await pieces(await complete(ask("/tool subject: read {}"), cookie));
+  const call = parts.find((p) => p.type === "call");
+  assert.equal(call.target, "subject");
+  assert.equal(call.name, "read");
+  assert.equal(call.invalid, "unknown tool");
+});
+
 const decide = (body, cookie) =>
   fetch(`${BASE_URL}/api/llm/decide`, {
     method: "POST",

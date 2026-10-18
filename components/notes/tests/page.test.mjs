@@ -25,10 +25,9 @@ const CHANGED = /event note\.changed notes → .*\bnote-editor\b.* delivered/;
 // list announces the note the user picked.
 const OPENED = /event note\.opened note-editor → (?:[\w-]+, )*note-list(?:, [\w-]+)* delivered/;
 const SELECTED = /event note\.selected note-list → (?:[\w-]+, )*note-editor(?:, [\w-]+)* delivered/;
-// A note deleted: the list announces the gesture on elapse, and notes announces the
-// note gone (to the list, and to the editor when it was showing it).
+// A note deleted: the list announces the gesture on elapse. What follows, the tombstone
+// and the row and the editor letting go, is tested together in note-list's bus test.
 const DISCARDED = /event note\.discarded note-list → notes delivered/;
-const DELETED = /event note\.deleted notes → .*\bnote-list\b.* delivered/;
 
 // The list's own shadow, read as the user sees it: each row's title and whether it
 // is the highlighted (open) one.
@@ -511,42 +510,6 @@ for (const engine of ENGINES) {
       await new Promise((r) => setTimeout(r, 100));
       assert.ok(!debug.some((l) => DISCARDED.test(l)), "undo emits no discard");
       assert.equal((await listState(page, "First")).present, true, "the note is still there");
-      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
-    });
-
-    test("a delete commits when its window ends and stays gone", async () => {
-      const { page, problems, debug } = await open();
-      await write(page, "First\nbody");
-      await until(async () => (await listState(page, "First")).present);
-
-      // A short window, so the bar drains at once and the delete becomes a fact.
-      await shortUndo(page);
-      await until(async () => (await listState(page, "First")).present);
-      await clickBin(page, "First");
-      await until(() => debug.some((l) => DISCARDED.test(l)) && debug.some((l) => DELETED.test(l)));
-      await until(async () => !(await listState(page, "First")).present);
-      await until(async () => (await editorStatus(page))?.trim() === "New note");
-
-      // The tombstone is durable: marked deleted in IndexedDB, and after a reload the
-      // note does not come back (5).
-      const record = await page.evaluate(
-        () =>
-          new Promise((res, rej) => {
-            const req = indexedDB.open("notes");
-            req.onerror = () => rej(req.error);
-            req.onsuccess = () => {
-              const all = req.result.transaction("notes", "readonly").objectStore("notes").getAll();
-              all.onsuccess = () => res(all.result);
-            };
-          }),
-      );
-      assert.equal(record.length, 1);
-      assert.equal(record[0].deleted, true, "the note is a tombstone, not erased");
-
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot);
-      await until(async () => (await listState(page, "New note")).present);
-      assert.equal((await listState(page, "First")).present, false, "it stays gone after a reload");
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     });
 

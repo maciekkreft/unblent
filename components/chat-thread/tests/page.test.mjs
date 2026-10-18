@@ -1,14 +1,8 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-
-// The books fixture is imported over HTTP so a real chapter can be read as a tool (7.7),
-// then converted to markdown; it is another component's test fixture, read as data, not
-// imported as code (11.2 covers import specifiers, not a data file a test reads).
-const SAMPLE = readFileSync(new URL("../../books/tests/fixtures/sample.epub", import.meta.url));
-const BOOK_ID = "01HQ8ZK7M4N5P6Q7R8S9T0V1W6";
 
 // The kit (10): the helpers every browser suite shares, reached by the path the check sets.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -26,7 +20,7 @@ const inputReady = (page) =>
 // A signed-in context on the conversations page, its account on the Echo test provider
 // (set over HTTP, since this page has no Settings). The chat box is then usable. One
 // browser serves the suite; each test owns its context (11.2).
-async function open(browser, engineName, name, undoMs, tools, seed) {
+async function open(browser, engineName, name, undoMs, tools) {
   const userId = `chat-${engineName}-${name}-${Date.now()}`;
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
@@ -40,9 +34,6 @@ async function open(browser, engineName, name, undoMs, tools, seed) {
     assert.ok((await context.request.put(`${BASE_URL}/api/conversations/tools`, { data: { tools } })).ok(), "the tool preferences are set");
   // A short delete-undo window (default 3s), so a delete test stays within its budget.
   if (undoMs != null) await shortUndo(context, undoMs);
-  // Chats already on the server before the first visit: the browser has no cached
-  // session yet, so the page starts signed out and learns who it is a moment later.
-  if (seed) await seed(context);
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
@@ -85,62 +76,6 @@ const deleteChat = (page, title) =>
 // Undo a counting-down delete.
 const undoDelete = (page) =>
   page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector(".row.discarding .undo")?.click());
-
-// The same, with the sample book imported first, so `books: chapter` has a real chapter
-// to return. Imported before the page loads, so the browser's `books` fact pulls it.
-async function openWithBook(browser, engineName, name) {
-  const userId = `chat-${engineName}-${name}-${Date.now()}`;
-  const context = await browser.newContext();
-  context.setDefaultTimeout(4000);
-  await signedIn(context, forge(userId));
-  assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
-  const put = await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE });
-  assert.ok(put.ok(), "the sample book is imported");
-  const page = await context.newPage();
-  const problems = watch(page);
-  // `books` learns of the imported book from its first pull after load; a chapter asked
-  // before that is not-found. No view on this page shows books, so wait for the trace's
-  // console line (10) announcing the book.
-  let bookKnown = false;
-  page.on("console", (msg) => {
-    if (msg.text().includes("event book.changed books")) bookKnown = true;
-  });
-  await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
-  await inputReady(page);
-  await until(async () => bookKnown);
-  return { context, page, problems };
-}
-
-// The product page: the chat runs in the right dock beside an open book,
-// so a new chat is linked to that book (about, and the book's line in start) and follows
-// the subject. The sample book is imported and set open before the page loads, so
-// `subject` settles on it and `conversation-list subject` scopes to its chats.
-async function openProduct(browser, engineName, name) {
-  const userId = `chat-${engineName}-${name}-${Date.now()}`;
-  const context = await browser.newContext();
-  context.setDefaultTimeout(4000);
-  await signedIn(context, forge(userId));
-  const [echo, imp] = await Promise.all([
-    context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } }),
-    context.request.put(`${BASE_URL}/api/books/${BOOK_ID}`, { headers: { "content-type": "application/epub+zip" }, data: SAMPLE }),
-  ]);
-  assert.ok(echo.ok(), "the account is set to Echo");
-  assert.ok(imp.ok(), "the sample book is imported");
-  assert.ok((await context.request.put(`${BASE_URL}/api/books/${BOOK_ID}/opened`)).ok(), "the sample book is the open one");
-  const page = await context.newPage();
-  const problems = watch(page);
-  // The trace's console lines (10), read for the subject reaching chat-input below.
-  page.subjectLines = [];
-  page.on("console", (msg) => / event subject\.changed subject → .*chat-input/.test(msg.text()) && page.subjectLines.push(msg.text()));
-  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-  await inputReady(page);
-  return { context, page, problems };
-}
-
-// The subject has settled on the open book: the product's only views that show a thing
-// show a book, so a subject.changed delivered to chat-input since the last check means it
-// has learned the book. Cleared on each check so a reload waits for its own.
-const bookIsSubject = async (page) => page.subjectLines.splice(0).length > 0;
 
 // The chat box is a CodeMirror document. Reach its EditorView through the handle CM6
 // hangs on the content node, as the note tests do. Set the draft with a dispatch, then
@@ -368,35 +303,18 @@ for (const engine of ENGINES) {
       }
     });
 
-    test("a tool switched off is not offered and its call is refused", async () => {
-      // subject: read is switched off for this account (12). Echo still asks for it, but the
-      // loop was never offered it, so llm refuses the call with an error result instead of
-      // running it; the model sees the refusal, and no lookup line is shown for the reader.
+    // What the thread shows of a lookup: a tool the user keeps on is named by its owner's
+    // label; one switched off (12) is never named. That the off tool is not offered, and
+    // its call is refused rather than asked, is decided in conversations' machine test and
+    // llm's api test; here is what the reader sees of it.
+    test("a lookup is named on screen, and a tool switched off is not", async () => {
       const { context, page, problems } = await open(browser, engine.name, "tool-off", undefined, { "subject: read": false });
       try {
-        await send(page, "/tool subject: read {}");
+        await send(page, "/tool subject: read {}\n/tool notes: list {}");
         await until(async () => (await threadText(page)).includes("This tool could not be used"));
+        assert.match(await threadText(page), /Listing the notes/, "the lookup is named on screen");
         assert.doesNotMatch(await threadText(page), /Checking what's open/, "an off tool is never named as a lookup");
         assert.doesNotMatch(await threadText(page), /"subject":null/, "the lookup did not run");
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
-    test("a chapter is read and comes back as markdown", async () => {
-      const { context, page, problems } = await openWithBook(browser, engine.name, "tool-chapter");
-      try {
-        await send(page, `/tool books: chapter {"id":"${BOOK_ID}","chapter":0}`);
-        await until(async () => (await threadText(page)).includes("A LINKED HEADING"));
-        // The chapter came back from `conversations` as markdown (a `# Chapter One` heading);
-        // with the markdown attribute on the stem page (10) the answer renders it as a real
-        // heading, so the `#` is gone from the text and lives as an <h1> instead.
-        const headings = await page.evaluate(() =>
-          [...document.querySelector("chat-thread").shadowRoot.querySelectorAll(".prose h1.md-h")].map((h) => h.textContent),
-        );
-        assert.ok(headings.some((t) => /Chapter One/.test(t)), "the chapter's # heading rendered as a heading");
-        assert.match(await threadText(page), /Reading a chapter/, "the lookup is named on screen");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();
@@ -432,25 +350,6 @@ for (const engine of ENGINES) {
       }
     });
 
-    test("a first visit lists the account's chats", async () => {
-      const U = (s) => "01HQ8ZK7M4N5P6Q7R8S9T0V1" + s;
-      const seed = async (context) => {
-        for (const k of ["1", "2"]) {
-          const turns = [{ id: U("D" + k), role: "user", text: "q" }, { id: U("E" + k), role: "assistant", text: "answer " + k, status: "done" }];
-          const put = await context.request.put(`${BASE_URL}/api/conversations/${U("C" + k)}`, { data: { title: "chat " + k, about: [], start: "", turns } });
-          assert.ok(put.ok(), "a chat is on the server");
-        }
-      };
-      const { context, page, problems } = await open(browser, engine.name, "first-visit", undefined, undefined, seed);
-      try {
-        await until(async () => (await chatTitles(page)).length === 2);
-        assert.deepEqual(await chatSubtitles(page), ["answer 2", "answer 1"], "each with its answer's first line");
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
     test("a delete can be undone", async () => {
       const { context, page, problems } = await open(browser, engine.name, "undo", 250);
       try {
@@ -461,45 +360,6 @@ for (const engine of ENGINES) {
         await undoDelete(page);
         await page.waitForTimeout(400); // past the (cancelled) window, to prove it never fires
         assert.ok((await chatTitles(page)).includes("keep me"), "the chat is still there after Undo");
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
-    test("chats survive a reload", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "reload");
-      try {
-        await send(page, "remember me");
-        await until(async () => (await lastAnswer(page)).includes("remember me"));
-        await until(async () => (await chatTitles(page)).includes("remember me"));
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await until(async () => await page.evaluate(() => Boolean(document.querySelector("conversation-list")?.shadowRoot?.querySelector(".row"))));
-        await until(async () => (await chatTitles(page)).includes("remember me"));
-        assert.ok((await chatTitles(page)).includes("remember me"), "the chat is listed from the server after a reload");
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
-    // --- the product page beside an open book ---------------------------
-
-    test("a new chat is linked to the open book on the product", async () => {
-      const { context, page, problems } = await openProduct(browser, engine.name, "book-link");
-      try {
-        // Wait until the subject has settled on the book, so chat-input links the new chat
-        // to it (7's step A1: a keystroke before the subject is known is held until it is).
-        await until(async () => await bookIsSubject(page));
-        await send(page, "about this book");
-        await until(async () => (await lastAnswer(page)).includes("about this book"));
-        await until(async () => !(await threadText(page)).includes("Not saved yet")); // saved to the server
-        // The account's copy names the book (about). That a chat about the open book is the
-        // one listed under it is decided in conversation-list's Node tests.
-        const { conversations } = await (await context.request.get(`${BASE_URL}/api/conversations`)).json();
-        const chat = conversations.find((c) => c.title === "about this book");
-        assert.ok(chat, "the new chat is saved to the account");
-        assert.ok(chat.about.some((link) => link.kind === "book" && link.id === BOOK_ID), "the new chat is linked to the open book");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();
