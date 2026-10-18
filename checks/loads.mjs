@@ -9,7 +9,9 @@ export function createTally() {
   // A finished test's record, by test name: both engines reuse a name and node reports
   // tests in completion order, so a FIFO per name hands each record to the right row.
   const done = new Map();
-  let current = null;
+  // One record per running test, innermost last: a journey (9) is a test whose steps are
+  // tests, so its own page load and each step's reload land on the one that made them.
+  const running = [];
   // A navigation start per page, until its load: a test may hold two tabs.
   const pending = new Map();
   return {
@@ -17,14 +19,15 @@ export function createTally() {
       launches.push({ engine, ms });
     },
     begin() {
-      current = { loads: [], load_ms: 0 };
-      pending.clear();
+      if (!running.length) pending.clear();
+      running.push({ loads: [], load_ms: 0 });
     },
     navigated(page, url, at) {
       pending.set(page, { url, start: at });
     },
     loaded(page, url, at) {
       const start = pending.get(page);
+      const current = running.at(-1);
       if (!current || !start) return;
       const ms = at - start.start;
       current.loads.push({ url, ms });
@@ -32,11 +35,11 @@ export function createTally() {
       pending.delete(page);
     },
     end(name) {
+      const current = running.pop();
       if (!current) return;
       if (!done.has(name)) done.set(name, []);
       done.get(name).push(current);
-      current = null;
-      pending.clear();
+      if (!running.length) pending.clear();
     },
     take(name) {
       return done.get(name)?.shift();

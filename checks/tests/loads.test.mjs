@@ -54,6 +54,35 @@ test("a load with no navigation start, or outside a test, is dropped", () => {
   assert.deepEqual(tally.take("t"), { loads: [], load_ms: 0 });
 });
 
+test("a load lands on the innermost running test: a journey's own, or its step's", () => {
+  const tally = createTally();
+  tally.begin();
+  tally.navigated(A, "http://x/", 0);
+  tally.loaded(A, "http://x/", 500);
+  tally.begin();
+  tally.navigated(A, "http://x/", 600);
+  tally.loaded(A, "http://x/", 900);
+  tally.end("reload");
+  tally.begin();
+  tally.end("j");
+  tally.end("journey");
+  assert.equal(tally.take("reload").load_ms, 300);
+  assert.equal(tally.take("j").load_ms, 0);
+  assert.equal(tally.take("journey").load_ms, 500);
+});
+
+test("the reporter marks a test with tests inside it with how many steps it had", async () => {
+  async function* events() {
+    yield { type: "test:pass", data: { name: "one", file: "/f.mjs", nesting: 1, details: { duration_ms: 1 } } };
+    yield { type: "test:fail", data: { name: "two", file: "/f.mjs", nesting: 1, details: { duration_ms: 1 } } };
+    yield { type: "test:pass", data: { name: "journey", file: "/f.mjs", nesting: 0, details: { duration_ms: 3 } } };
+    yield { type: "test:pass", data: { name: "plain", file: "/f.mjs", nesting: 0, details: { duration_ms: 1 } } };
+  }
+  const lines = [];
+  for await (const line of durations(events())) lines.push(JSON.parse(line));
+  assert.deepEqual(lines.map((l) => [l.name, l.steps]), [["one", undefined], ["two", undefined], ["journey", 2], ["plain", undefined], [undefined, undefined]]);
+});
+
 test("launches are counted and summed", () => {
   const tally = createTally();
   tally.launched("webkit", 400);

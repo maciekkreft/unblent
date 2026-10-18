@@ -19,10 +19,13 @@ function instrument(page) {
 }
 
 const open = new Set();
-// The contexts the running test opened; null while no test runs (a before hook, the
-// file's top level), where a context would be shared by every test after it.
-let contexts = null;
+// One frame per running test, innermost last, holding the browsers open when it began and
+// the contexts it opened. Empty while no test runs (a before hook, the file's top level),
+// where a context would be shared by every test after it. A journey (9) is a test whose
+// steps are tests: its context is its own frame's, opened and closed inside it.
+const frames = [];
 function opened(context) {
+  const contexts = frames.at(-1)?.contexts;
   if (!contexts) {
     context.close().catch(() => {});
     throw new Error(
@@ -31,7 +34,7 @@ function opened(context) {
     );
   }
   contexts.add(context);
-  context.on("close", () => contexts?.delete(context));
+  context.on("close", () => contexts.delete(context));
   // A page made with newPage is already in the context; later ones and popups arrive.
   context.pages().forEach(instrument);
   context.on("page", instrument);
@@ -59,21 +62,20 @@ for (const type of [webkit, chromium]) {
   };
 }
 
-// A suite's own browser (launched in before) is already open when its tests start.
-let before;
+// A suite's own browser (launched in before) is already open when its tests start, and a
+// journey's is open when its steps start.
 beforeEach(() => {
-  before = new Set(open);
-  contexts = new Set();
+  frames.push({ before: new Set(open), contexts: new Set() });
   tally.begin();
 });
 
 afterEach(async (t) => {
   // Before the reporter sees the test's pass or fail, so the row can carry its loads.
   tally.end(t.name);
+  const { before, contexts } = frames.pop();
   const leaked = [...open].filter((browser) => !before.has(browser));
   // A context goes with its browser; one left open on a browser that stays is the leak.
   const left = [...contexts].filter((context) => context.browser()?.isConnected() && !leaked.includes(context.browser()));
-  contexts = null;
   // Closed here, at the moment the test ends, so a timed-out test's browser never
   // overlaps the next test's; unclosed browsers are how the run exhausts a small host.
   await Promise.all([...leaked.map((browser) => browser.close()), ...left.map((context) => context.close())]);

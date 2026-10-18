@@ -36,6 +36,10 @@ STATIC_BUDGET_S = 1.0
 TEST_TIMEOUT_MS = 5000
 # Section 11: a test past half its budget has no headroom left for a loaded host.
 HEADROOM_MS = TEST_TIMEOUT_MS / 2
+# A journey (9) has five seconds per step, each step judged as a test, and this in all.
+# The kit holds the same numbers as STEP_MS and JOURNEY_MS; it sets the timeouts.
+JOURNEY_TIMEOUT_MS = 60000
+JOURNEYS_JSON = ROOT / "checks" / "journeys.json"
 # The task-end gate and the full run test the browser in WebKit (11). Every two-engine
 # test names its engine "in <engine>"; a Chromium-only test (the WebAuthn ceremony) does
 # not, so it stays in the WebKit pass, and the push run's Chromium pass, which runs only
@@ -695,6 +699,41 @@ def check_kit(manifests: dict) -> None:
     for name in kit_mentions(path.read_text(), names):
         fail("checks/kit.mjs", "kit check (11.2)",
              f"the kit names {name!r}; a helper about one component lives in that component's tests")
+
+
+# --- Journey check (architecture.md 9, 11.2) ---------------------------------------
+
+# A step is a subtest, `t.test("…")`, or a step list handed to the kit's journey().
+# `pattern.test(text)` never takes a literal, so a regular expression is not a step.
+_STEP = re.compile(r"""\b\w+\.test\(\s*[`'"]|\bjourney\(""")
+
+
+def journey_problems(files: dict, approved: list) -> list:
+    """The browser test files with steps that checks/journeys.json does not list (9): a
+    journey keeps one page across its steps, which only the owner approves. `files` maps
+    a path to its source. A listed path with no file is ignored, so deleting a component
+    is still deleting one directory. Pure, so checks/tests can exercise it."""
+    listed = set(approved)
+    out = []
+    for path, src in sorted(files.items()):
+        text = _strip_comments(src)
+        if ".launch(" in text and _STEP.search(text) and path not in listed:
+            out.append(path)
+    return out
+
+
+def check_journeys() -> None:
+    try:
+        approved = json.loads(JOURNEYS_JSON.read_text()) if JOURNEYS_JSON.exists() else []
+    except json.JSONDecodeError as error:
+        fail("checks/journeys.json", "journey check (11.2)", f"is not JSON: {error}")
+    if not isinstance(approved, list) or not all(isinstance(p, str) for p in approved):
+        fail("checks/journeys.json", "journey check (11.2)", "must be a JSON list of test file paths")
+    files = {f: (ROOT / f).read_text() for f in glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)}
+    for path in journey_problems(files, approved):
+        fail(path, "journey check (11.2)",
+             "this browser test has steps, so it keeps one page across them: a journey (9). "
+             "Ask the owner, and once approved list it in checks/journeys.json")
 
 
 # --- Editor kit check (architecture.md 10, 11.2) ----------------------------------
@@ -1636,6 +1675,7 @@ def _test_lock():
 
 
 VERBOSE = False
+ISOLATING = False
 
 
 def _node_test(files: list, env=None, extra=()) -> subprocess.Popen:
@@ -1668,9 +1708,11 @@ def headroom_warnings(rows: list) -> list:
     the duration rows so checks/tests can exercise it without a node run."""
     lines = []
     for row in sorted(rows, key=lambda r: -(r.get("ms") or 0)):
-        if (row.get("ms") or 0) > HEADROOM_MS:
+        # A journey (9) is judged by its own budget; each of its steps has a row of its own.
+        budget = JOURNEY_TIMEOUT_MS if row.get("steps") else TEST_TIMEOUT_MS
+        if (row.get("ms") or 0) > budget / 2:
             lines.append(f"warning: {_where(row)}: \"{row['name']}\" took {row['ms'] / 1000:.1f}s, over half "
-                         f"its {TEST_TIMEOUT_MS / 1000:.0f}s budget (11): no headroom on a loaded host")
+                         f"its {budget / 1000:.0f}s budget (11): no headroom on a loaded host")
     return lines
 
 
@@ -1722,7 +1764,9 @@ def _read_durations(proc: subprocess.Popen) -> list:
     path = Path(proc.durations)
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     path.unlink(missing_ok=True)
-    for line in headroom_warnings(rows):
+    # Isolated journey steps (11) each load their own page first, so their time is not a
+    # step's and the warning would name every one of them.
+    for line in [] if ISOLATING else headroom_warnings(rows):
         print(line, file=sys.stderr)
     return rows
 
@@ -1742,12 +1786,12 @@ def _run_node(files: list, env=None) -> list | None:
     return None if proc.returncode == 0 else rows
 
 
-def run_tests(affected=None, push=False, pages=()) -> None:
+def run_tests(affected=None, push=False, pages=(), isolate=False) -> None:
     # affected is None for the full run; a set of test files narrows to the tests
     # reachable from a change (11). A narrowed run never touches infrastructure tests,
     # since any infra change runs everything. `push` adds the push run's second browser
     # pass in Chromium. `pages` names the addresses the page smoke test loads; empty, it
-    # loads every page.
+    # loads every page. `isolate` runs each journey step that declares its start alone (11).
     scoped = affected is not None
     # Every test process, pure or browser, reaches the kit the way it reaches Playwright:
     # through a path in the environment, never an import across components (10).
@@ -1807,6 +1851,8 @@ def run_tests(affected=None, push=False, pages=()) -> None:
         env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}", "UNBLENT_DATA": data_dir}
         if pages:
             env["UNBLENT_PAGES"] = ",".join(sorted(pages))
+        if isolate:
+            env["UNBLENT_ISOLATE"] = "1"
 
         for test in server_tests:
             _run_python_test(test, "server tests", "server-entry HTTP test reported failures", env)
@@ -1952,6 +1998,11 @@ USAGE = """The one check command (architecture.md 11).
                         the full run, then every browser test again in
                         Chromium; the pre-push hook in .githooks/ runs it.
                         Never in a session: the owner pushes by hand
+  debug a journey       python3 checks/check.py --only <component> --isolate
+                        each journey step that declares its starting state
+                        runs alone, in a fresh page brought to that state; a
+                        step that passes alone but fails in the journey was
+                        broken by an earlier step
   by hand               python3 checks/check.py --server [port]
                         the throwaway server the tests use (temporary data
                         directory, port 8090 unless given), until Ctrl-C; for
@@ -1960,7 +2011,7 @@ USAGE = """The one check command (architecture.md 11).
   Tests print one line per file, and a failure's reason under its name.
   --verbose prints every test instead; use it with --only <component>.
   A test past half its 5s budget, and a browser test file past 30s, is named
-  in a warning.
+  in a warning. A journey (checks/journeys.json) has 5s per step, 60s in all.
 """
 
 
@@ -1972,14 +2023,18 @@ def main() -> None:
     if "--server" in argv:
         serve(_server_port(argv))
         return
-    global VERBOSE
+    global VERBOSE, ISOLATING
     VERBOSE = "--verbose" in argv
+    ISOLATING = "--isolate" in argv
     static_only = "--static" in argv
     changed = "--changed" in argv
     only = _only_value(argv)
     push = "--push" in argv
+    isolate = "--isolate" in argv
     if push and (changed or only or static_only):
         fail("checks/check.py", "--push", "is the whole push run (11); it takes no --changed, --only or --static")
+    if isolate and not only:
+        fail("checks/check.py", "--isolate", "debugs one component's journeys (11): --only <component> --isolate")
     timings = []
     # The two slow rules wait on other programs, so they start first and the rules
     # that need no manifests run meanwhile. Each timing is the main thread's own time,
@@ -2004,6 +2059,7 @@ def main() -> None:
     _timed(timings, "supersession check", check_supersession, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "kit", check_kit, manifests)
+    _timed(timings, "journeys", check_journeys)
     _timed(timings, "editor kit", check_editor, manifests)
     _timed(timings, "store check", check_store, manifests)
     _timed(timings, "shows-on", check_shows_on, manifests, parsed_pages)
@@ -2036,12 +2092,14 @@ def main() -> None:
         if picked is not None:
             affected, pages = picked
     with _test_lock():
-        _timed(timings, "tests", run_tests, affected, push, pages)
+        _timed(timings, "tests", run_tests, affected, push, pages, isolate)
     scope = "all" if affected is None else (
         ", ".join(sorted(f"{Path(f).parts[1]}/{Path(f).name.removesuffix('.test.mjs')}" for f in affected)) or "none")
     if pages:
         scope += "; pages: " + ", ".join(sorted(pages))
     scope += "; webkit, then chromium" if push else "; webkit"
+    if isolate:
+        scope += "; journey steps isolated"
     print(f"OK: {', '.join(name for _, name in timings)} in {sum(t for t, _ in timings):.1f}s [tests: {scope}]")
 
 

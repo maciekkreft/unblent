@@ -33,7 +33,9 @@ function code(file, line) {
 // its declaration is named instead.
 function reason(error, test) {
   const cause = error?.cause ?? error;
-  const message = String(cause?.message ?? cause ?? "failed").split("\n").filter((l) => l.trim()).slice(0, 6).join("\n  ");
+  // A journey's failure (9) ends with what the user saw at every step, kept whole.
+  const [said, trail] = String(cause?.message ?? cause ?? "failed").split(/\n(?=what the user saw, step by step:\n)/);
+  const message = [...said.split("\n").filter((l) => l.trim()).slice(0, 6), ...(trail ? trail.split("\n") : [])].join("\n  ");
   const ours = String(cause?.stack ?? "").split("\n")
     .filter((line) => line.includes(ROOT) && !line.includes("node_modules") && !line.includes("/checks/"))
     .map((line) => line.trim());
@@ -53,21 +55,27 @@ export default async function* progress(source) {
     file = null; ms = 0; count = 0; failed = false;
     return line;
   }
+  // A journey's steps are declared by the kit, so node names the kit as their file; they
+  // are counted under the file of the test they run in, which starts before them.
+  let top = null;
   for await (const event of source) {
+    if (event.type === "test:start" && event.data.nesting === 0) top = event.data.file;
     if (event.type !== "test:pass" && event.type !== "test:fail") continue;
     const { data } = event;
-    if (data.file !== file) {
+    const at = data.nesting > 0 ? (top ?? data.file) : data.file;
+    if (at !== file) {
       const line = finish();
       if (line) yield line;
-      file = data.file;
+      file = at;
     }
     if (data.nesting === 0) ms += data.details?.duration_ms ?? 0;
     if (data.details?.type !== "suite") count += 1;
-    // A suite fails for its subtests, already named, or for a hook of its own, which is not.
-    const own = data.details?.type !== "suite" || data.details?.error?.failureType !== "subtestsFailed";
+    // A suite or a journey fails for its subtests, already named, or for a hook or code of
+    // its own, which is not.
+    const own = data.details?.error?.failureType !== "subtestsFailed";
     if (event.type === "test:fail" && own) {
       failed = true;
-      yield `FAIL ${where(data.file)} "${data.name}"\n${reason(data.details?.error, data)}\n`;
+      yield `FAIL ${where(at)} "${data.name}"\n${reason(data.details?.error, data)}\n`;
     }
   }
   const line = finish();

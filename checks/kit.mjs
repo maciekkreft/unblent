@@ -124,3 +124,168 @@ export function shortUndo(context, ms = 150) {
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
   }, ms);
 }
+
+// --- Journeys (9) -------------------------------------------------------------------
+
+// A journey's budget (11): five seconds per step and a minute in all, in place of the five
+// seconds of a test. Under `check.py --isolate` a step also loads its own page and is
+// brought to its starting state, so it gets that setup on top.
+export const STEP_MS = 5000;
+export const JOURNEY_MS = 60000;
+export const ISOLATED_STEP_MS = 3 * STEP_MS;
+const ISOLATED = process.env.UNBLENT_ISOLATE === "1";
+
+const TRAIL = "what the user saw, step by step:";
+
+// One browser test that loads its page once and goes through its steps in order, each a
+// subtest (9). journey() gives the test's options and body, so the test is declared in the
+// test file and is reported under it; the file keeps the literal launch, so the check still
+// sorts it as a browser test:
+//
+//   test(`the lists on / in ${engine.name}`, ...journey({
+//     launch: () => engine.launch(),
+//     open: async (browser) => ({ page, problems, close }),  // a fresh context, its account
+//                                                            // seeded, its page loaded
+//     look: (visit) => state,                                // what the user sees, as JSON
+//   }, [
+//     { name: "j moves down", run: async (v) => { ...; await v.see((s) => complaint || null); } },
+//     { name: "G in a long list",
+//       from: { state: "the keyboard on a row of Notes", check: (s) => complaint || null,
+//               reach: async (v) => { ... } },
+//       run: async (v) => { ... } },
+//   ]));
+//
+// A step without `from` continues from where the step before it ended. A step with `from`
+// first checks the state it expects at its start, and fails naming the step before it when
+// the page is not in that state. `v.see(check)` waits until what the user sees passes the
+// check (a function returning a complaint, or nothing): a journey waits for what the user
+// should see, never for a fixed time. A visit's `problems` (from watch) must stay empty.
+// After a failed step the rest are skipped. With `--isolate` every step with `from` runs
+// alone instead, in a visit of its own brought to its start by `reach`, and the others are
+// skipped: a step that passes alone but fails in the journey was broken by an earlier one.
+export function journey({ launch, open, look }, steps) {
+  const timeout = ISOLATED ? steps.length * ISOLATED_STEP_MS : JOURNEY_MS;
+  return [{ timeout }, async (t) => {
+    const browser = await launch();
+    try {
+      if (ISOLATED) await isolated(t, browser, { open, look }, steps);
+      else await together(t, browser, { open, look }, steps);
+    } finally {
+      await browser.close();
+    }
+  }];
+}
+
+// The visit a step drives: what `open` returned, with `see` and `look` added, and every
+// state seen recorded on the trail under the step that saw it.
+function walk(visit, look, trail) {
+  const v = Object.create(visit);
+  v.step = null;
+  v.look = async () => {
+    const state = await look(visit);
+    trail.push({ step: v.step, ...state });
+    return state;
+  };
+  v.see = async (check, wait = STEP_MS - 1000) => {
+    const start = Date.now();
+    let complaint = "nothing was seen";
+    for (;;) {
+      const state = await look(visit);
+      complaint = check(state);
+      if (!complaint || Date.now() - start > wait) {
+        trail.push({ step: v.step, ...state });
+        if (complaint) throw new Error(complaint);
+        return state;
+      }
+      await new Promise((r) => setTimeout(r, 40));
+    }
+  };
+  return v;
+}
+
+function told(v, trail, error) {
+  const lines = trail.map((entry) => `  ${JSON.stringify(entry)}`).join("\n");
+  return new Error(`step "${v.step}": ${error?.message ?? error}\n${TRAIL}\n${lines}`, { cause: error });
+}
+
+// A step stopped by its own clock just inside node's, so its failure still lists the trail.
+async function within(ms, work) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`still not done after ${ms / 1000}s, the budget of a step (11)`)), ms - 300);
+  });
+  try {
+    return await Promise.race([work(), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function clean(visit) {
+  const problems = visit.problems ?? [];
+  if (problems.length) throw new Error(`the browser reported: ${problems.join("; ")}`);
+}
+
+async function together(t, browser, { open, look }, steps) {
+  const trail = [];
+  const visit = await open(browser);
+  try {
+    const v = walk(visit, look, trail);
+    let previous = "the page load";
+    let broken = null;
+    for (const step of steps) {
+      const skip = broken ? `"${broken}" failed before it` : false;
+      let passed = false;
+      await t.test(step.name, { timeout: STEP_MS, skip }, async () => {
+        v.step = step.name;
+        try {
+          if (step.from) {
+            const complaint = step.from.check(await v.look());
+            if (complaint) {
+              throw new Error(`expected at its start ${step.from.state}, but ${complaint}: ` +
+                `the step before it, "${previous}", left the page in another state`);
+            }
+          }
+          await within(STEP_MS, () => step.run(v));
+          clean(visit);
+          passed = true;
+        } catch (error) {
+          throw told(v, trail, error);
+        }
+      });
+      // A step node stopped at its time limit never reached the catch above.
+      if (!skip && !passed) broken ??= step.name;
+      previous = step.name;
+    }
+  } finally {
+    await visit.close();
+  }
+}
+
+async function isolated(t, browser, { open, look }, steps) {
+  for (const step of steps) {
+    if (!step.from) {
+      await t.test(step.name, { skip: "continues from the step before it, so it runs only in the journey" }, () => {});
+      continue;
+    }
+    await t.test(step.name, { timeout: ISOLATED_STEP_MS }, async () => {
+      const trail = [];
+      const visit = await open(browser);
+      const v = walk(visit, look, trail);
+      try {
+        v.step = `${step.name} (reaching its start: ${step.from.state})`;
+        await within(ISOLATED_STEP_MS, async () => {
+          await step.from.reach(v);
+          await v.see(step.from.check);
+          v.step = step.name;
+          await step.run(v);
+        });
+        clean(visit);
+      } catch (error) {
+        throw told(v, trail, error);
+      } finally {
+        await visit.close();
+      }
+    });
+  }
+}
