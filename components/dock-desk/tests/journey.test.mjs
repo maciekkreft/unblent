@@ -7,8 +7,9 @@ import { randomInt } from "node:crypto";
 
 // The keyboard journey on the product page (plan Revision 1, item 4): the owner's own way
 // of using `/` with "Vim keys" on, pressed at a human pace, asserting after every step what
-// the user sees. A late focus move, a letter typed into a hidden editor, a dead key, a tab
-// or a fold that does not happen fails here by step name, with every step's state printed.
+// the user sees. The lists, the chat box, tabs and panels, the focus ring and folding the
+// docks are journeys of their own (journey-*.test.mjs); what is left here is the Reader's
+// cursor, highlights from the keyboard, and Vim keys off.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
@@ -44,8 +45,8 @@ const BOOK = "01K00000000000000000000SMP";
 const NOTES = ["Note one", "Note two", "Note three"];
 
 // A user set up straight through the server (5): the sample book open, three notes about it,
-// two chats about it, and the Echo provider so the chat box takes text without a key.
-const seedUser = async ({ echo = true } = {}) => {
+// and two chats about it.
+const seedUser = async () => {
   const cookie = forgeCookie("journey");
   const put = async (path, type, body) => {
     const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
@@ -65,7 +66,6 @@ const seedUser = async ({ echo = true } = {}) => {
     ];
     await json(`/api/conversations/${ulid()}`, { title: `Chat ${k}`, about: [{ kind: "book", id: BOOK }], start: "", turns });
   }
-  if (echo) await json(`/api/llm`, { provider: "echo", model: "echo" });
   return cookie;
 };
 
@@ -211,10 +211,8 @@ const look = (page) =>
     };
   });
 
-// The panel (a desk child, by its address) the keyboard is in, and the row it is on.
+// The panel (a desk child, by its address) the keyboard is in.
 const panel = (s) => s.panel;
-const chatRow = (s) => s.chatOpen ?? "New chat";
-const onRow = (s, text) => s.deep?.startsWith("li[option]") && s.deepText?.startsWith(text);
 
 const keys = (page, ...list) => async () => {
   for (const [i, k] of list.entries()) {
@@ -241,55 +239,6 @@ const clickAt = (page, find, arg) => async () => {
   assert.ok(box, `nothing to click for ${find.name || "a target"} ${arg ?? ""}`);
   await page.mouse.click(box.x, box.y);
 };
-const centre = (el) => {
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-};
-function row([tag, text]) {
-  const el = [...(document.querySelector(tag)?.shadowRoot?.querySelectorAll("li.row") ?? [])].find((r) => r.textContent.includes(text));
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.left + r.width / 3, y: r.top + r.height / 2 };
-}
-function deskTab(label) {
-  const el = [...document.querySelector("dock-desk").shadowRoot.querySelectorAll('.dock .panel [role="tab"]')].find((t) => t.textContent.trim() === label);
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-}
-function chatBox() {
-  const el = document.querySelector("chat-input")?.shadowRoot?.querySelector(".cm-content");
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.left + 10, y: r.top + r.height / 2 };
-}
-// The first imported book's tile: the journal, which books presents first, has no
-// "Chapter Two" in its Contents.
-function tile() {
-  const el = document.querySelector("book-shelf")?.shadowRoot?.querySelector('.tile:not([data-id="00000000000000000000000JRN"])');
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-}
-function contentsRow(text) {
-  const el = [...(document.querySelector("book-toc")?.shadowRoot?.querySelectorAll(".entry") ?? [])].find((e) => e.textContent.includes(text));
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-}
-// Bare desk: the stage header between the Reader's tab and the header's buttons.
-function blankHeader() {
-  const strip = document.querySelector("dock-desk").shadowRoot.querySelector(".stage .strip");
-  const tabs = strip.querySelector('[role="tablist"]').getBoundingClientRect();
-  const next = strip.querySelector('[role="tablist"]').nextElementSibling.getBoundingClientRect();
-  return { x: (tabs.right + next.left) / 2, y: tabs.top + tabs.height / 2 };
-}
-// Bare panel: the Notes list below its last row.
-function blankNotes() {
-  const r = document.querySelector("note-list").getBoundingClientRect();
-  return { x: r.left + r.width / 2, y: r.bottom - 40 };
-}
 // A word of the reader's text, clicked in its middle.
 function word(text) {
   const strip = document.querySelector("book-reader").shadowRoot.querySelector(".strip");
@@ -327,10 +276,10 @@ for (const engine of ENGINES) {
 
     // `/` signed in as a fresh seeded user, settled: the book open on Chapter One, the
     // three notes and two chats listed, and with Vim keys on the keyboard on the Reader.
-    const open = async (vimKeys = true, { echo = true } = {}) => {
+    const open = async (vimKeys = true) => {
       context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
       context.setDefaultTimeout(4000);
-      await signedIn(context, await seedUser({ echo }));
+      await signedIn(context, await seedUser());
       await context.addInitScript((value) => {
         localStorage.setItem("settings", value);
         localStorage.setItem("settings:product", value);
@@ -372,291 +321,9 @@ for (const engine of ENGINES) {
         await act();
         await until(async () => cond(await look(page)));
       };
-      // The notes as the server holds them, after the page is told to send what it has.
-      const server = async () => {
-        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-        await pause(150);
-        return page.evaluate(async () => (await (await fetch("/api/notes")).json()).notes.map((n) => ({ id: n.id, title: n.title, body: n.body, version: n.version })));
-      };
-      return { page, problems, step, reach, server };
+      return { page, problems, step, reach };
     };
     const clean = (problems) => assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-
-    // --- F1: no letter types into a note or a chat box the user is not in -------------
-
-    // In the chat box, as a person reaches it: the Chat tab, a chat, a click in the box.
-    const inChatBox = async (page, reach) => {
-      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
-      await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.chatBox !== null);
-      await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
-    };
-
-    test(`Escape twice from the chat box puts the keyboard on the chat's row in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await inChatBox(page, reach);
-      await step("Escape Escape", keys(page, "Escape", "Escape"), (s) =>
-        all(want(s.chats === "conversation-list", `Chats shows ${s.chats}`), want(onRow(s, "Chat"), `the keyboard is on ${s.deep} "${s.deepText}"`)), SETTLE);
-      clean(problems);
-    });
-
-    test(`letters after leaving the chat box type nothing into it in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await inChatBox(page, reach);
-      await reach(quick(page, "Escape", "Escape"), (s) => s.chats === "conversation-list" && onRow(s, "Chat"));
-      await step("a s on the row", keys(page, "a", "s"), (s) => all(want(s.chatBox === "", `the chat box holds "${s.chatBox}"`), want(onRow(s, "Chat"), `the keyboard is on ${s.deep}`)));
-      clean(problems);
-    });
-
-    test(`letters after a click on bare desk type nothing anywhere in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
-      await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.chatBox !== null);
-      await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
-      await reach(quick(page, "Escape", "Escape"), (s) => s.chats === "conversation-list");
-      const before = await look(page);
-      await step("click bare desk space", clickAt(page, blankHeader), (s) => want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`));
-      await step("a s", keys(page, "a", "s"), (s) => all(want(s.chatBox === "", `the chat box holds "${s.chatBox}"`), unchanged(s, before, "editor")));
-      clean(problems);
-    });
-
-    // The owner's own path: a note opened by mouse and typed in, Escape to Vim's normal
-    // mode, Ctrl+. to Chat. The keyboard must land on the chat list's row, j/k move there,
-    // and the note keeps exactly what was typed, on the page and on the server.
-    const typedNote = async (page, reach) => {
-      await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
-      for (const k of ["i", "h", "e", "y", "Escape"]) await page.keyboard.press(k);
-      // Settled once the list shows the typed note, which then moves to the top.
-      await until(async () => {
-        const s = await look(page);
-        return s.editor?.startsWith("hey") && s.rows.some((r) => r.startsWith("hey"));
-      });
-      return { look: await look(page) };
-    };
-    // The typed note as the server ends up holding it: "hey" typed, and no j or k after it.
-    const savedAsTyped = async (server) => {
-      let note;
-      await until(async () => {
-        note = (await server()).find((n) => `${n.title}\n${n.body}`.includes("hey"));
-        return Boolean(note);
-      });
-      assert.ok(!/[jk]/.test(`${note.title}\n${note.body}`), `the note was saved with a letter pressed elsewhere: ${JSON.stringify(note)}`);
-    };
-
-    test(`Ctrl+. from a typed note lands on the chat list, and j moves there in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      const typed = await typedNote(page, reach);
-      const landed = await step("Ctrl+.", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chats" && s.chats === "conversation-list", `Chats shows ${s.chats} on ${s.rightTab}`), want(onRow(s, chatRow(s)), `the keyboard is on ${s.deep} "${s.deepText}", not ${chatRow(s)}`)), SETTLE);
-      const below = landed.chatRows[landed.chatRows.indexOf(landed.deepText) + 1];
-      await step("j", keys(page, "j"), (s) => all(want(onRow(s, below), `the keyboard is on ${s.deep} "${s.deepText}", not ${below}`), unchanged(s, typed.look, "editor")));
-      clean(problems);
-    });
-
-    test(`j and k on the chat list after Ctrl+. from a typed note leave the note as typed in ${engine.name}`, async () => {
-      const { page, problems, step, reach, server } = await open();
-      const typed = await typedNote(page, reach);
-      await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
-      const landed = await look(page);
-      await step("j k", keys(page, "j", "k"), (s) =>
-        all(want(onRow(s, landed.deepText), `the keyboard is on ${s.deep} "${s.deepText}"`), unchanged(s, typed.look, "editor"), unchanged(s, typed.look, "rows")));
-      await savedAsTyped(server);
-      clean(problems);
-    });
-
-    test(`Enter on New chat after Ctrl+. from a typed note puts the cursor in the chat box in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      const typed = await typedNote(page, reach);
-      await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
-      await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
-      await step("Enter on New chat", keys(page, "Enter"), (s) =>
-        all(want(s.chats === "chat-thread", `Chats shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), unchanged(s, typed.look, "editor")), SETTLE);
-      clean(problems);
-    });
-
-    test(`typing after Enter on New chat from a typed note goes into the chat box only in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      const typed = await typedNote(page, reach);
-      await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
-      await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
-      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input") && !s.chatNormal);
-      await step("type o k", keys(page, "o", "k"), (s) => all(want(s.chatBox === "ok", `the chat box holds "${s.chatBox}"`), unchanged(s, typed.look, "editor")));
-      clean(problems);
-    });
-
-    test(`Ctrl+. from a typed note, the focus then dropped Safari style, j still moves the chats in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      const typed = await typedNote(page, reach);
-      await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
-      await reach(quick(page, "g", "g"), (s) => onRow(s, "New chat"));
-      await step("the focus dropped", () => safari(page), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      await step("j k j", keys(page, "j", "k", "j"), (s) => all(want(onRow(s, s.chatRows[1]), `the keyboard is on ${s.deep} "${s.deepText}"`), unchanged(s, typed.look, "editor"), unchanged(s, typed.look, "rows")));
-      clean(problems);
-    });
-
-    test(`with no model chosen, Ctrl+. to a chat left open puts the keyboard where letters type nothing in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open(true, { echo: false });
-      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
-      await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread");
-      await reach(clickAt(page, deskTab, "Notes"), (s) => s.rightTab === "Notes");
-      await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
-      const before = await look(page);
-      await step("Ctrl+.", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
-      await step("j k", keys(page, "j", "k"), (s) => all(unchanged(s, before, "editor"), want(s.chatBox === "", `the chat box holds "${s.chatBox}"`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)));
-      clean(problems);
-    });
-
-    // --- F2: the keyboard is always somewhere on the desk -----------------------------
-
-    test(`a tab click puts the keyboard in the panel it shows in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("click the Chats tab", clickAt(page, deskTab, "Chats"), (s) =>
-        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
-      await step("j", keys(page, "j"), (s) => want(onRow(s, "Chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      clean(problems);
-    });
-
-    test(`a tab click Safari style puts the keyboard in the panel it shows in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats" && panel(s) === "list-then-item#chats");
-      await step("click the Notes tab, Safari style", async () => {
-        await clickAt(page, deskTab, "Notes")();
-        await safari(page);
-      }, (s) => all(want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`)), SETTLE);
-      await step("j", keys(page, "j"), (s) => want(onRow(s, "Note"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      clean(problems);
-    });
-
-    test(`a click on bare desk keeps Ctrl+l working in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("click bare desk space", clickAt(page, blankHeader), (s) => want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`));
-      await step("Ctrl+l", keys(page, "Control+l"), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
-      clean(problems);
-    });
-
-    test(`a click below the notes keeps Ctrl+. working in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await step("click below the notes", clickAt(page, blankNotes), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`));
-      await step("Ctrl+.", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
-      clean(problems);
-    });
-
-    test(`with the focus dropped Safari style on the Reader Ctrl+l still works in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("the focus dropped on the Reader", () => safari(page), (s) => want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`));
-      await step("Ctrl+l", keys(page, "Control+l"), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
-      clean(problems);
-    });
-
-    test(`with the focus dropped Safari style on Notes j still works in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await step("the focus dropped on Notes", () => safari(page), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
-      await step("j", keys(page, "j"), (s) => want(onRow(s, "Note"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      clean(problems);
-    });
-
-    // --- R1: the panel with the keyboard is framed ---------------------------------------
-
-    test(`Ctrl+l frames Notes and unframes the Reader in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("the Reader focused", null, (s) => want(JSON.stringify(s.framed) === '["stage"]', `framed: ${JSON.stringify(s.framed)}`));
-      await step("Ctrl+l", keys(page, "Control+l"), (s) =>
-        all(want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), want(JSON.stringify(s.framed) === '["right"]', `framed: ${JSON.stringify(s.framed)}`)), SETTLE);
-      clean(problems);
-    });
-
-    test(`Ctrl+h back frames the Reader and unframes Notes in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await step("Ctrl+h", keys(page, "Control+h"), (s) =>
-        all(want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(JSON.stringify(s.framed) === '["stage"]', `framed: ${JSON.stringify(s.framed)}`)), SETTLE);
-      clean(problems);
-    });
-
-    // --- R3: what the keyboard is on wears the focus ring (7.4) --------------------------
-
-    // The ring is drawn as a box-shadow; "none" is what a view showed when its ring was
-    // written as an outline, which no engine draws from a box-shadow value.
-    const ringed = (s) => want(s.ring && s.ring !== "none", `${s.deep} "${s.deepText}" shows no focus ring`);
-    const unringed = (s) => want(s.ring === "none", `${s.deep} "${s.deepText}" shows the focus ring after a click: ${s.ring}`);
-
-    test(`Ctrl+l puts the focus ring on the Notes row in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("Ctrl+l", keys(page, "Control+l"), (s) => all(want(onRow(s, "Note"), `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
-      clean(problems);
-    });
-
-    test(`Ctrl+h puts the focus ring on the Books tile in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("Ctrl+h", keys(page, "Control+h"), (s) =>
-        all(want(s.deep === "li[option].tile", `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
-      clean(problems);
-    });
-
-    test(`a click on a Contents row leaves it without the focus ring in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, tile), (s) => s.deep === "button.entry");
-      await step("click Chapter Two", clickAt(page, contentsRow, "Chapter Two"), (s) =>
-        all(want(s.deep === "button.entry" && s.deepText === "Chapter Two", `the keyboard is on ${s.deep} "${s.deepText}"`), unringed(s)), SETTLE);
-      clean(problems);
-    });
-
-    test(`Tab from a clicked Contents row puts the focus ring on the Reader's tab in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, tile), (s) => s.deep === "button.entry");
-      await reach(clickAt(page, contentsRow, "Chapter Two"), (s) => s.deepText === "Chapter Two");
-      await step("Tab", keys(page, "Tab"), (s) => all(want(s.deep === "button[tab]", `the keyboard is on ${s.deep} "${s.deepText}"`), ringed(s)), SETTLE);
-      clean(problems);
-    });
-
-    // --- R2: New chat from the keyboard ---------------------------------------------------
-
-    // A chat open in the Chat tab, then back on the list with the keyboard on its row.
-    const fromOpenChat = async (page, reach) => {
-      await reach(clickAt(page, deskTab, "Chats"), (s) => s.rightTab === "Chats");
-      await reach(clickAt(page, row, ["conversation-list", "Chat 1"]), (s) => s.chats === "chat-thread" && s.thread.includes("user: question 1"));
-      await reach(clickAt(page, chatBox), (s) => s.focus.includes("chat-input"));
-      await reach(quick(page, "Escape", "Escape"), (s) => s.chats === "conversation-list" && onRow(s, "Chat 1"));
-    };
-    // The box opens in Vim's insert mode, where Enter makes a line (architecture 10, the
-    // rich editor row); Escape to normal mode, then Enter sends.
-    const typeAndSend = (page) => async () => {
-      await page.keyboard.type("hello", { delay: 30 });
-      await keys(page, "Escape", "Enter")();
-    };
-    const asked = (s) =>
-      all(want(s.thread.includes("user: hello"), `the thread shows ${JSON.stringify(s.thread)}`), want(s.thread.includes("model: hello"), `no answer: ${JSON.stringify(s.thread)}`), want(s.chatBox === "", `the chat box holds "${s.chatBox}"`));
-
-    test(`gg from an open chat's row reaches New chat and Enter puts the cursor in the chat box in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await fromOpenChat(page, reach);
-      await step("g g", keys(page, "g", "g"), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      await step("Enter on New chat", keys(page, "Enter"), (s) =>
-        all(want(s.chats === "chat-thread", `Chats shows ${s.chats}`), want(s.focus.includes("chat-input"), `the keyboard is in ${s.focus}`), want(s.thread.length === 0, `the thread shows ${JSON.stringify(s.thread)}`)), SETTLE);
-      clean(problems);
-    });
-
-    test(`k k from an open chat's row, Enter, hello, Escape, Enter asks the new chat in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await fromOpenChat(page, reach);
-      await step("k k", keys(page, "k", "k"), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input") && !s.chatNormal);
-      await step("type hello, Escape, Enter", typeAndSend(page), asked);
-      clean(problems);
-    });
-
-    test(`Ctrl+. from a note, gg, Enter, hello, Escape, Enter asks a new chat in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
-      await reach(quick(page, "Control+."), (s) => s.chats === "conversation-list" && onRow(s, chatRow(s)));
-      await step("g g", keys(page, "g", "g"), (s) => want(onRow(s, "New chat"), `the keyboard is on ${s.deep} "${s.deepText}"`));
-      await reach(quick(page, "Enter"), (s) => s.chats === "chat-thread" && s.focus.includes("chat-input") && !s.chatNormal);
-      await step("type hello, Escape, Enter", typeAndSend(page), asked);
-      clean(problems);
-    });
 
     // --- F3, R3: the Reader's cursor ------------------------------------------------------
 
@@ -820,64 +487,11 @@ for (const engine of ENGINES) {
       clean(problems);
     });
 
-    // --- F4: tab keys ---------------------------------------------------------------------
-
-    test(`gt switches the tab from a list in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await step("g t", keys(page, "g", "t"), (s) =>
-        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`)), SETTLE);
-      clean(problems);
-    });
-
-    test(`gT switches the tab back from a list in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await reach(quick(page, "g", "t"), (s) => s.rightTab === "Chats" && panel(s) === "list-then-item#chats");
-      await step("g T", keys(page, "g", "T"), (s) =>
-        all(want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`)), SETTLE);
-      clean(problems);
-    });
-
-    test(`gt in the Reader, alone on the stage, does nothing in ${engine.name}`, async () => {
-      const { page, problems, step } = await open();
-      await step("g t in the Reader", keys(page, "g", "t"), (s) =>
-        all(want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`), want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(!s.pending, "a passage is pending")));
-      clean(problems);
-    });
-
-    test(`Ctrl+. and Ctrl+, work inside a note in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(clickAt(page, row, ["note-list", "Note two"]), (s) => s.notes === "note-editor" && s.focus.includes("note-editor"));
-      const before = await look(page);
-      await step("Ctrl+. in the note", keys(page, "Control+."), (s) =>
-        all(want(s.rightTab === "Chats", `the tab shown is ${s.rightTab}`), want(panel(s) === "list-then-item#chats", `the keyboard is in ${s.focus}`), unchanged(s, before, "editor")), SETTLE);
-      await step("Ctrl+,", keys(page, "Control+,"), (s) => want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`));
-      clean(problems);
-    });
-
-    // --- F5: fold keys --------------------------------------------------------------------
-
-    test(`Ctrl+Shift+l folds and unfolds the right dock in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await step("Ctrl+Shift+l", keys(page, "Control+Shift+l"), (s) =>
-        all(want(s.rightFolded === true, "the right dock is open"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)), SETTLE);
-      await step("Ctrl+Shift+l again", keys(page, "Control+Shift+l"), (s) =>
-        all(want(s.rightFolded === false, "the right dock is folded"), want(panel(s) === "book-stage", `the keyboard is in ${s.focus}`)));
-      clean(problems);
-    });
-
-    test(`Ctrl+l reaches Notes again after a fold and an unfold in ${engine.name}`, async () => {
-      const { page, problems, step, reach } = await open();
-      await reach(quick(page, "Control+l"), (s) => panel(s) === "list-then-item#notes");
-      await reach(quick(page, "Control+Shift+l"), (s) => s.rightFolded === true && panel(s) === "book-stage");
-      await reach(quick(page, "Control+Shift+l"), (s) => s.rightFolded === false);
-      await step("Ctrl+l", keys(page, "Control+l"), (s) => want(panel(s) === "list-then-item#notes", `the keyboard is in ${s.focus}`), SETTLE);
-      clean(problems);
-    });
-
     // --- Vim keys off: every letter and Ctrl key does nothing ----------------------------
+
+    // The ring is drawn as a box-shadow; "none" is what a view showed when its ring was
+    // written as an outline, which no engine draws from a box-shadow value.
+    const ringed = (s) => want(s.ring && s.ring !== "none", `${s.deep} "${s.deepText}" shows no focus ring`);
 
     test(`with Vim keys off, Tab from the page start puts the focus ring on the Books tab in ${engine.name}`, async () => {
       const { page, problems, step, reach } = await open(false);

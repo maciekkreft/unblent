@@ -85,10 +85,14 @@ for (const engine of ENGINES) {
       const { context, page, problems } = await open(false);
       try {
         await focusList(page);
-        await page.keyboard.press("j");
-        await page.keyboard.press("G");
-        await page.waitForTimeout(200);
         assert.equal(await focusedTitle(page), "Second");
+        // The arrow keys move with Vim keys off too (12): ArrowUp from Second reaching New
+        // note says j and G before it moved nothing, and that every letter was handled.
+        for (const key of ["j", "G", "x", "a", "s", "ArrowUp"]) await page.keyboard.press(key);
+        await until(async () => (await focusedTitle(page)) === "New note");
+        // No letter pressed on a row types into the note open beside it.
+        assert.equal(await editorBody(page), "Second\nbody");
+        assert.deepEqual(await rowTitles(page), ["New note", "Second", "First"]);
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();
