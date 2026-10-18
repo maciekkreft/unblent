@@ -668,6 +668,23 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - A written tool run on a passage the user selects, not only on typed text (sketch: `~/.claude/plans/book-tools.md`).
 - A built-in tool that fills a new tool's page from the passage being read, and another that scores how well a tool's questions and criteria match what the book says (sketch: `~/.claude/plans/book-tools.md`).
 - Optional questions and weights in a written tool's score, only if a real tool asks for them (sketch: `~/.claude/plans/book-tools.md`).
+- Bullet lists in every editor built on the editor kit, where "- " at the start of a line makes a bullet, Enter makes the next one and Enter on an empty one ends the list, stored as plain markdown (sketch: `~/.claude/plans/bullets-types-links.md`).
+- Sheets placed inside a journal day's text, where the user inserts a choice point or a later kind of sheet between paragraphs and the day's text keeps one placeholder line where it stands, the journal knowing no kind of sheet, and sheets made before this still shown under the text (sketch: `~/.claude/plans/bullets-types-links.md`).
+- Links between notes, where typing `[[` in a note offers the notes by title and picking one puts a link by the note's id, shown as a tag with the note's current title, that opens the note when clicked (sketch: `~/.claude/plans/bullets-types-links.md`).
+- Links to a highlight, made with "Link in note" on a marked passage and stored as the same link to the highlight's note record, so that clicking it opens the book at the passage with one step back, and the books' stored form does not change (sketch: `~/.claude/plans/bullets-types-links.md`).
+- Note types, kept on the account and managed by the user, starting with Temporary (the default for a new note), Permanent, Literature and Applications, shown as a label on a note that changes its type when clicked and kept on the note by the type's id, a type in use by any note not being deletable (sketch: `~/.claude/plans/bullets-types-links.md`).
+- A note's text changeable only on the day it was written and in the hour after its last edit, as a journal day is, while its type and its links can always be changed and a note is never deleted; highlights are not affected (sketch: `~/.claude/plans/hints-and-locks.md`).
+- A chat from an earlier day shown read only, with a read-only text box and a greyed-out Send, and not deletable (sketch: `~/.claude/plans/hints-and-locks.md`).
+- Signed out, the product showing none of the account's work, every panel empty and asking the user to sign in, while what the browser keeps stays and is shown again at the next sign-in (sketch: `~/.claude/plans/hints-and-locks.md`).
+- Hints, kept with a book in a Hints tab: a name, one sentence asking the model, and a trigger naming an evaluator's question and the answers that show the hint; a line given one of those answers gets one suggestion from the model chosen in Settings, shown under it; a hint is tried on a text the way an evaluator is (sketch: `~/.claude/plans/hints-and-locks.md`).
+- Hints that may use the chat's tools (7.7) to look things up before suggesting.
+- Hiding an evaluator's mark and its hint on one line of a day that can still be edited, leaving a faint dot that shows them again (sketch: `~/.claude/plans/hints-and-locks.md`).
+- The push gate also covering the phone preview and signed-in and signed-out use in both browsers, run only when the owner pushes by hand, never by a coding session (sketch: `~/.claude/plans/hints-and-locks.md`).
+- Notes and chats kept with the day they were made, so each day shows only its own, with a checkbox on a note or a chat that shows it on every day.
+- A summary of a note made in a chat, where the note is placed in the chat's history, the input box holds the default summary prompt from Settings for the user to change before sending, the user can first highlight and comment the passages the summary must keep, and the summary is saved only after the user confirms that it says what the note says.
+- Highlights and comments on past journal days, and summaries of journal days made the same way as a summary of a note.
+- A summary saved as the next version of the note or journal day it summarises, so opening that note or day shows the summary, with a switch to each earlier version.
+- Copying a choice point, or any later kind of sheet, from an earlier day to today as the next version of the original, which stays unchanged, with a link in the bottom left corner of the copy that opens the version it continues.
 
 ---
 
@@ -676,3 +693,8 @@ Where the product is heading. Nothing here is designed or built; each line is on
 Work that is decided but not done yet. Remove a line when its work is done.
 
 - On the product page, signed out, Chats and Evaluators disagree. Chats hides the chats, which is the right behaviour, but says "Chats need a connection.", which blames the network instead of asking the user to sign in. Evaluators says the right thing, "Sign in to run evaluators.", but shows the evaluators and says it only when the user tries to run one. Both should behave like Chats and speak like Evaluators: signed out, the panel shows no chats or evaluators and asks the user to sign in.
+- On the desk, Ctrl+. and Ctrl+, (and gt and gT) move to the next or previous tab in a different order from the one the tabs are shown in. They should follow the tabs as the user sees them, left to right.
+- Pinning a chat that has no messages yet does not work. Until the chat has its first message, the pin should be unavailable.
+- In a chat, the user can mark passages in the assistant's last answer and write a comment on each one, the way Redline does.
+- The tab and the list item the user is looking at are pinned by default, so that a note or a chat being written stays open when the user switches, for example, from the journal to a book.
+- In a choice point, where the user chooses what Jev checks, clicking an icon, Auto or None moves the page back to its top. The page should stay where it is, with the focus on what was clicked.
