@@ -19,7 +19,8 @@ The architecture is the spec. If a request conflicts with it, name the section a
   components' own tests, one smoke test per page that holds them, and the
   partners' tests only when a contract file or the manifest's contract changed.
   The bare full run (both engines, all tests) is the pre-push gate the
-  `.githooks/pre-push` hook runs. One test phase runs at a time per host (a lock);
+  `.githooks/pre-push` hook runs. Never push and never run the bare full run in a
+  session: the owner pushes by hand, and that runs it. One test phase runs at a time per host (a lock);
   a test past half its 5s budget is named in a warning. A test run prints one line
   per file, a failure's reason under its name, and at the end of the browser phase
   where its time went (launches, page loads, the rest). Add `--verbose` together
