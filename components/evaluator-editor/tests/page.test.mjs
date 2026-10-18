@@ -197,27 +197,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
-    // A box writes in paragraphs like every editor (10): Enter a gap, Shift+Enter a line.
-    test("in a question's box Enter starts a paragraph and Shift+Enter breaks the line", async () => {
-      const { context, page, problems } = await twoQuestions(false);
-      try {
-        // Add a question left the keyboard in its box.
-        await page.keyboard.type("one");
-        await page.keyboard.press("Enter");
-        await page.keyboard.type("two");
-        await page.keyboard.press("Shift+Enter");
-        await page.keyboard.type("three");
-        const box = (root) => {
-          const content = root.querySelectorAll('.question [data-field="text"] .cm-content')[1];
-          return { text: content.cmView.rootView.view.state.doc.toString(), gaps: content.querySelectorAll(".cm-gap").length };
-        };
-        assert.deepEqual(await inEditor(page, box), { text: "one\n\ntwo\nthree", gaps: 1 });
-        assert.deepEqual(problems, []);
-      } finally {
-        await context.close();
-      }
-    });
-
     // A question's tick: off greys it and the list's count drops by one; it stays
     // editable; one press brings it back.
     test("unticking a question greys it, keeps it editable and leaves it out of the count; ticking brings it back", async () => {

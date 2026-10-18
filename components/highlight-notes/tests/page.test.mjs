@@ -263,36 +263,27 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Escape");
       await until(async () => (await hnDoc(page)).includes("A Vim thought"));
 
+      // Once the comment saves, the book's mark gains its commented accent (the round
+      // trip through notes and back to the reader).
+      await until(
+        async () =>
+          page.evaluate(() => {
+            const m = document.querySelector("book-reader").shadowRoot.querySelector(".strip mark");
+            return m != null && m.classList.contains("commented");
+          }),
+        6000,
+      );
       await synced(page, (notes) => notes.some((n) => (n.body ?? "").includes("A Vim thought")));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
 
-    // With Vim keys on, Enter in insert mode is the editor's: it starts a paragraph, and the
-    // blank line before it is drawn as a gap.
-    test(`with Vim keys Enter in a comment starts a paragraph in ${engine.name}`, async () => {
+    // What Highlights adds to the editor kit's paragraphs (10): the empty comment line
+    // under a quote, where a comment is typed, is never a gap, and a comment's paragraphs
+    // and line breaks save in its note. With Vim keys on, Enter in insert mode is the
+    // kit's, not Vim's.
+    test(`Enter makes a paragraph and Shift+Enter a line break in a comment, under Vim, in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: VIM });
-      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
-      await showHighlights(page);
-      await until(async () => (await hnQuotes(page)).length > 0);
-
-      await hnCaret(page, "end");
-      await until(async () => hnHas(page, ".cm-fat-cursor"));
-      await page.keyboard.press("A");
-      await page.keyboard.type("One");
-      await page.keyboard.press("Enter");
-      await page.keyboard.type("Two");
-      await page.keyboard.press("Escape");
-      await until(async () => (await hnDoc(page)).endsWith("\nOne\n\nTwo"));
-      assert.ok(await hnHas(page, ".cm-line.cm-gap"), "the blank line is drawn as a gap");
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // Enter starts a paragraph, drawn after a short gap; Shift+Enter breaks the line with
-    // none. The empty comment line under a quote, where a comment is typed, is never a gap.
-    test(`Enter makes a paragraph and Shift+Enter a line break in ${engine.name}`, async () => {
-      const { page, problems } = await open({ settings: PLAIN });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
       await showHighlights(page);
       await until(async () => (await hnQuotes(page)).length > 0);
@@ -301,11 +292,14 @@ for (const engine of ENGINES) {
       assert.equal(await gaps(), 0, "the empty comment line under the quote is a full line");
 
       await hnCaret(page, "end");
+      await until(async () => hnHas(page, ".cm-fat-cursor"));
+      await page.keyboard.press("A");
       await page.keyboard.type("One");
       await page.keyboard.press("Enter");
       await page.keyboard.type("Two");
       await page.keyboard.press("Shift+Enter");
       await page.keyboard.type("Three");
+      await page.keyboard.press("Escape");
       await until(async () => (await hnDoc(page)).endsWith("\nOne\n\nTwo\nThree"));
       assert.equal(await gaps(), 1, "one gap, from Enter; none from Shift+Enter");
       await synced(page, (notes) => notes.some((n) => n.body === "One\n\nTwo\nThree"));
@@ -376,7 +370,8 @@ for (const engine of ENGINES) {
 
     // With Vim keys off the same document takes plain keys: no block cursor, and selecting
     // a whole quote line and pressing Delete removes that highlight through the undo window,
-    // the same rule as `dd` (one rule in both modes); Undo brings it back. A comment saves.
+    // the same rule as `dd` (one rule in both modes); Undo brings it back. Typing on the
+    // quote line changes nothing, the bin removes with the same undo, and a comment saves.
     test(`without Vim keys a deleted quote line is undoable and a comment saves in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: PLAIN });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
@@ -395,6 +390,19 @@ for (const engine of ENGINES) {
       await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-undo").click());
       await until(async () => (await hnHas(page, ".cm-bin")) && !(await hnHas(page, ".cm-undo")));
       assert.ok((await hnQuotes(page)).length > 0, "the highlight came back");
+
+      // Typing on the quote line, and Backspace there, change nothing.
+      const before = await hnDoc(page);
+      await hnCaret(page, "start");
+      await page.keyboard.type("ZZZ");
+      await page.keyboard.press("Backspace");
+      assert.equal(await hnDoc(page), before, "the quote line refused the edit");
+
+      // The bin starts the same undo window, and Undo brings the highlight back.
+      await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-bin").click());
+      await until(async () => (await hnHas(page, ".cm-undo")) && (await hnHas(page, ".cm-discarding")));
+      await page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-undo").click());
+      await until(async () => (await hnHas(page, ".cm-bin")) && !(await hnHas(page, ".cm-undo")));
 
       // Plain typing goes straight into the comment, no `i` first.
       await hnCaret(page, "end");

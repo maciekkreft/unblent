@@ -101,7 +101,7 @@ for (const engine of ENGINES) {
     }
   });
 
-  test(`the account section sets the provider and model and keeps them across a reload in ${engine.name}`, async () => {
+  test(`the account section sets the provider, the model and the thinking effort in ${engine.name}`, async () => {
     const browser = await engine.launch();
     // Sign in without a passkey ceremony (as api.test.mjs does): a fresh user gets
     // its own throwaway per-user llm.db, so the settings it saves are its own.
@@ -142,13 +142,8 @@ for (const engine of ENGINES) {
 
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `llm-${engine.name}.png`), fullPage: true });
-
-      // Kept on the server (7.7): a reload reads the same picture back.
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await ready(page);
-      await until(async () => (await accountSelect(page, "Provider"))?.value === "echo", 6000);
-      await until(async () => (await accountSelect(page, "Model"))?.value === "echo");
-      await until(async () => (await accountSelect(page, "Thinking effort"))?.value === "high");
+      // That the choices are kept on the server (7.7) and read back is api.test.mjs's
+      // "settings round trip".
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

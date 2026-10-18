@@ -103,11 +103,18 @@ async function listedPages() {
   return (await res.json()).pages.map((p) => p.path);
 }
 
+const vimChecked = (page) =>
+  page.evaluate(() =>
+    [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".switches label")]
+      .find((l) => l.textContent.includes("Vim keys"))
+      .querySelector("input").checked,
+  );
+
 const clean = (page) => page.evaluate(() => localStorage.clear());
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
-  test(`the settings sheet reorders, hides, and its choices survive a reload in ${engine.name}`, async () => {
+  test(`the settings sheet reorders, hides, turns on Vim keys, and its choices survive a reload in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine);
     try {
       // Starting picture: every page the server lists (pages: list, 8), in its order,
@@ -147,6 +154,11 @@ for (const engine of ENGINES) {
       await until(async () => (await stored(page)).viewportSwitchHidden === true);
       await until(async () => switchGone(page));
 
+      // Turn Vim keys on (off by default): stored with the rest.
+      assert.equal(await vimChecked(page), false, "Vim keys are off by default");
+      await clickSwitch(page, "Vim keys");
+      await until(async () => (await stored(page)).vimKeys === true);
+
       mkdirSync(SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: resolve(SCREENSHOTS, `settings-${engine.name}.png`), fullPage: true });
 
@@ -157,6 +169,7 @@ for (const engine of ENGINES) {
       assert.equal((await sheetRows(page)).find((r) => r.path === hide).shown, false);
       assert.equal(await navLinks(page).then((l) => l.includes(hide)), false);
       assert.ok(await switchGone(page), "the viewport switch stays hidden across a reload");
+      await until(() => vimChecked(page));
       // No view declares a role, so the sheet offers no editor choice (the one "Vim keys"
       // switch replaced them); by now the catalog has answered.
       assert.equal(
@@ -171,30 +184,6 @@ for (const engine of ENGINES) {
       await until(async () => (await sheetRows(page))[0].path === "/workshop/design/tokens");
       await until(async () => (await navLinks(page)).includes(hide));
       await until(async () => !(await switchGone(page)));
-
-      await clean(page);
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    } finally {
-      await browser.close();
-    }
-  });
-  test(`the Vim keys switch is kept across a reload in ${engine.name}`, async () => {
-    const { browser, page, problems } = await open(engine);
-    const checked = () =>
-      page.evaluate(() =>
-        [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".switches label")]
-          .find((l) => l.textContent.includes("Vim keys"))
-          .querySelector("input").checked,
-      );
-    try {
-      assert.equal(await checked(), false, "off by default");
-      await clickSwitch(page, "Vim keys");
-      await until(async () => (await stored(page))?.vimKeys === true);
-      await page.reload();
-      await ready(page);
-      await until(checked);
-      await clickSwitch(page, "Vim keys");
-      await until(async () => (await stored(page)).vimKeys === false);
 
       await clean(page);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
