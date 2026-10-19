@@ -691,6 +691,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - To consider, in place of a note that becomes read only after its first day: a note editable freely on the day it was made, where an edit on a later day makes a new version of the note instead of changing it, a switch at the bottom of the editor moves between the versions, and only the latest version can be edited.
 - A set of example goals for the Therapy Goal evaluator, each with the answer it should get, run again after a change to the evaluator's options to show which answers moved (sketch: `~/.claude/plans/evaluator-dataset.md`).
 - Copying a choice point, or any later kind of sheet, from an earlier day to today as the next version of the original, which stays unchanged, with a link in the bottom left corner of the copy that opens the version it continues.
+- Pipes, where a line in a journal day or a note names steps after it with `|` (an evaluator, a hint, later any step that turns text into text with a model), the line runs through them in order when the user presses Run, and each step's result is kept and shown under the line, never written into the text unless the user inserts it (sketch: `~/.claude/plans/line-pipes.md`).
 
 ---
 
