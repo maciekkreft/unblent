@@ -211,6 +211,24 @@ test("a book opened before books lists it gets its tab when its label arrives", 
   assert.equal(last().active, NEW);
 });
 
+test("a tab still waiting for its label neither keeps the last drawn tab closable nor takes the front", async () => {
+  const NEW = "01HVVVVVVVVVVVVVVVVVVVVVVV";
+  const lone = await tabbed({ openId: BOOK });
+  await open(lone.actor, NEW);
+  await open(lone.actor, BOOK);
+  lone.actor.send({ type: "book.closed", id: BOOK });
+  assert.deepEqual(ids(lone.last()), [BOOK], "the one drawn tab stays");
+  assert.deepEqual(lone.switched, []);
+
+  const { actor, switched, last } = await tabbed({ openId: BOOK });
+  await open(actor, NEW);
+  await open(actor, OTHER);
+  await open(actor, BOOK);
+  actor.send({ type: "tab.closed", view: "book-stage", id: BOOK });
+  assert.deepEqual(switched, [OTHER], "the next drawn tab comes forward, past the hidden one");
+  assert.deepEqual(ids(last()), [OTHER]);
+});
+
 test("a page without books announces no tabs", async () => {
   const actor = createActor(machine, { input: { ask: () => Promise.resolve({ error: "no-answerer" }), address: "book-stage", storage: fakeStorage() } });
   const seen = [];

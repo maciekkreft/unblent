@@ -35,11 +35,20 @@ const remember = (context) => {
   }
 };
 
-// The tab that takes the front when `id` leaves it: the right neighbour, else the left.
-const neighbourOf = (tabs, id) => {
+// The tab that takes the front when `id` leaves it: the nearest drawn tab on the right,
+// else on the left, since a tab with no label yet is not drawn (tabsOf); only when none
+// is drawn does a hidden one come forward.
+const neighbourOf = (context, id) => {
+  const { tabs, labels } = context;
   const at = tabs.indexOf(id);
-  return tabs[at + 1] ?? tabs[at - 1] ?? null;
+  const drawn = (t) => t !== undefined && labels[t] !== undefined;
+  const right = tabs.slice(at + 1).find(drawn);
+  const left = tabs.slice(0, at).reverse().find(drawn);
+  return right ?? left ?? tabs[at + 1] ?? tabs[at - 1] ?? null;
 };
+
+// How many tabs the desk draws: a tab with no label yet is left out (tabsOf).
+const drawnCount = (context) => context.tabs.filter((id) => context.labels[id] !== undefined).length;
 
 // What tabs.shown announces. A tab with no label yet (a book books has not listed) is
 // left out until its label is known, so no tab is ever blank.
@@ -78,13 +87,14 @@ const switchTo = (enqueue, id) => {
   enqueue.emit({ type: "book.switched", id });
 };
 
-// Removes a tab the user closed. The last tab stays, so the stage always shows a book.
+// Removes a tab the user closed. The last drawn tab stays, so the stage always shows a
+// book the user can see, the same count that marks a tab closable (tabsOf).
 const close = ({ context, event, enqueue }) => {
   const { id } = event;
-  if (!context.tabs.includes(id) || context.tabs.length < 2) return;
+  if (!context.tabs.includes(id) || drawnCount(context) < 2) return;
   const tabs = context.tabs.filter((t) => t !== id);
-  if (context.front === id) switchTo(enqueue, neighbourOf(context.tabs, id));
-  const front = context.front === id ? neighbourOf(context.tabs, id) : context.front;
+  if (context.front === id) switchTo(enqueue, neighbourOf(context, id));
+  const front = context.front === id ? neighbourOf(context, id) : context.front;
   settle({ ...context, front }, enqueue, { tabs });
 };
 
@@ -255,7 +265,7 @@ export const machine = setup({
         if (id === context.openId) enqueue.assign({ openId: null, written: false });
         if (!context.tabs.includes(id)) return;
         const tabs = context.tabs.filter((t) => t !== id);
-        const next = context.front === id ? neighbourOf(context.tabs, id) : context.front;
+        const next = context.front === id ? neighbourOf(context, id) : context.front;
         if (context.front === id && next != null) switchTo(enqueue, next);
         settle({ ...context, front: next }, enqueue, { tabs });
       }),
