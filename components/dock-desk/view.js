@@ -237,6 +237,23 @@ class DockDesk extends LitElement {
     .settled .strip [role="tablist"] {
       scroll-behavior: smooth;
     }
+    /* A strip that hides tabs past an edge fades that edge, so a tab cut there reads
+       as "more this way" rather than a stray glyph (Norman: a visible signifier). */
+    .strip [role="tablist"][data-more="start"] {
+      mask-image: linear-gradient(to right, transparent, var(--color-ink) var(--space-lg));
+    }
+    .strip [role="tablist"][data-more="end"] {
+      mask-image: linear-gradient(to left, transparent, var(--color-ink) var(--space-lg));
+    }
+    .strip [role="tablist"][data-more="both"] {
+      mask-image: linear-gradient(
+        to right,
+        transparent,
+        var(--color-ink) var(--space-lg),
+        var(--color-ink) calc(100% - var(--space-lg)),
+        transparent
+      );
+    }
     button {
       font: inherit;
       color: var(--color-body);
@@ -1078,6 +1095,18 @@ class DockDesk extends LitElement {
   // A group's strip: tabs first, then the shown tab's actions, then the fold. An entry
   // is a child's one tab, or one of the child's own tabs, which carries its own label
   // and, where the child marks it closable, a close button after it.
+  // Which edges of a strip hide tabs past them. The list keeps a margin the width of the
+  // focus ring inside each edge (see the tablist style), so a strip scrolled by less than
+  // that hides nothing.
+  #edges(list) {
+    const slack = 2;
+    const start = list.scrollLeft > slack;
+    const end = list.scrollWidth - list.clientWidth - list.scrollLeft > slack;
+    const more = start && end ? "both" : start ? "start" : end ? "end" : null;
+    if (more) list.dataset.more = more;
+    else delete list.dataset.more;
+  }
+
   #tablist(group, entries, active, labelOf, activate, follow) {
     const selected = entries.findIndex((e) => sameEntry(e, active));
     const tab = (entry, i) => html`
@@ -1115,7 +1144,7 @@ class DockDesk extends LitElement {
       </span>`;
     };
     return html`
-      <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, entries, active, activate)}>
+      <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, entries, active, activate)} @scroll=${(e) => this.#edges(e.currentTarget)}>
         ${entries.map((entry, i) => (entry.id !== undefined ? html`${own(entry, i)}${moves(entry, i)}` : tab(entry, i)))}
       </div>
     `;
@@ -1319,6 +1348,7 @@ class DockDesk extends LitElement {
       const dx = right > l.right ? Math.min(right - l.right, t.left - l.left) : t.left < l.left ? t.left - l.left : 0;
       if (dx) list.scrollBy({ left: dx });
     }
+    for (const list of this.renderRoot.querySelectorAll('.strip [role="tablist"]')) this.#edges(list);
     this.#start(snapshot);
     this.#land(snapshot.context);
     // A body drawn afresh (a dock that appeared) starts unframed; a view moved to another
