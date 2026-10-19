@@ -30,6 +30,10 @@ const store = location.pathname.startsWith("/try/")
     }
   : cache;
 
+// keepalive lets a small write finish when the page goes away, so a reload or a closed
+// tab neither cancels a save on its way nor makes the browser report it as a failed
+// request. Each such body is a few bytes, far under the browser's 64 KiB keepalive cap;
+// an upload is large and keeps an ordinary fetch.
 const api = {
   // Fetch the tab-local object URL for the picked bytes, PUT them, and always revoke
   // the URL (Decision 5). 200 carries the row; 422 is not-an-epub; 401 the session;
@@ -57,6 +61,7 @@ const api = {
     const res = await fetch(`/api/books/${id}/position`, {
       method: "PUT",
       credentials: "same-origin",
+      keepalive: true,
       headers: { "content-type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ chapter: chapterIndex, block }),
     });
@@ -71,6 +76,7 @@ const api = {
     const res = await fetch(`/api/books/${id}/title`, {
       method: "PUT",
       credentials: "same-origin",
+      keepalive: true,
       headers: { "content-type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ title }),
     });
@@ -82,6 +88,7 @@ const api = {
     const res = await fetch(`/api/books/${id}/deleted`, {
       method: "PUT",
       credentials: "same-origin",
+      keepalive: true,
       headers: { "content-type": "application/json", Accept: "application/json" },
       body: "{}",
     });
@@ -95,6 +102,7 @@ const api = {
     const res = await fetch(`/api/books/${id}/opened`, {
       method: "PUT",
       credentials: "same-origin",
+      keepalive: true,
       headers: { "content-type": "application/json", Accept: "application/json" },
       body: "{}",
     });
