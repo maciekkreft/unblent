@@ -49,6 +49,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       return { context, page, problems };
     };
 
+    // Browser: focus and keys.
     test("with Vim keys on, j, k, G and gg move along the rows and Enter opens", async () => {
       const { context, page, problems } = await open(true);
       try {
@@ -71,6 +72,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing and the arrows move", async () => {
       const { context, page, problems } = await open(false);
       try {
