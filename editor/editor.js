@@ -1,7 +1,7 @@
-import { EditorState, EditorSelection, RangeSetBuilder, StateField, Prec, Compartment } from "@codemirror/state";
+import { EditorState, EditorSelection, RangeSetBuilder, StateField, Prec, Compartment, Facet } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
 import { history, historyKeymap, standardKeymap, isolateHistory } from "@codemirror/commands";
-import { vim } from "@replit/codemirror-vim";
+import { vim, Vim } from "@replit/codemirror-vim";
 
 // The editor kit (architecture.md 10): what every CodeMirror editor needs and nothing
 // one editor alone needs. It imports only vendored CodeMirror packages, never the bus,
@@ -231,13 +231,23 @@ export function setVim(view, on) {
   view.dispatch({ effects: vimSlot.reconfigure(vimContent(on)) });
 }
 
+// Ex commands are global to the Vim module, so :q is registered once here and each
+// editor says what quitting means for it through this facet; one without a handler
+// quits nothing. The facet sits outside the Vim compartment, so setVim keeps it.
+const quitHandler = Facet.define();
+Vim.defineEx("quit", "q", (cm) => {
+  for (const quit of cm.cm6.state.facet(quitHandler)) quit(cm.cm6);
+});
+
 // The shared setup. Put first in an editor's extensions: the Vim plugin must see a key
 // before any keymap does. The standard and history keys are low precedence, so an
 // editor's own keymap (and paragraphs()) wins over them. `history: false` is for an
 // editor that holds history in a compartment of its own, to empty it by reconfiguring.
-export function baseExtensions({ vim: vimOn = false, history: withHistory = true } = {}) {
+// `quit(view)` runs when the user types :q or :quit with Vim on.
+export function baseExtensions({ vim: vimOn = false, history: withHistory = true, quit = null } = {}) {
   return [
     vimSlot.of(vimContent(vimOn)),
+    quit ? quitHandler.of(quit) : [],
     // Vim hides the native selection, so its visual-mode range shows only through
     // CodeMirror's own selection layer.
     drawSelection(),

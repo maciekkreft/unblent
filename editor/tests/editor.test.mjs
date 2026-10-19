@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
+import { Vim } from "@replit/codemirror-vim";
 import {
   baseExtensions,
   setVim,
@@ -335,4 +336,29 @@ test("a move into a marker rests at the text; a click too", () => {
   const named = target("One\n- two", 1, [paragraphs({ notList: () => true })]);
   move(named, 4);
   assert.equal(named.state.selection.main.head, 4);
+});
+
+// What Vim's Ex line reads of its editor, with the view as cm6, so :q runs without a
+// browser.
+const exLine = (view) => ({
+  cm6: view,
+  state: { vim: { visualMode: false } },
+  operation: (fn) => fn(),
+  getCursor: () => ({ line: 0, ch: 0 }),
+});
+
+test(":q and :quit run the editor's own quit handler; one without a handler does nothing", () => {
+  const quits = [];
+  const one = target("One", 0, baseExtensions({ vim: true, quit: (view) => quits.push(view) }));
+  const other = target("Two", 0, baseExtensions({ vim: true }));
+  Vim.handleEx(exLine(one), "q");
+  Vim.handleEx(exLine(one), "quit");
+  assert.deepEqual(quits, [one, one]);
+  Vim.handleEx(exLine(other), "q");
+  assert.equal(quits.length, 2);
+  // Switching Vim off and on keeps the handler.
+  setVim(one, false);
+  setVim(one, true);
+  Vim.handleEx(exLine(one), "q");
+  assert.equal(quits.length, 3);
 });
