@@ -140,6 +140,11 @@ export const glyphOf = (icon, tone) => icon || (tone === "right" ? "check" : ton
 // gave (only the picked one when it gave none); a yes / no answer's top is yes from an
 // even chance up. The question's text is shown before a yes / no answer, and before a
 // pick when its evaluator asked more than one question, since a lone pick names itself.
+// `sure` is whether the words are the plain answer ("<Option>", "Yes", "No"), which a mark
+// shows solid and any other faded; `also` is the second option a Between or Not clear
+// answer leaves open; `meaning` the first line of the picked option's description, its
+// summary, as owners write a longer explanation for Jev under it; `expected` the name of
+// the answer expected, for the line that says whether Jev gave it.
 export const answerOf = (question, answer, asked = 1) => {
   if (question.kind === "pick") {
     const options = live(question.options ?? []);
@@ -148,24 +153,53 @@ export const answerOf = (question, answer, asked = 1) => {
       .map((g) => ({ ...g, option: options.find((o) => o.id === g.id) }))
       .filter((g) => g.option)
       .sort((a, b) => b.p - a.p)
-      .map((g) => ({ id: g.id, name: g.option.name, icon: g.option.icon ?? null, p: g.p }));
+      .map((g) => ({ id: g.id, name: g.option.name, icon: g.option.icon ?? null, description: g.option.description ?? "", p: g.p }));
     if (!ranked.length) return null;
-    const tone = toneOf(expectOf(question), ranked[0].id);
+    const expect = expectOf(question);
+    const tone = toneOf(expect, ranked[0].id);
+    const words = sayPick(ranked);
+    const sure = words === ranked[0].name;
     return {
       id: question.id,
       kind: "pick",
       question: asked > 1 ? question.text : null,
       top: ranked[0].id,
-      words: sayPick(ranked),
+      words,
       tone,
       glyph: glyphOf(ranked[0].icon, tone),
+      sure,
+      also: ranked[1] && (words.startsWith("Between") || words.startsWith("Not clear")) ? ranked[1].name : null,
+      meaning: filled(ranked[0].description) ? ranked[0].description.trim().split("\n")[0].trim() : null,
+      expected: expect == null ? null : options.find((o) => o.id === expect).name,
       probabilities: ranked.map(({ id, p }) => ({ id, p })),
     };
   }
   const top = answer.p >= 0.5 ? "yes" : "no";
-  const tone = toneOf(expectOf(question), top);
-  return { id: question.id, kind: "yesno", question: question.text, top, words: sayYesNo(answer.p), tone, glyph: glyphOf(null, tone), p: answer.p };
+  const expect = expectOf(question);
+  const tone = toneOf(expect, top);
+  const words = sayYesNo(answer.p);
+  return {
+    id: question.id,
+    kind: "yesno",
+    question: question.text,
+    top,
+    words,
+    tone,
+    glyph: glyphOf(null, tone),
+    sure: words === "Yes" || words === "No",
+    also: null,
+    meaning: null,
+    expected: expect == null ? null : expect === "yes" ? "Yes" : "No",
+    p: answer.p,
+  };
 };
+
+// The line under an answer that says whether Jev gave the one expected, or null when
+// none is: "<Option>, as expected" when it did, "<Option> is expected" when not.
+export const sayExpect = (answer) =>
+  answer.expected == null || answer.tone == null
+    ? null
+    : { text: answer.tone === "right" ? `${answer.expected}, as expected` : `${answer.expected} is expected`, tone: answer.tone };
 
 // The answers mapped back onto the evaluators asked, keyed by evaluator id.
 export const results = (asked, answers) => {
@@ -185,9 +219,64 @@ export const results = (asked, answers) => {
 
 // --- The Evaluate box ------------------------------------------------------------------
 
-// The button's words: how many lines it would evaluate, or that it is evaluating.
-export const evaluateLabel = (count, running) =>
-  running ? "Evaluating…" : count === 0 ? "Evaluate" : `Evaluate ${count} line${count === 1 ? "" : "s"}`;
+// The button's words: how many lines it would evaluate. While a run works the button is
+// Stop instead, and "Stopping…" once pressed, until the line in flight is answered.
+export const evaluateLabel = (count) => (count === 0 ? "Evaluate" : `Evaluate ${count} line${count === 1 ? "" : "s"}`);
+export const stopLabel = (stopping) => (stopping ? "Stopping…" : "Stop");
+
+// A line refused for free use is told once under the button (STOPS), not as a line.
+const settled = (r) => r.status === "done" || (r.status === "failed" && !STOPS.includes(r.error));
+
+// Every answer of one line, evaluator by evaluator in the order the run asked them.
+const answersOf = (run) => Object.values(run.results).flatMap((v) => v.questions);
+
+// The marks at the end of one line of the box: a pulsing dot while Jev is asked about it,
+// then one mark per answer shown, the option's icon (else a check, or a warning when it
+// is not the answer expected), coloured by its tone and faded when Jev is not sure. A
+// line waiting, failed, or stopped has none.
+export const marksOf = (run) =>
+  run.status === "asking"
+    ? [{ pending: true, label: "Asking Jev" }]
+    : run.status !== "done"
+      ? []
+      : answersOf(run).map((a) => ({ icon: a.glyph ?? "check", tone: a.tone, sure: a.sure, label: a.question ? `${a.question} ${a.words}` : a.words }));
+
+// Whether a line came out as expected: at least one of its answers expects one, and every
+// one that does got it.
+export const asExpected = (run) => {
+  const judged = answersOf(run).filter((a) => a.tone != null);
+  return judged.length > 0 && judged.every((a) => a.tone === "right");
+};
+
+// The top row of the panel: how many lines are answered of how many the run took, and of
+// those how many came out as expected, said only when some question expects an answer.
+export const tally = (runs) => {
+  const done = runs.filter((r) => r.status === "done");
+  const judged = done.some((r) => answersOf(r).some((a) => a.tone != null));
+  const evaluated = `${done.length} evaluated`;
+  return {
+    done: done.length,
+    total: runs.length,
+    words: judged ? `${evaluated} · ${done.filter(asExpected).length} as expected` : evaluated,
+  };
+};
+
+// The line the panel tells about, as an index into the run's lines, or -1 when no line
+// is answered yet (the panel is hidden). During a run it is the line just answered; after
+// it, the line the user last clicked or put the cursor on, when that line is answered,
+// else still the last one answered. A line is known by its text, as its marks are, and
+// of two with the same text by the nearer one.
+export const focusOf = ({ runs, running, picked }) => {
+  let last = -1;
+  runs.forEach((r, i) => settled(r) && (last = i));
+  if (running || picked == null) return last;
+  let best = -1;
+  runs.forEach((r, i) => {
+    if (!settled(r) || r.line !== picked.line) return;
+    if (best < 0 || Math.abs(r.at - picked.at) < Math.abs(runs[best].at - picked.at)) best = i;
+  });
+  return best < 0 ? last : best;
+};
 
 // The fold line's words, as [text, bold] parts: who evaluates, by name up to two.
 export const foldLine = (names, anyOn) => {
@@ -249,7 +338,7 @@ const without = (map, id) => {
 };
 
 // A different book, or none, starts the Run box afresh.
-const fresh = { text: "", runs: [], asked: [], running: false };
+const fresh = { text: "", runs: [], asked: [], running: false, stopping: false, picked: null };
 
 // An evaluator whose asks changed, or that went, loses its answers on every line.
 const dropResults = (runs, id) => runs.map((r) => (id in r.results ? { ...r, results: without(r.results, id) } : r));
@@ -365,47 +454,7 @@ export const machine = setup({
   id: "evaluator-list",
   meta: {
     description:
-      "Lists the evaluators kept with the open book and tries them on a text. At the top a box labelled" +
-      " \"Write one sentence per line\" takes a text, and its button evaluates each line on its own with " +
-      "the switched-on evaluators, asking only their switched-on questions; the button says \"Evaluate\"," +
-      " or \"Evaluate 1 line\" or \"Evaluate N lines\" once there is text, and \"Evaluating…\" while it " +
-      "works. Blank lines are skipped, and each line is one request to Jev, sent one after another, " +
-      "never two at once. Typing during a run does not change it. Beside the button a line says who " +
-      "evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when " +
-      "there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of " +
-      "evaluators under it. With `folded` the list starts hidden, without it shown; the user's own " +
-      "showing or hiding is remembered in this browser and wins over the page. The list: New evaluator " +
-      "is the first row and opens an empty editor; the evaluator appears in the list once something is " +
-      "written in it. Each row has a tick box that switches the evaluator on or off, its name, greyed " +
-      "when off, and how many of its questions would be asked: those written and switched on. With " +
-      "`subject` it follows the book open on the stage, and another book shows that book's evaluators; " +
-      "while no book is open, or without `subject`, it says to open a book. While the Journal is open " +
-      "it lists the Journal's evaluators and every evaluator of another book marked Show in journal, " +
-      "that book's title on the line under its name; its tick, opening it and evaluating work as for " +
-      "the Journal's own. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and" +
-      " G; Enter opens the row. Under the list come the results, one block per line as it is answered: " +
-      "the line's text, then each answer in words, never as a number. A pick answer names the option " +
-      "when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, " +
-      "\"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes," +
-      " Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. An" +
-      " answer starts with its option's icon when the option has one, and with the question's text when" +
-      " the question is yes / no or its evaluator asks more than one. When the question expects an " +
-      "answer, the icon is green when Jev gave it and red when not, judged by the top answer for " +
-      "Between and Not clear, and an answer without an icon gets a check or a warning in the same " +
-      "colours; nothing expected, no colour. With more than one evaluator, each one's answers sit under" +
-      " its name. A failed line says why in one sentence and stops the run: the lines already answered " +
-      "stay, the ones after it are not asked, and the button starts every line over. On a try page, " +
-      "when a guest has used all its free use the button is off and under it says \"You have used all " +
-      "your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the " +
-      "guest's behalf, it is off and says \"Free trials are paused for now.\"; a guest the admin blocked " +
-      "has it off and reads \"This trial has ended.\" Results are not saved: Clear removes them and stops" +
-      " a run, a change to an evaluator removes its own from every line, and another book removes all " +
-      "of them. The text is kept per book in this browser, so a reload or coming back to the book shows" +
-      " it again. With `subject`, a line at the top names the book shown. While the editor's pin is on," +
-      " as `pins` says, the list stays on that book when another comes on the stage, and unpinning " +
-      "brings the stage's book back at once. The row of the evaluator the editor shows is marked, " +
-      "whether the user picked it or the editor opened it by itself on another book, after a reload or " +
-      "a pin, and the keyboard starts from it.",
+      "Lists the evaluators kept with the open book and tries them on a text. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys. Its button evaluates each line on its own with the switched-on evaluators, asking only their switched-on questions; it says \"Evaluate\", or \"Evaluate 1 line\" or \"Evaluate N lines\" once there is text. Blank lines are skipped, and each line is one request to Jev, sent one after another, never two at once. Typing during a run does not change it. While a run works the button is Stop, which lets the line being asked be answered and asks no more (it says \"Stopping…\" until then); after a run come Clear and \"Evaluate N lines\", which starts every line over. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. A line edited after it was answered loses its marks. Under the box, a panel tells about one line: during a run the line just answered, after it the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the run: the lines already answered keep their marks, the ones after it are not asked. Beside the button a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. With `subject` it follows the book open on the stage, and another book shows that book's evaluators; while no book is open, or without `subject`, it says to open a book. While the Journal is open it lists the Journal's evaluators and every evaluator of another book marked Show in journal, that book's title on the line under its name; its tick, opening it and evaluating work as for the Journal's own. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. On a try page, when a guest has used all its free use the button is off and under it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it is off and says \"Free trials are paused for now.\"; a guest the admin blocked has it off and reads \"This trial has ended.\" Answers are not saved: Clear removes them, a change to an evaluator removes its own from every line, and another book removes all of them. The text is kept per book in this browser, so a reload or coming back to the book shows it again. With `subject`, a line at the top names the book shown. While the editor's pin is on, as `pins` says, the list stays on that book when another comes on the stage, and unpinning brings the stage's book back at once. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself on another book, after a reload or a pin, and the keyboard starts from it.",
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject", "folded"],
@@ -437,7 +486,8 @@ export const machine = setup({
     freeUse: null,
     // The Run box (UI state): the text, whether a run is in flight, the last run's lines
     // ({ at, line, status: waiting | asking | done | failed, results by evaluator id,
-    // error }), and the evaluators and questions as the run took them.
+    // error }), the evaluators and questions as the run took them, whether Stop was
+    // pressed, and the line the user last pointed at ({ at, line }) for the panel.
     ...fresh,
   }),
   // The subject and settings reads run for the machine's whole life, so a book's load
@@ -505,12 +555,13 @@ export const machine = setup({
         waiting: {
           on: {
             // The lines and evaluators are taken once, so typing during the run changes
-            // nothing it asks.
+            // nothing it asks. The panel starts again from the first line answered.
             _run: {
               guard: ({ context }) =>
                 filled(context.text) && askable(context.evaluators).length > 0 && freeStop(context.freeUse) == null,
               target: "running",
               actions: assign(({ context }) => ({
+                picked: null,
                 asked: askable(context.evaluators),
                 runs: lines(context.text).map((l) => ({ ...l, status: "waiting", results: {}, error: null })),
               })),
@@ -524,13 +575,16 @@ export const machine = setup({
             const next = context.runs.findIndex((r) => r.status === "waiting");
             return { running: true, runs: context.runs.map((r, i) => (i === next ? { ...r, status: "asking" } : r)) };
           }),
-          exit: assign({ running: false }),
+          exit: assign({ running: false, stopping: false }),
+          // Stop lets the line in flight be answered, since it is already paid for, and
+          // asks no more; the lines answered keep their marks.
+          on: { _stop: { actions: assign({ stopping: true }) } },
           invoke: {
             src: "decide",
             input: ({ context }) => ({ ask: context.ask, payload: payload(context.runs.find((r) => r.status === "asking").line, context.asked) }),
             onDone: [
               {
-                guard: ({ context, event }) => Array.isArray(event.output?.answers) && more(context),
+                guard: ({ context, event }) => Array.isArray(event.output?.answers) && more(context) && !context.stopping,
                 target: "running",
                 reenter: true,
                 actions: assign(({ context, event }) => ({
@@ -568,7 +622,12 @@ export const machine = setup({
           ],
         },
         // Clear also stops a run, so nothing it had still on its way comes back.
-        _clear: { target: ".waiting", actions: assign({ runs: [], asked: [] }) },
+        _clear: { target: ".waiting", actions: assign({ runs: [], asked: [], picked: null }) },
+        // The line the user clicked or moved the cursor to, by its number and text.
+        _point: {
+          guard: ({ event }) => Number.isInteger(event.at) && typeof event.line === "string",
+          actions: assign({ picked: ({ event }) => ({ at: event.at, line: event.line.trim() }) }),
+        },
         // The gestures (7.2: internal messages from the view). A pick names a shown
         // evaluator or the draft; a tick names a shown evaluator and changes it.
         _pick: {

@@ -36,6 +36,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a gesture.
     test("the admin ticks an evaluator in Administration › Starters", async () => {
       const adminId = `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const admin = forge(`${adminId}|admin`);
@@ -81,6 +82,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: a page's composition.
     test("a fresh browser finds a copy on the try page, runs it as a guest, and keeps it", async () => {
       const context = await browser.newContext();
       try {
@@ -104,9 +106,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.match(await listText(page), /About: Journal/);
         assert.deepEqual(writes, [], "the copy is made in this browser, nothing on the server");
 
-        await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("You did your best today.");
+        await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
+
+        await page.keyboard.insertText("You did your best today.");
         await page.getByRole("button", { name: "Evaluate 1 line" }).click();
-        await until(async () => (await page.locator("evaluator-list .line.done").count()) === 1);
+        await until(async () => (await page.locator("evaluator-list .marks").count()) === 1);
         assert.equal(writes[0], "/api/session/guest", "the first Run makes the guest");
 
         // The copy is uploaded as the guest's own, with an id of its own, in the Journal.

@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, belongs, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, foldLine, foldedAtStart, freeStop, notice } from "../machine.js";
+import { machine, rows, subtitle, belongs, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, stopLabel, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -397,10 +397,11 @@ test("an answer is green when it is the one expected, red when not, plain when n
 });
 
 test("the Evaluate button and the fold line say what will happen", () => {
-  assert.equal(evaluateLabel(0, false), "Evaluate");
-  assert.equal(evaluateLabel(1, false), "Evaluate 1 line");
-  assert.equal(evaluateLabel(3, false), "Evaluate 3 lines");
-  assert.equal(evaluateLabel(3, true), "Evaluating…");
+  assert.equal(evaluateLabel(0), "Evaluate");
+  assert.equal(evaluateLabel(1), "Evaluate 1 line");
+  assert.equal(evaluateLabel(3), "Evaluate 3 lines");
+  assert.equal(stopLabel(false), "Stop");
+  assert.equal(stopLabel(true), "Stopping…");
   const said = (names, anyOn = true) => foldLine(names, anyOn).map(([t, b]) => (b ? `<b>${t}</b>` : t)).join("");
   assert.equal(said([], false), "No evaluator is on");
   assert.equal(said([], true), "No evaluator has a question yet");
@@ -470,7 +471,7 @@ const lineResults = (status, line, at, extra = {}) => ({ at, line, status, resul
 const ONE = {
   [id(1)]: {
     questions: [
-      { id: Q(1), kind: "yesno", question: "Is it kind?", top: "yes", words: "Yes", tone: null, glyph: null, p: 0.93 },
+      { id: Q(1), kind: "yesno", question: "Is it kind?", top: "yes", words: "Yes", tone: null, glyph: null, sure: true, also: null, meaning: null, expected: null, p: 0.93 },
       {
         id: Q(4),
         kind: "pick",
@@ -479,12 +480,18 @@ const ONE = {
         words: "Probably: Angry",
         tone: null,
         glyph: null,
+        sure: false,
+        also: null,
+        meaning: null,
+        expected: null,
         probabilities: [{ id: O(2), p: 0.6 }, { id: O(1), p: 0.4 }],
       },
     ],
   },
   [id(5)]: {
-    questions: [{ id: Q(10), kind: "pick", question: null, top: O(8), words: "Left", tone: null, glyph: null, probabilities: [{ id: O(8), p: 0.8 }] }],
+    questions: [
+      { id: Q(10), kind: "pick", question: null, top: O(8), words: "Left", tone: null, glyph: null, sure: true, also: null, meaning: null, expected: null, probabilities: [{ id: O(8), p: 0.8 }] },
+    ],
   },
 };
 
@@ -692,4 +699,98 @@ test("the line under a name counts only the questions Run would ask", () => {
   assert.equal(subtitle(evaluator(1, A, { questions: [empty] })), "0 questions", "an empty question is not counted");
   assert.equal(subtitle(evaluator(1, A, { questions: [q(1), empty, lonePick, pick] })), "2 questions");
   assert.equal(subtitle(evaluator(1, A, { questions: [q(1), { ...q(5), on: false }] })), "1 question");
+});
+
+// --- The marks and the panel ----------------------------------------------------------
+
+const GOAL = [
+  option(1, "Behavioral Goal", { icon: "footprints", description: "What do I want to do?\nSomething to start, do more of, or do differently." }),
+  option(2, "Emotional Goal", { icon: "heart" }),
+  option(3, "Vague Goal"),
+];
+const kindOf = pick(20, "Which kind of goal?", GOAL, { expect: O(1) });
+const said = (probabilities) => results([{ id: id(9), questions: [kindOf] }], [{ id: qid(id(9), Q(20)), p: probabilities[0].p, choice: probabilities[0].id, probabilities }])[id(9)].questions[0];
+
+test("an answer says whether it is sure, what else was close, what the option means and what was expected", () => {
+  const sure = said([{ id: O(1), p: 0.9 }, { id: O(2), p: 0.1 }]);
+  assert.deepEqual([sure.words, sure.sure, sure.also, sure.meaning, sure.expected], ["Behavioral Goal", true, null, "What do I want to do?", "Behavioral Goal"]);
+  const between = said([{ id: O(2), p: 0.5 }, { id: O(1), p: 0.4 }, { id: O(3), p: 0.1 }]);
+  assert.deepEqual([between.words, between.sure, between.also, between.meaning], ["Between: Emotional Goal and Behavioral Goal", false, "Behavioral Goal", null]);
+  const unclear = said([{ id: O(3), p: 0.4 }, { id: O(2), p: 0.2 }, { id: O(1), p: 0.2 }]);
+  assert.deepEqual([unclear.words, unclear.sure, unclear.also], ["Not clear, maybe: Vague Goal", false, "Emotional Goal"]);
+  const probably = said([{ id: O(1), p: 0.6 }, { id: O(2), p: 0.3 }, { id: O(3), p: 0.1 }]);
+  assert.deepEqual([probably.sure, probably.also], [false, null], "Probably names no second option");
+  const yes = results([{ id: id(9), questions: [yesno(21, "Kind?", { expect: "no" })] }], [{ id: qid(id(9), Q(21)), p: 0.6 }])[id(9)].questions[0];
+  assert.deepEqual([yes.words, yes.sure, yes.expected], ["Probably yes", false, "No"]);
+  assert.equal(results([{ id: id(9), questions: [yesno(22, "Kind?")] }], [{ id: qid(id(9), Q(22)), p: 0.1 }])[id(9)].questions[0].sure, true, "No is sure");
+});
+
+test("the expectation is told as \"<Option>, as expected\" or \"<Option> is expected\", never as what the user expects", () => {
+  assert.deepEqual(sayExpect(said([{ id: O(1), p: 0.9 }])), { text: "Behavioral Goal, as expected", tone: "right" });
+  assert.deepEqual(sayExpect(said([{ id: O(2), p: 0.9 }])), { text: "Behavioral Goal is expected", tone: "wrong" });
+  const yesno1 = (expect, p) => results([{ id: id(9), questions: [yesno(21, "Kind?", { expect })] }], [{ id: qid(id(9), Q(21)), p }])[id(9)].questions[0];
+  assert.deepEqual(sayExpect(yesno1("yes", 0.2)), { text: "Yes is expected", tone: "wrong" });
+  assert.deepEqual(sayExpect(yesno1("no", 0.2)), { text: "No, as expected", tone: "right" });
+  assert.equal(sayExpect(yesno1(undefined, 0.2)), null, "nothing expected, nothing said");
+});
+
+const run = (at, line, status, answers = []) => ({ at, line, status, error: null, results: answers.length ? { [id(9)]: { questions: answers } } : {} });
+
+test("a line's marks: a dot while asked, then one per answer, its icon or a check or warning, faded when unsure", () => {
+  assert.deepEqual(marksOf(run(1, "A", "waiting")), []);
+  assert.deepEqual(marksOf(run(1, "A", "asking")), [{ pending: true, label: "Asking Jev" }]);
+  assert.deepEqual(marksOf({ ...run(1, "A", "failed"), error: "busy" }), []);
+  const wrong = said([{ id: O(3), p: 0.5 }, { id: O(2), p: 0.4 }]);
+  const plain = results([{ id: id(9), questions: [yesno(22, "Kind?"), yesno(23, "Short?")] }], [
+    { id: qid(id(9), Q(22)), p: 0.9 },
+    { id: qid(id(9), Q(23)), p: 0.6 },
+  ])[id(9)].questions;
+  assert.deepEqual(marksOf(run(1, "A", "done", [said([{ id: O(1), p: 0.9 }]), wrong, ...plain])), [
+    { icon: "footprints", tone: "right", sure: true, label: "Behavioral Goal" },
+    { icon: "warning", tone: "wrong", sure: false, label: "Between: Vague Goal and Emotional Goal" },
+    { icon: "check", tone: null, sure: true, label: "Kind? Yes" },
+    { icon: "check", tone: null, sure: false, label: "Short? Probably yes" },
+  ]);
+});
+
+test("the tally counts the lines evaluated and, when something is expected, those as expected", () => {
+  const right = said([{ id: O(1), p: 0.9 }]);
+  const wrong = said([{ id: O(2), p: 0.9 }]);
+  const runs = [run(1, "A", "done", [right]), run(2, "B", "done", [wrong]), run(3, "C", "done", [right]), run(4, "D", "asking"), run(5, "E", "waiting")];
+  assert.deepEqual(tally(runs), { done: 3, total: 5, words: "3 evaluated · 2 as expected" });
+  assert.equal(asExpected(runs[0]), true);
+  assert.equal(asExpected(runs[1]), false);
+  const plain = results([{ id: id(9), questions: [yesno(22, "Kind?")] }], [{ id: qid(id(9), Q(22)), p: 0.9 }])[id(9)].questions;
+  assert.deepEqual(tally([run(1, "A", "done", plain)]), { done: 1, total: 1, words: "1 evaluated" }, "nothing expected, no second half");
+});
+
+test("the panel tells about the line just answered while running, else the line pointed at when answered", () => {
+  const runs = [run(1, "A", "done"), run(3, "B", "done"), run(4, "A", "done"), run(5, "C", "asking"), run(6, "D", "waiting")];
+  assert.equal(focusOf({ runs: [], running: false, picked: null }), -1, "nothing answered, no panel");
+  assert.equal(focusOf({ runs: [run(1, "A", "asking")], running: true, picked: null }), -1);
+  assert.equal(focusOf({ runs, running: true, picked: { at: 1, line: "A" } }), 2, "running: the line just answered, whatever is pointed at");
+  assert.equal(focusOf({ runs, running: false, picked: null }), 2);
+  assert.equal(focusOf({ runs, running: false, picked: { at: 3, line: "B" } }), 1);
+  assert.equal(focusOf({ runs, running: false, picked: { at: 1, line: "A" } }), 0, "of two with one text, the nearer");
+  assert.equal(focusOf({ runs, running: false, picked: { at: 6, line: "D" } }), 2, "a line not answered keeps the last one answered");
+  assert.equal(focusOf({ runs, running: false, picked: { at: 2, line: "A edited" } }), 2);
+  assert.equal(focusOf({ runs: [{ ...run(1, "A", "failed"), error: "used-up" }], running: false, picked: null }), -1, "a refusal told under the button is no line to show");
+});
+
+test("Stop lets the line in flight be answered and asks no more; a point picks the panel's line", async () => {
+  const { actor, ctx, decided, settle } = await runner();
+  actor.send({ type: "_type", text: "One\nTwo\nThree" });
+  actor.send({ type: "_run" });
+  actor.send({ type: "_stop" });
+  assert.equal(ctx().stopping, true);
+  assert.equal(ctx().running, true);
+  await settle();
+  assert.equal(ctx().running, false);
+  assert.equal(ctx().stopping, false);
+  assert.deepEqual(ctx().runs.map((r) => r.status), ["done", "waiting", "waiting"]);
+  assert.equal(decided.length, 1);
+  actor.send({ type: "_point", at: 1, line: " One " });
+  assert.deepEqual(ctx().picked, { at: 1, line: "One" });
+  actor.send({ type: "_run" });
+  assert.equal(ctx().picked, null, "a new run starts the panel from its first answer");
 });

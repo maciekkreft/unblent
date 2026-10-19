@@ -22,6 +22,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a page's composition.
     test("a visitor writes an evaluator for the Journal, and the first Evaluate makes the guest", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -45,7 +46,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.deepEqual(writes, [], "opening the page and writing makes nothing on the server");
         assert.equal((await context.cookies()).length, 0, "no account before the first Evaluate");
 
-        await page.getByPlaceholder("Write or paste your text. Each line is evaluated on its own.").fill("Walk for ten minutes after lunch.");
+        await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
+
+        await page.keyboard.insertText("Walk for ten minutes after lunch.");
         await page.getByRole("button", { name: "Evaluate 1 line" }).click();
         await until(async () => (await listText(page)).includes("Free trials are paused for now."));
         assert.equal(writes[0], "/api/session/guest", "the first Evaluate makes the guest");
@@ -58,6 +61,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: a reload against real storage.
     test("the list starts folded here, and the visitor's own fold is kept across a reload", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

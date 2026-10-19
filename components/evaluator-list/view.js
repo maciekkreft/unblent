@@ -1,8 +1,29 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, rows, subtitle, askable, lines, UNTITLED, freeStop, notice, STOPS, evaluateLabel, foldLine, foldedAtStart } from "./machine.js";
+import { EditorState, Annotation, StateField, StateEffect } from "@codemirror/state";
+import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
+import { baseExtensions, setVim, paragraphs } from "editor";
+import {
+  machine,
+  rows,
+  subtitle,
+  askable,
+  lines,
+  UNTITLED,
+  freeStop,
+  notice,
+  STOPS,
+  evaluateLabel,
+  stopLabel,
+  foldLine,
+  foldedAtStart,
+  marksOf,
+  focusOf,
+  tally,
+  sayExpect,
+} from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 
@@ -101,6 +122,108 @@ const GLYPHS = {
   check: () => icon("check"),
   warning: () => icon("warning"),
 };
+
+// The Evaluate box is a CodeMirror editor built on the editor kit (10), so marks can stand
+// at a line's end, it takes Vim's keys when the "Vim keys" preference (12) is on, and Enter
+// makes a paragraph. It grows with its text; the panel scrolls with the list around it.
+const boxTheme = EditorView.theme({
+  ".cm-content": {
+    padding: "var(--space-xs) 0",
+    minHeight: "calc(var(--text-body) * var(--leading-normal) * 3)",
+  },
+  ".cm-line": { padding: "0 var(--space-sm)" },
+  ".cm-placeholder": { color: "var(--color-body-mid)" },
+  // An answered line keeps room at its right end for its marks, which stand there.
+  ".cm-line.cm-checked": { position: "relative" },
+  ...Object.fromEntries(
+    [1, 2, 3, 4].map((n) => [
+      `.cm-line.cm-checked-${n}`,
+      { paddingRight: `calc(var(--space-sm) + (var(--text-body) * var(--leading-normal) + var(--space-2xs)) * ${n})` },
+    ]),
+  ),
+  // The line the panel tells about, tinted as the mockup's picked line.
+  ".cm-line.cm-focus": {
+    backgroundColor: "var(--color-accent-subtle)",
+    boxShadow: "inset calc(var(--border-width) * 3) 0 0 var(--color-accent)",
+  },
+});
+
+// The text set from the machine (another book) rather than typed, not sent back as an edit.
+const fromMachine = Annotation.define();
+
+// What the box draws besides the text: the marks by line text, and the line in focus.
+const setDrawn = StateEffect.define();
+const drawnField = StateField.define({
+  create: () => ({ marks: new Map(), focus: null }),
+  update: (value, tr) => tr.effects.reduce((v, e) => (e.is(setDrawn) ? e.value : v), value),
+});
+
+// The line of the document a run's line stands on now: its own number while its text is
+// still there, else the first line with that text, else none (it was edited).
+const lineOf = (doc, at, text) => {
+  if (at >= 1 && at <= doc.lines && doc.line(at).text.trim() === text) return doc.line(at);
+  for (let n = 1; n <= doc.lines; n += 1) if (doc.line(n).text.trim() === text) return doc.line(n);
+  return null;
+};
+
+// The marks at a line's end. They are a widget, not text: the cursor, Vim and the line's
+// height pass them by, and CodeMirror ignores their events. Pressing one puts its line in
+// the panel and leaves the cursor where it is.
+class MarksWidget extends WidgetType {
+  constructor(marks, point) {
+    super();
+    this.marks = marks;
+    this.point = point;
+    this.key = JSON.stringify(marks);
+  }
+
+  eq(other) {
+    return other.key === this.key;
+  }
+
+  toDOM(view) {
+    const span = document.createElement("span");
+    span.className = "marks";
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", this.marks.map((m) => m.label).join(" · "));
+    render(
+      this.marks.map((m) =>
+        m.pending
+          ? html`<span class="mark pending" title=${m.label}><i></i></span>`
+          : html`<span class="mark ${m.tone ?? ""} ${m.sure ? "" : "unsure"}" title=${m.label}>${GLYPHS[m.icon]?.()}</span>`,
+      ),
+      span,
+    );
+    span.addEventListener("mousedown", (e) => e.preventDefault());
+    span.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      const line = view.state.doc.lineAt(view.posAtDOM(span));
+      this.point(line.number, line.text);
+    });
+    return span;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+const drawn = (point) =>
+  EditorView.decorations.compute([drawnField, "doc"], (state) => {
+    const { marks, focus } = state.field(drawnField);
+    const ranges = [];
+    const focused = focus ? lineOf(state.doc, focus.at, focus.line) : null;
+    for (let n = 1; n <= state.doc.lines; n += 1) {
+      const line = state.doc.line(n);
+      const these = marks.get(line.text.trim());
+      const classes = [];
+      if (these?.length) classes.push(`cm-checked cm-checked-${Math.min(these.length, 4)}`);
+      if (focused?.number === n) classes.push("cm-focus");
+      if (classes.length) ranges.push(Decoration.line({ class: classes.join(" ") }).range(line.from));
+      if (these?.length) ranges.push(Decoration.widget({ widget: new MarksWidget(these, point), side: 1 }).range(line.to));
+    }
+    return Decoration.set(ranges);
+  });
 
 const ERRORS = {
   "signed-out": "Sign in to run evaluators.",
@@ -228,28 +351,79 @@ class EvaluatorList extends LitElement {
       padding: var(--space-md) var(--space-md) var(--space-sm);
     }
     .run label {
+      cursor: default;
       font-size: var(--text-sm);
       font-weight: var(--weight-semibold);
       color: var(--color-ink);
     }
-    textarea {
-      box-sizing: border-box;
-      width: 100%;
-      font: inherit;
-      font-size: var(--text-body);
-      color: var(--color-ink);
+    /* The box's frame, drawn around the editor, which draws none. */
+    .box {
       background: var(--color-canvas-soft);
       border: var(--border-width) solid var(--color-border);
       border-radius: var(--radius-sm);
-      padding: var(--space-sm);
-      resize: vertical;
+      cursor: text;
     }
-    textarea::placeholder {
-      color: var(--color-body-mid);
-    }
-    textarea:focus {
-      outline: none;
+    .box:focus-within {
       box-shadow: var(--focus-ring);
+    }
+    ::selection {
+      background: var(--color-accent-selection);
+    }
+    /* Jev's marks at an answered line's right end, as tall as the line, so the line keeps
+       its height. */
+    .marks {
+      position: absolute;
+      top: 0;
+      right: var(--space-xs);
+      display: flex;
+      gap: var(--space-2xs);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .mark {
+      display: inline-grid;
+      place-items: center;
+      width: calc(var(--text-body) * var(--leading-normal));
+      height: calc(var(--text-body) * var(--leading-normal));
+      border-radius: var(--radius-sm);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+      cursor: pointer;
+    }
+    .mark svg {
+      display: block;
+    }
+    .mark.right {
+      color: var(--color-success);
+      background: var(--color-success-subtle);
+    }
+    .mark.wrong {
+      color: var(--color-danger);
+      background: var(--color-danger-subtle);
+    }
+    /* Faded when Jev is not sure: anything but the plain answer. */
+    .mark.unsure {
+      opacity: 0.5;
+    }
+    .mark.pending {
+      cursor: default;
+    }
+    .mark.pending i {
+      width: calc(var(--space-xs) * 1.5);
+      height: calc(var(--space-xs) * 1.5);
+      border-radius: var(--radius-full);
+      background: var(--color-mute);
+      animation: pulse calc(var(--duration-slide) * 4) ease-in-out infinite;
+    }
+    @keyframes pulse {
+      50% {
+        opacity: 0.3;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .mark.pending i {
+        animation: none;
+      }
     }
     /* The fold line and the buttons; on a narrow panel the buttons wrap under the fold line.
        Every target is at least 44px tall, for a finger. */
@@ -311,13 +485,24 @@ class EvaluatorList extends LitElement {
     .buttons button {
       padding: var(--space-sm) var(--space-md);
     }
-    .clear {
+    .clear,
+    .stop {
       color: var(--color-body);
       background: none;
       border: var(--border-width) solid var(--color-border);
     }
-    .clear:hover {
+    .stop {
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+      border-color: var(--color-border-strong);
+    }
+    .clear:hover,
+    .stop:hover:not(:disabled) {
       background: var(--color-surface-hover);
+    }
+    .stop:disabled {
+      color: var(--color-mute);
+      cursor: default;
     }
     .go {
       font-weight: var(--weight-semibold);
@@ -366,110 +551,119 @@ class EvaluatorList extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-danger);
     }
-    /* The results, one block per line of the text, in the order of the text. */
-    .lines {
+    /* The panel under the box: the line in focus, told in detail. */
+    .focus {
       display: flex;
       flex-direction: column;
-      gap: var(--space-md);
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-    .line {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-xs);
-      padding-top: var(--space-sm);
-      border-top: var(--border-width) solid var(--color-border);
-    }
-    .line:first-child {
-      border-top: 0;
-      padding-top: 0;
-    }
-    .said {
-      display: flex;
-      align-items: center;
       gap: var(--space-sm);
       margin: 0;
+      padding: var(--space-sm) var(--space-md);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-md);
+    }
+    .where {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      column-gap: var(--space-sm);
+      row-gap: var(--space-2xs);
+      margin: 0;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
+    .bar {
+      flex: 1 1 calc(var(--space-2xl) * 2);
+      height: calc(var(--space-2xs) * 1.5);
+      border-radius: var(--radius-full);
+      background: var(--color-border);
+      overflow: hidden;
+    }
+    .bar span {
+      display: block;
+      height: 100%;
+      border-radius: var(--radius-full);
+      background: var(--color-accent);
+      transition: width var(--duration-slide) ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .bar span {
+        transition: none;
+      }
+    }
+    .quote {
+      margin: 0;
       font-size: var(--text-body);
+      font-weight: var(--weight-semibold);
       line-height: var(--leading-tight);
       color: var(--color-ink);
       overflow-wrap: anywhere;
     }
-    /* The line being asked: the same pulsing dot as a choice point's pending check. */
-    .dot {
-      flex: none;
-      width: calc(var(--space-xs) * 1.5);
-      height: calc(var(--space-xs) * 1.5);
-      border-radius: var(--radius-full);
-      background: var(--color-mute);
-      animation: pulse calc(var(--duration-slide) * 4) ease-in-out infinite;
-    }
-    @keyframes pulse {
-      50% {
-        opacity: 0.3;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .dot {
-        animation: none;
-      }
-    }
-    .verdict {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-2xs);
-    }
     .by {
-      margin: var(--space-2xs) 0 0;
+      margin: 0;
       font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
       color: var(--color-mute);
     }
     .answers {
       display: flex;
       flex-direction: column;
-      gap: var(--space-2xs);
+      gap: var(--space-sm);
       margin: 0;
       padding: 0;
       list-style: none;
     }
     .answer {
       display: flex;
-      align-items: baseline;
-      flex-wrap: wrap;
-      column-gap: var(--space-sm);
-      font-size: var(--text-sm);
-      line-height: var(--leading-normal);
+      align-items: flex-start;
+      gap: var(--space-sm);
     }
-    .question {
-      color: var(--color-body-mid);
-    }
-    .words {
-      color: var(--color-ink);
-      font-weight: var(--weight-semibold);
-    }
-    /* The answer's glyph, coloured as a choice point's marks: green when it is the answer
-       expected, red when not, plain when nothing is expected. */
-    .glyph {
+    /* The answer's icon, coloured as its mark: green when it is the answer expected, red
+       when not, plain when nothing is expected. */
+    .tile {
       flex: none;
-      align-self: center;
       display: inline-grid;
       place-items: center;
-      width: calc(var(--text-sm) + var(--space-xs) * 2);
-      height: calc(var(--text-sm) + var(--space-xs) * 2);
+      width: calc(var(--space-lg) + var(--space-xs));
+      height: calc(var(--space-lg) + var(--space-xs));
       border-radius: var(--radius-sm);
+      font-size: var(--text-subtitle);
       color: var(--color-body-mid);
+      background: var(--color-canvas-soft);
     }
-    .glyph svg {
+    .tile svg {
       display: block;
     }
-    .glyph.right {
+    .tile.right {
       color: var(--color-success);
       background: var(--color-success-subtle);
     }
-    .glyph.wrong {
+    .tile.wrong {
       color: var(--color-danger);
       background: var(--color-danger-subtle);
+    }
+    .said {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+      min-width: 0;
+      font-size: var(--text-sm);
+      line-height: var(--leading-tight);
+      color: var(--color-body-mid);
+      overflow-wrap: anywhere;
+    }
+    .words {
+      font-size: var(--text-body);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    .expect {
+      font-weight: var(--weight-semibold);
+    }
+    .expect.right {
+      color: var(--color-success);
+    }
+    .expect.wrong {
+      color: var(--color-danger);
     }
     .empty {
       margin: 0;
@@ -556,6 +750,7 @@ class EvaluatorList extends LitElement {
   // focused one would leave the focus on whatever now fills its element: the keyboard
   // follows the roving row, which is keyed by id, instead.
   updated() {
+    this.#syncBox();
     const active = this.renderRoot.activeElement;
     if (!active?.matches(".open")) return;
     const roving = this.renderRoot.querySelector('.open[tabindex="0"]');
@@ -586,12 +781,97 @@ class EvaluatorList extends LitElement {
     this.requestUpdate();
   }
 
+  // The Evaluate box's editor, made once its region is drawn and kept while the list is
+  // reloaded, then put back in the region drawn anew.
+  #box = null;
+  #boxVim = false;
+  // The line asked last scrolled into view, so it is scrolled to once.
+  #followed = null;
+
+  #point(at, line) {
+    this.#actor.send({ type: "_point", at, line });
+  }
+
+  #makeBox(region, context) {
+    this.#boxVim = context.vimKeys === true;
+    this.#box = new EditorView({
+      parent: region,
+      // Shadow DOM: CodeMirror reads the selection through the root and mounts its
+      // stylesheet there, so it must know the shadow root.
+      root: this.renderRoot,
+      state: EditorState.create({
+        doc: context.text,
+        extensions: [
+          ...baseExtensions({ vim: this.#boxVim }),
+          paragraphs(),
+          boxTheme,
+          placeholder("Write or paste your text. Each line is evaluated on its own."),
+          EditorView.contentAttributes.of({ "aria-label": "Write one sentence per line", id: "text" }),
+          drawnField,
+          drawn((at, line) => this.#point(at, line)),
+          EditorView.updateListener.of((update) => {
+            const own = !update.transactions.every((t) => t.annotation(fromMachine));
+            if (update.docChanged && own) this.#actor.send({ type: "_type", text: update.state.doc.toString() });
+            // The line clicked or moved to, while the box has the keyboard.
+            if ((update.selectionSet || update.focusChanged) && update.view.hasFocus && own) {
+              const line = update.state.doc.lineAt(update.state.selection.main.head);
+              this.#point(line.number, line.text);
+            }
+          }),
+        ],
+      }),
+    });
+  }
+
+  // The box follows the machine: the text when it changed elsewhere (another book), Vim,
+  // the marks and the line in focus, and during a run the line asked, scrolled into view.
+  #syncBox() {
+    const snapshot = this.#actor.snapshot;
+    const region = this.renderRoot.querySelector(".box");
+    if (!snapshot || !region) return;
+    const { context } = snapshot;
+    if (!this.#box) this.#makeBox(region, context);
+    else if (this.#box.dom.parentNode !== region) region.replaceChildren(this.#box.dom);
+    const view = this.#box;
+    this.#boxVim = context.vimKeys === true;
+    setVim(view, this.#boxVim);
+    const marks = new Map();
+    for (const r of context.runs) {
+      const these = marksOf(r);
+      if (these.length && !marks.has(r.line)) marks.set(r.line, these);
+    }
+    const at = focusOf(context);
+    const value = { marks, focus: at < 0 ? null : { at: context.runs[at].at, line: context.runs[at].line } };
+    const key = JSON.stringify([[...marks], value.focus]);
+    const doc = view.state.doc.toString();
+    const changes = doc === context.text ? undefined : { from: 0, to: doc.length, insert: context.text };
+    const effects = key === this.#drawnKey ? [] : [setDrawn.of(value)];
+    this.#drawnKey = key;
+    const asking = context.runs.find((r) => r.status === "asking");
+    const follow = asking ? `${asking.at}:${asking.line}` : null;
+    if (follow && follow !== this.#followed) {
+      const line = lineOf(changes ? view.state.update({ changes }).state.doc : view.state.doc, asking.at, asking.line);
+      if (line) effects.push(EditorView.scrollIntoView(line.from, { y: "nearest" }));
+    }
+    this.#followed = follow;
+    if (changes || effects.length) view.dispatch({ changes, effects, annotations: fromMachine.of(true) });
+  }
+
+  #drawnKey = null;
+
+  disconnectedCallback() {
+    this.#box?.destroy();
+    this.#box = null;
+    this.#drawnKey = null;
+    super.disconnectedCallback();
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
-    const { draft, open, evaluators, book, titles, runs } = snapshot.context;
+    const { draft, open, evaluators, book, titles } = snapshot.context;
     const shown = rows(evaluators);
     const ids = [draft, ...shown.map((e) => e.id)];
     const focusId = this.#focusRow(ids, open);
@@ -609,7 +889,7 @@ class EvaluatorList extends LitElement {
             </li>
             ${shown.map((e) => this.#row(e, open, focusId, e.book === book ? null : (titles[e.book] ?? "Another book")))}
           </ul>`}
-      <div class="out">${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}${this.#lines(runs, evaluators)}</div>
+      <div class="out">${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}</div>
     `;
   }
 
@@ -620,85 +900,82 @@ class EvaluatorList extends LitElement {
     return title ? html`<p class="about">About: ${title}</p>` : nothing;
   }
 
+  // The editor is made into .box after render (#syncBox). A press on the caption puts the
+  // keyboard in the box, as a label does for a field.
   #runBox(snapshot) {
-    const { text, evaluators, runs, running, freeUse } = snapshot.context;
+    const { text, evaluators, runs, running, stopping, freeUse } = snapshot.context;
     const asked = askable(evaluators);
     const names = asked.map((a) => evaluators.find((e) => e.id === a.id)?.name.trim() || UNTITLED);
     const folded = this.#isFolded();
     const parts = foldLine(names, rows(evaluators).some((e) => e.on));
     return html`
       <div class="run">
-        <label for="text">Write one sentence per line</label>
-        <textarea
-          id="text"
-          rows="3"
-          placeholder="Write or paste your text. Each line is evaluated on its own."
-          .value=${text}
-          @input=${(event) => this.#actor.send({ type: "_type", text: event.target.value })}
-        ></textarea>
+        <label @click=${() => this.#box?.focus()}>Write one sentence per line</label>
+        <div class="box"></div>
         <div class="actions">
           <button class="fold" type="button" aria-expanded=${folded ? "false" : "true"} aria-controls="evaluators" @click=${() => this.#toggleFold()}>
             ${icon("caret-right")}<span>${parts.map(([part, bold]) => (bold ? html`<b>${part}</b>` : part))}</span>
           </button>
           <span class="buttons">
-            ${runs.length > 0 ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
-            <button
-              class="go"
-              type="button"
-              ?disabled=${running || asked.length === 0 || text.trim() === "" || freeStop(freeUse) != null}
-              @click=${() => this.#actor.send({ type: "_run" })}
-            >
-              ${evaluateLabel(lines(text).length, running)}
-            </button>
+            ${running
+              ? html`<button class="stop" type="button" ?disabled=${stopping} @click=${() => this.#actor.send({ type: "_stop" })}>${stopLabel(stopping)}</button>`
+              : html`${runs.length > 0 ? html`<button class="clear" type="button" @click=${() => this.#actor.send({ type: "_clear" })}>Clear</button>` : nothing}
+                  <button
+                    class="go"
+                    type="button"
+                    ?disabled=${asked.length === 0 || text.trim() === "" || freeStop(freeUse) != null}
+                    @click=${() => this.#actor.send({ type: "_run" })}
+                  >
+                    ${evaluateLabel(lines(text).length)}
+                  </button>`}
           </span>
         </div>
+        ${this.#panel(snapshot.context)}
       </div>
     `;
   }
 
-  // A line not asked yet shows nothing, so the blocks appear one after another as Jev
-  // answers, and a failure leaves only what was answered and the reason.
-  #lines(runs, evaluators) {
-    const shown = runs.filter((r) => r.status !== "waiting");
-    if (shown.length === 0) return nothing;
+  // The line in focus, told in detail: where it stands in the run, the line, and each
+  // answer with its mark, what the option means, what else was close, and whether it is
+  // the answer expected. Hidden while no line is answered.
+  #panel(context) {
+    const at = focusOf(context);
+    if (at < 0) return nothing;
+    const { runs, evaluators } = context;
+    const r = runs[at];
+    const count = tally(runs);
     const names = new Map(rows(evaluators).map((e) => [e.id, e.name.trim() || UNTITLED]));
-    return html`<ol class="lines" aria-label="Results by line">
-      ${shown.map((r) => {
-        const verdicts = Object.entries(r.results);
-        // One glyph on the line keeps a glyph's room on every answer, so they line up.
-        const room = verdicts.some(([, v]) => v.questions.some((q) => q.glyph));
-        return html`<li class="line ${r.status}" data-at=${r.at}>
-          <p class="said">
-            ${r.status === "asking" ? html`<i class="dot" role="img" aria-label="Asking Jev"></i>` : nothing}<span>${r.line}</span>
-          </p>
-          ${r.status === "failed" && !STOPS.includes(r.error) ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>` : nothing}
-          ${verdicts.map(([id, result]) => this.#verdict(names.get(id) ?? UNTITLED, result, verdicts.length > 1, room))}
-        </li>`;
-      })}
-    </ol>`;
+    const verdicts = Object.entries(r.results);
+    return html`<section class="focus" aria-label="The line in focus">
+      <p class="where">
+        <span>Line ${at + 1} of ${count.total}</span>
+        <span class="bar" role="progressbar" aria-label="Lines evaluated" aria-valuemin="0" aria-valuemax=${count.total} aria-valuenow=${count.done}
+          ><span style=${`width: ${count.total ? Math.round((count.done / count.total) * 100) : 0}%`}></span
+        ></span>
+        <span>${count.words}</span>
+      </p>
+      <p class="quote">“${r.line}”</p>
+      ${r.status === "failed" && !STOPS.includes(r.error) ? html`<p class="error" role="alert">${ERRORS[r.error]}</p>` : nothing}
+      ${verdicts.map(
+        ([id, result]) => html`${verdicts.length > 1 ? html`<p class="by">${names.get(id) ?? UNTITLED}</p>` : nothing}
+          <ul class="answers" aria-label="Answers from ${names.get(id) ?? UNTITLED}">
+            ${result.questions.map((q) => this.#answer(q))}
+          </ul>`,
+      )}
+    </section>`;
   }
 
-  // One evaluator's answers for one line, under its name when more than one evaluated.
-  #verdict(name, result, named, room) {
-    return html`<div class="verdict">
-      ${named ? html`<p class="by">${name}</p>` : nothing}
-      <ul class="answers" aria-label="Answers from ${name}">
-        ${result.questions.map((q) => this.#answer(q, room))}
-      </ul>
-    </div>`;
-  }
-
-  #answer(q, room) {
-    const tone = q.tone ?? "";
-    const said = q.tone === "right" ? "As expected" : q.tone === "wrong" ? "Not as expected" : nothing;
-    return html`<li class="answer ${tone}">
-      ${q.glyph
-        ? html`<span class="glyph ${tone}" role="img" aria-label=${said}>${GLYPHS[q.glyph]?.()}</span>`
-        : room
-          ? html`<span class="glyph" aria-hidden="true"></span>`
-          : nothing}
-      ${q.question ? html`<span class="question">${q.question}</span>` : nothing}
-      <span class="words">${q.words}</span>
+  #answer(q) {
+    const expect = sayExpect(q);
+    return html`<li class="answer">
+      <span class="tile ${q.tone ?? ""}" aria-hidden="true">${q.glyph ? GLYPHS[q.glyph]?.() : nothing}</span>
+      <span class="said">
+        ${q.question ? html`<span class="question">${q.question}</span>` : nothing}
+        <span class="words">${q.words}</span>
+        ${q.meaning ? html`<span class="meaning">${q.meaning}</span>` : nothing}
+        ${q.also ? html`<span class="also">Also close: ${q.also}</span>` : nothing}
+        ${expect ? html`<span class="expect ${expect.tone}">${expect.text}</span>` : nothing}
+      </span>
     </li>`;
   }
 
