@@ -704,5 +704,4 @@ Work that is decided but not done yet. Remove a line when its work is done.
 - On the desk, Ctrl+. and Ctrl+, (and gt and gT) move to the next or previous tab in a different order from the one the tabs are shown in. They should follow the tabs as the user sees them, left to right.
 - Pinning a chat that has no messages yet does not work. Until the chat has its first message, the pin should be unavailable.
 - In a chat, the user can mark passages in the assistant's last answer and write a comment on each one, the way Redline does.
-- The tab and the list item the user is looking at are pinned by default, so that a note or a chat being written stays open when the user switches, for example, from the journal to a book.
 - Remove "Show in journal" from Evaluators. Today an evaluator of another book can be ticked to be listed in the journal's Evaluators too. Pinning the evaluator already keeps it open while the user writes in the journal, so the tick is not needed. The journal should list only its own evaluators.
