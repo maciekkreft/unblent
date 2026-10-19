@@ -189,6 +189,25 @@ export const nextGroup = (from, key, present) => {
   return null;
 };
 
+// The tabs of one group in the order its strip draws them, left to right: a side in its
+// own order, which the user changes with its earlier and later buttons and at whose end a
+// moved tab lands; the stage in the page's order, which it keeps. The strips and the tab
+// keys (12, "Vim keys") read this one list, so the keys cannot step in an order the user
+// does not see.
+export const tabsOf = ({ views, docks }, group) =>
+  group === "stage" ? names(views).filter((n) => !dockedNames(docks).includes(n)) : (docks[group]?.views ?? []);
+
+// The tab Ctrl+. (step 1) or Ctrl+, (step -1) shows after `shown`, wrapping at either
+// end; from no shown tab (a header button pressed) the first or the last. Null when the
+// group has no tab.
+export const nextTab = (context, group, shown, step) => {
+  const tabs = tabsOf(context, group);
+  if (!tabs.length) return null;
+  const at = tabs.indexOf(shown);
+  if (at < 0) return step > 0 ? tabs[0] : tabs[tabs.length - 1];
+  return tabs[(at + step + tabs.length) % tabs.length];
+};
+
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
 const isDocked = ({ context, event }) => dockedNames(context.docks).includes(event.name);

@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, nextGroup } from "./machine.js";
+import { machine, nextGroup, nextTab, tabsOf } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
 
 const SIDES = ["left", "right", "bottom"];
@@ -31,6 +31,7 @@ const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).font
 
 // The keys that move between groups and tabs while "Vim keys" is on (12), held with Ctrl.
 const PANEL_KEYS = new Set(["h", "j", "k", "l", ".", ","]);
+const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 // The side Ctrl+Shift+<key> folds or unfolds.
 const FOLD_KEYS = { h: "left", l: "right", j: "bottom" };
 // What a press may hand the focus back to: what a browser other than Safari would have focused.
@@ -818,6 +819,9 @@ class DockDesk extends LitElement {
   // editor or a field, where they are text (or CodeMirror's Vim's own). The g is left to
   // the view, where it is half of a list's gg.
   #letter(event, context) {
+    // The Shift a real keyboard sends down before the T of gT is not a letter, so it
+    // keeps the g waiting.
+    if (MODIFIERS.has(event.key)) return;
     const target = event.composedPath()[0];
     const prefix = this.#prefix;
     this.#prefix = null;
@@ -872,11 +876,8 @@ class DockDesk extends LitElement {
   // Next or previous tab, wrapping as the arrow keys do in a strip (#arrow), then the
   // focus follows into the newly shown view.
   #cycle(context, group, step) {
-    const docked = SIDES.flatMap((s) => context.docks[s]?.views ?? []);
-    const tabs = group === "stage" ? context.views.map((v) => v.name).filter((n) => !docked.includes(n)) : context.docks[group]?.views ?? [];
-    if (!tabs.length) return;
-    const at = tabs.indexOf(group === "stage" ? context.stage : this.#shownIn(context, group));
-    const next = tabs[(at + step + tabs.length) % tabs.length];
+    const next = nextTab(context, group, group === "stage" ? context.stage : this.#shownIn(context, group), step);
+    if (!next) return;
     if (group === "stage") this.#send("_open", next);
     else this.#send("_activate", next, group);
     this.#landing = { group, name: next };
@@ -957,8 +958,7 @@ class DockDesk extends LitElement {
     // DOM, like `views`.
     const extras = [...this.children].filter((c) => c.hasAttribute("control") || c.hasAttribute("button"));
     const buttons = extras.filter((c) => c.hasAttribute("button"));
-    const dockedAll = SIDES.flatMap((s) => docks[s]?.views ?? []);
-    const tabs = views.map((v) => v.name).filter((name) => !dockedAll.includes(name));
+    const tabs = tabsOf(snapshot.context, "stage");
     const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);
     // On the phone a side dock overlays the stage as a drawer (@container below);
     // the scrim dims the stage still peeking beside it, and tapping it folds the

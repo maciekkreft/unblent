@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, nextGroup } from "../machine.js";
+import { machine, nextGroup, nextTab, tabsOf } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -656,4 +656,42 @@ test("Ctrl+j goes down to the bottom dock and Ctrl+k back up to the stage", () =
   assert.equal(nextGroup("stage", "j", ["left", "stage"]), null, "no bottom dock");
   assert.equal(nextGroup("bottom", "h", all), "left", "the bottom spans under the row");
   assert.equal(nextGroup("bottom", "l", all), "right");
+});
+
+// The tab keys step through a group in the order its strip draws it, left to right.
+test("the tab keys follow a side's own order after its tabs were moved", async () => {
+  const views = [...VIEWS, { name: "note-list", label: "Notes" }];
+  const { actor, emitted } = await settle(
+    stored({ stage: "token-sheet", docks: { right: { open: true, views: ["contract-list", "trace-list"] } } }),
+    { views },
+  );
+  actor.send({ type: "_shift", name: "trace-list", step: -1 });
+  actor.send({ ...emitted.at(-1), type: "dock.changed" });
+  actor.send({ type: "_dock", name: "note-list", side: "right" });
+  actor.send({ ...emitted.at(-1), type: "dock.changed" });
+  const { context } = actor.getSnapshot();
+  assert.deepEqual(tabsOf(context, "right"), ["trace-list", "contract-list", "note-list"]);
+  assert.equal(nextTab(context, "right", "trace-list", 1), "contract-list");
+  assert.equal(nextTab(context, "right", "note-list", 1), "trace-list");
+  assert.equal(nextTab(context, "right", "trace-list", -1), "note-list");
+});
+
+test("the stage's tab keys follow the page's order, which a returned tab takes", async () => {
+  const { actor, emitted } = await settle(
+    stored({ stage: "token-sheet", docks: { right: { open: true, views: ["contract-list"] } } }),
+  );
+  actor.send({ type: "_undock", name: "contract-list" });
+  actor.send({ ...emitted.at(-1), type: "dock.changed" });
+  const { context } = actor.getSnapshot();
+  assert.deepEqual(tabsOf(context, "stage"), ["token-sheet", "contract-list", "trace-list"]);
+  assert.equal(nextTab(context, "stage", "token-sheet", 1), "contract-list");
+  assert.equal(nextTab(context, "stage", "token-sheet", -1), "trace-list");
+});
+
+test("the tab keys from no shown tab start at an end, and an empty group has none", () => {
+  const context = { views: VIEWS, docks: { left: { open: true, views: ["trace-list"] } } };
+  assert.equal(nextTab(context, "stage", null, 1), "token-sheet");
+  assert.equal(nextTab(context, "stage", null, -1), "contract-list");
+  assert.equal(nextTab(context, "left", "trace-list", 1), "trace-list");
+  assert.equal(nextTab(context, "bottom", null, 1), null);
 });

@@ -272,7 +272,7 @@ for (const engine of ENGINES) {
       run: async (v) => {
         await press(v.page, "g", "t");
         await v.see(showing("Chats", "list-then-item#chats"));
-        await press(v.page, "g", "T");
+        await press(v.page, "g", "Shift+T");
         await v.see(showing("Notes", "list-then-item#notes"));
       },
     },
