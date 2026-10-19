@@ -126,15 +126,14 @@ test("the pin pins the open chat and unpins it; with no chat open it does nothin
   assert.equal(h.actor.getSnapshot().can({ type: "_togglePin" }), false);
 });
 
-test("opening another chat while pinned moves the pin to it; deleting the pinned chat unpins", async () => {
+test("opening or deleting the pinned chat sends no pin.toggled: only a press does, and pins follows the chat itself", async () => {
   const h = start({ openId: CHAT, pinned: CHAT, chatsById: { [CHAT]: emptyChat(CHAT), [CHAT2]: emptyChat(CHAT2) } });
   await until(() => state(h) === "showing", "showing");
   assert.equal(h.actor.getSnapshot().context.pin, CHAT, "the pin from pins");
   h.actor.send({ type: "conversation.opened", id: CHAT2 });
-  assert.deepEqual(h.toggled, [CHAT2]);
   await until(() => state(h) === "showing", "showing");
   h.actor.send({ type: "conversation.deleted", id: CHAT2 });
-  assert.deepEqual(h.toggled, [CHAT2, null]);
+  assert.deepEqual(h.toggled, []);
 });
 
 test("opening another chat while not pinned leaves the pins alone", async () => {

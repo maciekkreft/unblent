@@ -124,7 +124,7 @@ test("in the journal a marked evaluator of another book is listed, opened and ed
   }
 });
 
-test("pinned, the list and the open evaluator stay on their book while the stage moves; unpinned, both follow it, and a reload keeps the pin", async () => {
+test("pinned from the start, the list and the open evaluator stay on their book while the stage moves; unpinned, both follow it, and a reload keeps the pin", async () => {
   const saved = [];
   const wiring = (stored) =>
     wire(["pins", "journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
@@ -144,7 +144,6 @@ test("pinned, the list and the open evaluator stay on their book while the stage
     await until(() => list().evaluators.map((e) => e.name).join() === "Book's");
     actors["evaluator-list"].send({ type: "_pick", id: BOOK_EVAL });
     await until(() => draft()?.name === "Book's");
-    actors["evaluator-editor"].send({ type: "_togglePin" });
     await until(() => actors.pins.getSnapshot().context.pins.evaluators === BOOK);
 
     actors.books.send({ type: "book.selected", id: JOURNAL });

@@ -80,11 +80,14 @@ const isHighlight = (note, subject) =>
   subject != null && links(note.about).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
 
 // Which note to open from a list reply (D7): the newest note about the subject that is
-// not a highlight of it (the reply is newest first), or — with no subject on the stage —
-// the newest note overall. Null when there is none, so the editor lands on the empty page.
-const pickId = (notes, subject) => {
+// not a highlight of it (the reply is newest first), or — for an editor that does not
+// follow the stage — the newest note overall. Null when there is none, so the editor
+// lands on the empty page. A following editor with nothing on the stage opens none: the
+// note it opens is pinned (`pins` starts every pin on), and the subject is often not
+// known yet at a reload, so a note chosen then would stay open in place of the subject's.
+const pickId = (notes, subject, subjecting) => {
   const list = Array.isArray(notes) ? notes : [];
-  if (subject == null) return list[0]?.id ?? null;
+  if (subject == null) return subjecting ? null : list[0]?.id ?? null;
   return list.find((n) => isAbout(n, subject) && !isHighlight(n, subject))?.id ?? null;
 };
 
@@ -237,9 +240,6 @@ export const machine = setup({
         enqueue.emit({ type: "pin.toggled", what: "note", id: legacy });
       }
     }),
-    unpin: enqueueActions(({ context, enqueue }) => {
-      if (context.pinned || context.restoring) enqueue.emit({ type: "pin.toggled", what: "note", id: null });
-    }),
   },
 }).createMachine({
   id: "note-editor",
@@ -252,9 +252,10 @@ export const machine = setup({
       "the most recently edited note about the subject whenever the subject changes, or an " +
       "empty page that a note about the subject arriving later fills; a new note is linked to " +
       "the subject at its first save, the About line shows that link, and a keystroke made " +
-      "before the subject is known waits for it. While pinned the editor stays on its note when " +
-      "the subject changes; picking another note still opens it and the pin stays on, now on " +
-      "that note. The pin is kept by `pins` and the titles of subjects seen on this device, so " +
+      "before the subject is known waits for it. The pin is on unless the user turns it off, and " +
+      "while it is on the editor stays on its note when the subject changes; picking another " +
+      "note still opens it and the pin stays on, now on that note; turned off, the editor " +
+      "follows the subject. The pin is kept by `pins` and the titles of subjects seen on this device, so " +
       "both survive a reload. It announces the note it shows, or none for the " +
       "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
       "here.",
@@ -374,12 +375,13 @@ export const machine = setup({
       },
     ],
     // The fact's news that the open note is gone (4.3, fourth rule): fall back to the
-    // empty page, where a keystroke starts a fresh note, and drop the pin — there is
-    // nothing to keep. A deletion of another note is left to the bus to record as ignored.
+    // empty page, where a keystroke starts a fresh note. `pins` lets go of the note when
+    // the empty page is announced; pin.toggled is the user's press alone, so it is not
+    // sent here. A deletion of another note is left to the bus to record as ignored.
     "note.deleted": {
       guard: ({ context, event }) => event.id === context.id,
       target: ".empty",
-      actions: ["unpin", assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false })],
+      actions: assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false }),
     },
     // The fact's news (4.3, fourth rule). Guarded so a change for another id is left
     // to the bus to record as ignored.
@@ -469,9 +471,9 @@ export const machine = setup({
           actions: assign({ id: ({ context }) => context.restoreId, restoring: true }),
         },
         {
-          guard: ({ context }) => pickId(context.startNotes, context.subject) != null,
+          guard: ({ context }) => pickId(context.startNotes, context.subject, context.subjecting) != null,
           target: "loading",
-          actions: assign({ id: ({ context }) => pickId(context.startNotes, context.subject) }),
+          actions: assign({ id: ({ context }) => pickId(context.startNotes, context.subject, context.subjecting) }),
         },
         { target: "empty" },
       ],
@@ -514,11 +516,11 @@ export const machine = setup({
             }),
           },
           {
-            // A remembered pin whose note is gone (D10): forget it and choose from the
-            // start picture as an unpinned editor would.
+            // A remembered pin whose note is gone (D10): choose from the start picture as
+            // an unpinned editor would; `pins` takes the note that choice announces.
             guard: ({ context, event }) => context.restoring && event.output.error === "not-found",
             target: "choosing",
-            actions: ["unpin", assign({ restoreId: null, restoring: false, id: null })],
+            actions: assign({ restoreId: null, restoring: false, id: null }),
           },
           { guard: ({ event }) => event.output.error === "not-found", target: "blank" },
           { target: "failed" },
@@ -535,9 +537,9 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           {
-            guard: ({ context, event }) => pickId(event.output.notes, context.subject) != null,
+            guard: ({ context, event }) => pickId(event.output.notes, context.subject, context.subjecting) != null,
             target: "loading",
-            actions: assign({ id: ({ context, event }) => pickId(event.output.notes, context.subject) }),
+            actions: assign({ id: ({ context, event }) => pickId(event.output.notes, context.subject, context.subjecting) }),
           },
           { target: "empty" },
         ],

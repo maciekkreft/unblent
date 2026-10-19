@@ -22,10 +22,16 @@ const GUEST = "b5d9cf7c30b0616b851e4facf5b0597a";
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 // session: read answered as the given account; NO_SESSION is a page without session.
+// `stage` is what subject: read answers, `open` what conversations: open answers.
 const NO_SESSION = Symbol("no session");
-const start = async (stored = null, userId = ADMIN) => {
+const start = async (stored = null, userId = ADMIN, { stage = null, open = null } = {}) => {
   const saved = [];
-  const ask = () => (userId === NO_SESSION ? Promise.resolve({ error: "no-answerer" }) : Promise.resolve({ userId, registrationOpen: false }));
+  const ask = (target) => {
+    if (userId === NO_SESSION) return Promise.resolve({ error: "no-answerer" });
+    if (target === "subject") return Promise.resolve({ subject: stage });
+    if (target === "conversations") return Promise.resolve({ id: open });
+    return Promise.resolve({ userId, registrationOpen: false });
+  };
   const actor = createActor(machine, { input: { stored, save: (v) => saved.push(JSON.parse(v)), ask } });
   const emitted = [];
   actor.on("pins.changed", (e) => {
@@ -71,7 +77,7 @@ test("a pin is kept, saved and announced, and each of the three is its own", asy
 });
 
 test("a repeat changes nothing and announces nothing", async () => {
-  const { actor, saved, emitted } = await start(JSON.stringify({ [ADMIN]: { note: NOTE, chat: null, evaluators: null } }));
+  const { actor, saved, emitted } = await start(JSON.stringify({ [ADMIN]: { note: NOTE, chat: null, evaluators: null, off: ["chat"] } }));
   actor.send({ type: "pin.toggled", what: "note", id: NOTE });
   actor.send({ type: "pin.toggled", what: "chat", id: null });
   assert.equal(saved.length, 0);
@@ -129,6 +135,71 @@ test("a read before session answers waits for it, and a page without session has
   }).start();
   assert.deepEqual(await read(actor), { note: null, chat: null, evaluators: BOOK });
   assert.deepEqual(await read((await start(stored, NO_SESSION)).actor), { note: NOTE, chat: null, evaluators: null });
+});
+
+const NOTE2 = "01ARZ3NDEKTSV4RRFFQ69G5FB2";
+const CHAT2 = "01ARZ3NDEKTSV4RRFFQ69G5FB3";
+const BOOK2 = "01ARZ3NDEKTSV4RRFFQ69G5FB4";
+const ON_BOOK = (id) => ({ kind: "book", id, title: "A book", view: "book-stage" });
+
+test("every pin starts on: it takes the book on the stage and each note and chat opened", async () => {
+  const { actor, saved } = await start(null, ADMIN, { stage: ON_BOOK(BOOK) });
+  assert.deepEqual(await read(actor), { note: null, chat: null, evaluators: BOOK });
+  actor.send({ type: "note.opened", id: NOTE });
+  actor.send({ type: "conversation.opened", id: CHAT });
+  actor.send({ type: "subject.changed", subject: ON_BOOK(BOOK2) });
+  assert.deepEqual(await read(actor), { note: NOTE, chat: CHAT, evaluators: BOOK }, "a new book on the stage moves no pin");
+  actor.send({ type: "note.opened", id: NOTE2 });
+  actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.deepEqual(await read(actor), { note: NOTE2, chat: CHAT2, evaluators: BOOK }, "a pick moves the pin to it");
+  assert.deepEqual(saved.at(-1), { [ADMIN]: { note: NOTE2, chat: CHAT2, evaluators: BOOK } });
+});
+
+test("a pin turned off stays off, through picks and a reload, until it is turned on again", async () => {
+  const first = await start(null, ADMIN, { stage: ON_BOOK(BOOK) });
+  first.actor.send({ type: "conversation.opened", id: CHAT });
+  first.actor.send({ type: "pin.toggled", what: "chat", id: null });
+  first.actor.send({ type: "pin.toggled", what: "evaluators", id: null });
+  first.actor.send({ type: "conversation.opened", id: CHAT2 });
+  first.actor.send({ type: "subject.changed", subject: ON_BOOK(BOOK2) });
+  assert.deepEqual(await read(first.actor), { note: null, chat: null, evaluators: null });
+
+  const again = await start(JSON.stringify(first.saved.at(-1)), ADMIN, { stage: ON_BOOK(BOOK) });
+  assert.deepEqual(await read(again.actor), { note: null, chat: null, evaluators: null }, "off is remembered");
+  again.actor.send({ type: "pin.toggled", what: "chat", id: CHAT });
+  again.actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.equal((await read(again.actor)).chat, CHAT2, "on again, the pin follows the chat opened");
+});
+
+test("the chat open at the start is pinned, asked again at the next read when conversations was not there yet", async () => {
+  assert.equal((await read((await start(null, ADMIN, { open: CHAT })).actor)).chat, CHAT);
+  let answered = false;
+  const ask = (target) => {
+    if (target === "conversations") return Promise.resolve(answered ? { id: CHAT } : { error: "no-answerer" });
+    return Promise.resolve(target === "subject" ? { subject: null } : { userId: ADMIN, registrationOpen: false });
+  };
+  const actor = createActor(machine, { input: { stored: null, save: () => {}, ask } }).start();
+  await flush();
+  answered = true;
+  await flush();
+  assert.equal(actor.getSnapshot().context.pins.chat, null, "not asked again by itself");
+  assert.equal((await read(actor)).chat, null, "that read answers what pins holds now");
+  await flush();
+  assert.equal((await read(actor)).chat, CHAT, "and asks again, so the next read has the chat");
+});
+
+test("a deleted note, chat or book lets go of its pin, which stays on for the next one", async () => {
+  const { actor } = await start(null, ADMIN, { stage: ON_BOOK(BOOK) });
+  actor.send({ type: "note.opened", id: NOTE });
+  actor.send({ type: "conversation.opened", id: CHAT });
+  actor.send({ type: "note.opened", id: null });
+  actor.send({ type: "conversation.deleted", id: CHAT });
+  actor.send({ type: "subject.changed", subject: ON_BOOK(BOOK2) });
+  actor.send({ type: "book.deleted", id: BOOK });
+  assert.deepEqual(await read(actor), { note: null, chat: null, evaluators: BOOK2 });
+  actor.send({ type: "note.opened", id: NOTE2 });
+  actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.deepEqual(await read(actor), { note: NOTE2, chat: CHAT2, evaluators: BOOK2 });
 });
 
 test("every emit and reply matches its schema", () => {

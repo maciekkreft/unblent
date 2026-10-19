@@ -16,8 +16,8 @@ const B1 = { kind: "book", id: "01HQ8ZK7M4N5P6Q7R8S9T0V1B1", title: "One", view:
 const B2 = { kind: "book", id: "01HQ8ZK7M4N5P6Q7R8S9T0V1B2", title: "Two", view: "book-reader" };
 const chat = (id, b) => ({ id, title: id, about: [{ kind: "book", id: b.id }], start: "", turns: [], updatedAt: 5 });
 
-test("a pinned chat stays open while the stage moves, the pin moves with a pick, and unpinned the chat follows again", async () => {
-  let open = CHAT;
+test("a chat opened is pinned without a press and stays while the stage moves, the pin moves with a pick, and turned off the chat follows again and the pin stays off", async () => {
+  let open = null;
   const chats = { [CHAT]: chat(CHAT, B1), [CHAT2]: chat(CHAT2, B2) };
   const { actors, unwire } = await wire(["pins", "conversations", "chat-thread"], {
     pins: { stored: null, save: () => {} },
@@ -36,8 +36,8 @@ test("a pinned chat stays open while the stage moves, the pin moves with a pick,
   const pins = () => actors.pins.getSnapshot().context.pins;
   try {
     await until(() => thread().conversation?.id === CHAT);
-    actors["chat-thread"].send({ type: "_togglePin" });
-    await until(() => pins().chat === CHAT);
+    actors.conversations.send({ type: "conversation.selected", id: CHAT });
+    await until(() => pins().chat === CHAT && thread().pin === CHAT);
 
     actors.conversations.send({ type: "subject.changed", subject: B2 });
     await new Promise((r) => setTimeout(r, 20));
@@ -51,6 +51,9 @@ test("a pinned chat stays open while the stage moves, the pin moves with a pick,
     await until(() => pins().chat === null);
     actors.conversations.send({ type: "subject.changed", subject: B1 });
     await until(() => thread().openId === CHAT);
+    actors.conversations.send({ type: "conversation.selected", id: CHAT2 });
+    await until(() => thread().openId === CHAT2);
+    assert.equal(pins().chat, null, "turned off, the pin stays off");
   } finally {
     unwire();
   }

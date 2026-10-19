@@ -284,9 +284,9 @@ for (const engine of ENGINES) {
       const pinnedBody = await editorBody(page);
       assert.equal(await aboutText(page), "About: Sample Book");
 
-      // Pin, then move the stage to the other book so the pinned note's book is no longer
-      // on the stage — the case where the About line used to go blank after a reload.
-      await clickPin(page);
+      // The note opened is pinned without a press (the pin starts on). Move the stage to
+      // the other book so the pinned note's book is no longer on the stage — the case
+      // where the About line used to go blank after a reload.
       await until(async () => await pinPressed(page));
       const listBefore = await shownTitles(page);
       // The "open book" write for `first` must reach the server before the reload, so the

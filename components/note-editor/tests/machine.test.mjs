@@ -410,11 +410,12 @@ test("a highlight of the subject is never the note the editor opens", async () =
   assert.equal(actor.getSnapshot().context.id, ID, "the plain note, not the newer highlight");
 });
 
-test("with the attribute on but nothing on the stage, start reopens the newest note overall", async () => {
+test("with the attribute on but nothing on the stage, start opens the empty page, not a note that would be pinned", async () => {
   const list = { notes: [{ id: ID2, title: "n", updatedAt: 20, about: [] }, { id: ID, title: "o", updatedAt: 10, about: [] }] };
   const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID2, null) }, subject: null }) });
   await settle();
-  assert.equal(actor.getSnapshot().context.id, ID2, "today's behaviour when there is no subject");
+  assert.equal(actor.getSnapshot().value, "empty");
+  assert.equal(actor.getSnapshot().context.id, null);
 });
 
 test("a new note written while following carries one link to the subject; later edits leave links alone", async () => {
@@ -553,7 +554,7 @@ test("unpinning lets the editor follow the next subject change again", async () 
   assert.equal(actor.getSnapshot().context.id, ID2, "following resumed: opened C's note");
 });
 
-test("deleting the pinned note falls to the empty page and unpins", async () => {
+test("deleting the pinned note falls to the empty page and leaves the pin to pins", async () => {
   const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
   const { actor, toggled: forgot } = editor({
     subjecting: true,
@@ -566,7 +567,7 @@ test("deleting the pinned note falls to the empty page and unpins", async () => 
   const s = actor.getSnapshot();
   assert.equal(s.value, "empty");
   assert.equal(s.context.pinned, false);
-  assert.equal(forgot.at(-1), null, "pins was told to unpin");
+  assert.deepEqual(forgot, [ID], "no press, so no pin.toggled: pins hears the empty page instead");
 });
 
 test("the note pins holds reopens and starts pinned, skipping the subject choice", async () => {
@@ -616,7 +617,7 @@ test("a pin in pins wins over the old key, which is still cleared", async () => 
   assert.equal(forgotten, 1);
 });
 
-test("a pinned note that is gone is unpinned, and start falls back to the subject's note", async () => {
+test("a pinned note that is gone is not reopened, and start falls back to the subject's note", async () => {
   const list = { notes: [{ id: ID2, title: "about A", updatedAt: 20, about: [LINK_A] }] };
   const ask = (target, name, payload) => {
     if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
@@ -630,7 +631,7 @@ test("a pinned note that is gone is unpinned, and start falls back to the subjec
   assert.deepEqual(s.value, { editing: "clean" });
   assert.equal(s.context.id, ID2, "fell back to the newest note about the subject");
   assert.equal(s.context.pinned, false);
-  assert.deepEqual(forgot, [null], "pins was told to unpin");
+  assert.deepEqual(forgot, [], "no press, so no pin.toggled: pins hears the note opened instead");
 });
 
 // --- The About line survives a reload, and names a new note (12) ----------------
