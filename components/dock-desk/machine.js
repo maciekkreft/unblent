@@ -318,8 +318,9 @@ export const machine = setup({
       "again. While arranging the move and dock buttons still act on the child whole, and a " +
       "child with two or more tabs also has two buttons after them, \"Move <label> earlier\" and \"Move " +
       "<label> later\", which move its tab in front one place (`tab.moved`), the one at an end " +
-      "greyed. Each of a child's tabs is one round pill holding its label and its ×, the one " +
-      "in front filled. Clicks, the arrow keys, Home and End, and Ctrl+. and Ctrl+, " +
+      "greyed. A child's tabs look like the docks' own tabs, the one in front in ink and " +
+      "semibold, each with its × right after the name, and pointing anywhere on a tab lights " +
+      "one square behind its name and its ×. Clicks, the arrow keys, Home and End, and Ctrl+. and Ctrl+, " +
       "step through the child's tabs inside the group's order. " +
       "While the \"Vim keys\" preference is on, on the desk and not on the phone, Ctrl+h and " +
       "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +

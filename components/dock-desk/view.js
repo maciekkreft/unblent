@@ -258,65 +258,53 @@ class DockDesk extends LitElement {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
     }
-    /* A child's own tab is one pill holding its label and its × (Norman: the × is seen
-       to belong to its tab). The tab button fills the pill up to the ×, so the whole
-       pill picks it. On the rail, which has no room for pills, they stay plain labels. */
+    /* A child's own tab looks like the docks' tabs, with its × right after the name
+       inside the same hover square, so pointing anywhere on the tab lights one square
+       behind both (Norman: the × is seen to belong to its tab). The name and the × stay
+       two buttons, each with its own focus ring. On the rail they stay plain labels. */
     .own {
       flex: none;
       display: inline-flex;
       align-items: center;
     }
+    .strip .own {
+      gap: var(--space-2xs);
+      padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-xs);
+      border-radius: var(--radius-sm);
+    }
+    .strip .own.lone {
+      padding-right: var(--space-xs);
+    }
+    .strip .own:hover {
+      background: var(--color-surface-hover);
+    }
+    .strip .own button:hover {
+      background: none;
+    }
+    .strip .own [role="tab"] {
+      padding: 0;
+    }
     .close {
       display: inline-flex;
       align-items: center;
       padding: var(--space-2xs);
-      border-radius: var(--radius-full);
       color: var(--color-body-mid);
     }
     .close svg {
       display: block;
     }
-    .strip .own {
-      padding: var(--space-xs) var(--space-xs) var(--space-xs) 0;
-      border-radius: var(--radius-full);
-    }
-    .strip .own [role="tab"] {
-      align-self: stretch;
-      display: inline-flex;
-      align-items: center;
-      padding: 0 var(--space-2xs) 0 calc(var(--space-sm) + var(--space-2xs));
-      border-radius: inherit;
-    }
-    .strip .own.lone [role="tab"] {
-      padding-right: calc(var(--space-sm) + var(--space-2xs) - var(--space-xs));
-    }
-    .strip .own [role="tab"]:hover,
-    .strip .own .close:hover {
-      background: none;
-    }
-    .strip .own.front {
-      background: var(--color-surface-hover);
-    }
-    .strip .own.front .close {
+    .own.front .close {
       color: var(--color-body);
     }
-    .strip .own:not(.front):hover {
-      background: var(--color-canvas-soft);
-      box-shadow: inset 0 0 0 var(--border-width) var(--color-border);
-    }
-    .strip .own:not(.front):hover .close {
-      background: var(--color-border);
+    .strip .own:hover .close {
       color: var(--color-ink);
     }
-    /* The child's ‹ ›, a little after its last pill, round like it. */
+    /* The child's ‹ ›, a little after its last tab. */
     .moves {
       flex: none;
       display: inline-flex;
       align-items: center;
       margin-left: var(--space-sm);
-    }
-    .moves .action {
-      border-radius: var(--radius-full);
     }
     .rail .moves {
       display: none;
