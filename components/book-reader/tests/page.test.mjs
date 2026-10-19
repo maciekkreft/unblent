@@ -47,17 +47,14 @@ const putJson = async (cookie, path, body) => {
   assert.equal(res.status, 200, `PUT ${path}`);
 };
 
-function watch(page, problems, ignore = false) {
-  // A reload aborts whatever book fetch was in flight; that abort is not a fault, so a
-  // test that reloads tolerates it, the way the shelf test tolerates a deliberate 422.
-  const skip = (t) => ignore && /\/api\/books\//.test(t ?? "");
+function watch(page, problems) {
   page.on("console", (msg) => {
-    if (msg.type() === "error" && !skip(msg.text())) problems.push(`console error: ${msg.text()}`);
+    if (msg.type() === "error") problems.push(`console error: ${msg.text()}`);
   });
-  page.on("pageerror", (err) => !skip(err.message) && problems.push(`page error: ${err.message}`));
-  page.on("requestfailed", (req) => !skip(req.url()) && problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`));
+  page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
+  page.on("requestfailed", (req) => problems.push(`request failed: ${req.url()} ${req.failure()?.errorText}`));
   page.on("response", (res) => {
-    if (res.status() >= 400 && !skip(res.url())) problems.push(`HTTP ${res.status()}: ${res.url()}`);
+    if (res.status() >= 400) problems.push(`HTTP ${res.status()}: ${res.url()}`);
   });
 }
 
@@ -142,7 +139,7 @@ for (const engine of ENGINES) {
       await context.addCookies([{ name: "unblent_session", value: opts.cookie ?? cookie, url: BASE_URL }]);
       const page = await context.newPage();
       await page.setViewportSize(opts.viewport ?? { width: 1024, height: 768 });
-      watch(page, problems, opts.ignoreAborts);
+      watch(page, problems);
       page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       if (opts.phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
       if (opts.vimKeys != null) await page.addInitScript((v) => localStorage.setItem("settings", v), seed(opts.vimKeys));
@@ -287,7 +284,7 @@ for (const engine of ENGINES) {
 
     // Browser: a reload against real storage.
     test("keeps the reading place across a reload", async () => {
-      const { page, problems, debug } = await openAndRewind({ ignoreAborts: true });
+      const { page, problems, debug } = await openAndRewind();
       try {
         await page.keyboard.press("ArrowRight");
         await waitPagesAtLeast(page, "Chapter Two", 3);
