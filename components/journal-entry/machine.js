@@ -183,6 +183,20 @@ const followBook = enqueueActions(({ context, event, enqueue, self }) => {
     .catch(() => self.send({ type: "_book", id, written: false, known: false }));
 });
 
+// The journal's book id, as books reported it: the book being followed when it is the
+// journal, else any book books said is written. Null while no book has been seen as the
+// journal, as on a page without books.
+export const journalId = (context) =>
+  context.want && context.written[context.want.id] === true
+    ? context.want.id
+    : (Object.keys(context.written).find((id) => context.written[id] === true) ?? null);
+
+// :q in the editor (the editor kit's quit, Vim keys on) closes the journal's book.
+const quit = enqueueActions(({ context, enqueue }) => {
+  const id = journalId(context);
+  if (id) enqueue.emit({ type: "book.closed", id });
+});
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
@@ -209,7 +223,8 @@ export const machine = setup({
       "it can still be written, when the page has loaded and whenever either changes, also at " +
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
-      "the text and follows the announced day.",
+      "the text and follows the announced day. With Vim keys on, typing :q or :quit in the " +
+      "editor, on any day, closes the journal's book.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed"],
     attributes: ["height"],
@@ -320,6 +335,7 @@ export const machine = setup({
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null })) },
     _show: { actions: assign(({ event }) => ({ selected: null, chapter: event.chapter })) },
+    _quit: { actions: quit },
     "book.opened": { actions: followBook },
     "chapter.selected": { actions: followBook },
     _book: {

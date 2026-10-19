@@ -186,5 +186,21 @@ for (const engine of ENGINES) {
         });
       await until(async () => (await stored())[0] === "# Monday\n\nRan\nRested");
     });
+
+    // Browser: focus and keys.
+    run("with Vim keys on, :q in the product's journal closes the journal's book", async (page) => {
+      // The product page, because there books names the journal; its preferences are the product profile's.
+      await page.addInitScript(() => localStorage.setItem("settings:product", JSON.stringify({ nav: [], vimKeys: true })));
+      const debug = [];
+      page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.locator("book-shelf .tile:not(.adding)").filter({ hasText: "Journal" }).click();
+      await editor(page).click();
+      await until(async () => (await entry(page).locator(".cm-fat-cursor").count()) === 1);
+      await until(async () => debug.some((l) => / event book\.opened books → .*journal-entry/.test(l)));
+      await page.keyboard.type(":q");
+      await page.keyboard.press("Enter");
+      await until(async () => debug.some((l) => / event book\.closed journal-entry → /.test(l)));
+    });
   });
 }

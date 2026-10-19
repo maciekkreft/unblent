@@ -266,6 +266,28 @@ test("book.changed and book.deleted keep whether a book is written current", asy
   assert.deepEqual(asked, [JOURNAL], "forgotten on delete, so asked again");
 });
 
+test(":q closes the journal's book, on any day, and nothing before books named the journal", async () => {
+  const closed = [];
+  const sunday = day(SUNDAY, "2026-10-11", "One.");
+  const { actor } = await start(picture({ days: [sunday], open: null }), { books: BOOKS });
+  actor.on("book.closed", (e) => closed.push(e));
+  actor.send({ type: "_quit" });
+  assert.deepEqual(closed, [], "no book is known to be the journal yet");
+  actor.send({ type: "book.opened", id: JOURNAL });
+  await flush();
+  actor.send({ type: "_quit" });
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  assert.deepEqual(showing(actor), [SUNDAY, false]);
+  actor.send({ type: "_quit" });
+  // Another book opened (the journal is no longer followed) still leaves the journal named.
+  actor.send({ type: "book.opened", id: OTHER });
+  await flush();
+  actor.send({ type: "_quit" });
+  const schema = JSON.parse(readFileSync(resolve(HERE, "..", "events", "book.closed.json"), "utf8"));
+  assert.deepEqual(closed, [1, 2, 3].map(() => ({ type: "book.closed", id: JOURNAL })));
+  for (const { type, ...rest } of closed) assert.ok(new Validator(schema, "2020-12").validate(rest).valid, type);
+});
+
 test("the Days list's pick still works after following a chapter, and a pick while typing saves first", async () => {
   const [d1, d2] = [day(SUNDAY, "2026-10-11", "One."), day(TODAY, "2026-10-12", "Two.")];
   const { actor, emitted } = await start(picture({ days: [d1, d2], open: TODAY }), { books: BOOKS });

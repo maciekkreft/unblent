@@ -452,7 +452,7 @@ class JournalEntry extends LitElement {
 
   #extensions(editable, vimOn) {
     return [
-      ...baseExtensions({ vim: vimOn }),
+      ...baseExtensions({ vim: vimOn, quit: () => this.#send({ type: "_quit" }) }),
       paragraphs({ notList: leveled }),
       this.#editable.of(editability(editable)),
       levelField,
