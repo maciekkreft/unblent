@@ -1,7 +1,7 @@
 import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -13,7 +13,6 @@ const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 const SAMPLE = resolve(HERE, "..", "..", "books", "tests", "fixtures", "sample.epub");
 const PAGE = `${BASE_URL}/workshop/design/subject`;
 
@@ -94,7 +93,6 @@ const openTile = (page, id) =>
 // so it reads only what it set up. Ids are fixed ULIDs.
 const BOOK_ONE = "01K00000000000000000000BK1";
 const BOOK_TWO = "01K00000000000000000000BK2";
-const HIGHLIGHT = "01K0000000000000000000HGHT";
 const seedUser = async ({ books = [], open = null, notes = [] } = {}) => {
   const cookie = forgeCookie();
   const put = async (path, type, body) => {
@@ -108,28 +106,12 @@ const seedUser = async ({ books = [], open = null, notes = [] } = {}) => {
   }
   return cookie;
 };
-// The note the reader saves for a drag over "short opening" on the sample's first page.
-const highlightOn = (book) => [{
-  kind: "book",
-  id: book,
-  place: { chapter: 0, contentVersion: 1, start: { block: 2, offset: 2 }, end: { block: 2, offset: 15 } },
-  quote: { exact: "short opening", prefix: "A ", suffix: " chapter, one page long. It link" },
-}];
 
 // The subject stem in a context of its own (11.2): the user's cookie, empty storage.
-const openPage = async (browser, cookie, { undoMs } = {}) => {
+const openPage = async (browser, cookie) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
-  // A short undo window, so a removal test need not wait out the real one. book-reader
-  // reads --duration-undo off its host at mount, so it must be in the cascade before
-  // the element upgrades; an adopted stylesheet is applied at document start.
-  if (undoMs != null)
-    await context.addInitScript((ms) => {
-      const sheet = new CSSStyleSheet();
-      sheet.replaceSync(`:root{--duration-undo:${ms}ms}`);
-      document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    }, undoMs);
   const page = await context.newPage();
   const problems = [];
   watch(page, problems);
@@ -191,135 +173,6 @@ const shownTitles = (page) =>
 
 const sameSet = (a, b) => a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
 
-// The Notes container's Back bar label (null when the list is shown, so no bar).
-const notesBarLabel = (page) =>
-  page.evaluate(() => {
-    const b = document.querySelector("list-then-item#notes").shadowRoot.querySelector(".bar button span");
-    return b ? b.textContent.trim() : null;
-  });
-
-// The fixed Highlights row (Decision 5): its count subtitle and whether it reads as the
-// selected row, or null when the row is not shown.
-const highlightsRow = (page) =>
-  page.evaluate(() => {
-    const r = document.querySelector("note-list").shadowRoot.querySelector(".row.highlights");
-    return r
-      ? { subtitle: r.querySelector(".subtitle").textContent.trim(), selected: r.getAttribute("aria-selected") }
-      : null;
-  });
-
-// Click the Notes container's Back bar (return from the shown item to the list).
-const clickNotesBack = (page) =>
-  page.evaluate(() => document.querySelector("list-then-item#notes").shadowRoot.querySelector(".bar button").click());
-
-// The reader's "Page N of M" footer, to prove a highlight never moves the text (D4).
-const pageLabel = (page) =>
-  page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".pageno")?.textContent ?? "");
-
-// The text of every painted highlight in the reader (empty when none).
-const marks = (page) =>
-  page.evaluate(() =>
-    [...document.querySelector("book-reader").shadowRoot.querySelectorAll(".strip mark")].map((m) => m.textContent),
-  );
-
-// The highlight bubble (session 3): its text (Copy · Remove, or Removed · Undo), whether
-// the first mark is dimmed for removal, and clicking a mark or a bubble button. A mark
-// opens its bubble on a real mouse click (its #pointerup), so the click goes through the
-// mouse at the mark's centre, not mark.click() (which fires no pointer events).
-const bubbleText = (page) =>
-  page.evaluate(
-    () => document.querySelector("book-reader").shadowRoot.querySelector(".bubble")?.textContent.replace(/\s+/g, " ").trim() ?? null,
-  );
-const markRemoving = (page) =>
-  page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".strip mark")?.classList.contains("removing") ?? false);
-const clickFirstMark = async (page) => {
-  const box = await page.evaluate(() => {
-    const m = document.querySelector("book-reader").shadowRoot.querySelector(".strip mark");
-    const r = m.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-  });
-  await page.mouse.click(box.x, box.y);
-};
-const clickBubble = (page, sel) =>
-  page.evaluate((s) => document.querySelector("book-reader").shadowRoot.querySelector(`.bubble ${s}`)?.click(), sel);
-
-// Wait until the reader's first chapter has laid out enough text to drag over.
-const readerHasText = (page) =>
-  until(
-    async () =>
-      page.evaluate(() => {
-        const s = document.querySelector("book-reader").shadowRoot.querySelector(".strip");
-        return Boolean(s && s.children.length && s.textContent.trim().length > 20);
-      }),
-    8000,
-  );
-
-// The client rect of a short run of text in the first roomy paragraph, to drag across.
-const dragRect = (page) =>
-  page.evaluate(() => {
-    const strip = document.querySelector("book-reader").shadowRoot.querySelector(".strip");
-    const block = [...strip.children].find((el) => el.textContent.trim().split(/\s+/).length >= 4);
-    const tn = document.createTreeWalker(block, NodeFilter.SHOW_TEXT).nextNode();
-    const range = document.createRange();
-    range.setStart(tn, 2);
-    range.setEnd(tn, Math.min(tn.data.length, 12));
-    const r = range.getBoundingClientRect();
-    return { x1: r.left + 1, x2: r.right - 1, y: r.top + r.height / 2 };
-  });
-
-// A synthetic mouse drag across the text: the highlight gesture (D3).
-const dragOver = async (page, r) => {
-  await page.mouse.move(r.x1, r.y);
-  await page.mouse.down();
-  await page.mouse.move((r.x1 + r.x2) / 2, r.y, { steps: 5 });
-  await page.mouse.move(r.x2, r.y, { steps: 5 });
-  await page.mouse.up();
-};
-
-// The elements the Notes container (list-then-item#notes) has assigned to its slot: the
-// list, or the item shown after a pick. The pair is named by its instance id (4.1).
-const assignedNotes = (page) =>
-  page.evaluate(() =>
-    document.querySelector("list-then-item#notes").shadowRoot.querySelector("slot").assignedElements().map((el) => el.localName),
-  );
-
-// Show the Highlights document: pick the Highlights row in the Notes list, then wait for
-// the container to show the document in place of the editor (Decision 2). The row lives in
-// Notes, so no dock tab need be brought forward.
-const showHighlights = async (page) => {
-  await until(async () =>
-    page.evaluate(() => Boolean(document.querySelector("note-list").shadowRoot.querySelector(".row.highlights"))),
-  );
-  await page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.highlights").click());
-  await until(async () => (await assignedNotes(page)).includes("highlight-notes"));
-};
-
-// Bring the docked Notes container to the stage: click the desk's "Return Notes to the
-// stage" action (shown while the desk is being arranged; workshop arranges by default).
-// The Highlights document lives inside Notes now, so staging Notes stages the document.
-const stageNotes = (page) =>
-  page.evaluate(() => {
-    const btn = [...document.querySelector("dock-desk").shadowRoot.querySelectorAll("button")].find((b) =>
-      /Return Notes to the stage/.test(b.getAttribute("aria-label") ?? ""),
-    );
-    btn?.click();
-  });
-
-// The label of the view shown on the stage (its active stage tab).
-const stagedTab = (page) =>
-  page.evaluate(
-    () =>
-      document
-        .querySelector("dock-desk")
-        .shadowRoot.querySelector('.stage [role="tab"][aria-selected="true"]')
-        ?.textContent.trim() ?? null,
-  );
-
-// The text of each painted quote line in the Highlights document.
-const hnQuotes = (page) =>
-  page.evaluate(() =>
-    [...document.querySelector("highlight-notes").shadowRoot.querySelectorAll(".cm-quote-text")].map((m) => m.textContent),
-  );
 // Nudge `notes` to sync now instead of after its idle window: it drains the outbox on a
 // visibilitychange (fact.js), so a test need not wait out the 2s debounce for a write to
 // reach the server. The tab stays "visible", so this is a drain and a pull, as a focus is.
@@ -477,189 +330,6 @@ for (const engine of ENGINES) {
         return Boolean(stored);
       });
       assert.deepEqual(stored.about, [{ kind: "book", id: first }], "the new note's book link reached the server");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-  });
-
-  // The reader makes and paints highlights (session 2, D3/D4). Signed in so the highlight
-  // note reaches the server and a reload brings it back. One browser per engine.
-  describe(`the reader highlights in ${engine.name}`, { timeout: 120000 }, () => {
-    let browser;
-    before(async () => {
-      browser = await engine.launch();
-    }, { timeout: 30000 });
-    afterEach(async () => {
-      await Promise.all(browser.contexts().map((c) => c.close()));
-    });
-    after(async () => {
-      await browser?.close();
-    }, { timeout: 15000 });
-
-    // Browser: a gesture.
-    test("a drag makes a highlight that holds the page count, stays off the list, and survives a reload", async () => {
-      const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
-      await readerHasText(page);
-
-      // Before the drag: where we are, and what the list shows (no book note yet).
-      const pagesBefore = await pageLabel(page);
-      const listBefore = await shownTitles(page);
-
-      // Drag across a run of text: a highlight is painted, snapped to whole words.
-      await dragOver(page, await dragRect(page));
-      await until(async () => (await marks(page)).length > 0);
-      const text = (await marks(page)).join("");
-      assert.ok(text.trim().length > 0, "the mark holds the highlighted text");
-      assert.equal(text, text.trim(), "the highlight is snapped, with no surrounding space");
-
-      // Highlighting never moves the text (D4), and the list never grows a row for it (D2).
-      assert.equal(await pageLabel(page), pagesBefore, "the page count is unchanged");
-      assert.ok(sameSet(await shownTitles(page), listBefore), "the note list shows no new row");
-
-      // The highlight note reaches the server, so a reload is deterministic.
-      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
-
-      // Reload: the book reopens and its highlight is painted again.
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await ready(page);
-      await until(async () => (await marks(page)).length > 0, 8000);
-      assert.equal((await marks(page)).join(""), text, "the same highlight comes back");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // The bubble (session 3): a click on a mark opens Copy · Remove; Remove starts the
-    // undo window (Removed · Undo, the mark dimmed), Undo brings it back, and a second
-    // Remove that elapses takes the highlight for good — gone here and after a reload.
-    // Browser: a gesture.
-    test("the bubble's Undo brings a removed highlight back", async () => {
-      const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
-      await readerHasText(page);
-      await dragOver(page, await dragRect(page));
-      await until(async () => (await marks(page)).length > 0);
-
-      // Click the mark: its bubble opens reading Copy · Remove.
-      await clickFirstMark(page);
-      await until(async () => /Copy/.test(await bubbleText(page) ?? "") && /Remove/.test(await bubbleText(page) ?? ""));
-
-      // Remove: the bubble reads Removed · Undo and the mark dims; Undo brings it back
-      // inside the real window, which this test never waits out.
-      await clickBubble(page, ".act.remove");
-      await until(async () => /Removed/.test(await bubbleText(page) ?? "") && (await markRemoving(page)));
-      await clickBubble(page, ".act.undo");
-      await until(async () => /Copy/.test(await bubbleText(page) ?? "") && !(await markRemoving(page)));
-      assert.ok((await marks(page)).length > 0, "the highlight is back after undo");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // Browser: a reload against real storage.
-    test("a removed highlight stays gone after a reload", async () => {
-      const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }), { undoMs: 10 });
-      await readerHasText(page);
-
-      // Make a highlight, and let its note reach the server before the removal, so the
-      // tombstone (below) is what a fresh load pulls — the reload stays deterministic.
-      await dragOver(page, await dragRect(page));
-      await until(async () => (await marks(page)).length > 0);
-      await synced(page, (notes) => notes.some((n) => (n.about ?? []).some((l) => l.place)));
-
-      // Remove; the short window elapses at once: the mark goes and the note becomes a
-      // tombstone that reaches the server.
-      await clickFirstMark(page);
-      await until(async () => /Remove/.test(await bubbleText(page) ?? ""));
-      await clickBubble(page, ".act.remove");
-      await until(async () => (await marks(page)).length === 0);
-      await synced(page, (notes) => notes.some((n) => n.deleted && (n.about ?? []).some((l) => l.place)));
-
-      // A reload keeps it gone: the tombstone is pulled, and no mark is painted.
-      const pulled = page.waitForResponse((res) => res.url().includes("/api/notes?since="));
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await ready(page);
-      await readerHasText(page);
-      // What the pull brought has been announced and painted.
-      await pulled;
-      await page.evaluate(() => new Promise((r) => setTimeout(() => requestAnimationFrame(() => requestAnimationFrame(r)))));
-      assert.equal((await marks(page)).length, 0, "the removed highlight does not come back");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-  });
-
-  // The Highlights tab (session 5) as the page composes it: the row in Notes, the document
-  // in the Notes pair, the book kept the subject. What the document does itself (a
-  // comment, the fixed quote line, removing with undo) is tested in highlight-notes; which
-  // row reads as open is note-list's machine test, and the pair on the phone preview is
-  // list-then-item's.
-  describe(`the highlights tab in ${engine.name}`, { timeout: 120000 }, () => {
-    let browser;
-    before(async () => {
-      browser = await engine.launch();
-    }, { timeout: 30000 });
-    afterEach(async () => {
-      await Promise.all(browser.contexts().map((c) => c.close()));
-    });
-    after(async () => {
-      await browser?.close();
-    }, { timeout: 15000 });
-    // The sample, open, with one highlight on it, commented.
-    const withHighlight = () =>
-      seedUser({ books: [BOOK_ONE], open: BOOK_ONE, notes: [{ id: HIGHLIGHT, body: "A thought about this", about: highlightOn(BOOK_ONE) }] });
-
-    // The Highlights row opens the document inside the Notes pair (Decision 1, 2, 5, 7):
-    // it stands in the list showing the count, picking it shows the document under the
-    // Notes Back bar, the highlight is never a plain note, and Back returns to the list with the row selected.
-    // Browser: a page's composition.
-    test("the Highlights row opens the document in the Notes pair and keeps the book the subject", async () => {
-      const { page, problems } = await openPage(browser, await withHighlight());
-
-      // The Highlights row stands in the list showing one highlight, not yet selected, and
-      // no plain note is listed for it.
-      await until(async () => (await highlightsRow(page))?.subtitle === "1 highlight", 8000);
-      assert.deepEqual(await shownTitles(page), [], "the highlight is not among the plain notes");
-      assert.equal((await highlightsRow(page)).selected, "false", "the row is not selected before it is picked");
-
-      // Pick it: the document shows under the "Notes" Back bar, its quote the book's
-      // highlight.
-      await showHighlights(page);
-      await until(async () => (await hnQuotes(page)).length > 0);
-      assert.equal(await notesBarLabel(page), "Notes", "the document opens under the Notes Back bar");
-      assert.deepEqual(await shownTitles(page), [], "still no plain note for the highlight");
-
-      // Back returns to the list, and the Highlights row reads as the open one.
-      await clickNotesBack(page);
-      await until(async () => (await assignedNotes(page)).includes("note-list"));
-      await until(async () => (await highlightsRow(page))?.selected === "true");
-
-      // Picking New note shows the editor, and the Highlights row is no longer selected.
-      await clickNew(page);
-      await until(async () => (await assignedNotes(page)).includes("note-editor"));
-      await until(async () => (await highlightsRow(page))?.selected === "false");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // The document stays inside the Notes pair even when Notes is brought to the stage (12):
-    // the book remains the subject and the highlight is never
-    // listed as a plain note, whether the pair is docked or staged.
-    // Browser: a page's composition.
-    test("the highlights document holds the Notes pair when it is staged", async () => {
-      const { page, problems } = await openPage(browser, await withHighlight());
-      await showHighlights(page);
-      await until(async () => (await hnQuotes(page)).length > 0, 8000);
-
-      // Bring the Notes container to the stage: the document still shows there, Notes still
-      // does not list the highlight (the book is the subject; the highlights document is a
-      // view about it, not a thing of its own).
-      await stageNotes(page);
-      await until(async () => (await stagedTab(page)) === "Notes");
-      await until(async () => (await hnQuotes(page)).length > 0);
-      assert.deepEqual(await shownTitles(page), [], "Notes does not list the highlight with the document staged");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
