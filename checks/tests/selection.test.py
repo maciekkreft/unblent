@@ -75,8 +75,60 @@ class Affected(unittest.TestCase):
 
     def test_infrastructure_runs_everything(self):
         self.assertIsNone(check.affected_tests(["bus/bus.js"], self.manifests, self.tests))
-        self.assertIsNone(check.affected_tests(["editor/editor.js"], self.manifests, self.tests))
+        self.assertIsNone(check.affected_tests(["vendor/vendor.json"], self.manifests, self.tests))
+        self.assertIsNone(check.affected_tests(["server/main.py"], self.manifests, self.tests))
         self.assertIsNone(check.classify_changes(["requirements.txt"], self.manifests))
+        self.assertIsNone(check.classify_changes([".env"], self.manifests))
+
+    def test_the_checks_files_the_tests_load_run_everything(self):
+        for name in ("kit.mjs", "browsers.mjs", "register.mjs", "manifests.mjs",
+                     "importmap-loader.mjs", "loads.mjs"):
+            self.assertIsNone(check.affected_tests([f"checks/{name}"], self.manifests, self.tests), name)
+
+    def test_no_change_runs_everything(self):
+        self.assertIsNone(check.classify_changes([], self.manifests))
+
+    def test_the_checks_own_code_reaches_only_the_checks_tests(self):
+        files, pages = check.affected_tests(["checks/show.py"], self.manifests, self.tests)
+        self.assertEqual(pages, set())
+        self.assertIn("checks/tests/selection.test.py", files)
+        self.assertIn("checks/tests/wire.test.mjs", files)
+        self.assertTrue(all(f.startswith("checks/tests/") for f in files), files)
+
+    def test_the_documentation_reaches_no_test(self):
+        self.assertEqual(check.affected_tests(["architecture.md", "CLAUDE.md"], self.manifests, self.tests),
+                         (set(), set()))
+
+    def test_the_documentation_beside_a_component_adds_nothing(self):
+        files, _ = check.affected_tests(["architecture.md", "components/settings-sheet/view.js"],
+                                        self.manifests, self.tests)
+        self.assertEqual(files, {"components/settings-sheet/tests/page.test.mjs", SMOKE})
+
+    def test_the_editor_kit_reaches_its_tests_its_importers_and_their_pages(self):
+        tests = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob("components/*/tests/*.test.mjs"))
+        importers = check._importers("editor")
+        self.assertIn("note-editor", importers)
+        files, pages = check.affected_tests(["editor/editor.js"], self.manifests, tests)
+        self.assertIn("editor/tests/editor.test.mjs", files)
+        self.assertIn(SMOKE, files)
+        self.assertEqual({Path(f).parts[1] for f in files if f.startswith("components/")} - {"pages"}, importers)
+        holdings = check._page_holdings()
+        self.assertEqual(pages, {a for a, held in holdings.items() if held & importers})
+
+    def test_the_store_reaches_its_tests_and_its_importers_only(self):
+        tests = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob("components/*/tests/*.test.mjs"))
+        importers = check._importers("store")
+        self.assertIn("notes", importers)
+        files, pages = check.affected_tests(["store/store.js"], self.manifests, tests)
+        self.assertIn("store/tests/store.test.mjs", files)
+        self.assertNotIn(SMOKE, files)
+        self.assertEqual(pages, set())
+        self.assertEqual({Path(f).parts[1] for f in files if f.startswith("components/")}, importers)
+
+    def test_the_tokens_reach_the_smoke_test_of_every_page(self):
+        files, pages = check.affected_tests(["tokens/tokens.css"], self.manifests, self.tests)
+        self.assertEqual(files, {SMOKE})
+        self.assertEqual(pages, set(check._page_holdings()))
 
     def test_a_change_that_keeps_the_contract_reaches_own_tests_and_the_page_smoke_only(self):
         files, pages = check.affected_tests(["components/settings-sheet/view.js"], self.manifests, self.tests)

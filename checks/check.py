@@ -1481,12 +1481,28 @@ def serve(port: int) -> None:
 # The full run is the definition of done, but while iterating the edit loop and the
 # Stop hook may narrow it to the tests reachable from what changed: the changed
 # components' own tests, those of their one-hop bus partners, and every test that
-# opens a changed page or a page holding a changed component. Any infrastructure
-# change still runs everything. `affected` is None for the full run, or the set of
-# test files to run.
+# opens a changed page or a page holding a changed component. The check's own code,
+# the editor kit, the store and the tokens reach a narrower set (11); the rest of the
+# infrastructure still runs everything. `affected` is None for the full run, or the set
+# of test files to run.
 
 _INFRA_DIRS = {"bus", "store", "editor", "checks", "vendor", "tokens", "server"}
 _INFRA_FILES = {".env", "requirements.txt"}
+# The parts of the infrastructure whose reach is known (11). Everything else under
+# _INFRA_DIRS runs every test.
+_NARROW_INFRA = {"checks", "editor", "store", "tokens"}
+# The files of checks/ that every test process loads, directly or through an import
+# (register.mjs loads importmap-loader.mjs, browsers.mjs loads loads.mjs): a change to
+# one can break any test, so it runs everything (11).
+_CHECKS_LOADED_BY_TESTS = {"kit.mjs", "browsers.mjs", "register.mjs", "manifests.mjs",
+                           "importmap-loader.mjs", "loads.mjs"}
+# Each narrow part's own tests (11.1).
+_INFRA_TESTS = {
+    "checks": ("checks/tests/*.test.mjs", "checks/tests/*.test.py"),
+    "editor": ("editor/tests/*.test.mjs",),
+    "store": ("store/tests/*.test.mjs",),
+    "tokens": (),
+}
 _TAG = re.compile(r"<([a-z][\w]*-[\w-]*)[\s>]")
 _ENTRY = re.compile(r"/static/components/([\w-]+)/(?:view|fact)\.js")
 # Section 11: a test opens the product by naming `/` right after its base URL.
@@ -1548,17 +1564,29 @@ _CONTRACT_DIRS = {"events", "queries", "commands"}
 
 
 def classify_changes(changed_paths: list, manifests: dict):
-    """The changed components and the edited page addresses, or None when everything
-    must run: an infrastructure, structural, or unclassifiable change (7.3, 11)."""
+    """The changed components, the edited page addresses and the narrow infrastructure
+    parts that changed, or None when everything must run: other infrastructure, a
+    structural or an unclassifiable change, or no change at all (7.3, 11). A change to
+    the documentation at the repository root reaches no test."""
     known = {Path(p).parent.name for p in manifests}
     seeds = set()
     pages = set()
+    infra = set()
+    seen = False
     for cp in changed_paths:
         cp = cp.replace("\\", "/").strip()
         if not cp:
             continue
+        seen = True
         parts = Path(cp).parts
         top = parts[0]
+        if len(parts) == 1 and cp.endswith(".md"):
+            continue
+        if top in _NARROW_INFRA:
+            if top == "checks" and len(parts) == 2 and parts[1] in _CHECKS_LOADED_BY_TESTS:
+                return None
+            infra.add(top)
+            continue
         if top in _INFRA_DIRS or cp in _INFRA_FILES:
             return None
         if top == "components":
@@ -1571,9 +1599,9 @@ def classify_changes(changed_paths: list, manifests: dict):
             pages.add(_page_address(cp))
         else:
             return None
-    if not seeds and not pages:
+    if not seen:
         return None
-    return seeds, pages
+    return seeds, pages, infra
 
 
 def contract_files_changed(changed_paths: list) -> set:
@@ -1633,26 +1661,49 @@ def _head_manifests(seeds: set) -> dict:
         return {Path(p).parent.name: m for p, m in json.loads(result.stdout).items() if "error" not in m}
 
 
+def _importers(spec: str) -> set:
+    """The components whose own code imports the bare specifier `spec`, read with the
+    import check's scan (11.2)."""
+    found = set()
+    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
+        src = _strip_comments((ROOT / path).read_text())
+        if spec in (_STATIC_IMPORT.findall(src) + _DYNAMIC_IMPORT.findall(src)):
+            found.add(Path(path).parts[1])
+    return found
+
+
 def affected_tests(changed_paths: list, manifests: dict, tests: list, contract_changed=frozenset()):
-    """The test files, out of `tests`, that a change can break, with the addresses of
-    the pages whose smoke test covers the change's place on them; or None to run
-    everything (11). A changed component reaches its own tests and the smoke test of
-    every page holding it; its one-hop partners' tests only when it is in
-    `contract_changed`. An edited page reaches its smoke test and every test that
-    names its address."""
+    """The test files, out of `tests` and the infrastructure's own tests, that a change
+    can break, with the addresses of the pages whose smoke test covers the change's
+    place on them; or None to run everything (11). A changed component reaches its own
+    tests and the smoke test of every page holding it; its one-hop partners' tests only
+    when it is in `contract_changed`. An edited page reaches its smoke test and every
+    test that names its address. The check's own code reaches the check's tests; the
+    editor kit its tests, its importers' and the smoke test of the pages holding them;
+    the store its tests and its importers'; the tokens the smoke test of every page."""
     classified = classify_changes(changed_paths, manifests)
     if classified is None:
         return None
-    seeds, edited_pages = classified
+    seeds, edited_pages, infra = classified
     graph = _interaction_graph(manifests)
     owners = set(seeds)
     for s in seeds & set(contract_changed):
         owners |= graph.get(s, set())
+    shown = set(seeds)
+    if "editor" in infra:
+        editors = _importers("editor")
+        owners |= editors
+        shown |= editors
+    if "store" in infra:
+        owners |= _importers("store")
     addresses = set(edited_pages)
     for address, held in _page_holdings().items():
-        if held & seeds:
+        if held & shown or "tokens" in infra:
             addresses.add(address)
     result = set()
+    for part in sorted(infra):
+        for pattern in _INFRA_TESTS[part]:
+            result.update(glob.glob(pattern, root_dir=ROOT))
     for f in tests:
         if Path(f).parts[1] in owners or (f == SMOKE_TEST and addresses):
             result.add(f)
@@ -1829,8 +1880,7 @@ def _run_node(files: list, env=None) -> list | None:
 
 def run_tests(affected=None, push=False, pages=(), isolate=False) -> None:
     # affected is None for the full run; a set of test files narrows to the tests
-    # reachable from a change (11). A narrowed run never touches infrastructure tests,
-    # since any infra change runs everything. `push` adds the push run's second browser
+    # reachable from a change (11), the infrastructure's own tests among them. `push` adds the push run's second browser
     # pass in Chromium. `pages` names the addresses the page smoke test loads; empty, it
     # loads every page. `isolate` runs each journey step that declares its start alone (11).
     scoped = affected is not None
@@ -1857,23 +1907,27 @@ def run_tests(affected=None, push=False, pages=(), isolate=False) -> None:
             pure.append(f)
 
     # The bus, the store and the editor kit are infrastructure, pure Node: their tests need neither
-    # the venv nor the server, and only an infra change (a full run) reaches them.
+    # the venv nor the server. A narrowed run keeps the ones the change reaches (11).
     # The budget is per test (11), so a file must not count as one: without isolation,
     # node times each test alone rather than the file, whose lifetime includes the
     # bus's own timers.
-    node_tests = ([] if scoped else
-                  sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
+    infra_node = (sorted(glob.glob("bus/tests/*.test.mjs", root_dir=ROOT)) +
                   sorted(glob.glob("store/tests/*.test.mjs", root_dir=ROOT)) +
                   sorted(glob.glob("editor/tests/*.test.mjs", root_dir=ROOT)) +
-                  sorted(glob.glob("checks/tests/*.test.mjs", root_dir=ROOT))) + pure
+                  sorted(glob.glob("checks/tests/*.test.mjs", root_dir=ROOT)))
+    if scoped:
+        infra_node = [f for f in infra_node if f in affected]
+    node_tests = infra_node + pure
     if node_tests:
         failed = _run_node(node_tests)
         if failed is not None:
             fail("pure-node tests", "node tests", _failure_detail(failed))
 
     # checks/tests is the check's own unit tests (11.1): pure stdlib, no server and no
-    # browser, so a checks-only change stays cheap. Only an infra change reaches them.
-    checks_tests = [] if scoped else sorted(glob.glob("checks/tests/*.test.py", root_dir=ROOT))
+    # browser, so a checks-only change stays cheap.
+    checks_tests = sorted(glob.glob("checks/tests/*.test.py", root_dir=ROOT))
+    if scoped:
+        checks_tests = [f for f in checks_tests if f in affected]
     for test in checks_tests:
         _run_python_test(test, "checks tests", "check unit test reported failures")
 
@@ -2056,6 +2110,13 @@ USAGE = """The one check command (architecture.md 11).
 """
 
 
+def _scope_label(test: str) -> str:
+    """`component/name` for a component's test, `part/name` for an infrastructure one."""
+    parts = Path(test).parts
+    owner = parts[1] if parts[0] == "components" else parts[0]
+    return f"{owner}/{Path(test).name.removesuffix('.test.mjs').removesuffix('.test.py')}"
+
+
 def main() -> None:
     argv = sys.argv[1:]
     if "--help" in argv or "-h" in argv:
@@ -2127,7 +2188,7 @@ def main() -> None:
         contract = set()
         classified = classify_changes(paths, manifests)
         if classified is not None:
-            seeds, _ = classified
+            seeds = classified[0]
             contract = contract_files_changed(paths) | contracts_changed(seeds, manifests, _head_manifests(seeds))
         picked = affected_tests(paths, manifests,
                                 sorted(glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)), contract)
@@ -2136,7 +2197,7 @@ def main() -> None:
     with _test_lock():
         _timed(timings, "tests", run_tests, affected, push, pages, isolate)
     scope = "all" if affected is None else (
-        ", ".join(sorted(f"{Path(f).parts[1]}/{Path(f).name.removesuffix('.test.mjs')}" for f in affected)) or "none")
+        ", ".join(sorted(_scope_label(f) for f in affected)) or "none")
     if pages:
         scope += "; pages: " + ", ".join(sorted(pages))
     scope += "; webkit, then chromium" if push else "; webkit"
