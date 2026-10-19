@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, apart, highlights } from "../machine.js";
+import { machine, shown, apart, highlights, plain } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -577,4 +577,23 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     await vimSettle();
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
   }
+});
+
+test("a source link shows as its label alone, unescaped", () => {
+  const link = (label) => `[${label}](note:${A})`;
+  assert.equal(plain(`See ${link("the first words…")} here`), "See the first words… here");
+  assert.equal(plain(link("a \\[b\\] c\\\\d")), "a [b] c\\d");
+  assert.equal(plain(`${link("one")} and ${link("two")}`), "one and two");
+  assert.equal(plain("[not a link](https://x.y) and [x](note:short)"), "[not a link](https://x.y) and [x](note:short)");
+  assert.equal(plain(undefined), undefined);
+});
+
+test("the rows from notes: list and note.changed show link labels", async () => {
+  const notes = [{ id: A, title: `Title [t](note:${B})`, subtitle: `[q\\]r](note:${B}) more`, updatedAt: 1 }];
+  const { actor } = list({ ask: answeringList(notes) });
+  await tick();
+  assert.equal(actor.getSnapshot().context.notes[0].title, "Title t");
+  assert.equal(actor.getSnapshot().context.notes[0].subtitle, "q]r more");
+  actor.send({ type: "note.changed", id: C, title: "x", subtitle: `[z](note:${A})`, updatedAt: 2, about: [] });
+  assert.equal(actor.getSnapshot().context.notes.find((n) => n.id === C).subtitle, "z");
 });

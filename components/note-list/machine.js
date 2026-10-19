@@ -24,8 +24,21 @@ const sorted = (notes) => [...notes].sort(order);
 // links existed, reads as none.
 const links = (note) => (Array.isArray(note.about) ? note.about : []);
 
+// A source link in a note's text, `[label](note:<id>)`, with `[`, `]` and `\` in the
+// label escaped by `\`. The editor draws it as a tag; a one-line preview has no room for
+// a tag, so the list shows the label alone, as the reader would read it.
+const SOURCE_LINK = /\[((?:[^\[\]\\\n]|\\[^\n])*)\]\(note:[0-9A-HJKMNP-TV-Z]{26}\)/g;
+export const plain = (text) =>
+  typeof text === "string" ? text.replace(SOURCE_LINK, (_, label) => label.replace(/\\(.)/g, "$1")) : text;
+
 // One row keeps only the fields the list shows, plus the links it filters by.
-const row = ({ id, title, subtitle, updatedAt, about }) => ({ id, title, subtitle, updatedAt, about: links({ about }) });
+const row = ({ id, title, subtitle, updatedAt, about }) => ({
+  id,
+  title: plain(title),
+  subtitle: plain(subtitle),
+  updatedAt,
+  about: links({ about }),
+});
 
 // Fold one changed note into the rows: replace the row with its id if present, else
 // add it, then re-sort. Only the fields a row shows (and its links) are kept (a
