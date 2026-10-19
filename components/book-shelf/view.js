@@ -167,6 +167,17 @@ class BookShelf extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-body-mid);
     }
+    /* The journal's placeholder keeps the same quiet card and draws a notebook above
+       its name, so the book the user writes is told apart at a glance without a
+       colour of its own. */
+    .placeholder.written {
+      flex-direction: column;
+      gap: var(--space-sm);
+    }
+    .placeholder.written svg {
+      width: calc(var(--text-heading) * 2);
+      height: calc(var(--text-heading) * 2);
+    }
     /* The open book carries the one visible selection: a solid accent ring, thick
        enough to read at a glance against a cover or a placeholder (Norman: visible
        signifier). --color-accent-selection is a text-selection tint, too faint here. */
@@ -633,7 +644,9 @@ class BookShelf extends LitElement {
     const isDiscarding = discarding.has(t.id);
     const cover = t.cover
       ? html`<img src=${t.cover} alt=${`Cover of ${t.title}`} />`
-      : html`<div class="placeholder">${t.title}</div>`;
+      : t.written
+        ? html`<div class="placeholder written">${icon("notebook")}<span>${t.title}</span></div>`
+        : html`<div class="placeholder">${t.title}</div>`;
     return html`
       <li
         class="tile ${isDiscarding ? "discarding" : ""}"

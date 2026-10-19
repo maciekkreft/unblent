@@ -12,7 +12,7 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const PAGE = `${BASE_URL}/`;
 
 // Each real tile as the user sees it: title, the line under it, the chapter count if
-// any, and which tools stand on its cover.
+// any, which tools stand on its cover, and whether its cover draws the notebook.
 const tiles = (page) =>
   page.evaluate(() =>
     [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile:not(.adding)")].map((t) => ({
@@ -21,12 +21,13 @@ const tiles = (page) =>
       progress: t.querySelector(".progress")?.textContent.trim() ?? null,
       rename: Boolean(t.querySelector(".edit")),
       remove: Boolean(t.querySelector(".bin")),
+      notebook: (t.querySelector(".cover svg")?.getBoundingClientRect().width ?? 0) > 0,
     })),
   );
 
 for (const engine of ENGINES) {
   // Browser: rendering and layout.
-  test(`the journal tile reads "Written by you" and cannot be renamed or deleted in ${engine.name}`, async () => {
+  test(`the journal tile shows a notebook, reads "Written by you" and cannot be renamed or deleted in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
     context.setDefaultTimeout(4000);
@@ -39,7 +40,7 @@ for (const engine of ENGINES) {
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       await until(async () => (await tiles(page)).some((t) => t.title === "Journal"));
       const [first] = await tiles(page);
-      assert.deepEqual(first, { title: "Journal", byline: "Written by you", progress: null, rename: false, remove: false });
+      assert.deepEqual(first, { title: "Journal", byline: "Written by you", progress: null, rename: false, remove: false, notebook: true });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await browser.close();
