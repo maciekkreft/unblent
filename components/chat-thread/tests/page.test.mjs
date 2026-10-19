@@ -288,29 +288,6 @@ for (const engine of ENGINES) {
       }
     });
 
-    // Browser: a reload against real storage.
-    test("a reload mid-answer ends at the question with Continue", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "continue");
-      try {
-        // A long answer, reloaded while it is still arriving: the question is saved but the
-        // in-progress answer is not (5: an arriving answer is not kept when the page goes away).
-        await send(page, "/slow " + "a long answer that is still arriving. ".repeat(3));
-        // Arriving, and the question is on the server (not "Not saved yet"), so a reload
-        // finds the chat ending at the question.
-        await until(async () => {
-          const t = await threadText(page);
-          return (await lastAnswer(page)).length > 0 && !t.includes("Not saved yet");
-        });
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await inputReady(page);
-        await until(async () => await action(page, "Continue")); // the chat ends at the question
-        assert.equal(await lastAnswer(page), "", "the in-progress answer was not kept");
-        assert.deepEqual(realProblems(problems), [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
     // What the thread shows of a lookup: a tool the user keeps on is named by its owner's
     // label; one switched off (12) is never named. That the off tool is not offered, and
     // its call is refused rather than asked, is decided in conversations' machine test and

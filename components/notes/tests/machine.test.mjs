@@ -460,6 +460,28 @@ test("a bare _sync drains a queued row at once, without pulling (a hidden tab)",
   assert.equal(store.outbox.size, 0);
 });
 
+test("a tab going hidden inside the idle window drains at once without pulling; back in front it pulls", async () => {
+  const store = fakeStore();
+  const api = fakeApi();
+  const { actor } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  const pullsBefore = api.pulls.length; // the sign-in pull
+
+  actor.send({ type: "note.saved", id: ID, title: "Hidden", body: "Hidden\ndrain", baseVersion: null });
+  await flush();
+  assert.equal(api.puts.length, 0, "a save waits for the idle window");
+  actor.send({ type: "_sync", pull: false }); // the tab goes hidden; the clock never moves
+  await flush();
+  assert.equal(api.puts.length, 1, "the hidden tab drained the outbox at once");
+  assert.equal(api.puts[0].body, "Hidden\ndrain");
+  assert.equal(api.pulls.length, pullsBefore, "a hidden-tab drain does not pull");
+  assert.equal(store.outbox.size, 0);
+
+  actor.send({ type: "_sync", pull: true }); // back in front
+  await flush();
+  assert.equal(api.pulls.length, pullsBefore + 1, "coming back to the front pulls");
+});
+
 test("a bare _sync with an empty outbox is a no-op", async () => {
   const store = fakeStore();
   const api = fakeApi();

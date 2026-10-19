@@ -136,3 +136,55 @@ test("answers list with the records kept", () => {
   assert.equal(replied.records.length, 1);
   assert.equal(replied.records[0].seq, 7);
 });
+
+// Two tabs of one origin, each a trace actor on its own real BroadcastChannel from
+// store.js, wired the way fact.js wires them: a tab that opens later says hello first.
+// The later tab must see the earlier tab's history (the hello / buffer handshake) and
+// its live traffic, tagged with the earlier tab's id (10, 12).
+test("a second tab's trace sees the first tab's history and live traffic", async () => {
+  const { openChannel } = await import("../store.js");
+  const tabA = "01ABCDEFGHJKMNPQRSAAAA";
+  const tabB = "01ABCDEFGHJKMNPQRSBBBB";
+  const opened = [];
+  const open = (tab) => {
+    const channel = openChannel("trace-test");
+    opened.push(channel);
+    let tapCb;
+    const printed = [];
+    const actor = createActor(machine, {
+      input: {
+        tab,
+        tap: (cb) => ((tapCb = cb), () => {}),
+        subscribe: (fn) => channel.subscribe(fn),
+        publish: (record) => channel.post({ type: "record", record }),
+        share: (records) => channel.post({ type: "buffer", records }),
+        print: (t) => printed.push(t),
+      },
+    });
+    return { channel, actor, printed, tap: (r) => tapCb(r) };
+  };
+  const settle = async () => {
+    for (let i = 0; i < 20; i += 1) await new Promise((r) => setTimeout(r, 5));
+  };
+  try {
+    const a = open(tabA);
+    a.actor.start();
+    a.tap(rec({ seq: 1, at: 10, name: "note.saved" })); // before the second tab exists
+
+    const b = open(tabB);
+    b.channel.post({ type: "hello", tab: tabB });
+    b.actor.start();
+    await settle();
+    a.tap(rec({ seq: 2, at: 20, name: "note.opened" })); // after: live
+    await settle();
+
+    const fromA = b.actor.getSnapshot().context.records.filter((r) => r.tab === tabA).map((r) => r.name);
+    assert.deepEqual(fromA, ["note.saved", "note.opened"], "the history and the live record both arrive");
+    assert.ok(b.printed.some((t) => t.startsWith("trace #1 AAAA event note.saved")), "printed tagged with the first tab");
+    assert.ok(b.printed.some((t) => t.startsWith("trace #2 AAAA event note.opened")));
+    a.actor.stop();
+    b.actor.stop();
+  } finally {
+    for (const channel of opened) channel.close();
+  }
+});

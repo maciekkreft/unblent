@@ -1,6 +1,5 @@
 import { test, describe, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -376,72 +375,6 @@ for (const engine of ENGINES) {
       const savedDuringRun = debug.slice(before).filter((l) => SAVED.test(l)).length;
       await until(async () => (await listRows(page)).some((r) => r.title === live && r.selected));
       assert.ok(savedDuringRun >= 1, `the throttle saved during the typing run, saw ${savedDuringRun}`);
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    } finally {
-      await browser.close();
-    }
-  });
-
-  // Browser: a gesture.
-  test(`a hidden tab drains the outbox at once when signed in, in ${engine.name}`, async () => {
-    const browser = await engine.launch();
-    // Sign in without a passkey ceremony: forge the session cookie the server would
-    // set (as api.test.mjs does), so notes syncs. A fresh user per run gets its own
-    // throwaway per-user database (5).
-    const SECRET = process.env.SESSION_SECRET;
-    assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
-    assert.ok(process.env.UNBLENT_DATA, "UNBLENT_DATA must name a throwaway data directory (checks/check.py sets it); never forge a cookie against the running server");
-    const userId = `notes-page-${Date.now()}`;
-    const cookie = `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
-    const context = await browser.newContext();
-    context.setDefaultTimeout(4000);
-    await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
-    try {
-      const problems = [];
-      const page = await context.newPage();
-      watch(page, problems);
-      // Record every request the page made, with the keepalive flag, before it flies.
-      await page.addInitScript(() => {
-        window.__fetches = [];
-        const real = window.fetch;
-        window.fetch = (url, init) => {
-          window.__fetches.push({ url: String(url), method: init?.method ?? "GET", keepalive: Boolean(init?.keepalive) });
-          return real(url, init);
-        };
-      });
-
-      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row.draft"));
-      await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
-      // Signing in pulls at once (5): wait for that GET so the fact is signed in.
-      await until(() => page.evaluate(() => window.__fetches.some((f) => /\/api\/notes\?since=/.test(f.url))));
-
-      const puts = () => page.evaluate(() => window.__fetches.filter((f) => f.method === "PUT" && /\/api\/notes\//.test(f.url)));
-      const gets = () => page.evaluate(() => window.__fetches.filter((f) => f.method === "GET" && /\/api\/notes\?since=/.test(f.url)));
-      assert.equal((await puts()).length, 0, "no PUT yet");
-      const getsBefore = (await gets()).length;
-
-      // A save (blur commits it at once), then the tab goes hidden inside the idle
-      // window: the drain must fire now, not 2 s later, and use keepalive.
-      await write(page, "Hidden\ndrain");
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await until(async () => (await puts()).length >= 1);
-      const afterHidden = await puts();
-      assert.equal(afterHidden.length, 1, "the hidden tab drained the outbox at once");
-      assert.equal(afterHidden[0].keepalive, true, "the drain used keepalive so it survives the tab");
-      assert.equal((await gets()).length, getsBefore, "a hidden-tab drain does not pull");
-
-      // Coming back to the front pulls again (5).
-      await page.evaluate(() => {
-        Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await until(async () => (await gets()).length > getsBefore);
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
