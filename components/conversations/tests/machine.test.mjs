@@ -400,6 +400,43 @@ test("a pin on another chat than the open one does not hold the open chat", asyn
   assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT2);
 });
 
+test("a pinned new chat with no message follows the subject; after its first message it stays (12)", async () => {
+  const B1 = { kind: "book", id: "b1", title: "One", view: "book-reader" };
+  const B2 = { kind: "book", id: "b2", title: "Two", view: "book-reader" };
+  const conversations = [{ id: CHAT2, title: "about two", about: [{ kind: "book", id: "b2" }], updatedAt: 10 }];
+  const FRESH = U("NW");
+  const h = start({ conversations, subject: B1, pinned: FRESH });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: FRESH });
+  h.actor.send({ type: "subject.changed", subject: B2 });
+  await flush();
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT2, "the empty chat gave way to the book's chat");
+
+  h.actor.send({ type: "conversation.selected", id: FRESH });
+  submit(h, { conversationId: FRESH });
+  h.actor.send({ type: "subject.changed", subject: B1 });
+  await flush();
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, FRESH, "with a message, the pinned chat stays");
+});
+
+test("a new chat open at a reload stays while the subject settles, and follows the next move (12)", async () => {
+  const B1 = { kind: "book", id: "b1", title: "One", view: "book-reader" };
+  const B2 = { kind: "book", id: "b2", title: "Two", view: "book-reader" };
+  const conversations = [
+    { id: CHAT, title: "about one", about: [{ kind: "book", id: "b1" }], updatedAt: 5 },
+    { id: CHAT2, title: "about two", about: [{ kind: "book", id: "b2" }], updatedAt: 10 },
+  ];
+  const FRESH = U("NW");
+  const h = start({ conversations, stored: FRESH, subject: null, pinned: FRESH });
+  await ready(h);
+  h.actor.send({ type: "subject.changed", subject: B1 });
+  await flush();
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, FRESH, "the new chat is still open");
+  h.actor.send({ type: "subject.changed", subject: B2 });
+  await flush();
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT2, "a real move is followed");
+});
+
 test("a focus reload picks up a chat added on another device", async () => {
   const first = { conversations: [{ id: CHAT, title: "one", about: [], updatedAt: 5 }], tools: { tools: {}, approval: "auto" } };
   const second = { conversations: [{ id: CHAT, title: "one", about: [], updatedAt: 5 }, { id: CHAT2, title: "two", about: [], updatedAt: 9 }], tools: { tools: {}, approval: "auto" } };

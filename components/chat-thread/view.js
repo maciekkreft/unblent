@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, parseMarkdown, userParagraphs } from "./machine.js";
+import { machine, canPin, parseMarkdown, userParagraphs } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -368,20 +368,24 @@ class ChatThread extends LitElement {
     `;
   }
 
-  // The pin keeps the open chat when the subject changes (12). Disabled while no chat is
-  // open; its label names the action for assistive tech.
+  // The pin keeps the open chat when the subject changes (12). Unavailable until the
+  // open chat has its first message, and the tooltip and label say so; otherwise the
+  // label names the action for assistive tech.
   #header(snapshot) {
     if (!snapshot) return nothing;
     const { openId, pin } = snapshot.context;
-    const pinned = openId != null && pin === openId;
+    const available = canPin(snapshot.context);
+    const pinned = available && pin === openId;
+    const label = !available ? "Pin chat: available after the first message" : pinned ? "Unpin chat" : "Pin chat";
     return html`
       <div class="header">
         <button
           class="pin"
           type="button"
           aria-pressed=${pinned}
-          aria-label=${pinned ? "Unpin chat" : "Pin chat"}
-          ?disabled=${openId == null}
+          aria-label=${label}
+          title=${label}
+          ?disabled=${!available}
           @click=${() => this.#actor.send({ type: "_togglePin" })}
         >
           ${icon("push-pin")}

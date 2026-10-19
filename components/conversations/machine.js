@@ -654,13 +654,23 @@ const onToolsEdited = (context, event, enqueue) => {
   enqueue.emit({ type: "tools.changed", ...value });
 };
 
+// A chat has a message once it is listed or holds a turn; a new chat's id has neither
+// until its first message is sent (onSubmit adds both).
+const hasMessages = (context, id) =>
+  context.headings.some((h) => h.id === id) || (context.chats.get(id)?.turns.length ?? 0) > 0;
+
 const onSubjectChanged = (context, event, enqueue, self) => {
   const sub = event.subject ? { kind: event.subject.kind, id: event.subject.id } : null;
   if (sameSubject(sub, context.lastSubject)) return;
+  const settling = context.lastSubject == null;
   context.lastSubject = sub;
   // A pinned open chat stays whatever comes on the stage (12); the chat learns of it only
-  // from what is added later, never from a change to its start (14).
-  if (context.pin != null && context.pin === context.openId) return;
+  // from what is added later, never from a change to its start (14). A chat with no
+  // message yet is not kept by its pin, which is unavailable: it follows the stage, except
+  // while the subject first settles after a reload, so the new chat the reader had open
+  // is still the one shown.
+  if (context.pin != null && context.pin === context.openId && hasMessages(context, context.openId)) return;
+  if (settling && context.openId != null && !hasMessages(context, context.openId)) return;
   // The chat already open, if it is about the new subject, stays open (12): a reader who
   // picked an older chat about the book must not have it replaced by the newest one when
   // the subject settles after a reload (the subject can arrive as a late change from none
@@ -834,7 +844,8 @@ export const machine = setup({
       "at 120,000 characters. A chat's start is written once, by the view where the chat was " +
       "created, and never changes. When the subject changes the open chat becomes the most " +
       "recently updated chat about it, or none, so the panel shows an empty new chat; while " +
-      "the open chat is pinned, as `pins` says, it stays open whatever the subject.",
+      "the open chat is pinned, as `pins` says, it stays open whatever the subject, once it has " +
+      "its first message; a new chat with none follows the subject like an unpinned one.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",

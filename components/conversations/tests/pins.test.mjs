@@ -14,7 +14,7 @@ const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
 const CHAT2 = "01HQ8ZK7M4N5P6Q7R8S9T0V1W5";
 const B1 = { kind: "book", id: "01HQ8ZK7M4N5P6Q7R8S9T0V1B1", title: "One", view: "book-reader" };
 const B2 = { kind: "book", id: "01HQ8ZK7M4N5P6Q7R8S9T0V1B2", title: "Two", view: "book-reader" };
-const chat = (id, b) => ({ id, title: id, about: [{ kind: "book", id: b.id }], start: "", turns: [], updatedAt: 5 });
+const chat = (id, b) => ({ id, title: id, about: [{ kind: "book", id: b.id }], start: "", turns: [{ id: `${id.slice(0, 25)}T`, role: "user", text: "hi", at: 1 }], updatedAt: 5 });
 
 test("a chat opened is pinned without a press and stays while the stage moves, the pin moves with a pick, and turned off the chat follows again and the pin stays off", async () => {
   let open = null;

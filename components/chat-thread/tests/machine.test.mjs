@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, parseMarkdown, userParagraphs } from "../machine.js";
+import { machine, canPin, parseMarkdown, userParagraphs } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -114,8 +114,11 @@ test("the open chat deleted falls back to the empty page", async () => {
   await until(() => state(h) === "empty", "empty");
 });
 
+const TURN = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1W3", role: "user", text: "hi" };
+const asked = (id) => emptyChat(id, { title: "hi", turns: [TURN] });
+
 test("the pin pins the open chat and unpins it; with no chat open it does nothing", async () => {
-  const h = start({ openId: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
+  const h = start({ openId: CHAT, chatsById: { [CHAT]: asked(CHAT) } });
   await until(() => state(h) === "showing", "showing");
   h.actor.send({ type: "_togglePin" });
   assert.equal(h.actor.getSnapshot().context.pin, CHAT);
@@ -124,6 +127,17 @@ test("the pin pins the open chat and unpins it; with no chat open it does nothin
   h.actor.send({ type: "conversation.opened", id: null });
   await until(() => state(h) === "empty", "empty");
   assert.equal(h.actor.getSnapshot().can({ type: "_togglePin" }), false);
+});
+
+test("a chat with no message yet cannot be pinned, even while pins holds it; its first message makes it pinned", async () => {
+  const h = start({ openId: CHAT, pinned: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
+  await until(() => state(h) === "showing", "showing");
+  assert.equal(canPin(h.actor.getSnapshot().context), false);
+  assert.equal(h.actor.getSnapshot().can({ type: "_togglePin" }), false);
+  h.actor.send({ type: "conversation.changed", ...asked(CHAT) });
+  assert.equal(canPin(h.actor.getSnapshot().context), true);
+  assert.equal(h.actor.getSnapshot().context.pin, CHAT, "on by default once it has a message");
+  assert.deepEqual(h.toggled, [], "no press, so nothing was sent");
 });
 
 test("opening or deleting the pinned chat sends no pin.toggled: only a press does, and pins follows the chat itself", async () => {

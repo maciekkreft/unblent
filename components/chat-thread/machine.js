@@ -211,6 +211,12 @@ export function userParagraphs(text) {
   return blocks;
 }
 
+// Whether the open chat can be pinned: only once it has its first message, because
+// `conversations` keeps a pinned chat only when it has one (12). Read by the view too,
+// so the button is unavailable exactly when a press would do nothing.
+export const canPin = (context) =>
+  context.openId != null && context.conversation?.id === context.openId && (context.conversation.turns?.length ?? 0) > 0;
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): which chat is open, then that chat. conversation.opened
@@ -233,7 +239,9 @@ export const machine = setup({
       "only the scroll position and which thinking records are open; the chat itself belongs to " +
       "`conversations`. A pin at the top right, on unless the user turns it off, keeps the open " +
       "chat when the subject changes; opening another chat while it is on moves the pin to it, " +
-      "and the pin is kept by `pins`, so it survives a reload.",
+      "and the pin is kept by `pins`, so it survives a reload. A chat with no message yet " +
+      "cannot be pinned: its pin is shown unavailable, saying why, until the first message " +
+      "is sent, and then it is on unless the user turned pins off.",
     kind: "view",
     attributes: ["height", "markdown"],
     emits: ["pin.toggled"],
@@ -261,9 +269,9 @@ export const machine = setup({
   on: {
     "pins.changed": { actions: assign({ pin: ({ event }) => event.chat ?? null, pinsObserved: true }) },
     // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the
-    // button turns at once. Nothing to pin while no chat is open.
+    // button turns at once. Nothing to pin until the open chat has its first message.
     _togglePin: {
-      guard: ({ context }) => context.openId != null,
+      guard: ({ context }) => canPin(context),
       actions: [
         assign({ pin: ({ context }) => (context.pin === context.openId ? null : context.openId) }),
         emit(({ context }) => ({ type: "pin.toggled", what: "chat", id: context.pin })),
