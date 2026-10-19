@@ -172,6 +172,9 @@ const look = ({ page }) =>
     };
   });
 
+// The Reader shows its open book as a tab of its own, named by the book's title.
+const TITLE = "Sample Book";
+
 const want = (cond, msg) => (cond ? null : msg);
 const all = (...checks) => checks.find(Boolean) ?? null;
 const sameSet = (a, b) => a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
@@ -188,7 +191,7 @@ const oneHighlight = {
   state: "one highlight painted on the staged book and Notes showing its list",
   check: (s) =>
     all(
-      want(s.staged === "Reader", `the stage shows ${s.staged}, not the Reader`),
+      want(s.staged === TITLE, `the stage shows ${s.staged}, not ${TITLE}`),
       want(s.marks.length > 0, "no highlight is painted"),
       want(!s.removing, "the highlight is being removed"),
       want(s.row?.subtitle === "1 highlight", `the Highlights row reads ${s.row?.subtitle}`),
@@ -291,7 +294,7 @@ for (const engine of ENGINES) {
       name: "the highlights document holds the Notes pair when it is staged",
       from: {
         state: "one highlight on the staged book",
-        check: (s) => all(want(s.staged === "Reader", `the stage shows ${s.staged}`), want(s.row?.subtitle === "1 highlight", `the Highlights row reads ${s.row?.subtitle}`)),
+        check: (s) => all(want(s.staged === TITLE, `the stage shows ${s.staged}`), want(s.row?.subtitle === "1 highlight", `the Highlights row reads ${s.row?.subtitle}`)),
         reach: highlight,
       },
       run: async (v) => {
@@ -312,8 +315,8 @@ for (const engine of ENGINES) {
         reach: highlight,
       },
       run: async (v) => {
-        await toStage(v.page, "Reader");
-        await v.see((s) => want(s.staged === "Reader" && s.marks.length > 0, `the stage shows ${s.staged} with ${s.marks.length} marks`));
+        await toStage(v.page, TITLE);
+        await v.see((s) => want(s.staged === TITLE && s.marks.length > 0, `the stage shows ${s.staged} with ${s.marks.length} marks`));
         await synced(v.page, (notes) => notes.some(placed));
         await clickFirstMark(v.page);
         await v.see((s) => want(/Remove/.test(s.bubble ?? ""), `the bubble reads ${s.bubble}`));
