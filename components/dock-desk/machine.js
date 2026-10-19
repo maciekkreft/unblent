@@ -1,4 +1,4 @@
-import { setup, assign, emit, fromPromise } from "xstate";
+import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 
 // A container view component (3.1) that owns only UI state: how its children are
 // arranged between four tab groups of one kind, the stage and the docks on the
@@ -197,16 +197,70 @@ export const nextGroup = (from, key, present) => {
 export const tabsOf = ({ views, docks }, group) =>
   group === "stage" ? names(views).filter((n) => !dockedNames(docks).includes(n)) : (docks[group]?.views ?? []);
 
-// The tab Ctrl+. (step 1) or Ctrl+, (step -1) shows after `shown`, wrapping at either
-// end; from no shown tab (a header button pressed) the first or the last. Null when the
-// group has no tab.
-export const nextTab = (context, group, shown, step) => {
-  const tabs = tabsOf(context, group);
-  if (!tabs.length) return null;
-  const at = tabs.indexOf(shown);
-  if (at < 0) return step > 0 ? tabs[0] : tabs[tabs.length - 1];
-  return tabs[(at + step + tabs.length) % tabs.length];
+// A child's own tabs as its last tabs.shown announced them, while the desk draws them:
+// never while arranging, when the child is one tab the move and dock buttons act on
+// whole, and never an empty list, which leaves the child its one labelled tab.
+const ownTabs = (context, name) => {
+  const own = context.tabs?.[name];
+  return !context.arranging && own?.tabs.length ? own : undefined;
 };
+
+// What one group's strip draws, left to right: one entry per child, `{ view }`, or a
+// child's own tabs in its place, `{ view, id, label, closable }`, in the child's own
+// order. The strips and the tab keys read this one list (12, "Vim keys").
+export const stripOf = (context, group) =>
+  tabsOf(context, group).flatMap((view) => {
+    const own = ownTabs(context, view);
+    return own ? own.tabs.map((t) => ({ view, id: t.id, label: t.label, closable: t.closable })) : [{ view }];
+  });
+
+// The entry of a shown child: its active tab when it draws its own tabs. Null for no
+// child (a header button pressed).
+export const entryOf = (context, view) => {
+  if (!view) return null;
+  const own = ownTabs(context, view);
+  return own ? { view, id: own.active ?? undefined } : { view };
+};
+
+export const sameEntry = (a, b) => Boolean(a && b) && a.view === b.view && a.id === b.id;
+
+// The entry Ctrl+. (step 1) or Ctrl+, (step -1) shows after `shown`, wrapping at
+// either end; from no shown entry (a header button pressed, or a child with no tab in
+// front) the first or the last. Null when the group has no tab.
+export const nextTab = (context, group, shown, step) => {
+  const entries = stripOf(context, group);
+  if (!entries.length) return null;
+  const at = entries.findIndex((e) => sameEntry(e, shown));
+  if (at < 0) return step > 0 ? entries[0] : entries[entries.length - 1];
+  return entries[(at + step + entries.length) % entries.length];
+};
+
+// The tab a gesture names is one the child announced; for a close, one it marked closable.
+const isOwnTab = ({ context, event }) => Boolean(ownTabs(context, event.name)?.tabs.some((t) => t.id === event.id));
+const isClosable = ({ context, event }) =>
+  Boolean(ownTabs(context, event.name)?.tabs.some((t) => t.id === event.id && t.closable));
+
+// Picking a child's own tab shows the child where it sits, as a click on its one tab
+// does (_open on the stage, _activate on a side), and tells the child which tab, unless
+// that tab is already in front. The child answers with tabs.shown, which is what the
+// strip then draws (4.3, fourth rule). With no dock fact (`local`) the stage is assigned.
+const pick = (local) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const s = sideOf(context.docks, event.name);
+    if (s) {
+      const dock = context.docks[s];
+      const front = dock.views.includes(dock.active) ? dock.active : dock.views[0];
+      if (!local && (!dock.open || front !== event.name))
+        enqueue.emit(arranged(context.stage, { ...context.docks, [s]: { ...dock, open: true, active: event.name } }));
+    } else {
+      if (local) enqueue.assign({ stage: event.name });
+      else if (context.stage !== event.name) enqueue.emit(arranged(event.name, context.docks));
+      enqueue.assign({ pressed: null });
+    }
+    if (context.tabs[event.name].active !== event.id) enqueue.emit({ type: "tab.picked", view: event.name, id: event.id });
+  });
+
+const close = { guard: isClosable, actions: emit(({ event }) => ({ type: "tab.closed", view: event.name, id: event.id })) };
 
 const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
@@ -236,6 +290,15 @@ export const machine = setup({
       "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. " +
+      "A child that announces tabs of its own (`tabs.shown`) is drawn, wherever it sits and " +
+      "outside arranging, as those tabs in place of its one tab, in its place in the strip, " +
+      "with a close button (\"Close <label>\") on each tab it marks closable and its tab in " +
+      "front selected while the child is shown; picking one shows the child and tells it " +
+      "which tab (`tab.picked`, unless that tab is already in front), and the close button " +
+      "tells it which tab to close (`tab.closed`); the child decides and announces its tabs " +
+      "again. While arranging the child is its one labelled tab, which the move and dock " +
+      "buttons act on whole. Clicks, the arrow keys, Home and End, and Ctrl+. and Ctrl+, " +
+      "step through the child's tabs inside the group's order. " +
       "While the \"Vim keys\" preference is on, on the desk and not on the phone, Ctrl+h and " +
       "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +
       "Ctrl+j to the bottom dock and Ctrl+k back up to the stage, passing over an empty side " +
@@ -274,6 +337,9 @@ export const machine = setup({
     // stage. It is the desk's own UI state, so it rides no fact and is never in
     // dock.arranged; the view keeps it in localStorage (3.1) and hands it back here.
     pressed: input.pressed ?? null,
+    // Each child's own tabs, by its address, as its last tabs.shown announced them: the
+    // child owns them, the desk only draws them.
+    tabs: {},
   }),
   initial: "loading",
   states: {
@@ -387,6 +453,9 @@ export const machine = setup({
           guard: ({ context, event }) => Boolean(context.docks[event.side]),
           actions: emit(({ context, event }) => arranged(context.stage, setOpen(context.docks, event.side, true))),
         },
+        // A child's own tab clicked, or reached by a key, and its × pressed.
+        _pick: { guard: isOwnTab, actions: pick(false) },
+        _close: close,
         // A child follows a selection gesture (6.4): bring its tab forward.
         "book.selected": show,
         "note.selected": show,
@@ -407,6 +476,8 @@ export const machine = setup({
         _press: {
           actions: assign({ pressed: ({ context, event }) => (context.pressed === event.name ? null : event.name) }),
         },
+        _pick: { guard: isOwnTab, actions: pick(true) },
+        _close: close,
         // A child follows a selection gesture (6.4); with no dock fact the desk is a
         // plain tab switcher, so a followed stage tab is staged locally, and the
         // detour ends.
@@ -428,8 +499,12 @@ export const machine = setup({
     "settings.changed": {
       actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
     },
-    // A child's own tabs are part of the contract before the desk draws them (9, step
-    // 2): received and, for now, left alone.
-    "tabs.shown": { actions: () => {} },
+    // A child announces its own tabs: kept by its address, for a child on this desk only.
+    "tabs.shown": {
+      guard: ({ context, event }) => names(context.views).includes(event.view),
+      actions: assign({
+        tabs: ({ context, event }) => ({ ...context.tabs, [event.view]: { tabs: event.tabs, active: event.active } }),
+      }),
+    },
   },
 });

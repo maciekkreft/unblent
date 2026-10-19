@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, nextGroup, nextTab, tabsOf } from "./machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
 import tabPicked from "./events/tab.picked.json" with { type: "json" };
 import tabClosed from "./events/tab.closed.json" with { type: "json" };
@@ -21,6 +21,7 @@ const RETURN = icon("arrows-in-simple");
 // side (mirrored on the right, turned down on the bottom, turned down on every
 // sheet on the phone). Fold and unfold are the same glyph in the same place.
 const FOLD = icon("sidebar-simple");
+const CLOSE = icon("x");
 // The glyphs a header button (6.4) may name in `button="<glyph>"`. The desk owns the
 // table, so a page names one and the icon stays a literal the icon check reads (11.2);
 // a name not here throws at render, naming the value, as an unknown icon does.
@@ -255,6 +256,28 @@ class DockDesk extends LitElement {
     [role="tab"][aria-selected="true"] {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
+    }
+    /* A child's own tab and its close button read as one tab: the button sits tight
+       after the label, a quiet glyph that darkens on hover. */
+    .own {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+    }
+    .own [role="tab"] {
+      padding-right: var(--space-2xs);
+    }
+    .close {
+      display: inline-flex;
+      align-items: center;
+      padding: var(--space-2xs);
+      color: var(--color-body-mid);
+    }
+    .close:hover {
+      color: var(--color-ink);
+    }
+    .close svg {
+      display: block;
     }
     .actions {
       flex: none;
@@ -851,12 +874,20 @@ class DockDesk extends LitElement {
   // Next or previous tab, wrapping as the arrow keys do in a strip (#arrow), then the
   // focus follows into the newly shown view.
   #cycle(context, group, step) {
-    const next = nextTab(context, group, group === "stage" ? context.stage : this.#shownIn(context, group), step);
+    const shown = entryOf(context, group === "stage" ? context.stage : this.#shownIn(context, group));
+    const next = nextTab(context, group, shown, step);
     if (!next) return;
-    if (group === "stage") this.#send("_open", next);
-    else this.#send("_activate", next, group);
-    this.#landing = { group, name: next };
+    this.#show(group, next);
+    this.#landing = { group, name: next.view };
     this.requestUpdate();
+  }
+
+  // Show one strip entry: a child's own tab is picked, a child's one tab is opened on
+  // the stage or activated on its side.
+  #show(group, entry) {
+    if (entry.id !== undefined) this.#actor.send({ type: "_pick", name: entry.view, id: entry.id });
+    else if (group === "stage") this.#send("_open", entry.view);
+    else this.#send("_activate", entry.view, group);
   }
 
   // A keydown on the bare page never passes through the desk, so with nothing focused the
@@ -948,7 +979,7 @@ class DockDesk extends LitElement {
           ${dock("left")}
           <section class="stage">
             <div class="strip">
-              ${this.#tablist("Stage", tabs, pressed ? null : stage, labelOf, (name) => this.#send("_open", name), (name) => this.#follow("stage", name))}
+              ${this.#tablist("Stage", stripOf(snapshot.context, "stage"), pressed ? null : entryOf(snapshot.context, stage), labelOf, (entry) => this.#show("stage", entry), (entry) => this.#follow("stage", entry.view))}
               ${ready && !pressed && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
               <span class="controls">${this.#extras(extras, pressed)}</span>
             </div>
@@ -1014,44 +1045,70 @@ class DockDesk extends LitElement {
     );
   }
 
-  // A group's strip: tabs first, then the shown tab's actions, then the fold.
-  #tablist(group, tabs, active, labelOf, activate, follow) {
+  // A group's strip: tabs first, then the shown tab's actions, then the fold. An entry
+  // is a child's one tab, or one of the child's own tabs, which carries its own label
+  // and, where the child marks it closable, a close button after it.
+  #tablist(group, entries, active, labelOf, activate, follow) {
+    const selected = entries.findIndex((e) => sameEntry(e, active));
+    const tab = (entry, i) => html`
+      <button
+        role="tab"
+        aria-selected=${i === selected}
+        tabindex=${i === selected || (selected < 0 && i === 0) ? 0 : -1}
+        @click=${() => {
+          activate(entry);
+          follow?.(entry);
+        }}
+      >
+        ${entry.id !== undefined ? entry.label : labelOf(entry.view)}
+      </button>
+    `;
     return html`
-      <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, tabs, active, activate)}>
-        ${tabs.map(
-          (name) => html`
-            <button
-              role="tab"
-              aria-selected=${name === active}
-              tabindex=${name === active ? 0 : -1}
-              @click=${() => {
-                activate(name);
-                follow?.(name);
-              }}
-            >
-              ${labelOf(name)}
-            </button>
-          `,
+      <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, entries, active, activate)}>
+        ${entries.map((entry, i) =>
+          entry.closable
+            ? html`<span class="own" role="presentation">
+                ${tab(entry, i)}
+                <button
+                  class="close"
+                  aria-label="Close ${entry.label}"
+                  title="Close ${entry.label}"
+                  @click=${(e) => this.#close(e, entry)}
+                >
+                  ${CLOSE}
+                </button>
+              </span>`
+            : tab(entry, i),
         )}
       </div>
     `;
   }
 
+  // The child decides what closing means and answers with its tabs; the keyboard stays
+  // in the strip, on the tab now selected, rather than falling to the page.
+  #close(event, entry) {
+    const list = event.currentTarget.closest('[role="tablist"]');
+    this.#actor.send({ type: "_close", name: entry.view, id: entry.id });
+    this.updateComplete.then(() => {
+      if (!list.contains(this.renderRoot.activeElement)) list.querySelector('[role="tab"][tabindex="0"]')?.focus();
+    });
+  }
+
   // Arrow keys move along a tablist and show the tab they land on; Home and End
   // jump to the ends. Either axis works, so a vertical rail reads the same keys.
-  #arrow(event, tabs, active, activate) {
+  #arrow(event, entries, active, activate) {
+    if (event.target.getAttribute("role") !== "tab") return;
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
-    const at = tabs.indexOf(active);
+    const at = entries.findIndex((e) => sameEntry(e, active));
     let next;
-    if (step) next = tabs[(at + step + tabs.length) % tabs.length];
-    else if (event.key === "Home") next = tabs[0];
-    else if (event.key === "End") next = tabs[tabs.length - 1];
-    if (!next || next === active) return;
+    if (step) next = entries[(at + step + entries.length) % entries.length];
+    else if (event.key === "Home") next = entries[0];
+    else if (event.key === "End") next = entries[entries.length - 1];
+    if (!next || sameEntry(next, active)) return;
     event.preventDefault();
     activate(next);
-    this.updateComplete.then(() =>
-      event.currentTarget.querySelector('[role="tab"][aria-selected="true"]')?.focus(),
-    );
+    const list = event.currentTarget;
+    this.updateComplete.then(() => list.querySelector('[role="tab"][aria-selected="true"]')?.focus());
   }
 
   // The three other groups, in the fixed order, so the same arrow is always in
@@ -1122,7 +1179,11 @@ class DockDesk extends LitElement {
   // the fold and unfold buttons are always rendered (one glyph, oriented by CSS).
   #dock(side, dock, labelOf, arranging) {
     const active = dock.views.includes(dock.active) ? dock.active : dock.views[0];
-    const show = (name) => this.#send("_activate", name, side);
+    const context = this.#actor.snapshot.context;
+    const entries = stripOf(context, side);
+    const shownEntry = entryOf(context, active);
+    const show = (entry) => this.#show(side, entry);
+    const follow = (entry) => this.#follow(side, entry.view);
     const group = `${side[0].toUpperCase()}${side.slice(1)} dock`;
     const entering = this.#present.has(side) ? "" : "entering";
     // Norman: the bar itself is the panel's handle, so the whole strip folds and
@@ -1135,7 +1196,7 @@ class DockDesk extends LitElement {
       <aside class="dock ${side} ${dock.open ? "" : "folded"} ${entering}" data-side=${side} aria-label=${group}>
         <div class="panel">
           <div class="strip" @click=${fold}>
-            ${this.#tablist(group, dock.views, active, labelOf, show, (name) => this.#follow(side, name))}
+            ${this.#tablist(group, entries, shownEntry, labelOf, show, follow)}
             ${arranging ? this.#actions(side, active, labelOf, dock.views) : nothing}
             ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
           </div>
@@ -1144,7 +1205,7 @@ class DockDesk extends LitElement {
           </div>
         </div>
         <div class="rail" @click=${unfold}>
-          ${this.#tablist(group, dock.views, active, labelOf, show, (name) => this.#follow(side, name))}
+          ${this.#tablist(group, entries, shownEntry, labelOf, show, follow)}
           ${this.#fold("Unfold", "false", () => this.#send("_unfold", undefined, side), `Unfold ${dock.views.map(labelOf).join(", ")}`)}
         </div>
       </aside>

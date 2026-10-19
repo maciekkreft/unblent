@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, nextGroup, nextTab, tabsOf } from "../machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -671,9 +671,9 @@ test("the tab keys follow a side's own order after its tabs were moved", async (
   actor.send({ ...emitted.at(-1), type: "dock.changed" });
   const { context } = actor.getSnapshot();
   assert.deepEqual(tabsOf(context, "right"), ["trace-list", "contract-list", "note-list"]);
-  assert.equal(nextTab(context, "right", "trace-list", 1), "contract-list");
-  assert.equal(nextTab(context, "right", "note-list", 1), "trace-list");
-  assert.equal(nextTab(context, "right", "trace-list", -1), "note-list");
+  assert.deepEqual(nextTab(context, "right", { view: "trace-list" }, 1), { view: "contract-list" });
+  assert.deepEqual(nextTab(context, "right", { view: "note-list" }, 1), { view: "trace-list" });
+  assert.deepEqual(nextTab(context, "right", { view: "trace-list" }, -1), { view: "note-list" });
 });
 
 test("the stage's tab keys follow the page's order, which a returned tab takes", async () => {
@@ -684,14 +684,121 @@ test("the stage's tab keys follow the page's order, which a returned tab takes",
   actor.send({ ...emitted.at(-1), type: "dock.changed" });
   const { context } = actor.getSnapshot();
   assert.deepEqual(tabsOf(context, "stage"), ["token-sheet", "contract-list", "trace-list"]);
-  assert.equal(nextTab(context, "stage", "token-sheet", 1), "contract-list");
-  assert.equal(nextTab(context, "stage", "token-sheet", -1), "trace-list");
+  assert.deepEqual(nextTab(context, "stage", { view: "token-sheet" }, 1), { view: "contract-list" });
+  assert.deepEqual(nextTab(context, "stage", { view: "token-sheet" }, -1), { view: "trace-list" });
 });
 
 test("the tab keys from no shown tab start at an end, and an empty group has none", () => {
   const context = { views: VIEWS, docks: { left: { open: true, views: ["trace-list"] } } };
-  assert.equal(nextTab(context, "stage", null, 1), "token-sheet");
-  assert.equal(nextTab(context, "stage", null, -1), "contract-list");
-  assert.equal(nextTab(context, "left", "trace-list", 1), "trace-list");
+  assert.deepEqual(nextTab(context, "stage", null, 1), { view: "token-sheet" });
+  assert.deepEqual(nextTab(context, "stage", null, -1), { view: "contract-list" });
+  assert.deepEqual(nextTab(context, "left", { view: "trace-list" }, 1), { view: "trace-list" });
   assert.equal(nextTab(context, "bottom", null, 1), null);
+});
+
+// A child that announces its own tabs (tabs.shown) is drawn as them, in its place.
+const BOOKS = {
+  type: "tabs.shown",
+  view: "contract-list",
+  tabs: [
+    { id: "journal", label: "Journal", closable: true },
+    { id: "b1", label: "Walden", closable: true },
+    { id: "b2", label: "Emma", closable: false },
+  ],
+  active: "b1",
+};
+
+async function withTabs({ arranging = false, docks = {} } = {}) {
+  const settled = await settle(stored({ stage: "contract-list", docks }, { arranging }));
+  const picked = [];
+  const closed = [];
+  settled.actor.on("tab.picked", (e) => picked.push(e));
+  settled.actor.on("tab.closed", (e) => closed.push(e));
+  settled.actor.send(BOOKS);
+  return { ...settled, picked, closed };
+}
+
+test("a child's own tabs take its place in the strip, in order", async () => {
+  const { actor } = await withTabs();
+  const { context } = actor.getSnapshot();
+  assert.deepEqual(
+    stripOf(context, "stage").map((e) => e.id ?? e.view),
+    ["token-sheet", "journal", "b1", "b2", "trace-list"],
+  );
+  assert.deepEqual(entryOf(context, "contract-list"), { view: "contract-list", id: "b1" });
+  assert.deepEqual(entryOf(context, "token-sheet"), { view: "token-sheet" });
+});
+
+test("the tab keys step through a child's tabs inside the group's order", async () => {
+  const { actor } = await withTabs();
+  const { context } = actor.getSnapshot();
+  const shown = { view: "contract-list", id: "b1" };
+  assert.equal(nextTab(context, "stage", shown, 1).id, "b2");
+  assert.equal(nextTab(context, "stage", shown, -1).id, "journal");
+  assert.deepEqual(nextTab(context, "stage", { view: "contract-list", id: "b2" }, 1), { view: "trace-list" });
+  assert.equal(nextTab(context, "stage", { view: "token-sheet" }, 1).id, "journal");
+  assert.deepEqual(nextTab(context, "stage", { view: "token-sheet" }, -1), { view: "trace-list" }, "wraps");
+});
+
+test("a docked child's tabs are drawn on its side", async () => {
+  const { actor } = await withTabs({ docks: { right: { open: true, views: ["trace-list", "contract-list"] } } });
+  const { context } = actor.getSnapshot();
+  assert.deepEqual(stripOf(context, "right").map((e) => e.id ?? e.view), ["trace-list", "journal", "b1", "b2"]);
+  assert.deepEqual(stripOf(context, "stage").map((e) => e.view), ["token-sheet"]);
+});
+
+test("while arranging, or with no tabs, the child is its one tab", async () => {
+  const { actor } = await withTabs({ arranging: true });
+  assert.deepEqual(stripOf(actor.getSnapshot().context, "stage"), [
+    { view: "token-sheet" },
+    { view: "contract-list" },
+    { view: "trace-list" },
+  ]);
+  assert.deepEqual(entryOf(actor.getSnapshot().context, "contract-list"), { view: "contract-list" });
+  actor.send({ type: "settings.changed", arranging: false, vimKeys: false });
+  actor.send({ ...BOOKS, tabs: [], active: null });
+  assert.deepEqual(stripOf(actor.getSnapshot().context, "stage").map((e) => e.view), ["token-sheet", "contract-list", "trace-list"]);
+});
+
+test("tabs.shown from a view not on the desk is ignored", async () => {
+  const { actor } = await withTabs();
+  actor.send({ ...BOOKS, view: "ghost" });
+  assert.equal(actor.getSnapshot().context.tabs.ghost, undefined);
+});
+
+test("picking another of a staged child's tabs emits tab.picked and leaves the layout", async () => {
+  const { actor, emitted, picked } = await withTabs();
+  const before = emitted.length;
+  actor.send({ type: "_pick", name: "contract-list", id: "b2" });
+  assert.deepEqual(picked, [{ type: "tab.picked", view: "contract-list", id: "b2" }]);
+  assert.equal(emitted.length, before, "the child is already staged");
+  actor.send({ type: "_pick", name: "contract-list", id: "b1" });
+  assert.equal(picked.length, 1, "the tab already in front is not picked again");
+  actor.send({ type: "_pick", name: "contract-list", id: "nope" });
+  assert.equal(picked.length, 1, "a tab the child did not announce");
+});
+
+test("picking a child's tab stages the child, and clears a pressed button", async () => {
+  const { actor, emitted, picked } = await withTabs();
+  actor.send({ type: "_open", name: "token-sheet" });
+  actor.send({ ...emitted.at(-1), type: "dock.changed" });
+  actor.send({ type: "_press", name: "settings-sheet" });
+  actor.send({ type: "_pick", name: "contract-list", id: "b1" });
+  assert.deepEqual(emitted.at(-1), { type: "dock.arranged", stage: "contract-list", docks: {} });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.equal(picked.length, 0, "b1 was already the child's tab in front");
+});
+
+test("picking a docked child's tab shows it on its side, unfolded", async () => {
+  const { actor, emitted, picked } = await withTabs({ docks: { right: { open: false, views: ["trace-list", "contract-list"] } } });
+  actor.send({ type: "_pick", name: "contract-list", id: "journal" });
+  assert.deepEqual(emitted.at(-1).docks.right, { open: true, views: ["trace-list", "contract-list"], active: "contract-list" });
+  assert.deepEqual(picked, [{ type: "tab.picked", view: "contract-list", id: "journal" }]);
+});
+
+test("the close button emits tab.closed for a closable tab only", async () => {
+  const { actor, closed } = await withTabs();
+  actor.send({ type: "_close", name: "contract-list", id: "journal" });
+  actor.send({ type: "_close", name: "contract-list", id: "b2" });
+  assert.deepEqual(closed, [{ type: "tab.closed", view: "contract-list", id: "journal" }]);
 });
