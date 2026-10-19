@@ -237,18 +237,14 @@ test("a question's expected answer is kept while it names an answer it has, come
   assert.equal("expect" in changed.at(-1).questions[1], false, "the settled option took it away");
 });
 
-test("Show in journal: a new evaluator starts without it, a save sets or clears it, and a save leaving it out keeps it", async () => {
+test("a journal flag left from Show in journal is neither kept, announced nor sent", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);
-  actor.send(saved());
-  assert.equal(changed.at(-1).journal, false);
   actor.send(saved({ journal: true }));
-  assert.deepEqual([changed.at(-1).journal, changed.at(-1).version], [true, 2]);
-  actor.send(saved({ name: "Renamed" }));
-  assert.deepEqual([changed.at(-1).journal, changed.at(-1).name], [true, "Renamed"]);
-  actor.send(saved({ name: "Renamed", journal: false }));
-  assert.deepEqual([changed.at(-1).journal, changed.at(-1).version], [false, 4]);
-  assert.equal((await list(actor))[0].journal, false);
+  assert.equal("journal" in changed.at(-1), false);
+  actor.send(saved({ journal: false }));
+  assert.equal(changed.at(-1).version, 1, "the flag alone is no change");
+  assert.equal("journal" in (await list(actor))[0], false);
 });
 
 test("switching keeps the tick, and the same tick or an unknown id is no change", async () => {
@@ -374,7 +370,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "journal", "name", "on", "questions", "starterFor", "updatedAt"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "name", "on", "questions", "starterFor", "updatedAt"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });

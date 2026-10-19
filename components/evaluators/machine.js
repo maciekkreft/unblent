@@ -70,7 +70,6 @@ const record = (r) => ({
   book: r.book,
   name: str(r.name),
   on: r.on !== false,
-  journal: r.journal === true,
   questions: questionsOf(r.questions),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   removing: r.removing === true,
@@ -89,7 +88,6 @@ const content = (r) => ({
   book: r.book,
   name: r.name,
   on: r.on,
-  journal: r.journal,
   questions: bare(r.questions),
   starterFor: pagesOf(r.starterFor),
 });
@@ -172,16 +170,16 @@ const live = (context, id) => {
 };
 
 // A new id adds an evaluator to its book, switched on; a save to one already kept
-// changes its name, its questions and, when the save says, whether it shows in the
-// journal, keeps its book and its tick, and keeps whatever of it is still in its undo
-// window. A save that leaves `journal` out keeps it, so a tab running an older editor
-// cannot clear it. A deleted id stays deleted (5).
+// changes its name and its questions, keeps its book and its tick, and keeps whatever
+// of it is still in its undo window. A deleted id stays deleted (5).
+// A `journal` field in a save or a stored row is no longer read: the schemas keep it
+// because contracts only grow (7.1), and a write leaving it out keeps the server's.
 function applySave(context, event, enqueue) {
   if (!isId(event.id) || context.evaluators.get(event.id)?.deleted) return;
   const was = live(context, event.id);
   if (!was) {
     if (!isId(event.book)) return;
-    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, journal: event.journal, questions: event.questions }));
+    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, questions: event.questions }));
   }
   const questions = keepMarked(
     was.questions,
@@ -190,8 +188,7 @@ function applySave(context, event, enqueue) {
       return { ...q, options: keepMarked(old ? old.options : [], q.options) };
     }),
   );
-  const journal = typeof event.journal === "boolean" ? event.journal : was.journal;
-  const next = { ...was, name: str(event.name), journal, questions };
+  const next = { ...was, name: str(event.name), questions };
   if (same(was, next)) return;
   commit(context, enqueue, next);
 }
@@ -217,7 +214,6 @@ const copyOf = (starter, journal, newId) =>
     book: journal,
     name: starter.name,
     on: true,
-    journal: false,
     questions: questionsOf(starter.questions).map((q) => {
       const ids = new Map(q.options.map((o) => [o.id, newId()]));
       return {
@@ -422,8 +418,7 @@ export const machine = setup({
       "question may name the answer expected (an option, or yes or no), kept across a switch " +
       "of kind and back, which a removed option takes with it once its removal settles; and it is switched on or off. Each question is switched on or off too: one " +
       "switched off is kept, with its wording, but not asked, and a question without the " +
-      "switch counts as on. An evaluator marked \"Show in journal\" is " +
-      "listed in the Journal's Evaluators tab as well as its own book's. `evaluators: list` answers one book's evaluators, " +
+      "switch counts as on. `evaluators: list` answers one book's evaluators, " +
       "or every book's when no book is given, oldest first, each with when its content last " +
       "changed (`updatedAt`, absent on one kept from before it was recorded). A new evaluator starts switched on. It works signed out, numbering versions " +
       "itself, and syncs to the account when signed in (section 5); signing in uploads every " +

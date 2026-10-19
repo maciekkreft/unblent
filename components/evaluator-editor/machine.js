@@ -4,9 +4,9 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // list-then-item shows under its Back bar when evaluator.selected arrives. It owns only
 // UI state — the evaluator being edited as a draft, the book it is kept with, and
 // whether typing is waiting to be saved — and points at four facts: it asks
-// evaluators: list for every book's evaluators, because the Journal lists other books'
-// marked ones and a pick there names the Journal, and follows evaluator.changed /
-// evaluator.deleted after, asks books: list for which book is the Journal and follows
+// evaluators: list for every book's evaluators, so an evaluator a pin keeps open is at
+// hand whichever book is on the stage, and follows evaluator.changed /
+// evaluator.deleted after, asks books: list for each book's title and follows
 // book.changed / book.deleted, asks settings: read for the "Vim keys" preference (12)
 // and follows settings.changed, and, with `subject`, asks subject: read and follows
 // subject.changed (4.3, fourth rule), so the tab never keeps showing an evaluator of a
@@ -39,14 +39,12 @@ export const expectOf = (q) => (q.expect === "yes" || q.expect === "no" || q.opt
 export const shownExpect = (q) =>
   (q.kind === "pick" ? live(q.options).some((o) => o.id === q.expect) : q.expect === "yes" || q.expect === "no") ? q.expect : null;
 
-// The draft as evaluator.saved carries it, with "Show in journal" and each question's
-// switch: no on/off for the evaluator, which evaluator-list owns as a gesture, and no marked item, which `evaluators` keeps in place by itself while its
+// The draft as evaluator.saved carries it, with each question's switch: no on/off for the evaluator, which evaluator-list owns as a gesture, and no marked item, which `evaluators` keeps in place by itself while its
 // undo window runs.
 export const wire = (d) => ({
   id: d.id,
   book: d.book,
   name: d.name,
-  journal: d.journal === true,
   questions: live(d.questions).map((q) => ({
     id: q.id,
     on: q.on !== false,
@@ -80,11 +78,11 @@ const known = (context, id) => context.evaluators.some((r) => r.id === id);
 const savable = (context) => context.draft && !context.draft.removing && (known(context, context.draft.id) || !isEmpty(context.draft));
 
 const copy = (r) =>
-  structuredClone({ id: r.id, book: r.book, name: r.name, journal: r.journal === true, questions: r.questions, removing: r.removing });
+  structuredClone({ id: r.id, book: r.book, name: r.name, questions: r.questions, removing: r.removing });
 
 const opened = (context, id, book) => {
   const found = context.evaluators.find((r) => r.id === id);
-  return found ? copy(found) : { id, book, name: "", journal: false, questions: [blankQuestion(context.mint())], removing: false };
+  return found ? copy(found) : { id, book, name: "", questions: [blankQuestion(context.mint())], removing: false };
 };
 
 // While typing waits to be saved, a change from the fact brings only its removal marks,
@@ -204,11 +202,6 @@ const edits = (target) => ({
     target,
     actions: assign(({ context, event }) => ({ draft: patchQuestion(context.draft, event.id, { on: event.on }) })),
   },
-  _journal: {
-    guard: ({ event }) => typeof event.on === "boolean",
-    target,
-    actions: assign(({ context, event }) => ({ draft: { ...context.draft, journal: event.on } })),
-  },
   _addQuestion: {
     target,
     actions: assign(({ context }) => ({
@@ -249,7 +242,7 @@ const removal = (kind, find, flagged, dropped) => ({
 });
 
 // A book's most recently edited evaluator, as the note editor opens the newest note: only
-// one kept with that book, so in the Journal one marked Show in journal never counts. One
+// one kept with that book. One
 // with no updatedAt (kept from before it was recorded) is the oldest; equal times fall to
 // the later id, which is the later made.
 export const newest = (evaluators, book) =>
@@ -267,8 +260,9 @@ const isPick = (event) => typeof event.id === "string" && typeof event.book === 
 // An evaluator is kept with a book, so only a subject that is a book has evaluators.
 const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
 
-// The book the evaluator open or being fetched was picked in; null while none is. In
-// the Journal that is the Journal, whichever book the evaluator is kept with.
+// The book the evaluator open or being fetched was picked in; null while none is. An
+// evaluator of another book reopened after a reload under a pin on the Journal keeps
+// the Journal here, so the pin stays on.
 const shownBook = (context) => context.want?.book ?? (context.draft ? context.book : null);
 
 // A new subject or pin (with `subject`): `next` gives both. The evaluator open is left
@@ -282,7 +276,7 @@ const followSubject = (next, extra = []) => [
     guard: ({ context, event }) => {
       const { subject, pin } = next({ context, event });
       const book = bookOf(subject);
-      return context.following && pin == null && book != null && shownBook(context) != null && book !== shownBook(context);
+      return context.following && pin == null && book != null && shownBook(context) != null && (book !== shownBook(context) || stray(context));
     },
     target: ".fetching",
     actions: [
@@ -309,6 +303,10 @@ const announce = enqueueActions(({ context, enqueue }) => {
   enqueue.emit({ type: "evaluator.opened", id });
 });
 
+// The evaluator open is kept with another book than the one it was opened in: only a
+// reload brings that back, and only a pin keeps it.
+const stray = (context) => context.draft != null && context.want == null && context.draft.book !== context.book;
+
 const pinned = (context) => context.pin != null && context.pin === shownBook(context);
 
 // A book's title from books' list or its news, for the About line.
@@ -317,8 +315,7 @@ const titled = (books) => Object.fromEntries((Array.isArray(books) ? books : [])
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
-    // Which book is the Journal, where "Show in journal" says nothing and is not offered;
-    // a page without books gets no-answerer and offers it everywhere.
+    // Each book's title, for the About line; a page without books gets no-answerer.
     books: fromPromise(({ input }) => input.ask("books", "list", {})),
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the boxes stay plain.
@@ -340,10 +337,7 @@ export const machine = setup({
   id: "evaluator-editor",
   meta: {
     description:
-      "Edits one evaluator, the item of the Evaluators tab: its name and its questions. Under " +
-      "the name, Show in journal lists an evaluator of any book but the Journal in the " +
-      "Journal's Evaluators as well; one opened from the Journal stays open while the " +
-      "Journal does. Each " +
+      "Edits one evaluator, the item of the Evaluators tab: its name and its questions. Each " +
       "question has a tick box that switches it on or off: one switched off is greyed but stays " +
       "editable and is kept, but not asked, and ticking it again brings it back; a new question " +
       "starts switched on. Each question is Yes / no, with optional words for what yes and no mean, or Pick one, with " +
@@ -362,10 +356,12 @@ export const machine = setup({
       "evaluator open before a reload opens again while it is still kept. With `subject` it " +
       "follows the book open on the stage, as the list beside it does: when another book " +
       "comes on, what was typed is saved and that book's most recently edited evaluator opens, " +
-      "or a New evaluator when it has none; in the Journal only the Journal's own count, not " +
-      "those marked Show in journal; while the " +
+      "or a New evaluator when it has none; while the " +
       "pin at the top right is on it stays on its book, and so does the list beside it; " +
-      "unpinning brings the stage's book back at once. The line beside the pin names the book, " +
+      "unpinning brings the stage's book back at once. After a reload an evaluator of another " +
+      "book than the one it was opened in stays open only while the pin is on; otherwise the " +
+      "editor opens that book's own newest evaluator, or a New evaluator. The line beside the " +
+      "pin names the book the evaluator is kept with, " +
       "and the pin is kept by `pins`, so it survives a reload. The question, what yes " +
       "and no mean and each option's description are text boxes that grow with what is written " +
       "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
@@ -385,13 +381,13 @@ export const machine = setup({
     // The book the open evaluator was picked in, and every book's evaluators.
     book: null,
     evaluators: [],
-    // The Journal's book id, once books has said.
-    journal: null,
     // The subject on the stage, and the book `pins` holds for this tab; pinsObserved says
     // pins.changed came before the start reply, which is then the older picture.
     subject: null,
     pin: null,
     pinsObserved: false,
+    // Whether the starting subject and pin have arrived.
+    started: false,
     // Each book's title by id, for the About line.
     titles: {},
     draft: null,
@@ -418,10 +414,7 @@ export const machine = setup({
       src: "books",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: {
-        actions: assign({
-          journal: ({ event }) => (Array.isArray(event.output?.books) ? (event.output.books.find((b) => b?.written === true)?.id ?? null) : null),
-          titles: ({ context, event }) => ({ ...titled(event.output?.books), ...context.titles }),
-        }),
+        actions: assign({ titles: ({ context, event }) => ({ ...titled(event.output?.books), ...context.titles }) }),
       },
       onError: { actions: [] },
     },
@@ -429,6 +422,7 @@ export const machine = setup({
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
       onDone: followSubject(({ context, event }) => ({
+        started: true,
         subject: event.output?.subject ?? null,
         pin: context.pinsObserved ? context.pin : (event.output?.pin ?? null),
       })),
@@ -449,18 +443,10 @@ export const machine = setup({
         [emit(({ context }) => ({ type: "pin.toggled", what: "evaluators", id: pinned(context) ? null : shownBook(context) }))],
       ),
     ],
-    "book.changed": [
-      {
-        guard: ({ event }) => event.written === true,
-        actions: assign({ journal: ({ event }) => event.id, titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }),
-      },
-      { actions: assign({ titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }) },
-    ],
-    // Followed because it supersedes books: list (4.3, fourth rule); books never deletes
-    // the Journal, so this only matters if that ever changes.
+    "book.changed": { actions: assign({ titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }) },
+    // Followed because it supersedes books: list (4.3, fourth rule).
     "book.deleted": {
-      guard: ({ context, event }) => event.id === context.journal,
-      actions: assign({ journal: null }),
+      actions: assign({ titles: ({ context, event }) => Object.fromEntries(Object.entries(context.titles).filter(([id]) => id !== event.id)) }),
     },
   },
   initial: "starting",
@@ -484,7 +470,15 @@ export const machine = setup({
               enqueueActions(({ context, event, enqueue }) => {
                 const { want } = context;
                 const next = { ...context, book: want.book, evaluators: event.output.evaluators };
-                const id = want.latest ? (newest(next.evaluators, want.book)?.id ?? want.id) : want.id;
+                // An evaluator of another book than the one it was opened in is kept only
+                // under a pin, since the list beside it shows that book's own; while the
+                // pin is not known yet, followSubject decides once it is.
+                const stray =
+                  want.restore &&
+                  context.started &&
+                  context.pin !== want.book &&
+                  next.evaluators.some((r) => r.id === want.id && r.book !== want.book);
+                const id = want.latest || stray ? (newest(next.evaluators, want.book)?.id ?? (stray ? context.mint() : want.id)) : want.id;
                 enqueue.assign({ book: want.book, evaluators: next.evaluators, draft: opened(next, id, want.book), want: null });
                 if (id !== want.id) enqueue(() => context.remember({ id, book: want.book }));
               }),

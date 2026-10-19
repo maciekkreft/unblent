@@ -5,7 +5,7 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // the row the editor shows, and a draft id for New evaluator — and points at three facts: it
 // asks subject: read for what is open and follows subject.changed, asks evaluators: list
 // for the open book and follows evaluator.changed / evaluator.deleted, asks books: list
-// for which book is the journal and what each book is called and follows book.changed /
+// for what each book is called and follows book.changed /
 // book.deleted, and asks settings: read for the "Vim keys" preference (12) and follows
 // settings.changed (4.3, fourth rule), and asks pins: read for the book the tab is pinned
 // to and follows pins.changed. Which row is open it learns only from the editor's
@@ -34,11 +34,6 @@ export const rows = (evaluators) => live(evaluators);
 const switchedOn = (question) => question.on !== false;
 
 
-// The journal lists its own evaluators and every one marked "Show in journal"; any other
-// book lists only its own.
-export const belongs = (book, journal, evaluator) =>
-  evaluator.book === book || (book != null && book === journal && evaluator.journal === true);
-
 // An evaluator is kept with a book, so only a subject that is a book has evaluators.
 export const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
 
@@ -55,11 +50,11 @@ const askableQuestion = (question) =>
   !question.removing && switchedOn(question) && filled(question.text) && (question.kind !== "pick" || pickable(question));
 
 // The line under an evaluator's name: how many questions Run would ask (written,
-// switched on, and for a pick question two named options), "· off" when its tick is
-// off, and, for one shown in the journal from another book, that book's title.
-export const subtitle = (evaluator, from = null) => {
+// switched on, and for a pick question two named options), and "· off" when its tick is
+// off.
+export const subtitle = (evaluator) => {
   const n = evaluator.questions.filter(askableQuestion).length;
-  return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}${from == null ? "" : ` · ${from}`}`;
+  return `${n} question${n === 1 ? "" : "s"}${evaluator.on ? "" : " · off"}`;
 };
 
 // What a run asks: each shown, switched-on evaluator with its askable, switched-on
@@ -362,35 +357,11 @@ const remint = (context, evaluators) => (evaluators.some((e) => e.id === context
 
 const shownHas = (context, id) => rows(context.evaluators).some((e) => e.id === id);
 
-// What books says about the journal and the titles. When that changes whether the book
-// shown is the journal, its evaluators are asked for again, since the journal's list
-// takes in other books' marked ones.
-const learn = (next) => [
-  {
-    guard: ({ context, event }) => {
-      const { journal } = next(context, event);
-      return context.book != null && journal !== context.journal && (context.book === journal || context.book === context.journal);
-    },
-    target: ".loading",
-    reenter: true,
-    actions: assign(({ context, event }) => next(context, event)),
-  },
-  { actions: assign(({ context, event }) => next(context, event)) },
-];
-
-// The journal is the book books marks written.
-const fromList = (context, event) => {
+// What books says about each book's title, for the line naming the book shown.
+const fromList = (event) => {
   const books = Array.isArray(event.output?.books) ? event.output.books : [];
-  return {
-    journal: books.find((b) => b.written === true)?.id ?? null,
-    titles: Object.fromEntries(books.map((b) => [b.id, b.title])),
-  };
+  return Object.fromEntries(books.map((b) => [b.id, b.title]));
 };
-
-const fromChange = (context, event) => ({
-  journal: event.written === true ? event.id : context.journal === event.id ? null : context.journal,
-  titles: { ...context.titles, [event.id]: event.title },
-});
 
 // The book the list shows: the one the tab is pinned to, else the book on the stage.
 export const wanted = ({ pin, subject }) => pin ?? bookOf(subject);
@@ -432,12 +403,9 @@ export const machine = setup({
     }),
     // The book's evaluators; evaluator.changed / evaluator.deleted are held for this ask
     // until its reply lands, so a change that races it is applied after it.
-    // The journal asks for every book's, as it lists the marked ones of any book.
-    load: fromPromise(({ input }) =>
-      input.ask("evaluators", "list", input.book === input.journal ? {} : { book: input.book }),
-    ),
+    load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
     // book.changed / book.deleted are held for this ask until its reply lands. A page
-    // without books gets no-answerer, and then no book is the journal.
+    // without books gets no-answerer, and then no book has a title.
     books: fromPromise(({ input }) => (input.following ? input.ask("books", "list", {}) : Promise.resolve({ books: [] }))),
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the letters stay off.
@@ -454,7 +422,7 @@ export const machine = setup({
   id: "evaluator-list",
   meta: {
     description:
-      "Lists the evaluators kept with the open book and tries them on a text. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys. Its button evaluates each line on its own with the switched-on evaluators, asking only their switched-on questions; it says \"Evaluate\", or \"Evaluate 1 line\" or \"Evaluate N lines\" once there is text. Blank lines are skipped, and each line is one request to Jev, sent one after another, never two at once. Typing during a run does not change it. While a run works the button is Stop, which lets the line being asked be answered and asks no more (it says \"Stopping…\" until then); after a run come Clear and \"Evaluate N lines\", which starts every line over. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. A line edited after it was answered loses its marks. Under the box, a panel tells about one line: during a run the line just answered, after it the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the run: the lines already answered keep their marks, the ones after it are not asked. Beside the button a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. With `subject` it follows the book open on the stage, and another book shows that book's evaluators; while no book is open, or without `subject`, it says to open a book. While the Journal is open it lists the Journal's evaluators and every evaluator of another book marked Show in journal, that book's title on the line under its name; its tick, opening it and evaluating work as for the Journal's own. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. On a try page, when a guest has used all its free use the button is off and under it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it is off and says \"Free trials are paused for now.\"; a guest the admin blocked has it off and reads \"This trial has ended.\" Answers are not saved: Clear removes them, a change to an evaluator removes its own from every line, and another book removes all of them. The text is kept per book in this browser, so a reload or coming back to the book shows it again. With `subject`, a line at the top names the book shown. While the editor's pin is on, as `pins` says, the list stays on that book when another comes on the stage, and unpinning brings the stage's book back at once. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself on another book, after a reload or a pin, and the keyboard starts from it.",
+      "Lists the evaluators kept with the open book and tries them on a text. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys. Its button evaluates each line on its own with the switched-on evaluators, asking only their switched-on questions; it says \"Evaluate\", or \"Evaluate 1 line\" or \"Evaluate N lines\" once there is text. Blank lines are skipped, and each line is one request to Jev, sent one after another, never two at once. Typing during a run does not change it. While a run works the button is Stop, which lets the line being asked be answered and asks no more (it says \"Stopping…\" until then); after a run come Clear and \"Evaluate N lines\", which starts every line over. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. A line edited after it was answered loses its marks. Under the box, a panel tells about one line: during a run the line just answered, after it the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the run: the lines already answered keep their marks, the ones after it are not asked. Beside the button a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. With `subject` it follows the book open on the stage, and another book shows that book's evaluators; while no book is open, or without `subject`, it says to open a book. The Journal, like any book, lists only its own evaluators. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. On a try page, when a guest has used all its free use the button is off and under it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it is off and says \"Free trials are paused for now.\"; a guest the admin blocked has it off and reads \"This trial has ended.\" Answers are not saved: Clear removes them, a change to an evaluator removes its own from every line, and another book removes all of them. The text is kept per book in this browser, so a reload or coming back to the book shows it again. With `subject`, a line at the top names the book shown. While the editor's pin is on, as `pins` says, the list stays on that book when another comes on the stage, and unpinning brings the stage's book back at once. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself on another book, after a reload or a pin, and the keyboard starts from it.",
     kind: "view",
     emits: ["evaluator.selected", "evaluator.switched"],
     attributes: ["subject", "folded"],
@@ -474,8 +442,7 @@ export const machine = setup({
     pin: null,
     pinsObserved: false,
     evaluators: [],
-    // The journal's book id, null until books answers, and each book's title by id.
-    journal: null,
+    // Each book's title by id, empty until books answers.
     titles: {},
     // The evaluator the editor shows, learned from evaluator.opened; the row marked.
     open: null,
@@ -523,7 +490,7 @@ export const machine = setup({
     {
       src: "books",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: learn(fromList),
+      onDone: { actions: assign({ titles: ({ event }) => fromList(event) }) },
       onError: { actions: [] },
     },
   ],
@@ -533,13 +500,13 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ ask: context.ask, book: context.book, journal: context.journal }),
+        input: ({ context }) => ({ ask: context.ask, book: context.book }),
         onDone: [
           {
             guard: ({ event }) => Array.isArray(event.output?.evaluators),
             target: "ready",
             actions: assign(({ context, event }) => {
-              const evaluators = event.output.evaluators.filter((e) => belongs(context.book, context.journal, e));
+              const evaluators = event.output.evaluators.filter((e) => e.book === context.book);
               return { evaluators, draft: remint(context, evaluators) };
             }),
           },
@@ -656,19 +623,12 @@ export const machine = setup({
       { guard: ({ context }) => !context.following, actions: [] },
       ...follow(({ context, event }) => ({ subject: context.subject, pin: event.evaluators ?? null, pinsObserved: true })),
     ],
-    "book.changed": learn(fromChange),
+    "book.changed": { actions: assign({ titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }) },
     "book.deleted": { actions: assign({ titles: ({ context, event }) => without(context.titles, event.id) }) },
-    // The fact's news (4.3, fourth rule), for the evaluators shown only. One that no
-    // longer belongs, as when "Show in journal" is turned off, leaves the journal's list
-    // as a deleted one does.
+    // The fact's news (4.3, fourth rule), for the evaluators of the book shown only.
     "evaluator.changed": [
       {
-        guard: ({ context, event }) =>
-          !belongs(context.book, context.journal, event.evaluator) && context.evaluators.some((e) => e.id === event.evaluator.id),
-        actions: assign(({ context, event }) => gone(context, event.evaluator.id)),
-      },
-      {
-        guard: ({ context, event }) => belongs(context.book, context.journal, event.evaluator),
+        guard: ({ context, event }) => event.evaluator.book === context.book,
         actions: assign(({ context, event }) => {
           const evaluators = [...context.evaluators.filter((e) => e.id !== event.evaluator.id), event.evaluator].sort(byId);
           // When what it would ask changed (its questions, a question's tick, or its

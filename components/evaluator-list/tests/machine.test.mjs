@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, belongs, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, stopLabel, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected } from "../machine.js";
+import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, stopLabel, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -85,84 +85,45 @@ test("the open book's evaluators are listed; another book shows its own; no book
   assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p.book), [A, B]);
 });
 
-// The journal: its own evaluators and those of other books marked Show in journal.
+// The journal, like any book, lists only its own evaluators. Records may still carry
+// `journal: true` from the retired Show in journal tick; it is ignored.
 const J = "01K7TEST000000000000000BJ1";
 const BOOKS = [
   { id: J, title: "Journal", written: true },
   { id: A, title: "Atomic Habits" },
-  { id: B, title: "Four Thousand Weeks" },
 ];
-const asking = [{ ...q(1), kind: "yesno", text: "Is it kind?", yes: "", no: "", options: [] }];
-const marked = (n, bk, over = {}) => ({ ...evaluator(n, bk, { questions: asking, ...over }), journal: true });
-const journalKept = () => [evaluator(5, J, { questions: asking }), marked(6, A), evaluator(7, A), marked(8, B, { on: false })];
-const startJournal = async ({ books = Promise.resolve({ books: BOOKS }), subject = book(J) } = {}) => {
+
+test("the journal lists only its own evaluators, an old Show in journal mark changing nothing", async () => {
+  const asking = [{ ...q(1), kind: "yesno", text: "Is it kind?", yes: "", no: "", options: [] }];
+  const marked = { ...evaluator(6, A, { questions: asking }), journal: true };
+  const kept = [evaluator(5, J, { questions: asking }), marked];
   const asked = [];
-  const kept = journalKept();
   const actor = createActor(machine, {
     input: {
       following: true,
-      mint: (() => {
-        const d = [D1, D2];
-        return () => d.shift();
-      })(),
+      mint: () => D1,
       ask: (target, name, payload) => {
         asked.push([target, name, payload]);
-        if (target === "subject") return Promise.resolve({ subject });
-        if (target === "books") return books;
+        if (target === "subject") return Promise.resolve({ subject: book(J) });
+        if (target === "books") return Promise.resolve({ books: BOOKS });
         if (target === "settings") return Promise.resolve({ error: "no-answerer" });
-        return Promise.resolve({ evaluators: payload.book ? kept.filter((e) => e.book === payload.book) : kept });
+        // A fact answering more than the book asked for still shows only that book's.
+        return Promise.resolve({ evaluators: kept });
       },
     },
-  });
-  const emitted = [];
-  actor.on("evaluator.selected", (e) => emitted.push(e));
-  actor.start();
+  }).start();
+  const ctx = () => actor.getSnapshot().context;
   await flush();
   await flush();
-  return { actor, asked, emitted, ctx: () => actor.getSnapshot().context };
-};
-
-test("which evaluators a book lists: its own, and in the journal also every marked one", () => {
-  assert.ok(belongs(A, J, evaluator(1, A)));
-  assert.ok(!belongs(A, J, marked(2, B)), "another book never shows a marked evaluator");
-  assert.ok(belongs(J, J, marked(2, B)));
-  assert.ok(!belongs(J, J, evaluator(3, B)));
-  assert.ok(!belongs(J, null, marked(2, B)), "until books says which is the journal, none is");
-  assert.equal(subtitle(evaluator(1, A), "Atomic Habits"), "1 question · Atomic Habits");
-  assert.equal(subtitle(evaluator(1, A, { on: false }), "Atomic Habits"), "1 question · off · Atomic Habits");
-});
-
-test("the journal lists its own and the marked evaluators of every book, and Run and a pick take them in", async () => {
-  const { actor, asked, emitted, ctx } = await startJournal();
   assert.ok(actor.getSnapshot().matches("ready"));
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5), id(6), id(8)]);
-  assert.equal(ctx().titles[A], "Atomic Habits");
-  assert.deepEqual(asked.filter(([t]) => t === "evaluators").at(-1)[2], {}, "the journal asks for every book's");
-  assert.deepEqual(request("Hi", ctx().evaluators).questions.map((q) => q.id.split(":")[0]), [id(5), id(6)], "Run asks the switched-on ones");
-  actor.send({ type: "_pick", id: id(6) });
-  assert.deepEqual(emitted.at(-1), { type: "evaluator.selected", id: id(6), book: J });
-  // Unmarked elsewhere: it leaves the journal's list; marked again: it comes back.
-  actor.send({ type: "evaluator.changed", evaluator: evaluator(6, A) });
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5), id(8)]);
-  assert.equal(ctx().open, null);
-  actor.send({ type: "evaluator.changed", evaluator: marked(7, A) });
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5), id(7), id(8)]);
-  // Another book lists only its own, marked or not.
-  actor.send({ type: "subject.changed", subject: book(A) });
-  await flush();
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(6), id(7)]);
-});
-
-test("a journal shown before books answers is asked for again once books says it is the journal", async () => {
-  let answer;
-  const { actor, asked, ctx } = await startJournal({ books: new Promise((r) => (answer = r)) });
   assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5)]);
-  answer({ books: BOOKS });
-  await flush();
-  await flush();
-  assert.ok(actor.getSnapshot().matches("ready"));
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5), id(6), id(8)]);
-  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{ book: J }, {}]);
+  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{ book: J }], "the journal asks for its own only");
+  assert.equal(ctx().titles[J], "Journal");
+  assert.deepEqual(request("Hi", ctx().evaluators).questions.map((q) => q.id.split(":")[0]), [id(5)]);
+  // News of another book's evaluator, marked or not, leaves the journal's list as it is.
+  actor.send({ type: "evaluator.changed", evaluator: { ...marked, name: "Renamed" } });
+  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5)]);
+  assert.equal(subtitle(marked), "1 question");
 });
 
 test("a book picked while another is still loading is the one shown", async () => {

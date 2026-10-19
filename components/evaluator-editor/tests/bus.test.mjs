@@ -36,7 +36,7 @@ const evaluator = (id, bookId, name) => ({ id, book: bookId, name, on: true, que
 let minted = 0;
 const mint = () => `01K7TEST00000000000000M${String(++minted).padStart(3, "0")}`;
 
-test("another book opens its most recently edited evaluator, the Journal only its own, and a book with none a New evaluator", async () => {
+test("another book opens its most recently edited evaluator, and a book with none a New evaluator", async () => {
   const BOOK2 = "01K7TEST0000000000000BK002";
   const OLD = "01K7TEST0000000000000E0003";
   const MARKED = "01K7TEST0000000000000E0004";
@@ -44,7 +44,7 @@ test("another book opens its most recently edited evaluator, the Journal only it
   const rows = [
     at(evaluator(BOOK_EVAL, BOOK, "Book's"), "2026-10-01T00:00:00.000Z"),
     evaluator(OLD, BOOK, "Book's old"),
-    at({ ...evaluator(MARKED, BOOK, "Marked"), journal: true }, "2026-09-02T00:00:00.000Z"),
+    at(evaluator(MARKED, BOOK, "Marked"), "2026-09-02T00:00:00.000Z"),
     at(evaluator(JOURNAL_EVAL, JOURNAL, "Journal's"), "2026-09-01T00:00:00.000Z"),
   ];
   const { actors, unwire } = await wire(["journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
@@ -75,7 +75,7 @@ test("another book opens its most recently edited evaluator, the Journal only it
 
     actors.books.send({ type: "book.selected", id: JOURNAL });
     await until(() => draft()?.book === JOURNAL);
-    assert.equal(draft().id, JOURNAL_EVAL, "the Journal's own, though one marked Show in journal is newer");
+    assert.equal(draft().id, JOURNAL_EVAL, "the Journal's own, though one of another book is newer");
     await until(() => open() === JOURNAL_EVAL);
 
     actors.books.send({ type: "book.selected", id: BOOK });
@@ -92,33 +92,37 @@ test("another book opens its most recently edited evaluator, the Journal only it
   }
 });
 
-test("in the journal a marked evaluator of another book is listed, opened and edited, and turning Show in journal off takes it out", async () => {
-  const marked = { ...evaluator(BOOK_EVAL, BOOK, "Book's"), questions: [{ id: "01K7TEST0000000000000Q0001", kind: "yesno", text: "Kind?", yes: "", no: "", options: [] }], journal: true };
-  const { actors, unwire } = await wire(["journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
-    journal: { store: store({ days: new Map() }), now: () => NOW },
-    books: { store: store({ rows: new Map([[BOOK, book]]) }, new Map([["open", { id: JOURNAL, at: 1 }]])), now: () => NOW, api: null, revoke: () => {} },
-    evaluators: { store: store({ rows: new Map([[BOOK_EVAL, marked], [JOURNAL_EVAL, evaluator(JOURNAL_EVAL, JOURNAL, "Journal's")]]) }) },
-    "evaluator-list": { mint, following: true },
-    "evaluator-editor": { mint, following: true, throttleMs: 50 },
-  });
-  const list = () => actors["evaluator-list"].getSnapshot().context.evaluators.map((e) => e.name);
-  const editor = () => actors["evaluator-editor"].getSnapshot().context;
+test("after a reload an evaluator of another book than the one it was opened in stays only under a pin", async () => {
+  const wiring = (parts, extra = {}) =>
+    wire(parts, {
+      journal: { store: store({ days: new Map() }), now: () => NOW },
+      books: { store: store({ rows: new Map([[BOOK, book]]) }, new Map([["open", { id: JOURNAL, at: 1 }]])), now: () => NOW, api: null, revoke: () => {} },
+      evaluators: {
+        store: store({ rows: new Map([[BOOK_EVAL, { ...evaluator(BOOK_EVAL, BOOK, "Book's"), journal: true }], [JOURNAL_EVAL, evaluator(JOURNAL_EVAL, JOURNAL, "Journal's")]]) }),
+      },
+      "evaluator-list": { mint, following: true },
+      "evaluator-editor": { mint, following: true, throttleMs: 50, open: { id: BOOK_EVAL, book: JOURNAL } },
+      ...extra,
+    });
+  const facts = ["journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"];
+
+  // Not pinned: the editor follows the Journal on the stage to its own, which the list marks.
+  let { actors, unwire } = await wiring(facts);
   try {
-    await until(() => list().join() === "Book's,Journal's");
-    assert.equal(actors["evaluator-list"].getSnapshot().context.titles[BOOK], "A book");
-    assert.equal(editor().journal, JOURNAL, "the editor knows the journal, where the switch is not offered");
-    actors["evaluator-list"].send({ type: "_pick", id: BOOK_EVAL });
-    await until(() => editor().draft?.name === "Book's");
-    assert.deepEqual([editor().draft.book, editor().draft.journal], [BOOK, true]);
+    await until(() => actors["evaluator-editor"].getSnapshot().context.draft?.id === JOURNAL_EVAL);
+    await until(() => actors["evaluator-list"].getSnapshot().context.open === JOURNAL_EVAL);
+    assert.deepEqual(actors["evaluator-list"].getSnapshot().context.evaluators.map((e) => e.name), ["Journal's"]);
+  } finally {
+    unwire();
+  }
 
-    actors["evaluator-editor"].send({ type: "_edit", patch: { name: "Kindness" } });
-    actors["evaluator-editor"].send({ type: "_blur" });
-    await until(() => list().join() === "Kindness,Journal's");
-
-    actors["evaluator-editor"].send({ type: "_journal", on: false });
-    actors["evaluator-editor"].send({ type: "_blur" });
-    await until(() => list().join() === "Journal's");
-    assert.equal(editor().draft.name, "Kindness", "the evaluator stays open in the editor, where it can be turned back on");
+  // Pinned to the Journal: the evaluator stays open.
+  ({ actors, unwire } = await wiring(["pins", ...facts], { pins: { stored: JSON.stringify({ evaluators: JOURNAL }), save: () => {} } }));
+  try {
+    await until(() => actors["evaluator-editor"].getSnapshot().context.pin === JOURNAL);
+    await until(() => actors["evaluator-editor"].getSnapshot().context.draft?.id === BOOK_EVAL);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(actors["evaluator-editor"].getSnapshot().context.draft?.id, BOOK_EVAL);
   } finally {
     unwire();
   }

@@ -121,7 +121,6 @@ test("every edit leaves as the whole evaluator, without the evaluator's on/off o
     id: R,
     book: P,
     name: "Goal or value",
-    journal: false,
     questions: [
       { id: Q1, on: true, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "Done once" }, { id: O2, name: "Value", description: "" }] },
       { id: Q2, on: true, kind: "yesno", text: "Is it a goal?", yes: "it ends", no: "never", options: [] },

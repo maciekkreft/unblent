@@ -195,16 +195,6 @@ class EvaluatorEditor extends LitElement {
       color: var(--color-mute);
     }
     /* The tick box as evaluator-list draws its on / off box. */
-    .shown {
-      display: inline-flex;
-      align-self: flex-start;
-      align-items: center;
-      gap: var(--space-xs);
-      font-size: var(--text-sm);
-      color: var(--color-body);
-      cursor: pointer;
-    }
-    .shown input,
     .ask input {
       flex: none;
       width: calc(var(--space-md) + var(--space-2xs));
@@ -213,7 +203,6 @@ class EvaluatorEditor extends LitElement {
       accent-color: var(--color-accent);
       cursor: pointer;
     }
-    .shown input:focus-visible,
     .ask input:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
@@ -582,10 +571,11 @@ class EvaluatorEditor extends LitElement {
   // Only while following the stage, where the pin means something: the book the tab
   // shows, and the pin that keeps the list and this editor on it when the stage moves (12).
   #header(snapshot) {
-    const { following, book, pin, titles } = snapshot.context;
+    const { following, book, pin, titles, draft } = snapshot.context;
     if (!following) return nothing;
     const pinned = pin != null && pin === book;
-    const title = titles[book];
+    // The book the evaluator is kept with, which a pin may hold on another book's stage.
+    const title = titles[draft?.book ?? book];
     return html`
       <div class="header">
         <span class="about">${title ? html`About: ${title}` : nothing}</span>
@@ -693,7 +683,7 @@ class EvaluatorEditor extends LitElement {
     if (!snapshot || snapshot.matches("starting") || snapshot.matches("fetching")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="note">Evaluators unavailable.</p>`;
     if (snapshot.matches({ ready: "choosing" })) return html`<p class="note">Pick an evaluator, or New evaluator.</p>`;
-    const { draft, evaluators, journal } = snapshot.context;
+    const { draft, evaluators } = snapshot.context;
     if (draft.removing) return html`<p class="note">This evaluator was deleted.</p>`;
     const stored = evaluators.some((r) => r.id === draft.id);
     const questions = draft.questions.filter((q) => !q.removing);
@@ -717,12 +707,6 @@ class EvaluatorEditor extends LitElement {
               @input=${(e) => this.#send({ type: "_edit", patch: { name: e.target.value } })}
             />
           </label>
-          ${draft.book === journal
-            ? nothing
-            : html`<label class="shown">
-                <input type="checkbox" .checked=${draft.journal} @change=${(e) => this.#send({ type: "_journal", on: e.target.checked })} />
-                Show in journal
-              </label>`}
           <fieldset class="field">
             <legend>Questions</legend>
             <div class="questions">${questions.map((q, i) => this.#question(q, i))}</div>

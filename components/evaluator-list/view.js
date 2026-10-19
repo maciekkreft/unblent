@@ -871,7 +871,7 @@ class EvaluatorList extends LitElement {
     if (!snapshot || snapshot.matches("loading")) return nothing;
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
-    const { draft, open, evaluators, book, titles } = snapshot.context;
+    const { draft, open, evaluators } = snapshot.context;
     const shown = rows(evaluators);
     const ids = [draft, ...shown.map((e) => e.id)];
     const focusId = this.#focusRow(ids, open);
@@ -887,7 +887,7 @@ class EvaluatorList extends LitElement {
                 <span class="name draft">${icon("plus")}New evaluator</span>
               </button>
             </li>
-            ${shown.map((e) => this.#row(e, open, focusId, e.book === book ? null : (titles[e.book] ?? "Another book")))}
+            ${shown.map((e) => this.#row(e, open, focusId))}
           </ul>`}
       <div class="out">${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}</div>
     `;
@@ -979,8 +979,7 @@ class EvaluatorList extends LitElement {
     </li>`;
   }
 
-  // from: the title of the book a row shown in the journal is kept with, or null.
-  #row(e, open, focusId, from) {
+  #row(e, open, focusId) {
     const tab = e.id === focusId ? 0 : -1;
     const name = e.name.trim();
     return html`
@@ -994,7 +993,7 @@ class EvaluatorList extends LitElement {
           />
           <button class="open" type="button" tabindex=${tab} aria-current=${e.id === open ? "true" : nothing}>
             <span class="name ${name ? (e.on ? "" : "off") : "untitled"}">${name || UNTITLED}</span>
-            <span class="sub">${subtitle(e, from)}</span>
+            <span class="sub">${subtitle(e)}</span>
           </button>
       </li>
     `;
