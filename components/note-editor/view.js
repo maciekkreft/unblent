@@ -243,7 +243,8 @@ const overLinks = EditorState.transactionFilter.of((tr) => {
   return [tr, { selection: EditorSelection.cursor(to), sequential: true }];
 });
 
-// A deletion that reaches into a tag, Backspace after it or x on it, takes the whole tag.
+// A deletion that reaches into a tag, Backspace after it or x on it, takes the whole tag,
+// and text put inside one goes after it.
 const wholeLinks = EditorState.transactionFilter.of((tr) => {
   if (!tr.docChanged) return tr;
   const found = linksIn(tr.startState);
@@ -253,6 +254,13 @@ const wholeLinks = EditorState.transactionFilter.of((tr) => {
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     let from = fromA;
     let to = toA;
+    // Text put inside a tag, as Vim's p does on the tag (it pastes after the character
+    // under the cursor), goes after the whole tag.
+    const inside = to === from && found.find((l) => l.from < from && from < l.to);
+    if (inside) {
+      from = to = inside.to;
+      grown = true;
+    }
     if (to > from) {
       for (const l of found) {
         if (l.from < to && l.to > from && (l.from < from || l.to > to)) {

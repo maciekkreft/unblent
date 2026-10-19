@@ -553,7 +553,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("the cursor steps over a source link as one character, and x or Backspace removes it whole", async () => {
+    test("the cursor steps over a source link as one character, p on it pastes after it, and x or Backspace removes it whole", async () => {
       const { context, page, problems } = await withLink(browser, true);
       const head = () =>
         page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.selection.main.head);
@@ -567,6 +567,14 @@ for (const engine of ENGINES) {
       await until(async () => (await head()) === 4);
       await page.keyboard.type("x");
       await until(async () => (await docText(page)) === "see  end");
+      await page.keyboard.type("u");
+      await until(async () => (await docText(page)) === `see ${LINK} end`);
+      // p on the tag pastes after the whole tag, never inside its text.
+      await page.keyboard.type("0yl");
+      await page.keyboard.type("llll");
+      await until(async () => (await head()) === 4);
+      await page.keyboard.type("p");
+      await until(async () => (await docText(page)) === `see ${LINK}s end`);
       await page.keyboard.type("u");
       await until(async () => (await docText(page)) === `see ${LINK} end`);
       // Backspace just after the tag, in insert mode.
