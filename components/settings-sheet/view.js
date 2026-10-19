@@ -492,9 +492,6 @@ class SettingsSheet extends LitElement {
         ["Ctrl+. and Ctrl+,", "show the next or the previous tab of the panel you are in"],
         ["Ctrl+Shift+h, l, j", "fold or unfold the left, right or bottom panel"],
       ])}
-      ${group("In a list and in the Reader, not while typing (there, use the Ctrl keys above)", [
-        ["gt, gT", "show the next or the previous tab"],
-      ])}
       ${group("In a list (books, contents, notes, chats)", [
         ["j, k", "next or previous row"],
         ["gg, G", "first or last row"],

@@ -173,10 +173,13 @@ class BookShelf extends LitElement {
     .placeholder.written {
       flex-direction: column;
       gap: var(--space-sm);
+      font-size: var(--text-heading);
     }
+    /* Sized by the card's width, so the notebook fills the cover on the desk and the
+       smaller phone card alike. */
     .placeholder.written svg {
-      width: calc(var(--text-heading) * 2);
-      height: calc(var(--text-heading) * 2);
+      width: 70%;
+      height: auto;
     }
     /* The open book carries the one visible selection: a solid accent ring, thick
        enough to read at a glance against a cover or a placeholder (Norman: visible

@@ -226,15 +226,6 @@ for (const engine of ENGINES) {
       },
     },
     {
-      name: "gt in the Reader, alone on the stage, does nothing",
-      from: inReader,
-      run: async (v) => {
-        await press(v.page, "g", "t");
-        await drawn(v.page);
-        await v.see((s) => all(inPanel("book-stage")(s), want(s.rightTab === "Notes", `the tab shown is ${s.rightTab}`), want(!s.pending, "a passage is pending")));
-      },
-    },
-    {
       name: "a click on bare desk keeps the keyboard in the Reader, and Ctrl+l and Ctrl+h working",
       from: inReader,
       run: async (v) => {
@@ -264,16 +255,6 @@ for (const engine of ENGINES) {
         await v.see(inPanel("list-then-item#notes"));
         await press(v.page, "j");
         await v.see((s) => onRow(s, "Note"));
-      },
-    },
-    {
-      name: "gt from a list shows the next tab, and gT the one before",
-      from: inNotes,
-      run: async (v) => {
-        await press(v.page, "g", "t");
-        await v.see(showing("Chats", "list-then-item#chats"));
-        await press(v.page, "g", "Shift+T");
-        await v.see(showing("Notes", "list-then-item#notes"));
       },
     },
     {

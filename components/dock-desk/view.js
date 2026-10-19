@@ -31,7 +31,6 @@ const ROOT_EM = () => parseFloat(getComputedStyle(document.documentElement).font
 
 // The keys that move between groups and tabs while "Vim keys" is on (12), held with Ctrl.
 const PANEL_KEYS = new Set(["h", "j", "k", "l", ".", ","]);
-const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
 // The side Ctrl+Shift+<key> folds or unfolds.
 const FOLD_KEYS = { h: "left", l: "right", j: "bottom" };
 // What a press may hand the focus back to: what a browser other than Safari would have focused.
@@ -671,8 +670,6 @@ class DockDesk extends LitElement {
 
   // The group that last held the focus, where a focus dropped on the bare page goes back.
   #lastGroup = "stage";
-  // The first key of a two-key Vim command (gt, gT) and when it was pressed.
-  #prefix = null;
 
   constructor() {
     super();
@@ -785,8 +782,7 @@ class DockDesk extends LitElement {
 
   // The desk's keyboard model for "Vim keys" (12): Ctrl+h/j/k/l between the groups,
   // Ctrl+. and Ctrl+, between the tabs of the group that has focus, Ctrl+Shift+h/l/j
-  // fold or unfold the left, right and bottom dock; outside an editor also gt and gT for
-  // the tabs. Off without the preference, so nothing
+  // fold or unfold the left, right and bottom dock. Off without the preference, so nothing
   // changes for anyone who leaves it off, and off on a narrow desk (the phone), where
   // the docks are drawers over the stage, not neighbours.
   #panelKey(event) {
@@ -799,7 +795,7 @@ class DockDesk extends LitElement {
       event.stopPropagation();
       return this.#toggleFold(snapshot.context, FOLD_KEYS[key]);
     }
-    if (!event.ctrlKey) return this.#letter(event, snapshot.context);
+    if (!event.ctrlKey) return;
     if (!PANEL_KEYS.has(key)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -813,29 +809,6 @@ class DockDesk extends LitElement {
     if (to !== "stage" && !docks[to].open) this.#send("_unfold", undefined, to);
     this.#landing = { group: to, name: this.#shownIn(snapshot.context, to) };
     this.requestUpdate();
-  }
-
-  // gt / gT: two letters, the second within a second of the first, and never inside an
-  // editor or a field, where they are text (or CodeMirror's Vim's own). The g is left to
-  // the view, where it is half of a list's gg.
-  #letter(event, context) {
-    // The Shift a real keyboard sends down before the T of gT is not a letter, so it
-    // keeps the g waiting.
-    if (MODIFIERS.has(event.key)) return;
-    const target = event.composedPath()[0];
-    const prefix = this.#prefix;
-    this.#prefix = null;
-    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
-    if (event.key === "g" && prefix?.key !== "g") {
-      this.#prefix = { key: event.key, at: Date.now() };
-      return;
-    }
-    if (!prefix || Date.now() - prefix.at > 1000) return;
-    const tabStep = { t: 1, T: -1 }[event.key];
-    if (!tabStep) return;
-    event.preventDefault();
-    event.stopPropagation();
-    this.#cycle(context, this.#focusedGroup(context.docks), tabStep);
   }
 
   // Fold an open side or unfold a folded one; a side the page does not have is passed

@@ -700,5 +700,5 @@ Where the product is heading. Nothing here is designed or built; each line is on
 Work that is decided but not done yet. Remove a line when its work is done.
 
 - On the product page, signed out, Chats and Evaluators disagree. Chats hides the chats, which is the right behaviour, but says "Chats need a connection.", which blames the network instead of asking the user to sign in. Evaluators says the right thing, "Sign in to run evaluators.", but shows the evaluators and says it only when the user tries to run one. Both should behave like Chats and speak like Evaluators: signed out, the panel shows no chats or evaluators and asks the user to sign in.
-- On the desk, Ctrl+. and Ctrl+, (and gt and gT) move to the next or previous tab in a different order from the one the tabs are shown in. They should follow the tabs as the user sees them, left to right.
+- On the desk, Ctrl+. and Ctrl+, move to the next or previous tab in a different order from the one the tabs are shown in. They should follow the tabs as the user sees them, left to right.
 - In a chat, the user can mark passages in the assistant's last answer and write a comment on each one, the way Redline does.

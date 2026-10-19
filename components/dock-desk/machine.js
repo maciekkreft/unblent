@@ -240,7 +240,7 @@ export const machine = setup({
       "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +
       "Ctrl+j to the bottom dock and Ctrl+k back up to the stage, passing over an empty side " +
       "and unfolding a folded one; Ctrl+. and Ctrl+, show the next or previous tab of the group " +
-      "that has focus and focus it, and so do gt and gT outside an editor; Ctrl+Shift+h, " +
+      "that has focus and focus it; Ctrl+Shift+h, " +
       "Ctrl+Shift+l and Ctrl+Shift+j fold or unfold the left, right and bottom dock, the " +
       "keyboard going to the stage when its side folds. " +
       "A clicked tab puts the keyboard in the view it shows. A press inside a view that leaves " +
