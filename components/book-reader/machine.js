@@ -323,6 +323,30 @@ const foldHighlight = (highlights, note, bookId) => {
 
 const rangeOf = (place) => ({ start: place.start, end: place.end });
 
+// The highlight of this chapter holding a point (the Vim cursor), by the same range a
+// highlight covers: start inclusive, end exclusive. Undefined when none holds it.
+export const highlightAt = (highlights, chapter, p) =>
+  highlights.find((h) => h.place.chapter === chapter && !before(p, h.place.start) && before(p, h.place.end));
+
+// A source link to a highlight, as a note stores it: `[label](note:<id>)`. The label is
+// the quote's first words, at most LABEL_MAX characters and cut at a word, with "…" when
+// the quote was cut; a first word longer than that is cut inside it. `[`, `]` and `\` are
+// escaped so the label cannot end the link early.
+const LABEL_MAX = 40;
+export const linkLabel = (exact) => {
+  const words = String(exact ?? "").trim().split(/\s+/u).filter(Boolean);
+  let label = "";
+  for (const w of words) {
+    const next = label ? `${label} ${w}` : w;
+    if (next.length > LABEL_MAX) break;
+    label = next;
+  }
+  if (!label && words.length) label = words[0].slice(0, LABEL_MAX);
+  const cut = label.length < words.join(" ").length;
+  return (cut ? `${label}…` : label).replace(/[\\[\]]/g, "\\$&");
+};
+export const sourceLink = (id, quote) => `[${linkLabel(quote?.exact)}](note:${id})`;
+
 // A Set with one id removed, as a new Set so assign sees a fresh value (the note-list
 // idiom): XState keeps context immutable, and the view re-renders on every snapshot.
 const without = (set, id) => {
@@ -484,9 +508,12 @@ export const machine = setup({
       "new page's top, and a highlight in progress goes on to that page; gg and G go to the " +
       "chapter's first and last page. A highlight made with the keys marks exactly the passage " +
       "painted while it was made, letter by letter if l and h made it, not grown to whole " +
-      "words as a drag with the mouse is.",
+      "words as a drag with the mouse is. A highlight's bubble offers Copy, Copy link and " +
+      "Remove; Copy link puts a link to the highlight, its quote's first words as the label, " +
+      "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
+      "the cursor inside a highlight opens its bubble and does the same.",
     kind: "view",
-    emits: ["book.progressed", "note.saved", "note.discarded"],
+    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied"],
     attributes: ["height", "highlights"],
     asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "settings: read"],
   },
@@ -739,6 +766,16 @@ export const machine = setup({
             enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
             enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `remove:${event.id}` });
           }),
+        },
+        // Copy link (Copy link in the bubble, or y with Vim keys): announced whether or not
+        // the clipboard took it, so an editor's Vim register still gets the link.
+        _copyLink: {
+          guard: ({ context, event }) => context.highlights.some((h) => h.id === event.id),
+          actions: emit(({ context, event }) => ({
+            type: "link.copied",
+            id: event.id,
+            text: sourceLink(event.id, context.highlights.find((h) => h.id === event.id).quote),
+          })),
         },
         _undo: {
           guard: ({ context, event }) => context.discarding.has(event.id),

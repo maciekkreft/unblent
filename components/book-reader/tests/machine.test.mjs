@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage } from "../machine.js";
+import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -989,4 +989,49 @@ test("the passage v covers ends before the word the cursor moved onto", () => {
   assert.deepEqual(snapToWords(texts, { start: at2(1, 2), end: at2(1, 6) }), { start: at2(1, 2), end: at2(1, 7) });
   const range = snapToWords(texts, { start: pointAt(ch, start), end: pointAt(ch, passage(ch, start, start + 3)[1]) });
   assert.equal(quoteOf(texts, range).exact, "short");
+});
+
+// --- Copy link: the stored form of a source link, and when it is announced -----------
+
+test("linkLabel keeps a short quote whole, on one line", () => {
+  assert.equal(linkLabel("Hello there"), "Hello there");
+  assert.equal(linkLabel("  Hello\nthere  "), "Hello there");
+});
+
+test("linkLabel cuts a long quote at a word, at most 40 characters, with an ellipsis", () => {
+  const label = linkLabel("The quick brown fox jumps over the lazy dog and keeps running far away");
+  assert.equal(label, "The quick brown fox jumps over the lazy…");
+  assert.ok(label.length - 1 <= 40);
+});
+
+test("linkLabel cuts a single word longer than the limit inside it", () => {
+  assert.equal(linkLabel("x".repeat(50)), "x".repeat(40) + "…");
+});
+
+test("linkLabel escapes brackets and backslashes so the label cannot end the link", () => {
+  assert.equal(linkLabel("a [b] c\\d"), "a \\[b\\] c\\\\d");
+});
+
+test("sourceLink is the label and the highlight's id in the stored form", () => {
+  assert.equal(sourceLink(HL_ID, { exact: "Hello there" }), "[Hello there](note:" + HL_ID + ")");
+});
+
+test("highlightAt finds the highlight of the chapter holding a point, end exclusive", () => {
+  const hs = [{ id: "n1", place: PLACE_HELLO }, { id: "n2", place: { ...PLACE_HELLO, chapter: 1 } }];
+  assert.equal(highlightAt(hs, 0, { block: 0, offset: 0 })?.id, "n1");
+  assert.equal(highlightAt(hs, 0, { block: 0, offset: 4 })?.id, "n1");
+  assert.equal(highlightAt(hs, 0, { block: 0, offset: 5 }), undefined);
+  assert.equal(highlightAt(hs, 1, { block: 0, offset: 2 })?.id, "n2");
+  assert.equal(highlightAt(hs, 2, { block: 0, offset: 2 }), undefined);
+});
+
+test("_copyLink announces link.copied with the stored link; an unknown id announces nothing", async () => {
+  const note = { id: HL_ID, title: "", about: [{ kind: "book", id: ID, place: PLACE_HELLO, quote: { exact: "Hello", prefix: "", suffix: "" } }] };
+  const { actor } = await openHL({ notes: [note] });
+  const copied = [];
+  actor.on("link.copied", (e) => copied.push(e));
+  actor.send({ type: "_copyLink", id: "01ARZ3NDEKTSV4RRFFQ69G5H99" });
+  actor.send({ type: "_copyLink", id: HL_ID });
+  await flush();
+  assert.deepEqual(copied, [{ type: "link.copied", id: HL_ID, text: "[Hello](note:" + HL_ID + ")" }]);
 });

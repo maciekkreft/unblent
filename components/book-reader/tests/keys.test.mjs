@@ -23,7 +23,7 @@ const seed = (vimKeys) =>
   JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
 
 // A user set up straight through the server (5): the sample book, open.
-const seedUser = async () => {
+const seedUser = async ({ highlight = false } = {}) => {
   const cookie = forgeCookie("reader-keys");
   const put = async (path, type, body) => {
     const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
@@ -31,8 +31,26 @@ const seedUser = async () => {
   };
   await put(`/api/books/${BOOK_ID}`, "application/epub+zip", readFileSync(SAMPLE));
   await put(`/api/books/${BOOK_ID}/opened`, "application/json", "{}");
+  if (highlight) {
+    const about = [{ kind: "book", id: BOOK_ID, place: HL_PLACE, quote: { exact: "Chapter One", prefix: "", suffix: "" } }];
+    await put(`/api/notes/${HL_ID}`, "application/json", JSON.stringify({ title: "", body: "", baseVersion: null, about }));
+  }
   return cookie;
 };
+// A highlight of the first page's heading, which the Vim cursor starts on.
+const HL_ID = "01K00000000000000000000HG1";
+const HL_PLACE = { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 11 } };
+const LINK = `[Chapter One](note:${HL_ID})`;
+// The text the page last put on the clipboard: writeText is recorded, so the test reads
+// what was copied without a clipboard permission prompt.
+const recordClipboard = () => {
+  navigator.clipboard.writeText = async (t) => {
+    window.__copied = t;
+  };
+};
+const copied = (page) => page.evaluate(() => window.__copied ?? null);
+const bubble = (page) =>
+  page.evaluate(() => [...(document.querySelector("book-reader").shadowRoot.querySelectorAll(".bubble .act") ?? [])].map((b) => b.textContent.trim()));
 
 const marks = (page) =>
   page.evaluate(() => [...document.querySelector("book-reader").shadowRoot.querySelectorAll(".strip mark")].map((m) => m.textContent));
@@ -62,14 +80,15 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    const open = async (vimKeys) => {
+    const open = async (vimKeys, { highlight = false } = {}) => {
       const problems = [];
       context = await browser.newContext();
       context.setDefaultTimeout(4000);
-      await signedIn(context, await seedUser());
+      await signedIn(context, await seedUser({ highlight }));
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), seed(vimKeys));
+      await page.addInitScript(recordClipboard);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => {
         const r = document.querySelector("book-reader")?.shadowRoot;
@@ -119,6 +138,38 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Enter");
       await new Promise((r) => setTimeout(r, 200));
       assert.deepEqual(await marks(page), []);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // A click on a mark opens its bubble; Copy link puts the stored link on the clipboard
+    // and only that button reads Copied.
+    // Browser: a gesture.
+    test(`Copy link in a highlight's bubble copies the link in ${engine.name}`, async () => {
+      const { page, problems } = await open(false, { highlight: true });
+      await until(async () => (await marks(page)).join(" ") === "Chapter One");
+      const box = await page.evaluate(() => {
+        const r = document.querySelector("book-reader").shadowRoot.querySelector(".strip mark").getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      });
+      await page.mouse.click(box.x, box.y);
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Remove");
+      await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble .copy-link").click());
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copied · Remove");
+      assert.equal(await copied(page), LINK);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // y with the cursor inside a highlight opens its bubble and does Copy link.
+    // Browser: focus and keys.
+    test(`y inside a highlight copies its link in ${engine.name}`, async () => {
+      const { page, problems } = await open(true, { highlight: true });
+      await until(async () => (await marks(page)).join(" ") === "Chapter One");
+      // Vim arrives with the settings reply; y acts only once it has.
+      await until(async () => {
+        await page.keyboard.press("y");
+        return (await bubble(page)).join(" · ") === "Copy · Copied · Remove";
+      });
+      assert.equal(await copied(page), LINK);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

@@ -2,10 +2,11 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
+import linkCopied from "./events/link.copied.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window
 // (the note-list idiom); the token is the one clock, shared with the bubble bar's
@@ -37,7 +38,7 @@ class ActorController {
         // knowing whether it paints and makes highlights (Decision 3).
         highlighting: this.host.highlights,
       },
-      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded },
+      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -311,7 +312,7 @@ class BookReader extends LitElement {
       opacity: 0.5;
     }
     /* The highlight bubble (Decision 3): a small overlay above the tapped mark's first
-       line, inside the clipped .page. Copy and Remove; during the undo window it reads
+       line, inside the clipped .page. Copy, Copy link and Remove; during the undo window it reads
        Removed · Undo with the draining bar note-list uses. Placed by --bx/--by set in JS
        (#positionBubble), so no literal length places it; it lifts above the text and a
        press on it never turns the page (#pointerdown stops there). */
@@ -615,7 +616,8 @@ class BookReader extends LitElement {
   // tap on a mark opens it, a page turn, a chapter change, Escape, or a tap elsewhere
   // closes it. Null when no bubble shows.
   #active = null;
-  // Whether the Copy button is flashing "Copied", and the timer that clears it.
+  // Which button is flashing "Copied" ("text" for Copy, "link" for Copy link, false for
+  // neither), so only the one pressed reads Copied, and the timer that clears it.
   #copied = false;
   #copiedTimer = 0;
   // The reveal nonce last acted on (machine one-shot): a drag inside an existing
@@ -1137,6 +1139,7 @@ class BookReader extends LitElement {
         if (this.#cursor == null) return false;
         this.#move(key);
       } else if (key === "v") this.#visualKey();
+      else if (key === "y" && !this.#visual) this.#yankLink();
       else if (key === "Enter" && this.#visual) this.#endVisual(true);
       else if (key === "Escape" && this.#visual) this.#endVisual(false);
       else return false;
@@ -1151,6 +1154,19 @@ class BookReader extends LitElement {
     if (this.#cursor == null) this.#placeCursor();
     if (this.#visual) this.#endVisual(false);
     else if (this.highlights && this.#actor.snapshot.context.highlighting && this.#cursor != null) this.#startVisual();
+  }
+
+  // y: Copy link on the highlight holding the cursor, its bubble opened so the Copied is
+  // seen. With no highlight there, y does nothing.
+  #yankLink() {
+    if (this.#cursor == null) return;
+    const ctx = this.#actor.snapshot.context;
+    const cv = ctx.book?.contentVersion;
+    const painted = ctx.highlights.filter((h) => h.place.contentVersion === cv);
+    const h = highlightAt(painted, this.#chapter, pointAt(this.#chapterText(), this.#cursor));
+    if (!h) return;
+    this.#openBubble(h.id);
+    this.#copy("link", h);
   }
 
   // gg and G: the chapter's first or last page, the cursor at its top.
@@ -1180,27 +1196,31 @@ class BookReader extends LitElement {
     this.requestUpdate();
   }
 
-  // Copy the highlighted text (Decision 3): nothing is ever copied without this, and the
-  // write is inside the click handler, where the clipboard permission holds. The label
-  // reads "Copied" for a moment; a blocked clipboard leaves it as Copy rather than error.
-  async #copyActive(quote) {
+  // Copy the highlighted text, or a link to it (Decision 3): nothing is ever copied
+  // without this, and the write is inside the click or key handler, where the clipboard
+  // permission holds. The button reads "Copied" for a moment; a blocked clipboard leaves
+  // it as it was rather than error. A link is announced either way, so an editor's Vim
+  // register gets it even when the system clipboard refused it.
+  async #copy(kind, h) {
+    const link = kind === "link";
     try {
-      await navigator.clipboard.writeText(quote?.exact ?? "");
+      await navigator.clipboard.writeText(link ? sourceLink(h.id, h.quote) : (h.quote?.exact ?? ""));
       clearTimeout(this.#copiedTimer);
-      this.#copied = true;
+      this.#copied = kind;
       this.requestUpdate();
       this.#copiedTimer = setTimeout(() => {
         this.#copied = false;
         this.requestUpdate();
       }, COPIED_MS);
     } catch {
-      // no clipboard permission (an insecure context, a denied prompt): leave it as Copy.
+      // no clipboard permission (an insecure context, a denied prompt): leave the label.
     }
+    if (link) this.#actor.send({ type: "_copyLink", id: h.id });
   }
 
   // Remove and undo (Decision 3): the mouse's gesture is one message, the machine runs
   // the delayed delete; the bubble stays open, reading Removed · Undo while the window
-  // drains and Copy · Remove again once undone.
+  // drains and Copy · Copy link · Remove again once undone.
   #removeActive() {
     if (this.#active) this.#actor.send({ type: "_remove", id: this.#active });
   }
@@ -1672,7 +1692,7 @@ class BookReader extends LitElement {
     }
   }
 
-  // The bubble for the open highlight (session 3): Copy and Remove, or, while the removal
+  // The bubble for the open highlight (session 3): Copy, Copy link and Remove, or, while the removal
   // window drains, Removed · Undo with the bar. Rendered inside .page so it is placed
   // against the same box #positionBubble measures; a press on it never turns the page.
   #bubble(snapshot) {
@@ -1689,8 +1709,11 @@ class BookReader extends LitElement {
               <span class="bar"></span>
             `
           : html`
-              <button class="act" type="button" @click=${() => this.#copyActive(h.quote)}>
-                ${this.#copied ? "Copied" : "Copy"}
+              <button class="act copy" type="button" @click=${() => this.#copy("text", h)}>
+                ${this.#copied === "text" ? "Copied" : "Copy"}
+              </button>
+              <button class="act copy-link" type="button" @click=${() => this.#copy("link", h)}>
+                ${this.#copied === "link" ? "Copied" : "Copy link"}
               </button>
               <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
             `}
