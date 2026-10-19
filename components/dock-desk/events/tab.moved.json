@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user moved the tab in front of one of a view's own tabs one place earlier or later.",
+  "type": "object",
+  "properties": {
+    "view": { "type": "string", "description": "The address (4.1) of the view whose tab it is." },
+    "id": { "type": "string", "description": "The moved tab's id, as the view announced it in tabs.shown." },
+    "step": { "enum": [-1, 1], "description": "-1 moves the tab one place earlier, 1 one place later." }
+  },
+  "required": ["view", "id", "step"],
+  "additionalProperties": false
+}

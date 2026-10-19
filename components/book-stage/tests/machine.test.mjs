@@ -220,3 +220,38 @@ test("a page without books announces no tabs", async () => {
   assert.deepEqual(seen, []);
   assert.deepEqual(tabsOf(actor.getSnapshot().context).tabs, []);
 });
+
+test("moving a tab trades places with its neighbour, is stored, and keeps the front", async () => {
+  const { actor, last, storage, switched } = await tabbed({ openId: OTHER, stored: [BOOK, OTHER, THIRD] });
+  actor.send({ type: "tab.moved", view: "book-stage", id: OTHER, step: -1 });
+  assert.deepEqual(ids(last()), [OTHER, BOOK, THIRD]);
+  actor.send({ type: "tab.moved", view: "book-stage", id: OTHER, step: 1 });
+  actor.send({ type: "tab.moved", view: "book-stage", id: OTHER, step: 1 });
+  assert.deepEqual(ids(last()), [BOOK, THIRD, OTHER]);
+  assert.equal(last().active, OTHER);
+  assert.deepEqual(switched, []);
+  assert.deepEqual(JSON.parse(storage.data[KEY]), [BOOK, THIRD, OTHER]);
+});
+
+test("a move past either end does nothing", async () => {
+  const { actor, shownEvents } = await tabbed({ openId: BOOK, stored: [BOOK, OTHER] });
+  const before = shownEvents.length;
+  actor.send({ type: "tab.moved", view: "book-stage", id: BOOK, step: -1 });
+  actor.send({ type: "tab.moved", view: "book-stage", id: OTHER, step: 1 });
+  assert.equal(shownEvents.length, before);
+});
+
+test("the moved order comes back after a restore", async () => {
+  const { actor, storage } = await tabbed({ openId: BOOK, stored: [BOOK, OTHER, THIRD] });
+  actor.send({ type: "tab.moved", view: "book-stage", id: BOOK, step: 1 });
+  const again = await tabbed({ openId: BOOK, storage });
+  assert.deepEqual(ids(again.last()), [OTHER, BOOK, THIRD]);
+});
+
+test("another view's move is ignored", async () => {
+  const { actor, last, shownEvents } = await tabbed({ openId: BOOK, stored: [BOOK, OTHER] });
+  const before = shownEvents.length;
+  actor.send({ type: "tab.moved", view: "book-stage#other", id: BOOK, step: 1 });
+  assert.equal(shownEvents.length, before);
+  assert.deepEqual(ids(last()), [BOOK, OTHER]);
+});

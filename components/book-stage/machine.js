@@ -88,6 +88,20 @@ const close = ({ context, event, enqueue }) => {
   settle({ ...context, front }, enqueue, { tabs });
 };
 
+// Moves a tab one place in the order the desk draws: it trades places with the nearest
+// labelled tab on that side, since an unlabelled one is not drawn (tabsOf). A move past
+// either end does nothing, and the front tab stays in front.
+const move = ({ context, event, enqueue }) => {
+  const at = context.tabs.indexOf(event.id);
+  if (at < 0 || context.labels[event.id] === undefined) return;
+  let to = at + event.step;
+  while (to >= 0 && to < context.tabs.length && context.labels[context.tabs[to]] === undefined) to += event.step;
+  if (to < 0 || to >= context.tabs.length) return;
+  const tabs = [...context.tabs];
+  [tabs[at], tabs[to]] = [tabs[to], tabs[at]];
+  settle(context, enqueue, { tabs });
+};
+
 const mine = ({ context, event }) => event.view === context.address;
 
 const readInput = ({ context }) => ({ ask: context.ask, id: context.openId });
@@ -120,7 +134,8 @@ export const machine = setup({
       "Each tab shows the book's title, and the journal's says Journal. Picking a tab opens its " +
       "book. Closing a tab, by its × or by `:q`, removes it, and if it was in front the tab to " +
       "its right comes forward, or the one to its left if there is none; the last tab cannot be " +
-      "closed. A deleted book's tab goes the same way, and a book the account no longer has " +
+      "closed. The desk's ‹ › move the tab in front one place earlier or later, and the new " +
+      "order is kept like the rest; a move past either end does nothing. A deleted book's tab goes the same way, and a book the account no longer has " +
       "(after View as) loses its tab. It announces its tabs so the desk can draw them in place " +
       "of the stage's own tab.",
     kind: "view",
@@ -256,6 +271,11 @@ export const machine = setup({
     "tab.closed": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         if (mine({ context, event })) close({ context, event, enqueue });
+      }),
+    },
+    "tab.moved": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (mine({ context, event })) move({ context, event, enqueue });
       }),
     },
     "book.closed": { actions: enqueueActions(close) },

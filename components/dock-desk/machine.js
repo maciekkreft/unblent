@@ -315,7 +315,7 @@ export const machine = setup({
       "or dock whose view holds the keyboard wears a frame in the focus ring's accent, so a move " +
       "between panels is seen; there is no frame on the phone, where one panel fills the screen.",
     kind: "view",
-    emits: ["dock.arranged", "tab.picked", "tab.closed"],
+    emits: ["dock.arranged", "tab.picked", "tab.closed", "tab.moved"],
     attributes: [],
     asks: ["dock: read", "settings: read"],
   },
