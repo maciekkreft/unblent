@@ -66,13 +66,21 @@ const invertDiscard = (tr) => {
 };
 
 // The index: one line decoration per quote line, carrying the note id and the quote text
-// it must keep (data-id for the styling and lookup, the text for the filter). It maps
-// through every change (a comment gaining or losing a line moves the quote lines below),
-// so a position always names the right note; a load rebuilds it from the fragments.
+// it must keep (data-id for the styling and lookup, the text for the filter). It follows
+// every change (a comment gaining or losing a line moves the quote lines below), so a
+// position always names the right note; a load rebuilds it from the fragments.
+// Each quote is moved the way the filter judged it, mapPos(from, 1), and never through
+// the line decoration's own mapping: that drops a decoration whose preceding character
+// is deleted, so `dd` on the comment line just above a quote lost that quote, and its
+// passage and comment were read back as the comment above it.
 const quoteField = StateField.define({
   create: () => Decoration.none,
   update(deco, tr) {
-    deco = deco.map(tr.changes);
+    if (tr.docChanged) {
+      const moved = [];
+      for (let it = deco.iter(); it.value; it.next()) moved.push(it.value.range(tr.changes.mapPos(it.from, 1)));
+      deco = Decoration.set(moved, true);
+    }
     for (const e of tr.effects) {
       if (e.is(setQuotes)) {
         const ranges = e.value.map((q) =>

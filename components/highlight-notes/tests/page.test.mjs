@@ -350,6 +350,35 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // `dd` on the last comment line directly above another highlight removes only that
+    // line: the highlight below keeps its passage and comment, and neither is read back
+    // into the comment above.
+    // Browser: focus and keys.
+    test(`dd on the comment line above a highlight leaves that highlight in ${engine.name}`, async () => {
+      const { page, problems } = await open({ highlight: false, earlier: 2, settings: VIM });
+      await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length === 2);
+      await until(async () => (await hnDoc(page)).split("\n").length === 8);
+
+      // Line 4 is "third", the first highlight's last comment line, just above the second quote.
+      await page.evaluate(() => {
+        const view = document.querySelector("highlight-notes").shadowRoot.querySelector(".cm-content").cmView.view;
+        view.focus();
+        view.dispatch({ selection: { anchor: view.state.doc.line(4).from } });
+      });
+      await until(async () => hnHas(page, ".cm-fat-cursor"));
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      const want = "C\nEarlier 0\nsecond\nh\nEarlier 1\nsecond\nthird";
+      await until(async () => (await hnDoc(page)) === want);
+      await synced(page, (notes) => notes.some((n) => n.body === "Earlier 0\nsecond"));
+      assert.equal(await hnDoc(page), want, "the highlight below was not copied into the comment above");
+      assert.deepEqual(await hnQuotes(page), ["C", "h"]);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
     // `dd` on a quote line removes the highlight through the same undo window as the bin,
     // and `u` brings it back.
     // Browser: focus and keys.
