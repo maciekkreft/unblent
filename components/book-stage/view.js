@@ -4,6 +4,15 @@ import { machine, shownOf } from "./machine.js";
 import tabsShown from "./events/tabs.shown.json" with { type: "json" };
 import switched from "./events/book.switched.json" with { type: "json" };
 
+// Reading localStorage itself can throw (blocked site data), so the tabs then last one load.
+const deviceStorage = () => {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -12,9 +21,16 @@ class ActorController {
   }
 
   hostConnected() {
+    // 4.1: the tabs it announces name its address, so the desk's gestures come back to it.
+    const instance = this.host.id || undefined;
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload, instance),
+        address: instance ? `book-stage#${instance}` : "book-stage",
+        storage: deviceStorage(),
+      },
       events: { "tabs.shown": tabsShown, "book.switched": switched },
+      instance,
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
