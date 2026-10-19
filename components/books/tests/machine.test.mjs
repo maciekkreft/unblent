@@ -482,6 +482,21 @@ test("selecting the already-open book, or an unknown one, changes nothing", asyn
   assert.deepEqual(opened, [], "no re-announcement, no announce for an unknown book");
 });
 
+test("bringing a book's tab to the front opens it, the same as a pick on the shelf", async () => {
+  const store = fakeStore([book(ID), book(ID2)]);
+  const { actor, opened } = start(store, { api: fakeApi(), ask: askUser("u1") });
+  await ready(actor);
+  opened.length = 0;
+  actor.send({ type: "book.switched", id: ID2 });
+  await flush();
+  assert.deepEqual(opened, [{ type: "book.opened", id: ID2 }], "the switched-to book is announced open");
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID2 });
+  assert.equal(store.outbox.get("open").book, ID2, "the open is queued for other devices");
+  actor.send({ type: "book.switched", id: ID2 });
+  await flush();
+  assert.equal(opened.length, 1, "switching to the book already open announces nothing");
+});
+
 test("a followed source link opens its book, the same as a pick on the shelf", async () => {
   const store = fakeStore([book(ID), book(ID2)]);
   const { actor, opened } = start(store, { api: fakeApi(), ask: askUser("u1") });

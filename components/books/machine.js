@@ -321,7 +321,7 @@ function applyRename(context, event, enqueue) {
   enqueue.raise({ type: "_drain" });
 }
 
-// The user opened a book (book-shelf emits book.selected, 4.3 fifth rule): record it
+// The user opened a book (book-shelf emits book.selected, book-stage book.switched; 4.3 fifth rule): record it
 // as the open book, announce it (book.opened), and queue the single last-write-wins
 // outbox row so a reload or another device opens it too (5). An unknown or tombstoned
 // id, or the already-open one, is ignored. The book's own version is untouched. The
@@ -408,7 +408,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "open?") replyOpen(context, message.reply);
   else if (message.type === "chapter?") answerChapter(context, message, self);
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
-  else if (message.type === "book.selected") applySelect(context, message, enqueue);
+  else if (message.type === "book.selected" || message.type === "book.switched") applySelect(context, message, enqueue);
   else if (message.type === "passage.selected") applySelect(context, { id: message.book }, enqueue);
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
@@ -514,7 +514,8 @@ export const machine = setup({
       "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
       "opened but never renamed or deleted here. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
-      "note opens the link's book, the same as choosing it on the shelf.",
+      "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
+      "book's tab to the front on the stage.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
@@ -595,6 +596,7 @@ export const machine = setup({
         "book.progressed": { actions: queue },
         "book.renamed": { actions: queue },
         "book.selected": { actions: queue },
+        "book.switched": { actions: queue },
         "passage.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
@@ -649,6 +651,7 @@ export const machine = setup({
         "book.progressed": { actions: queue },
         "book.renamed": { actions: queue },
         "book.selected": { actions: queue },
+        "book.switched": { actions: queue },
         "passage.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
@@ -667,6 +670,8 @@ export const machine = setup({
         },
         "book.picked": { actions: enqueueActions(({ context, event, enqueue, self }) => applyPick(context, event, enqueue, self)) },
         "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
+        // The user brought a book's tab to the front on the stage: it opens the same way.
+        "book.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
         // The user followed a source link in a note (note-editor emits passage.selected):
         // its book opens the same way as from the shelf; the reader goes to the passage.
         "passage.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, { id: event.book }, enqueue)) },
