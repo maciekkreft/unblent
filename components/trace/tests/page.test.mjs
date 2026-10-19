@@ -30,6 +30,7 @@ async function until(fn, timeout = 4000) {
 // tabs of the same origin share a BroadcastChannel, so the second tab's trace must
 // see the first tab's catalog: list, tagged with the first tab's id (section 10, 12).
 for (const engine of ENGINES) {
+  // Browser: a page's composition.
   test(`a second tab's trace sees the first tab's traffic in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();

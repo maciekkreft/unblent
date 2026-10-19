@@ -114,6 +114,7 @@ const clean = (page) => page.evaluate(() => localStorage.clear());
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: a reload against real storage.
   test(`the settings sheet reorders, hides, turns on Vim keys, and its choices survive a reload in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine);
     try {

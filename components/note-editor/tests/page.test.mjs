@@ -134,6 +134,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: focus and keys.
     test("edits under Vim: lines start as Body, \\2 makes a Heading and \\1 a Title, no markers in the buffer", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -192,6 +193,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: a page's composition.
     test("a choice the composer cannot load leaves the page's default", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -219,6 +221,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: a gesture.
     test("the level bar sets and follows the level", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -262,6 +265,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: focus and keys.
     test("levels keep Vim motions exact and both cursors stay visible", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -325,6 +329,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: focus and keys.
     test("with Vim keys off it types straight in; turned on, the block cursor is back", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -355,6 +360,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: focus and keys.
     test("undo stops at the note as it was opened", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -381,6 +387,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: rendering and layout.
     test("the editor mounts on the phone", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -406,6 +413,7 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: a reload against real storage.
     test("Enter starts a paragraph drawn as a gap, Shift+Enter breaks the line, and a reload shows the gap again", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

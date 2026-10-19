@@ -123,6 +123,7 @@ const ENGINES = [
 for (const engine of ENGINES) {
   // Signed out: the shelf invites a sign-in, and a picked file is refused (the fact
   // mints nothing anonymously, 5), which notice-stack shows.
+  // Browser: rendering and layout.
   test(`the shelf refuses an import when signed out in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
@@ -184,6 +185,7 @@ for (const engine of ENGINES) {
       return { page, problems, debug };
     };
 
+    // Browser: rendering and layout.
     test("a picked epub becomes a tile with its cover", async () => {
       const { page, problems, debug } = await open();
       await setFile(page, SAMPLE);
@@ -203,6 +205,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Browser: a gesture.
     test("renaming a book in place updates the tile and reaches the server (D11)", async () => {
       const { page, problems } = await open();
       await setFile(page, SAMPLE);
@@ -240,6 +243,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Browser: rendering and layout.
     test("a broken file is refused with a message and no tile", async () => {
       const { page, problems } = await open();
       const before = (await tiles(page)).length;
@@ -252,6 +256,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Browser: a gesture.
     test("the bin offers Undo, which brings the book back", async () => {
       const cookie = forgeCookie();
       await importBook(cookie, SAMPLE_ID, SAMPLE);
@@ -277,6 +282,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Browser: rendering and layout.
     test("the phone preview lays the shelf out within the window", async () => {
       const { page, problems } = await open({ phone: true });
       await setFile(page, SAMPLE);
@@ -321,6 +327,7 @@ for (const engine of ENGINES) {
       await until(async () => (await focusedAt(page)) === at);
     };
 
+    // Browser: focus and keys.
     test("the keys move through the shelf as a grid, and with Vim keys on hjkl, G and gg do too", async () => {
       const cookie = forgeCookie();
       await Promise.all(
@@ -350,6 +357,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing on the shelf", async () => {
       const { page, problems } = await twoBooks(false);
       const [first] = (await tiles(page)).map((t) => t.title);

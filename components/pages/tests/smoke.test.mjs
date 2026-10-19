@@ -72,6 +72,7 @@ for (const engine of ENGINES) {
     }, { timeout: 15000 });
 
     for (const { path, kind } of PAGES) {
+      // Browser: a page's composition.
       test(`${path} composes`, async () => {
         const context = await browser.newContext();
         context.setDefaultTimeout(4000);
@@ -86,6 +87,7 @@ for (const engine of ENGINES) {
       // The product is reviewed in the phone preview too (CLAUDE.md): it composes
       // inside the narrowed body without sideways overflow.
       if (kind === "app") {
+        // Browser: a page's composition.
         test(`${path} composes on the phone preview`, async () => {
           const context = await browser.newContext();
           context.setDefaultTimeout(4000);

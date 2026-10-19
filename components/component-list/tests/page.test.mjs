@@ -48,6 +48,7 @@ for (const engine of ENGINES) {
     await browser?.close();
   }, { timeout: 15000 });
 
+  // Browser: rendering and layout.
   test(`the components page lists every component in ${engine.name}`, async () => {
     const context = await browser.newContext();
     const page = await context.newPage();

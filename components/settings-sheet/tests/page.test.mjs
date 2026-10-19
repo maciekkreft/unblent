@@ -45,6 +45,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     });
 
+    // Browser: a gesture.
     test("a new account has no Jev key until it saves its own", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -76,6 +77,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("the Vim keys list is folded away until asked for, with the switch on or off", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

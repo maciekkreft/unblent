@@ -41,6 +41,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`the desk shows one child at a time in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const page = await browser.newPage();

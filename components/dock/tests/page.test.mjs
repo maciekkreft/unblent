@@ -255,6 +255,7 @@ for (const engine of ENGINES) {
     before(async () => { browser = await engine.launch(); }, { timeout: 30000 });
     after(async () => { await browser?.close(); }, { timeout: 15000 });
 
+  // Browser: a gesture.
   test(`the desk is four tab groups: dock a view and switch its tabs in ${engine.name}`, async () => {
     // A stored layout with every view on the stage, so this test starts from the
     // all-staged picture rather than the side dock.html seeds (that is its own test).
@@ -345,6 +346,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a gesture.
   test(`a dock keeps its scroll, folds to its rail and unfolds on a tab in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -397,6 +399,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a gesture.
   test(`the bar folds and unfolds on the same tab, and a tab click only switches in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -432,6 +435,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a reload against real storage.
   test(`a stored layout is kept across a load, and a docked view moves between edges and returns in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -486,6 +490,7 @@ for (const engine of ENGINES) {
 
   // Starts where the last stage tab is about to be docked, so the time goes to what the
   // test proves rather than to docking the others first.
+  // Browser: rendering and layout.
   test(`with every view docked the stage says so, and a full strip keeps its shown tab in view in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -528,6 +533,7 @@ for (const engine of ENGINES) {
   });
 
   // A left dock stored folded, every view in it: the folding itself is shown above.
+  // Browser: rendering and layout.
   test(`a folded left rail clears the layout pill in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -552,6 +558,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: rendering and layout.
   test(`a side dock is a scrim drawer and a bottom dock a sheet on the phone in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       phone: true,
@@ -652,6 +659,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a gesture.
   test(`the layout switch bars arranging but never folding in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -695,6 +703,7 @@ for (const engine of ENGINES) {
 
   // The switch hidden in Settings, as the settings fact stores it (that hiding it turns
   // arranging off is decided in settings' Node tests): the desk loads not arrangeable.
+  // Browser: a reload against real storage.
   test(`a hidden layout switch keeps arranging off, and folding still works, in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser, {
       layout: {
@@ -723,6 +732,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a page's composition.
   test(`a fresh desk seeds the side a page declares in ${engine.name}`, async () => {
     const { context, page, problems } = await open(browser);
     try {

@@ -62,6 +62,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: rendering and layout.
     test("a guest's Run goes through and the bar goes down", async () => {
       const { context, page, problems } = await guestPage(browser, (n) => ({ left: n === 1 ? 1 : 0.9, blocked: false, paused: [] }));
       try {
@@ -104,6 +105,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       ["paused for every guest", { left: 0.4, blocked: false, paused: ["jev", "anthropic"] }, "Free use 40% left", "Free trials are paused for now."],
       ["blocked", { left: 0.4, blocked: true, paused: [] }, "Free use ended", "This trial has ended."],
     ]) {
+      // Browser: rendering and layout.
       test(`${name}: the bar says "${said}"${notice ? " and Run is off" : ""}`, async () => {
         const { context, page, problems } = await guestPage(browser, () => freeUse);
         try {

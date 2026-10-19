@@ -82,6 +82,7 @@ for (const engine of ENGINES) {
     // v starts at the cursor, on the page's first word; two w move it onto the next
     // heading, which the passage stops before. Enter makes the highlight the mouse
     // would: painted in the reader and saved as a note with a place.
+    // Browser: focus and keys.
     test(`v w w Enter makes a highlight in ${engine.name}`, async () => {
       const { page, problems } = await open(true);
       // Vim arrives with the settings reply; v starts a highlight only once it has.
@@ -103,6 +104,7 @@ for (const engine of ENGINES) {
     });
 
     // Ctrl+v starts a highlight exactly as v does (12, "Vim keys").
+    // Browser: focus and keys.
     test(`Escape drops a keyboard highlight begun with Ctrl+v in ${engine.name}`, async () => {
       const { page, problems } = await open(true);
       await until(async () => {
@@ -120,6 +122,7 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
+    // Browser: focus and keys.
     test(`with Vim keys off v does nothing in ${engine.name}`, async () => {
       const { page, problems } = await open(false);
       // Give the settings reply time to land, so off is the answer and not the default.

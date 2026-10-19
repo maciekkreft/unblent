@@ -67,6 +67,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: a page's composition.
   test(`the container shows the list, then the item, then the list in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const page = await browser.newPage();
@@ -133,6 +134,7 @@ for (const engine of ENGINES) {
 
 // The phone preview (data-viewport="phone", set through the localStorage key): the same
 // list-then-item behaviour, so the pair is one tab on a phone too.
+// Browser: rendering and layout.
 test("the container works in the phone preview", async () => {
   const browser = await webkit.launch();
   const page = await browser.newPage();

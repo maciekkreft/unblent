@@ -74,6 +74,7 @@ for (const engine of ENGINES) {
     before(async () => { browser = await engine.launch(); }, { timeout: 30000 });
     after(async () => { await browser?.close(); }, { timeout: 15000 });
 
+  // Browser: rendering and layout.
   test(`page-nav links every page and marks the current one in ${engine.name}`, async () => {
     const context = await browser.newContext();
     context.setDefaultTimeout(4000);
@@ -125,6 +126,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a page's composition.
   test(`page-nav hosts a slotted control in the bar in ${engine.name}`, async () => {
     const context = await browser.newContext();
     context.setDefaultTimeout(4000);

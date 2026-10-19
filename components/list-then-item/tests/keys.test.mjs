@@ -25,6 +25,7 @@ const shown = (page) =>
   );
 
 for (const engine of ENGINES) {
+  // Browser: focus and keys.
   test(`Enter on a note lands in the editor and Escape returns to the list on / in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });

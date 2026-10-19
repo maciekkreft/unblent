@@ -85,6 +85,7 @@ const ready = (page) =>
   page.waitForFunction(() => document.querySelector("settings-sheet")?.shadowRoot?.querySelector("h3"));
 
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`signed out, the account section invites a sign-in in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
@@ -101,6 +102,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a gesture.
   test(`the account section sets the provider, the model and the thinking effort in ${engine.name}`, async () => {
     const browser = await engine.launch();
     // Sign in without a passkey ceremony (as api.test.mjs does): a fresh user gets
@@ -150,6 +152,7 @@ for (const engine of ENGINES) {
       await browser.close();
     }
   });
+  // Browser: a gesture.
   test(`a saved key reads as saved, Replace opens the box and Cancel closes it, in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const userId = `llm-key-${engine.name}-${Date.now()}`;

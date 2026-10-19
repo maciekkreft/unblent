@@ -62,6 +62,7 @@ async function open(engine, vimKeys, viewport = { width: 1400, height: 900 }) {
 }
 
 for (const engine of ENGINES) {
+  // Browser: focus and keys.
   test(`Ctrl+h/l and Ctrl+. move the keyboard between panels and tabs on / in ${engine.name}`, async () => {
     const { browser, context, page, problems } = await open(engine, true);
     try {
@@ -90,6 +91,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`with Vim keys on the keyboard starts on the stage, so Ctrl+l works at once on / in ${engine.name}`, async () => {
     const { browser, context, page, problems } = await open(engine, true);
     try {
@@ -104,6 +106,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`with Vim keys off nothing takes the focus at load on / in ${engine.name}`, async () => {
     const { browser, context, page, problems } = await open(engine, false);
     try {
@@ -116,6 +119,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`with Vim keys off Ctrl+l leaves the keyboard where it is on / in ${engine.name}`, async () => {
     const { browser, context, page, problems } = await open(engine, false);
     try {
@@ -133,6 +137,7 @@ for (const engine of ENGINES) {
   // Safari does not focus a pressed checkbox or button, so the press drops the focus on
   // the page; landing the keyboard on the view then would scroll it to its top before the
   // release, and the click would hit something else. The blur imitates Safari in any engine.
+  // Browser: focus and keys.
   test(`with Vim keys on a press that drops the focus keeps the scroll and the click lands on / in ${engine.name}`, async () => {
     const { browser, context, page, problems } = await open(engine, true, { width: 1280, height: 520 });
     try {

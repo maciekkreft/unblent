@@ -239,6 +239,7 @@ const onNewChat = {
 };
 
 for (const engine of ENGINES) {
+  // Browser: focus and keys.
   test(`the chat box on / in ${engine.name}`, ...journey({
     launch: () => engine.launch(),
     open: async (browser) => {

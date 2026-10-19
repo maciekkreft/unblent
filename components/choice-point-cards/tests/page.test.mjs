@@ -31,6 +31,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a reload against real storage.
     test("the New choice point row opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
@@ -62,6 +63,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: focus and keys.
     test("with Vim keys on, the first Escape in a box leaves insert mode and the second folds the sheet", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
@@ -89,6 +91,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // Lit draws the list by position, so folding the sheet above moves the editors of the
     // one below rather than making them again: what is typed there stays and takes keys.
+    // Browser: focus and keys.
     test("two choice points stay open, and Done folds only its own", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
       context.setDefaultTimeout(4000);
@@ -119,6 +122,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // Settings are written through the APIs under the test's own login; Jev is answered
     // here through page.route, so no real request is made, and the account is told it has
     // a key.
+    // Browser: rendering and layout.
     test("checked lines get Jev's marks, the status line says the answer, and the card warns", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
@@ -173,6 +177,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // An earlier day and its choice point arrive through the APIs under the test's own login.
+    // Browser: rendering and layout.
     test("an earlier day's choice point opens to be read: no New row, no typing, Close", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
@@ -207,6 +212,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // Enter starts a new line after a short gap, Shift+Enter one right under it; each is
     // one item, so the card still shows them one after another.
+    // Browser: focus and keys.
     test("Enter makes a paragraph and Shift+Enter a line break, and the card lists each line", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
@@ -236,6 +242,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: rendering and layout.
     test("on a wide page the V stands between the moves, on a phone-wide page above them", async () => {
       const layout = async (width) => {
         const context = await browser.newContext({ viewport: { width, height: 800 } });

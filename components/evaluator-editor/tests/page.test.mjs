@@ -49,6 +49,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a gesture.
     test("a press beside Add an option leaves the scroll and the name alone, and the button adds one option", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
       context.setDefaultTimeout(4000);
@@ -134,6 +135,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // A press on a choice drops the focus on the page when the browser does not focus
     // what was pressed; with Vim keys on the desk puts it back in the panel, and that
     // used to mean the evaluator's name, far above the second question.
+    // Browser: focus and keys.
     test("with Vim keys on, switching the second question's kind keeps the keyboard in that question", async () => {
       const { context, page, problems, second } = await twoQuestions(true);
       try {
@@ -164,6 +166,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // The boxes are editors drawn inside the form: neither the save a moment into typing
     // nor the save when a box loses focus may take the keyboard out of the box in use.
+    // Browser: focus and keys.
     test("with Vim keys on, typing in the second question's box keeps the keyboard there through both saves", async () => {
       const { context, page, problems, saves, second } = await twoQuestions(true);
       // The next save, and the render of the fact's answer to it.
@@ -199,6 +202,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // A question's tick: off greys it and the list's count drops by one; it stays
     // editable; one press brings it back.
+    // Browser: a gesture.
     test("unticking a question greys it, keeps it editable and leaves it out of the count; ticking brings it back", async () => {
       const { context, page, problems, second } = await twoQuestions(false);
       const sub = page.locator("evaluator-list .row:not(.new) .sub").first();
@@ -240,6 +244,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // What the box saved is what comes back: a test of its own, so each fits its budget.
     // Signed in, so the account's copy is the sign that the save is kept: the reload
     // waits for it rather than for a pause.
+    // Browser: a reload against real storage.
     test("a question typed in its box is there after a reload", async () => {
       const { context, page, problems } = await twoQuestions(true, forgeCookie("evaluator-editor"));
       try {
@@ -263,6 +268,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
     // The option's icon button opens a panel; a choice saves at once, closes it and gives
     // the keyboard back to the button; Escape closes it unchanged; a reload shows the icon.
+    // Browser: focus and keys.
     test("an option's icon is chosen in a panel, saved, and there after a reload", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
       context.setDefaultTimeout(4000);

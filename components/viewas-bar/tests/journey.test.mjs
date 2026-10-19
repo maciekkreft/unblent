@@ -43,6 +43,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a page's composition.
     test(`the admin views as a guest under the bar and comes back to their own notes in ${engine.name}`, async () => {
       const adminId = `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const admin = forge(`${adminId}|admin`);

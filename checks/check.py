@@ -736,6 +736,47 @@ def check_journeys() -> None:
              "Ask the owner, and once approved list it in checks/journeys.json")
 
 
+# --- Reason check (architecture.md 9, 11.2) ----------------------------------------
+
+# The five reasons a test needs the browser (9), one fixed wording each.
+REASONS = ("rendering and layout", "a gesture", "focus and keys",
+           "a reload against real storage", "a page's composition")
+# A top-level test. A journey's steps (`t.test(`, the kit's step lists) are not matched:
+# the journey is one test and names its reason once.
+_TEST = re.compile(r"""^\s*test(?:\.\w+)?\(\s*([`'"])(.*?)\1""")
+
+
+def reason_problems(files: dict) -> list:
+    """(path, line, test name) for every top-level test in a browser test file whose
+    comment directly above it, the run of `//` lines ending on the line before it, names
+    none of the five reasons of section 9. `files` maps a path to its source. Pure, so
+    checks/tests can exercise it."""
+    out = []
+    for path, src in sorted(files.items()):
+        if ".launch(" not in src:
+            continue
+        lines = src.splitlines()
+        for i, line in enumerate(lines):
+            match = _TEST.match(line)
+            if not match:
+                continue
+            j, comment = i - 1, []
+            while j >= 0 and lines[j].lstrip().startswith("//"):
+                comment.append(lines[j].lower())
+                j -= 1
+            if not any(r in c for c in comment for r in REASONS):
+                out.append((path, i + 1, match.group(2)))
+    return out
+
+
+def check_reasons() -> None:
+    files = {f: (ROOT / f).read_text() for f in glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)}
+    for path, line, name in reason_problems(files):
+        fail(f"{path}:{line}", "reason check (11.2)",
+             f"the browser test {name!r} names no reason it needs the browser (9). Put a "
+             "`//` comment directly above it naming one of: " + "; ".join(REASONS))
+
+
 # --- Editor kit check (architecture.md 10, 11.2) ----------------------------------
 
 def editor_import_problems(src: str) -> list:
@@ -2060,6 +2101,7 @@ def main() -> None:
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "kit", check_kit, manifests)
     _timed(timings, "journeys", check_journeys)
+    _timed(timings, "reasons", check_reasons)
     _timed(timings, "editor kit", check_editor, manifests)
     _timed(timings, "store check", check_store, manifests)
     _timed(timings, "shows-on", check_shows_on, manifests, parsed_pages)

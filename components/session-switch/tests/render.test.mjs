@@ -39,6 +39,7 @@ function watch(page) {
 // only renders the anonymous switch; the passkey ceremony needs a virtual
 // authenticator (Chromium) and lives in ceremony.test.mjs (11.2).
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`the session switch shows the anonymous create-account control in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();

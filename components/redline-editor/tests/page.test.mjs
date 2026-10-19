@@ -107,6 +107,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     });
 
+    // Browser: a gesture.
     test("an empty page takes a paste and shows the text formatted", async () => {
       const { context, page, problems } = await open(browser);
       try {
@@ -138,6 +139,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("a selection opens a comment that saves as typed, survives a reload, and is removed with an undo", async () => {
       const { context, page, problems } = await open(browser);
       try {
@@ -164,6 +166,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("Copy with comments puts the text with CriticMarkup on the clipboard", async () => {
       const { context, page, problems } = await open(browser);
       try {
@@ -183,6 +186,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("in the phone preview the marks show and a touch opens no comment", async () => {
       const { context, page, problems } = await open(browser, { phone: true });
       try {
@@ -209,6 +213,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("New text empties the page with an undo, then clears the text", async () => {
       const { context, page, problems } = await open(browser);
       try {

@@ -126,6 +126,7 @@ for (const engine of ENGINES) {
   // A real conflict, end to end: the server holds a newer copy, the tab's edit is
   // refused (409), notes emits note.conflicted, the stack shows it, and Keep mine
   // re-emits note.saved so the user's copy survives (12).
+  // Browser: a gesture.
   test(`a conflict shows a notice and Keep mine keeps the user's copy in ${engine.name}`, async () => {
     const SECRET = process.env.SESSION_SECRET;
     assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
@@ -201,6 +202,7 @@ for (const engine of ENGINES) {
 
   // The stack is fixed above the switch and stays within the window in a phone
   // preview (7.5): a bounded toast column, not a full-width bar.
+  // Browser: rendering and layout.
   test(`a notice stays within the window in a phone preview in ${engine.name}`, async () => {
     const browser = await engine.launch();
     // A bare context with no authenticator: navigator.credentials rejects promptly,
@@ -238,6 +240,7 @@ for (const engine of ENGINES) {
   // provokable reasons are driven end to end on the books stem page: signed out (the
   // fact mints nothing anonymously) and a broken file (not an epub). The unavailable
   // wording is the same one the session unavailable path exercises above.
+  // Browser: rendering and layout.
   test(`a refused book shows the stack's message in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
@@ -283,6 +286,7 @@ for (const engine of ENGINES) {
 
   // The Undo row: a removal shows its words with Undo; Undo brings the thing back, and
   // a removal left alone settles when its window runs out.
+  // Browser: a gesture.
   test(`a removal offers Undo and settles when left in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();

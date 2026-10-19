@@ -145,6 +145,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: rendering and layout.
     test("a message is answered word by word", async () => {
       const { context, page, problems } = await open(browser, engine.name, "answer");
       try {
@@ -157,6 +158,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("an answer's markdown renders as formatting", async () => {
       // The stem page sets the markdown attribute (10). Echo repeats the text, so a message
       // written in markdown comes back as an answer whose # and ** are rendered, not shown.
@@ -189,6 +191,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("thinking shows a live line and then an openable record", async () => {
       const { context, page, problems } = await open(browser, engine.name, "think");
       try {
@@ -219,6 +222,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("a slow answer can be stopped", async () => {
       const { context, page, problems } = await open(browser, engine.name, "stop");
       try {
@@ -235,6 +239,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("a failed answer offers Try again", async () => {
       const { context, page, problems } = await open(browser, engine.name, "fail");
       try {
@@ -246,6 +251,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: focus and keys.
     test("Enter while an answer arrives keeps the typed text", async () => {
       const { context, page, problems } = await open(browser, engine.name, "keepdraft");
       try {
@@ -264,6 +270,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a reload against real storage.
     test("a finished chat survives a reload", async () => {
       const { context, page, problems } = await open(browser, engine.name, "reload");
       try {
@@ -281,6 +288,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a reload against real storage.
     test("a reload mid-answer ends at the question with Continue", async () => {
       const { context, page, problems } = await open(browser, engine.name, "continue");
       try {
@@ -307,6 +315,7 @@ for (const engine of ENGINES) {
     // label; one switched off (12) is never named. That the off tool is not offered, and
     // its call is refused rather than asked, is decided in conversations' machine test and
     // llm's api test; here is what the reader sees of it.
+    // Browser: rendering and layout.
     test("a lookup is named on screen, and a tool switched off is not", async () => {
       const { context, page, problems } = await open(browser, engine.name, "tool-off", undefined, { "subject: read": false });
       try {
@@ -323,6 +332,7 @@ for (const engine of ENGINES) {
 
     // --- conversation-list (session 10) -------------------------------------------------
 
+    // Browser: a gesture.
     test("a second chat is listed and picking a row switches to it", async () => {
       const { context, page, problems } = await open(browser, engine.name, "list-switch");
       try {
@@ -350,6 +360,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("a delete can be undone", async () => {
       const { context, page, problems } = await open(browser, engine.name, "undo", 250);
       try {

@@ -102,6 +102,7 @@ const inReader = {
 };
 
 for (const engine of ENGINES) {
+  // Browser: focus and keys.
   test(`folding the docks on / in ${engine.name}`, ...journey({
     launch: () => engine.launch(),
     open: async (browser) => {

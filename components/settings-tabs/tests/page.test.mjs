@@ -50,6 +50,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: rendering and layout.
     test(`the admin sees Administration beside Settings in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
@@ -127,6 +128,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: rendering and layout.
     test(`everyone else sees Settings alone, and Administration asks nothing, in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {

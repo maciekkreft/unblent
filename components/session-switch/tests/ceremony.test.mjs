@@ -35,6 +35,7 @@ async function until(fn, timeout = 4000) {
 // once the authenticator is gone. The login path is covered by api.test.mjs
 // (login/begin) and machine.test.mjs; keeping this flow short holds the file
 // inside its time budget (11) even on a loaded host.
+// Browser: a gesture.
 test("signs in, signs out, and refuses a ceremony with no authenticator (chromium)", async () => {
   const browser = await chromium.launch({ chromiumSandbox: false });
   try {

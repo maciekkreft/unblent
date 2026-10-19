@@ -57,6 +57,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`the page follows the colour scheme in ${engine.name}`, async () => {
     const pair = tokenPair("--color-canvas");
     const dark = rgb(pair.dark);

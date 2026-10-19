@@ -66,6 +66,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a reload against real storage.
     test("an older journal database loses the detectors' tables and their outbox row, and keeps its days", async () => {
       const context = await browser.newContext();
       try {

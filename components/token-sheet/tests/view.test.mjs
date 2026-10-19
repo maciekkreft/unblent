@@ -40,6 +40,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`token sheet renders in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const page = await browser.newPage();

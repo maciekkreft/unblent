@@ -188,6 +188,7 @@ const notesListed = {
 };
 
 for (const engine of ENGINES) {
+  // Browser: focus and keys.
   test(`the lists on / in ${engine.name}`, ...journey({
     launch: () => engine.launch(),
     open: async (browser) => {

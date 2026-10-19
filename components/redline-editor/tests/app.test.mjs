@@ -21,6 +21,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     });
 
+    // Browser: a page's composition.
     test("in the product profile the app shows only the redline, at its own address", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

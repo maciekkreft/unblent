@@ -98,6 +98,7 @@ for (const engine of ENGINES) {
   // the desk stays arrangeable). Docking a stage tab beside it gives two tabs, and
   // the reorder arrows (6.4) move the shown one; the
   // order survives a reload because `dock` stores it.
+  // Browser: a gesture.
   test(`reorder arrows move a docked tab and the order persists in ${engine.name}`, async () => {
     const browser = await engine.launch();
     try {
@@ -176,6 +177,7 @@ for (const engine of ENGINES) {
 
   // The product page docks Notes and Editor on the right; the Editor follows
   // note.selected with `shows-on` (6.4), so picking a note brings its tab forward.
+  // Browser: a page's composition.
   test(`picking a note brings the Notes tab forward on / in ${engine.name}`, async () => {
     const browser = await engine.launch();
     try {
@@ -244,6 +246,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: rendering and layout.
   test(`a side dock is a scrim drawer on the phone in ${engine.name}`, async () => {
     const rail = tokenPx("--space-xl");
     const peek = tokenPx("--space-2xl");
@@ -357,6 +360,7 @@ for (const engine of ENGINES) {
   // while pressed, and leaves it by every route: the gear again, a stage tab, Escape,
   // and (a reload) not at all, since pressed rides no fact. Every header button is one
   // size, 36px (--text-subtitle in --space-sm padding).
+  // Browser: a gesture.
   test(`the gear shows Settings on the stage and every route leaves it in ${engine.name}`, async () => {
     const browser = await engine.launch();
     try {
@@ -494,6 +498,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: rendering and layout.
   test(`the gear fills the stage on the phone in ${engine.name}`, async () => {
     const rail = tokenPx("--space-xl");
     const browser = await engine.launch();

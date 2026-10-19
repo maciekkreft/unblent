@@ -58,6 +58,7 @@ for (const engine of ENGINES) {
       return { context, page, problems };
     };
 
+    // Browser: focus and keys.
     test("with Vim keys on, j/k, G and gg move along the list and Enter opens", async () => {
       const { context, page, problems } = await open(true);
       try {
@@ -81,6 +82,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing", async () => {
       const { context, page, problems } = await open(false);
       try {

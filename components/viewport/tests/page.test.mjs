@@ -50,6 +50,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`the phone preview follows the viewport fact in ${engine.name}`, async () => {
     const phoneWidth = tokenPx("--viewport-phone");
     const browser = await engine.launch();

@@ -237,6 +237,7 @@ for (const engine of ENGINES) {
     // A highlight made in the book appears in the document, and Vim normal-mode editing
     // of the comment saves through notes to the server. The highlight is created here, in one page, so its create and comment never
     // hand a note version across page loads (which would race a stale write into a conflict).
+    // Browser: focus and keys.
     test(`a highlight appears and a Vim comment saves in ${engine.name}`, async () => {
       const { page, problems } = await open({ highlight: false, settings: VIM });
       await readerHasText(page);
@@ -282,6 +283,7 @@ for (const engine of ENGINES) {
     // under a quote, where a comment is typed, is never a gap, and a comment's paragraphs
     // and line breaks save in its note. With Vim keys on, Enter in insert mode is the
     // kit's, not Vim's.
+    // Browser: focus and keys.
     test(`Enter makes a paragraph and Shift+Enter a line break in a comment, under Vim, in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: VIM });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
@@ -309,6 +311,7 @@ for (const engine of ENGINES) {
 
     // The quote line is protected: `x` on it is refused and flashes; `dd` on the only
     // comment line empties it to one blank line and keeps the highlight.
+    // Browser: focus and keys.
     test(`the quote line refuses an edit and dd empties a one-line comment in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: VIM });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
@@ -349,6 +352,7 @@ for (const engine of ENGINES) {
 
     // `dd` on a quote line removes the highlight through the same undo window as the bin,
     // and `u` brings it back.
+    // Browser: focus and keys.
     test(`dd on a quote line discards with undo in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: VIM });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
@@ -372,6 +376,7 @@ for (const engine of ENGINES) {
     // a whole quote line and pressing Delete removes that highlight through the undo window,
     // the same rule as `dd` (one rule in both modes); Undo brings it back. Typing on the
     // quote line changes nothing, the bin removes with the same undo, and a comment saves.
+    // Browser: focus and keys.
     test(`without Vim keys a deleted quote line is undoable and a comment saves in ${engine.name}`, async () => {
       const { page, problems } = await open({ settings: PLAIN });
       await page.waitForFunction(() => document.querySelector("highlight-notes")?.shadowRoot?.querySelector(".cm-content"));
@@ -415,6 +420,7 @@ for (const engine of ENGINES) {
 
     // A highlight made below the fold of a long Highlights document is scrolled into view
     // with the comment line under it, where the user writes next.
+    // Browser: rendering and layout.
     test(`a new highlight below the fold is scrolled into view in ${engine.name}`, async () => {
       const { page, problems } = await open({ highlight: false, earlier: 10, settings: PLAIN });
       await readerHasText(page);

@@ -59,6 +59,7 @@ const clickSwitch = (page, label) =>
 // stem page composes trace-list, which shows the page's own bus traffic (section
 // 10); the one other view on it is page-nav, so its pages: list query must appear.
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`the trace page shows its own bus traffic in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const page = await browser.newPage();

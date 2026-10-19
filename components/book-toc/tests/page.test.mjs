@@ -164,6 +164,7 @@ for (const engine of ENGINES) {
       return { page, problems };
     };
 
+    // Browser: rendering and layout.
     test("lists the contents with nesting and marks the current chapter", async () => {
       const { page, problems } = await open();
       try {
@@ -181,6 +182,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a page's composition.
     test("the highlight follows a page turn into the next chapter", async () => {
       const { page, problems } = await open();
       try {
@@ -198,6 +200,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("choosing a chapter moves the reader and the highlight", async () => {
       const { page, problems } = await open();
       try {
@@ -220,6 +223,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a page's composition.
     test("the highlight stays on the section while reading an unlisted piece", async () => {
       const { page, problems } = await open({ book: "Gappy Book" });
       try {
@@ -247,6 +251,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("on the phone the drawer's contents jump the reader, then fold away", async () => {
       const { page, problems } = await open({ phone: true });
       try {
@@ -276,6 +281,7 @@ for (const engine of ENGINES) {
         await page.close();
       }
     });
+    // Browser: focus and keys.
     test("with Vim keys on, j/k, G and gg move along the contents and Enter opens", async () => {
       const { page, problems } = await open({ vimKeys: true });
       try {
@@ -300,6 +306,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing", async () => {
       const { page, problems } = await open({ vimKeys: false });
       try {

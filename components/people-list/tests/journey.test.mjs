@@ -26,6 +26,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await browser?.close();
     }, { timeout: 10000 });
 
+    // Browser: a gesture.
     test("Delete hides the guest with an Undo, and once it runs out the guest and its work are gone", async () => {
       const made = await fetch(`${BASE_URL}/api/session/guest`, { method: "POST" });
       const guest = await made.json();

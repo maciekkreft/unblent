@@ -182,6 +182,7 @@ for (const engine of ENGINES) {
       return ctx;
     };
 
+    // Browser: focus and keys.
     test("with Vim keys on, Ctrl+f and Ctrl+d/Ctrl+u turn the page, across a chapter too", async () => {
       const { page, problems } = await openAndRewind({ vimKeys: true });
       try {
@@ -200,6 +201,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: focus and keys.
     test("with Vim keys on, G and gg reach the chapter's ends and Ctrl+b turns back across a chapter", async () => {
       const { page, problems } = await openInChapterTwo({ vimKeys: true });
       try {
@@ -219,6 +221,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: focus and keys.
     test("with Vim keys off, Ctrl+f and l do not turn the page", async () => {
       const { page, problems } = await openAndRewind({ vimKeys: false });
       try {
@@ -233,6 +236,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("opens a selected book at its first page, paginates a long chapter, turns a page, and announces the place", async () => {
       const { page, problems, debug } = await openAndRewind();
       try {
@@ -281,6 +285,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a reload against real storage.
     test("keeps the reading place across a reload", async () => {
       const { page, problems, debug } = await openAndRewind({ ignoreAborts: true });
       try {
@@ -334,6 +339,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("keeps the same block when the viewport resizes", async () => {
       const { page, problems } = await openAndRewind();
       try {
@@ -370,6 +376,7 @@ for (const engine of ENGINES) {
     // Folding the left dock widens the reader, which re-paginates the chapter, exactly
     // as opening the right dock narrows it on the product page. The place must survive the
     // round trip: the same page and the same first line after fold then unfold.
+    // Browser: rendering and layout.
     test("keeps the page across a dock fold", async () => {
       const { page, problems } = await openInChapterTwo({ viewport: { width: 760, height: 768 } });
       try {
@@ -408,6 +415,7 @@ for (const engine of ENGINES) {
     // starting there. Only a character offset can name that place; a block-only anchor
     // would jump to the paragraph's start after a fold. (Chapter Two opens with one
     // paragraph that outruns a page, so a page turn into it lands inside it.)
+    // Browser: rendering and layout.
     test("keeps the place inside a paragraph longer than a page", async () => {
       const { page, problems } = await openInChapterTwo({ viewport: { width: 760, height: 768 } });
       try {
@@ -447,6 +455,7 @@ for (const engine of ENGINES) {
     // WebKit resolves a transform's percentage against the pixel-snapped box, so a
     // slide written in the strip's own 100% fell a fraction short of every column and
     // the text crept sideways page by page. A fractional, narrow page makes it show.
+    // Browser: rendering and layout.
     test("a late page sits on its column at a fractional page width", async () => {
       const { page, problems } = await openAndRewind();
       try {
@@ -472,6 +481,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
     test("a jump from the contents lands on the chapter's first page without sliding", async () => {
       const { page, problems } = await openAndRewind();
       try {
@@ -572,6 +582,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("a swipe turns a page on the phone", async () => {
       const { page, problems } = await openAndRewind({ phone: true });
       try {
@@ -625,6 +636,7 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
     test("a mouse drag selects text and does not turn", async () => {
       const { page, problems } = await openAndRewind();
       try {

@@ -351,6 +351,7 @@ for (const engine of ENGINES) {
   // page gave distinct ids. This is the page-level check deferred from session 3, so it
   // runs once, in WebKit.
   if (engine.name === "webkit") {
+    // Browser: a page's composition.
     test("the two containers are separate tabs named by address", async () => {
       const browser = await engine.launch();
       const context = await browser.newContext();
@@ -424,6 +425,7 @@ for (const engine of ENGINES) {
     // The About line names a note's book after a reload (fault the reload race left blank),
     // and names the stage's book on a new note before anything is typed (12).
     // One page kept open throughout, so the book stays staged and the subject stays set.
+    // Browser: a reload against real storage.
     test("the About line survives a reload and names a new note", async () => {
       const { page, problems } = await openPage(browser, await twoBooks());
       await until(async () => (await tileIds(page)).length >= 2, 8000);
@@ -502,6 +504,7 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
+    // Browser: a gesture.
     test("a drag makes a highlight that holds the page count, stays off the list, and survives a reload", async () => {
       const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
       await readerHasText(page);
@@ -537,6 +540,7 @@ for (const engine of ENGINES) {
     // The bubble (session 3): a click on a mark opens Copy · Remove; Remove starts the
     // undo window (Removed · Undo, the mark dimmed), Undo brings it back, and a second
     // Remove that elapses takes the highlight for good — gone here and after a reload.
+    // Browser: a gesture.
     test("the bubble's Undo brings a removed highlight back", async () => {
       const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }));
       await readerHasText(page);
@@ -559,6 +563,7 @@ for (const engine of ENGINES) {
       await page.close();
     });
 
+    // Browser: a reload against real storage.
     test("a removed highlight stays gone after a reload", async () => {
       const { page, problems } = await openPage(browser, await seedUser({ books: [BOOK_ONE], open: BOOK_ONE }), { undoMs: 10 });
       await readerHasText(page);
@@ -613,6 +618,7 @@ for (const engine of ENGINES) {
     // The Highlights row opens the document inside the Notes pair (Decision 1, 2, 5, 7):
     // it stands in the list showing the count, picking it shows the document under the
     // Notes Back bar, the highlight is never a plain note, and Back returns to the list with the row selected.
+    // Browser: a page's composition.
     test("the Highlights row opens the document in the Notes pair and keeps the book the subject", async () => {
       const { page, problems } = await openPage(browser, await withHighlight());
 
@@ -646,6 +652,7 @@ for (const engine of ENGINES) {
     // The document stays inside the Notes pair even when Notes is brought to the stage (12):
     // the book remains the subject and the highlight is never
     // listed as a plain note, whether the pair is docked or staged.
+    // Browser: a page's composition.
     test("the highlights document holds the Notes pair when it is staged", async () => {
       const { page, problems } = await openPage(browser, await withHighlight());
       await showHighlights(page);
@@ -666,6 +673,7 @@ for (const engine of ENGINES) {
     // Only one row is ever selected (Decision 7): opening a new note marks the New note row
     // as open; then picking Highlights must move the selection, not add a second one. This is
     // the New-note-first order, where the draft row is the open one when Highlights is picked.
+    // Browser: a page's composition.
     test("opening New note then Highlights leaves only the Highlights row selected", async () => {
       const { page, problems } = await openPage(browser, await withHighlight());
       await until(async () => (await highlightsRow(page)) != null, 8000);
@@ -692,6 +700,7 @@ for (const engine of ENGINES) {
     // The phone preview shows either the list or the picked item in the Notes tab, so the
     // row opens the document and Back returns to the list there too (Decision, phone flow).
     if (engine.name === "webkit") {
+      // Browser: rendering and layout.
       test("the Highlights row opens and closes on the phone preview", async () => {
         const { page, problems } = await openPage(browser, await withHighlight(), { phone: true });
         await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");

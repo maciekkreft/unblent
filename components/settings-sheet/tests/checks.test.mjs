@@ -25,6 +25,7 @@ for (const engine of ENGINES) {
     // evaluator for another box answered by its questions. The evaluator and the stored box
     // are made through the APIs under the test's own login; that a chosen box is kept and
     // synced is decided in choice-point-checks' Node tests (9).
+    // Browser: rendering and layout.
     test("the choice point checks fold open, show a box's stored evaluator, and take a new one, with no expected answer or icon to set", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

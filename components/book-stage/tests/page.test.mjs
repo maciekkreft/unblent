@@ -28,6 +28,7 @@ const clickTile = (page, title) =>
   }, title);
 
 for (const engine of ENGINES) {
+  // Browser: a page's composition.
   test(`the stage shows the journal's page for the Journal and the reader for an imported book in ${engine.name}`, async () => {
     const cookie = forgeCookie("book-stage");
     // The book arrives through the server's API (11.2): milliseconds, no browser upload.

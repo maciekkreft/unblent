@@ -48,6 +48,7 @@ for (const engine of ENGINES) {
     await browser?.close();
   }, { timeout: 15000 });
 
+  // Browser: a gesture.
   test(`the product hides the workshop behind the toolbox in ${engine.name}`, async () => {
     const problems = [];
     const context = await browser.newContext();
@@ -113,6 +114,7 @@ for (const engine of ENGINES) {
 
   // The chosen profile as settings stores it (§12, local-only; that the door's press
   // stores it is decided in settings' Node tests): the product loads in the workshop.
+  // Browser: a reload against real storage.
   test(`the workshop chosen at the door is kept on load, and the door leads back in ${engine.name}`, async () => {
     const problems = [];
     const context = await browser.newContext();

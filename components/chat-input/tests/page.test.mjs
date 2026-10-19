@@ -131,6 +131,7 @@ const editSettings = (page, vimKeys) =>
   emitEvent(page, "settings.edited", "settings-sheet", { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, vimKeys });
 
 for (const engine of ENGINES) {
+  // Browser: focus and keys.
   test(`without Vim keys Enter sends and Shift+Enter makes a line in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "plain");
     try {
@@ -153,6 +154,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`with Vim keys Enter makes a paragraph in insert and sends in normal in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "vim", { vim: true });
     try {
@@ -176,6 +178,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`each subject's new chat keeps its own draft in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "subjects");
     try {
@@ -196,6 +199,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`the draft survives a live Vim toggle in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "toggle");
     try {
@@ -215,6 +219,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
   test(`New chat puts the cursor in the box, in insert mode under Vim, in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "newchat", { vim: true });
     try {
@@ -232,6 +237,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: rendering and layout.
   test(`the box keeps its draft across sign-out and sign-in in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "signout");
     try {

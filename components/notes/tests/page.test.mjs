@@ -145,6 +145,7 @@ const ENGINES = [
 
 // WebKit first, then Chromium: a Safari-class engine is the stricter check.
 for (const engine of ENGINES) {
+  // Browser: a reload against real storage.
   test(`the note-editor saves through the notes fact in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
@@ -248,6 +249,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a gesture.
   test(`the note-list highlights the open note and drives the editor in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
@@ -381,6 +383,7 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: a gesture.
   test(`a hidden tab drains the outbox at once when signed in, in ${engine.name}`, async () => {
     const browser = await engine.launch();
     // Sign in without a passkey ceremony: forge the session cookie the server would
@@ -487,6 +490,7 @@ for (const engine of ENGINES) {
       return { page, problems, debug };
     };
 
+    // Browser: a gesture.
     test("the trash starts an undoable delete", async () => {
       const { page, problems, debug } = await open();
       await write(page, "First\nbody");
@@ -513,6 +517,7 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     });
 
+    // Browser: a gesture.
     test("a left swipe deletes a note on the desk", async () => {
       const { page, problems, debug } = await open();
       await write(page, "Swiped\nbody");
@@ -525,6 +530,7 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     });
 
+    // Browser: a gesture.
     test("a left swipe deletes a note on the phone", async () => {
       // The phone has no hover, so the swipe is the delete there.
       const { page, problems } = await open({ phone: true });

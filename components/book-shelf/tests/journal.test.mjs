@@ -25,6 +25,7 @@ const tiles = (page) =>
   );
 
 for (const engine of ENGINES) {
+  // Browser: rendering and layout.
   test(`the journal tile reads "Written by you" and cannot be renamed or deleted in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
