@@ -506,6 +506,32 @@ class BookReader extends LitElement {
       font-size: var(--text-caption);
       color: var(--color-mute);
     }
+    /* The command line (Vim keys): drawn over the footer, as Vim draws it over its
+       status line, so the page keeps its height and nothing is paginated again. */
+    .footer {
+      position: relative;
+    }
+    .command {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      padding: 0 var(--space-md);
+      background: var(--color-canvas);
+      color: var(--color-ink);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      white-space: pre;
+      overflow: hidden;
+    }
+    .command.refused {
+      color: var(--color-danger);
+    }
+    .command .caret {
+      width: calc(var(--text-sm) * 0.6);
+      height: calc(var(--text-sm) * var(--leading-tight));
+      background: var(--color-ink);
+    }
     .footer .chap {
       flex: 1;
       min-width: 0;
@@ -1169,6 +1195,24 @@ class BookReader extends LitElement {
     return true;
   }
 
+  // While the command line is open every key is the line's, so the reader's own keys
+  // wait; the machine decides what each one does. ":" opens it, with Vim keys on.
+  #commandLine(e) {
+    const context = this.#actor.snapshot?.context;
+    if (!context?.vimKeys || e.metaKey || e.altKey) return false;
+    if (context.command == null) {
+      if (e.key !== ":" || e.ctrlKey) return false;
+      const target = e.composedPath()[0];
+      if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return false;
+      if (this.#visual) this.#endVisual(false);
+      this.#closeBubble();
+    } else if (e.ctrlKey) return true;
+    this.#actor.send({ type: "_commandKey", key: e.key });
+    e.preventDefault();
+    e.stopPropagation();
+    return true;
+  }
+
   // v (or Ctrl+v) starts a highlight at the cursor, or drops the one in progress.
   #visualKey() {
     if (this.#cursor == null) this.#placeCursor();
@@ -1537,6 +1581,7 @@ class BookReader extends LitElement {
   }
 
   #keydown(e) {
+    if (this.#commandLine(e)) return;
     if (this.#vimKey(e)) return;
     if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
       e.preventDefault();
@@ -1566,6 +1611,7 @@ class BookReader extends LitElement {
   // The cursor shows only while the reader has the keyboard, and comes back where it was.
   #focusChanged(focused) {
     this.#focused = focused;
+    if (!focused && this.#actor.snapshot?.context.command != null) this.#actor.send({ type: "_commandKey", key: "Escape" });
     this.#paintCursor();
   }
 
@@ -1763,6 +1809,12 @@ class BookReader extends LitElement {
     `;
   }
 
+  #command({ command, notACommand }) {
+    if (command != null) return html`<div class="command" role="status">:${command}<span class="caret" aria-hidden="true"></span></div>`;
+    if (notACommand != null) return html`<div class="command refused" role="status">Not a command: ${notACommand}</div>`;
+    return nothing;
+  }
+
   // dock-desk's Ctrl+h/j/k/l (12) focuses a panel by its host: land on the page, where
   // the reader's own keys are read. Asked before the first page is drawn (the desk
   // starts the keyboard on the stage at load), it lands as soon as there is one.
@@ -1834,6 +1886,7 @@ class BookReader extends LitElement {
               ${icon("caret-right")}
             </button>
           </span>
+          ${this.#command(snapshot.context)}
         </div>
       </div>
     `;

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt } from "../machine.js";
+import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -1064,4 +1064,74 @@ test("_copyLink announces link.copied with the stored link; an unknown id announ
   actor.send({ type: "_copyLink", id: HL_ID });
   await flush();
   assert.deepEqual(copied, [{ type: "link.copied", id: HL_ID, text: "[Hello](note:" + HL_ID + ")" }]);
+});
+
+// --- The command line (Vim keys on) ----------------------------------------------------
+
+const keys = (actor, seq) => {
+  for (const key of seq) actor.send({ type: "_commandKey", key });
+};
+async function commanding() {
+  const h = await open();
+  const closed = [];
+  h.actor.on("book.closed", (e) => closed.push(e));
+  h.actor.send({ type: "settings.changed", vimKeys: true });
+  return { ...h, closed };
+}
+
+test(": opens the line only with Vim keys on and a book open, and letters build it", async () => {
+  const { actor } = await open();
+  keys(actor, [":"]);
+  assert.equal(ctx(actor).command, null, "Vim keys off: : does nothing");
+  actor.send({ type: "settings.changed", vimKeys: true });
+  keys(actor, ["q"]);
+  assert.equal(ctx(actor).command, null, "a letter before : is a reader key, not the line's");
+  keys(actor, [":", "q", "u", "x", "Backspace", "i"]);
+  assert.equal(ctx(actor).command, "qui");
+  const empty = start();
+  await flush();
+  empty.actor.send({ type: "settings.changed", vimKeys: true });
+  keys(empty.actor, [":"]);
+  assert.equal(ctx(empty.actor).command, null, "no book open: nothing to close");
+});
+
+test(":q and :quit Enter close the open book and the line", async () => {
+  const { actor, closed } = await commanding();
+  keys(actor, [":", "q", "Enter"]);
+  assert.equal(ctx(actor).command, null);
+  keys(actor, [":", ..."quit", "Enter"]);
+  assert.deepEqual(closed, [{ type: "book.closed", id: ID }, { type: "book.closed", id: ID }]);
+});
+
+test("Escape, Backspace on an empty line and an empty Enter cancel without closing", async () => {
+  const { actor, closed } = await commanding();
+  keys(actor, [":", "q", "Escape"]);
+  assert.equal(ctx(actor).command, null, "Escape");
+  keys(actor, [":", "q", "Backspace"]);
+  assert.equal(ctx(actor).command, "", "the line stays open on its own :");
+  keys(actor, ["Backspace"]);
+  assert.equal(ctx(actor).command, null, "Backspace on the empty line");
+  keys(actor, [":", "Enter"]);
+  assert.equal(ctx(actor).command, null, "Enter on the empty line");
+  keys(actor, [":", "q"]);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(ctx(actor).command, null, "Vim keys turned off");
+  assert.deepEqual(closed, []);
+});
+
+test("any other command is named back for a moment, and nothing closes", async () => {
+  const { actor, closed, clock } = await commanding();
+  keys(actor, [":", "w", "q", "Enter"]);
+  assert.deepEqual([ctx(actor).command, ctx(actor).notACommand], [null, "wq"]);
+  clock.increment(NOT_A_COMMAND_MS - 1);
+  assert.equal(ctx(actor).notACommand, "wq");
+  // A new line clears the refusal at once, and its timer with it.
+  keys(actor, [":"]);
+  assert.equal(ctx(actor).notACommand, null);
+  keys(actor, ["x", "Enter"]);
+  clock.increment(NOT_A_COMMAND_MS - 1);
+  assert.equal(ctx(actor).notACommand, "x", "the first refusal's timer was cancelled");
+  clock.increment(1);
+  assert.equal(ctx(actor).notACommand, null);
+  assert.deepEqual(closed, []);
 });

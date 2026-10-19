@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
+import { setup, assign, fromPromise, emit, enqueueActions, raise, cancel } from "xstate";
 
 // The view component that reads one book (8, kind 4): it owns only UI state — which
 // book and chapter it is showing, that chapter's fragment, a place it still owes the
@@ -438,6 +438,37 @@ const passageChapter = (passage, book) => Math.min(passage.place.chapter, Math.m
 // The glow one-shot for a followed link: the highlight's id and a fresh nonce.
 const glowFor = (context, passage = context.passage) => ({ id: passage.id, n: (context.glow?.n ?? 0) + 1 });
 
+// The command line (Vim keys on): ":" opens it, typed letters build it, Backspace on an
+// empty line or Escape cancels it, and Enter runs it. The only command is q (or quit),
+// which closes the open book; any other text is named back for NOT_A_COMMAND_MS, then
+// the line is gone.
+export const NOT_A_COMMAND_MS = 2000;
+export const QUIT = ["q", "quit"];
+
+const commandKey = enqueueActions(({ context, event, enqueue }) => {
+  const { key } = event;
+  const line = context.command;
+  if (line == null) {
+    if (key !== ":" || !context.vimKeys || !context.book) return;
+    enqueue(cancel("notACommand"));
+    enqueue.assign({ command: "", notACommand: null });
+    return;
+  }
+  if (key === "Escape" || (key === "Backspace" && line === "")) enqueue.assign({ command: null });
+  else if (key === "Backspace") enqueue.assign({ command: line.slice(0, -1) });
+  else if (key === "Enter") {
+    const text = line.trim();
+    enqueue.assign({ command: null });
+    if (text === "") return;
+    if (QUIT.includes(text)) {
+      if (context.book) enqueue.emit({ type: "book.closed", id: context.book.id });
+      return;
+    }
+    enqueue.assign({ notACommand: text });
+    enqueue(raise({ type: "_notACommandEnd" }, { delay: NOT_A_COMMAND_MS, id: "notACommand" }));
+  } else if (key.length === 1) enqueue.assign({ command: line + key });
+});
+
 export const machine = setup({
   actors: {
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
@@ -519,7 +550,11 @@ export const machine = setup({
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
       "the cursor inside a highlight opens its bubble and does the same. Following a source " +
       "link in a note opens the page that holds the passage, in the book already open or " +
-      "after `books` opens its book, and the highlight glows for about a second.",
+      "after `books` opens its book, and the highlight glows for about a second. With Vim keys " +
+      "on and the reader focused, : opens a one-line command line at the reader's foot, as in " +
+      "Vim, and the reader's other keys wait while it is open; q or quit and Enter close the " +
+      "book, any other text shows \"Not a command\" with that text for a moment, and Escape, " +
+      "Backspace on an empty line or leaving the reader cancels it.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "book.closed"],
     attributes: ["height", "highlights"],
@@ -530,6 +565,10 @@ export const machine = setup({
     // The "Vim keys" device preference (12): off until settings says otherwise, and off
     // on a page without it (the ask replies no-answerer).
     vimKeys: false,
+    // The command line's text after its ":" while it is open, else null; and the text
+    // last refused, shown in its place for a moment (commandKey).
+    command: null,
+    notACommand: null,
     // A ULID for a new highlight note (Decision 1); arrives through input so the machine
     // stays importable in Node.
     mint: input.mint,
@@ -596,7 +635,14 @@ export const machine = setup({
   },
   initial: "starting",
   on: {
-    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "settings.changed": {
+      actions: assign(({ context, event }) => ({
+        vimKeys: event.vimKeys === true,
+        command: event.vimKeys === true ? context.command : null,
+      })),
+    },
+    _commandKey: { actions: commandKey },
+    _notACommandEnd: { actions: assign({ notACommand: null }) },
     // The open book changed (4.3, fourth rule): the fact says which book is open now,
     // whether the user opened it here, or on another device and this tab pulled it.
     // A book id reads it at its saved position; null empties the reader.
@@ -606,13 +652,13 @@ export const machine = setup({
         target: ".opening",
         actions: assign({
           id: ({ event }) => event.id,
-          book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [],
+          book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [], command: null,
           passage: ({ context, event }) => (context.passage?.book === event.id ? context.passage : null),
         }),
       },
       {
         target: ".empty",
-        actions: assign({ id: null, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [] }),
+        actions: assign({ id: null, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [], command: null }),
       },
     ],
     // The fact's news that the open book is gone (4.3, fourth rule): back to the empty
@@ -624,7 +670,7 @@ export const machine = setup({
     "book.deleted": {
       guard: ({ context, event }) => Boolean(context.book) && event.id === context.book.id,
       target: ".empty",
-      actions: assign({ id: null, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [] }),
+      actions: assign({ id: null, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [], command: null }),
     },
   },
   states: {

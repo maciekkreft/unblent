@@ -219,6 +219,32 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
+    // The command line covers the footer, as Vim's covers its status line, so the
+    // page keeps its size.
+    // Browser: rendering and layout.
+    test(`: draws the command line over the footer and it takes typing in ${engine.name}`, async () => {
+      const { page, problems } = await open(true);
+      const line = () =>
+        page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          const c = r.querySelector(".footer .command");
+          if (!c) return null;
+          const [a, f] = [c.getBoundingClientRect(), r.querySelector(".footer").getBoundingClientRect()];
+          return { text: c.textContent, over: a.top >= f.top && a.bottom === f.bottom && a.left === f.left && a.right === f.right, footer: f.height };
+        });
+      const footer = await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer").getBoundingClientRect().height);
+      // Vim arrives with the settings reply; : opens the line only once it has.
+      await until(async () => {
+        await page.keyboard.press(":");
+        return (await line()) !== null;
+      });
+      await page.keyboard.type("wq");
+      assert.deepEqual(await line(), { text: ":wq", over: true, footer });
+      await page.keyboard.press("Enter");
+      await until(async () => (await line())?.text === "Not a command: wq");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
     // Browser: focus and keys.
     test(`with Vim keys off v does nothing in ${engine.name}`, async () => {
       const { page, problems } = await open(false);
