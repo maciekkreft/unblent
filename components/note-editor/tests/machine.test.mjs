@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
 // the view edits are pure functions, tested at the end.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "pin.toggled"].map((n) => [n, schemaOf(n)]));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "pin.toggled", "passage.selected"].map((n) => [n, schemaOf(n)]));
 // Every emit of every test, checked against its schema by the last test.
 const recorded = [];
 
@@ -48,6 +48,7 @@ function editor({
   // The note `pins` holds at start; pins: read is answered here so each test's own ask
   // only answers notes and subject.
   pinned = null,
+  pushRegister,
 } = {}) {
   const clock = new SimulatedClock();
   const saved = [];
@@ -56,7 +57,7 @@ function editor({
   const asked = (target, name, payload) =>
     target === "pins" ? Promise.resolve({ note: pinned, chat: null, evaluators: null }) : ask(target, name, payload);
   const actor = createActor(machine, {
-    input: { ask: asked, mint, focus, follows, subjecting, recall, forget, recallTitles, rememberTitles },
+    input: { ask: asked, mint, focus, follows, subjecting, recall, forget, recallTitles, rememberTitles, pushRegister },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
@@ -944,6 +945,64 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     await settle();
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(reply));
   }
+});
+
+// Source links: the stored form book-reader's Copy link writes, `[label](note:<id>)`.
+const HL = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
+const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
+const PASSAGE = { chapter: 2, contentVersion: 1, start: { block: 3, offset: 4 }, end: { block: 3, offset: 20 } };
+const HIGHLIGHT = {
+  note: {
+    id: HL, title: "", body: "", version: 1, pending: false, updatedAt: 1,
+    about: [{ kind: "book", id: BOOK, place: PASSAGE, quote: { exact: "The quote", prefix: "", suffix: "" } }],
+  },
+};
+
+test("source links are found by their range, with the label's escapes off", () => {
+  const link = `[A \\[b\\] c…](note:${HL})`;
+  const text = `before ${link} after [plain](https://x.y) [x](note:short)`;
+  assert.deepEqual(sourceLinksIn(text), [{ from: 7, to: 7 + link.length, id: HL, label: "A [b] c…" }]);
+  assert.deepEqual(sourceLinksIn(`[a](note:${HL})[b](note:${ID})`).map((l) => l.label), ["a", "b"]);
+  assert.deepEqual(sourceLinksIn("no links\n[a\nb](note:" + HL + ")"), [], "a label never spans lines");
+});
+
+test("a source link goes to the passage the highlight's link to its book carries", () => {
+  assert.deepEqual(passageOf(HIGHLIGHT, HL), { book: BOOK, id: HL, place: PASSAGE });
+  assert.equal(passageOf({ error: "not-found" }, HL), null);
+  assert.equal(passageOf({ note: { ...HIGHLIGHT.note, about: [{ kind: "book", id: BOOK }] } }, HL), null, "a note marking no passage");
+  assert.equal(passageOf(null, HL), null);
+});
+
+const reading = (reply) => (target, name, payload) =>
+  name === "read" && payload.id === HL ? Promise.resolve(reply) : Promise.resolve(name === "list" ? { notes: [] } : {});
+
+test("following a source link announces the passage and leaves the draft alone", async () => {
+  const { actor } = await started({ ask: reading(HIGHLIGHT) });
+  const selected = [];
+  actor.on("passage.selected", (e) => { selected.push(e); recorded.push({ value: e, schema: SCHEMAS["passage.selected"] }); });
+  actor.send({ type: "_typed", body: "draft" });
+  actor.send({ type: "_follow", id: HL });
+  await settle();
+  assert.deepEqual(selected, [{ type: "passage.selected", book: BOOK, id: HL, place: PASSAGE }]);
+  assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" });
+  assert.equal(actor.getSnapshot().context.body, "draft");
+});
+
+test("following a link to a removed highlight marks it removed and announces nothing", async () => {
+  const { actor } = await started({ ask: reading({ error: "not-found" }) });
+  const selected = [];
+  actor.on("passage.selected", (e) => selected.push(e));
+  actor.send({ type: "_follow", id: HL });
+  await settle();
+  assert.deepEqual(selected, []);
+  assert.deepEqual(actor.getSnapshot().context.removed, [HL]);
+});
+
+test("a copied link goes into Vim's register", async () => {
+  const pushed = [];
+  const { actor } = await started({ pushRegister: (text) => pushed.push(text) });
+  actor.send({ type: "link.copied", id: HL, text: `[q](note:${HL})` });
+  assert.deepEqual(pushed, [`[q](note:${HL})`]);
 });
 
 test("every payload matches its schema", () => {

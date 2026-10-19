@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
+import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnChild, stopChild } from "xstate";
 
 // The view component for editing one note (3.1): owns only its own UI state — the
 // draft, which state it is in, whether it is pinned — and points at `notes`, which
@@ -118,6 +118,26 @@ export function aboutTitleOf(snapshot) {
   return fresh ? subject?.title ?? null : null;
 }
 
+// A source link in a note's text, `[label](note:<id>)` (book-reader's Copy link writes
+// it): every one in `text`, by its range in the text and its label with the escapes off.
+// The view draws each as one tag; the text itself stays as stored.
+const SOURCE_LINK = /\[((?:[^\[\]\\\n]|\\[^\n])*)\]\(note:([0-9A-HJKMNP-TV-Z]{26})\)/g;
+export function sourceLinksIn(text) {
+  const found = [];
+  for (const m of String(text).matchAll(SOURCE_LINK)) {
+    found.push({ from: m.index, to: m.index + m[0].length, id: m[2], label: m[1].replace(/\\(.)/g, "$1") });
+  }
+  return found;
+}
+
+// Where following a source link goes: the book and the passage the highlight's link to
+// its book carries, from a notes: read reply. Null when the highlight is gone (a
+// tombstone reads not-found) or the note marks no passage, so nothing opens.
+export function passageOf(reply, id) {
+  const link = links(reply?.note?.about).find((l) => l.kind === "book" && l.place);
+  return link ? { book: link.id, id, place: link.place } : null;
+}
+
 const assignTyped = assign({ body: ({ event }) => event.body });
 
 // A first keystroke into an editor holding no note mints its id (a ULID, the
@@ -173,6 +193,14 @@ export const machine = setup({
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
     read: fromPromise(({ input }) => input.ask("notes", "read", { id: input.id })),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Following a source link asks notes for the highlight beside whatever the editor is
+    // doing, so the draft and its state are untouched; the reply comes back as _followed.
+    follow: fromCallback(({ input, sendBack }) => {
+      input.ask("notes", "read", { id: input.id }).then(
+        (reply) => sendBack({ type: "_followed", id: input.id, reply }),
+        () => sendBack({ type: "_followed", id: input.id, reply: null }),
+      );
+    }),
   },
   guards: {
     // The text is what notes already holds (what we last sent, loaded, or adopted),
@@ -258,9 +286,13 @@ export const machine = setup({
       "follows the subject. The pin is kept by `pins` and the titles of subjects seen on this device, so " +
       "both survive a reload. It announces the note it shows, or none for the " +
       "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
-      "here.",
+      "here. A source link to a highlight, pasted from the reader's Copy link (or with p after " +
+      "the reader's y while Vim keys is on), is drawn as one tag, the link icon and the start of " +
+      "the quote, that the cursor steps over and Backspace or x removes whole; a click on it, " +
+      "or Enter on it in Vim's normal mode, opens the book at the passage, and a tag whose " +
+      "highlight is gone turns grey and struck through and opens nothing.",
     kind: "view",
-    emits: ["note.saved", "note.opened", "pin.toggled"],
+    emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected"],
     attributes: ["height", "follows", "subject"],
     asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read"],
   },
@@ -306,6 +338,10 @@ export const machine = setup({
     vimKeys: false,
     // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
     pinned: false,
+    // Puts a copied source link in Vim's unnamed register, so p pastes it (link.copied).
+    pushRegister: input.pushRegister,
+    // Source links whose highlight is gone (UI state): their tags are drawn removed.
+    removed: [],
     // Whether a pin restore is in flight, so a successful load starts pinned and a
     // not-found one forgets the pin (D10).
     restoring: false,
@@ -330,6 +366,34 @@ export const machine = setup({
     // selection. An unfollowing editor leaves it to the bus to record as ignored.
     "note.selected": { guard: ({ context }) => context.follows, target: ".loading", actions: "open" },
     focus: { actions: ({ context }) => context.focus() },
+    // The reader copied a link to a highlight: Vim's p reads Vim's own register, not the
+    // system clipboard, so the link goes there too.
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    // A click on a source link, or Enter on it in Vim's normal mode: ask notes for the
+    // highlight. A second follow replaces one still waiting.
+    _follow: {
+      actions: [
+        stopChild("follow"),
+        spawnChild("follow", { id: "follow", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) }),
+      ],
+    },
+    // The highlight's reply: the passage opens (passage.selected), or the highlight is
+    // gone and its tag is drawn removed.
+    _followed: [
+      {
+        guard: ({ event }) => passageOf(event.reply, event.id) != null,
+        actions: [
+          assign({ removed: ({ context, event }) => context.removed.filter((id) => id !== event.id) }),
+          emit(({ event }) => ({ type: "passage.selected", ...passageOf(event.reply, event.id) })),
+        ],
+      },
+      {
+        guard: ({ event }) => event.reply?.error === "not-found",
+        actions: assign({
+          removed: ({ context, event }) => (context.removed.includes(event.id) ? context.removed : [...context.removed, event.id]),
+        }),
+      },
+    ],
     // The user pinned or unpinned (D7): the gesture goes to `pins` (4.3, fifth rule); the
     // button turns at once and pins.changed confirms it. Guarded so the button does
     // nothing while the editor holds no note.

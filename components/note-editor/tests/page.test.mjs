@@ -118,6 +118,34 @@ const drawn = (page) =>
     };
   });
 
+// A source link as book-reader's Copy link writes it, to a highlight this browser does not
+// hold, so following it finds the highlight gone.
+const GONE = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
+const LINK = `[The quote](note:${GONE})`;
+
+// The editor's document as stored: the raw text, with the link in it.
+const docText = (page) =>
+  page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
+
+// An editor on the notes stem page, holding `see <link> end`, typed without Vim.
+async function withLink(browser, vimKeys) {
+  const context = await browser.newContext();
+  context.setDefaultTimeout(4000);
+  const problems = [];
+  const page = await context.newPage();
+  watch(page, problems);
+  await page.addInitScript((v) => localStorage.setItem("settings", v), vimKeys ? VIM : NO_VIM);
+  await page.goto(`${BASE_URL}${STEM}`);
+  await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+  if (vimKeys) await vimReady(page);
+  await page.locator("note-editor .cm-content").click();
+  if (vimKeys) await page.keyboard.press("i");
+  await page.keyboard.insertText(`see ${LINK} end`);
+  if (vimKeys) await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-source-link"));
+  return { context, page, problems };
+}
+
 const ENGINES = [
   { name: "webkit", launch: () => webkit.launch() },
   { name: "chromium", launch: () => chromium.launch({ chromiumSandbox: false }) },
@@ -497,6 +525,82 @@ for (const engine of ENGINES) {
       await page.reload();
       await until(async () => (await lines(page))[2]?.text === "One");
       assert.deepEqual(await shown(), want);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: rendering and layout.
+    test("a source link is drawn as one tag, the link icon and its label, its text kept as stored", async () => {
+      const { context, page, problems } = await withLink(browser, false);
+      const tag = await page.evaluate(() => {
+        const root = document.querySelector("note-editor").shadowRoot;
+        const el = root.querySelector(".cm-source-link");
+        const s = getComputedStyle(el);
+        return {
+          count: root.querySelectorAll(".cm-source-link").length,
+          label: el.textContent.trim(),
+          icon: Boolean(el.querySelector("svg path")),
+          line: root.querySelector(".cm-line").textContent.replace(/\s+/g, " "),
+          tinted: s.backgroundColor !== "rgba(0, 0, 0, 0)",
+          struck: s.textDecorationLine.includes("line-through"),
+        };
+      });
+      assert.deepEqual(tag, { count: 1, label: "The quote", icon: true, line: "see The quote end", tinted: true, struck: false });
+      assert.equal(await docText(page), `see ${LINK} end`);
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: focus and keys.
+    test("the cursor steps over a source link as one character, and x or Backspace removes it whole", async () => {
+      const { context, page, problems } = await withLink(browser, true);
+      const head = () =>
+        page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.selection.main.head);
+      const after = 4 + LINK.length;
+      // 0 then four l's: on the tag; one more l: past it; h: back on it.
+      await page.keyboard.type("0llll");
+      await until(async () => (await head()) === 4);
+      await page.keyboard.type("l");
+      await until(async () => (await head()) === after);
+      await page.keyboard.type("h");
+      await until(async () => (await head()) === 4);
+      await page.keyboard.type("x");
+      await until(async () => (await docText(page)) === "see  end");
+      await page.keyboard.type("u");
+      await until(async () => (await docText(page)) === `see ${LINK} end`);
+      // Backspace just after the tag, in insert mode.
+      await page.keyboard.type("0lllll");
+      await until(async () => (await head()) === after);
+      await page.keyboard.press("i");
+      await page.keyboard.press("Backspace");
+      await until(async () => (await docText(page)) === "see  end");
+      assert.equal(await head(), 4);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: a gesture.
+    test("following a source link to a removed highlight greys and strikes its tag", async () => {
+      const { context, page, problems } = await withLink(browser, true);
+      const struck = () =>
+        page.evaluate(() => {
+          const el = document.querySelector("note-editor").shadowRoot.querySelector(".cm-source-link");
+          return getComputedStyle(el).textDecorationLine.includes("line-through");
+        });
+      assert.equal(await struck(), false);
+      // Enter on the tag in normal mode follows it.
+      await page.keyboard.type("0llll");
+      await page.keyboard.press("Enter");
+      await until(struck);
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await page.reload();
+      // A click follows it too, on a fresh page.
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-source-link"));
+      assert.equal(await struck(), false);
+      await page.locator("note-editor .cm-source-link").click();
+      await until(struck);
+      assert.equal(await docText(page), `see ${LINK} end`, "following changes nothing in the text");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
