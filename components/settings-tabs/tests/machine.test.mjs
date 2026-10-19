@@ -45,3 +45,19 @@ test("it asks session at start and follows session.changed after", async () => {
   assert.equal(admin, false);
   assert.equal(shownOf(CHILDREN, admin, picked), "Settings");
 });
+
+// The view hands back the tab picked before a reload; it is shown once session says
+// the admin is here, and Settings is shown until then and for anyone else.
+test("a pick handed back by the view is shown to the admin and kept for anyone else", async () => {
+  const start = (picture) =>
+    createActor(machine, { input: { ask: async () => picture, children: CHILDREN, picked: "Administration" } }).start();
+  const admin = start({ userId: "a", admin: true });
+  assert.equal(shownOf(CHILDREN, admin.getSnapshot().context.admin, "Administration"), "Settings", "before session answers");
+  await flush();
+  assert.equal(shownOf(CHILDREN, admin.getSnapshot().context.admin, admin.getSnapshot().context.picked), "Administration");
+  const guest = start({ userId: "g", guest: true });
+  await flush();
+  const { admin: isAdmin, picked } = guest.getSnapshot().context;
+  assert.equal(shownOf(CHILDREN, isAdmin, picked), "Settings");
+  assert.equal(picked, "Administration");
+});

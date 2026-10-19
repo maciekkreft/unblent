@@ -11,8 +11,8 @@ const VIEWS = [
 
 // The actor is where decisions live (3.2): it is driven with a fake ask, the shape
 // the bus's `ask` returns (4.2).
-function settle(ask, { views = VIEWS, narrow } = {}) {
-  const actor = createActor(machine, { input: { ask, views, narrow } });
+function settle(ask, { views = VIEWS, narrow, pressed } = {}) {
+  const actor = createActor(machine, { input: { ask, views, narrow, pressed } });
   const emitted = [];
   actor.on("dock.arranged", (e) => emitted.push(e));
   return new Promise((resolve) => {
@@ -533,7 +533,15 @@ test("in failed, _open switches the stage locally", async () => {
 
 // A header button (6.4): pressing shows its child on the stage, pressing again or
 // choosing something else returns to the stage. `pressed` is the desk's own state,
-// never emitted, so a reload starts on the stage.
+// never emitted; the view keeps it in the browser and hands it back on a reload.
+test("a pressed button handed back by the view starts pressed and still stores nothing", async () => {
+  const { actor, emitted } = await settle(fresh, { pressed: "settings-tabs" });
+  assert.equal(actor.getSnapshot().context.pressed, "settings-tabs");
+  actor.send({ type: "_press", name: "settings-tabs" });
+  assert.equal(actor.getSnapshot().context.pressed, null);
+  assert.deepEqual(emitted, []);
+});
+
 test("_press toggles pressed and a second name replaces it", async () => {
   const { actor, emitted } = await settle(fresh);
   actor.send({ type: "_press", name: "settings-sheet" });

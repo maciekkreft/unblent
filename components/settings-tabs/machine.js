@@ -53,7 +53,9 @@ export const machine = setup({
     attributes: [],
     asks: ["session: read"],
   },
-  context: ({ input }) => ({ ask: input.ask, children: input.children ?? [], admin: false, picked: null }),
+  // The pick is handed back by the view after a reload (3.1); shownOf falls back to the
+  // first tab while it is not offered, and keeps it for when it is again.
+  context: ({ input }) => ({ ask: input.ask, children: input.children ?? [], admin: false, picked: input.picked ?? null }),
   invoke: {
     src: "session",
     input: ({ context }) => ({ ask: context.ask }),

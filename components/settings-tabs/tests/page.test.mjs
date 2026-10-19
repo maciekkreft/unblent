@@ -128,6 +128,35 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: a reload against real storage.
+    test(`the tab picked is still shown after a reload in ${engine.name}`, async () => {
+      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+      try {
+        context.setDefaultTimeout(4000);
+        await signedIn(context, forgeCookie("admin"));
+        await context.route(/\/api\/session\/me$/, async (route) => {
+          const response = await route.fetch();
+          await route.fulfill({ response, json: { ...(await response.json()), admin: true, name: "Admin" } });
+        });
+        await context.route(/\/api\/session\/people$/, (route) => route.fulfill({ json: { people: PEOPLE } }));
+        await context.route(/\/api\/llm\/spending$/, (route) => route.fulfill({ json: spending(1) }));
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+        await openGear(page);
+        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        // A reload cancels what is still loading, which the watch reports as a failure.
+        await page.locator("people-list tbody tr").first().waitFor();
+        await page.waitForLoadState("networkidle");
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await slotted(page)).join() === "people-list,guest-limits,evaluator-starters");
+        await page.locator("people-list tbody tr").first().waitFor();
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: rendering and layout.
     test(`everyone else sees Settings alone, and Administration asks nothing, in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });

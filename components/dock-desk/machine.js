@@ -209,7 +209,7 @@ export const machine = setup({
       "`control` to place it at the end of the stage header with no tab; `button=\"gear\"` to " +
       "show it from a button in the stage header that takes the stage while pressed, until it " +
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
-      "arrives, and is never saved (the desk owns the glyphs it can draw, so the icon stays a " +
+      "arrives, and is still pressed after a reload in this browser (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
       "`note.selected`, `conversation.selected`, `evaluator.selected`), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
@@ -252,9 +252,9 @@ export const machine = setup({
     // groups with Ctrl+h/j/k/l and between tabs with Ctrl+. and Ctrl+,.
     vimKeys: false,
     // The address of the child shown from a header button (6.4), or null for the
-    // stage. It is a detour the user leaves, so it rides no fact and is never in
-    // dock.arranged; a reload starts on the stage.
-    pressed: null,
+    // stage. It is the desk's own UI state, so it rides no fact and is never in
+    // dock.arranged; the view keeps it in localStorage (3.1) and hands it back here.
+    pressed: input.pressed ?? null,
   }),
   initial: "loading",
   states: {

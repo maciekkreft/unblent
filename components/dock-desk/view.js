@@ -41,6 +41,28 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([di
 const addressOf = (child) =>
   (child.getAttribute("data-role") ?? child.localName) + (child.id ? "#" + child.id : "");
 
+// The header button left pressed, kept across reloads (3.1): the view's own UI state,
+// so it follows the browser, not the account, and losing it loses nothing. Wrapped like
+// list-then-item's: a browser refusing storage reads null and drops the write.
+const KEY = "dock-desk:pressed";
+const memory = {
+  recall() {
+    try {
+      return localStorage.getItem(KEY);
+    } catch {
+      return null;
+    }
+  },
+  remember(address) {
+    try {
+      if (address) localStorage.setItem(KEY, address);
+      else localStorage.removeItem(KEY);
+    } catch {
+      // No persistence available; the pressed button lives only for this page.
+    }
+  },
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -66,10 +88,14 @@ class ActorController {
         side: child.getAttribute("side") ?? undefined,
         showsOn: child.getAttribute("shows-on") ?? undefined,
       }));
+    // A remembered button the page no longer has is dropped.
+    const recalled = memory.recall();
+    const buttons = [...this.host.children].filter((child) => child.hasAttribute("button")).map(addressOf);
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         views,
+        pressed: buttons.includes(recalled) ? recalled : null,
         // The seed folds a side too wide for a narrow desk (6.4); the host's own
         // width is the honest signal (the phone frame narrows the body), read when
         // the seed is chosen, and compared to the same breakpoint as the CSS.
@@ -77,7 +103,11 @@ class ActorController {
       },
       events: { "dock.arranged": arranged },
     });
-    this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    let kept = this.actor.getSnapshot().context.pressed;
+    this.subscription = this.actor.subscribe(({ context }) => {
+      if (context.pressed !== kept) memory.remember((kept = context.pressed));
+      this.host.requestUpdate();
+    });
     // The composer (3.6) swaps a role element in place; a view keyed by role
     // stays the same docked view (12), so a re-render re-assigns the new element
     // to its slot (updated()). A child list change is the one thing outside the

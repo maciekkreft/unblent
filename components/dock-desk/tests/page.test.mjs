@@ -482,15 +482,22 @@ for (const engine of ENGINES) {
         "Escape returns focus to the gear",
       );
 
-      // A reload shows the stage: pressed rides no fact.
+      // A reload keeps Settings on the stage, kept in this browser (3.1); once the gear
+      // is pressed again, a reload shows the stage.
+      const reloaded = async () => {
+        await page.reload();
+        await page.waitForFunction(() =>
+          document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
+        );
+      };
       await clickPill();
       await pressed();
-      await page.reload();
-      await page.locator("dock-desk").waitFor();
-      await page.waitForFunction(() =>
-        document.querySelector("dock-desk")?.shadowRoot?.querySelector(".controls .pill"),
-      );
-      assert.equal(await pillAttr("aria-pressed"), "false", "a reload shows the stage, not Settings");
+      await reloaded();
+      assert.equal(await pillAttr("aria-pressed"), "true", "a reload keeps Settings on the stage");
+      await clickPill();
+      await staged();
+      await reloaded();
+      assert.equal(await pillAttr("aria-pressed"), "false", "once closed, a reload shows the stage");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

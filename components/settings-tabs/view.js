@@ -7,6 +7,28 @@ import { machine, tabsOf, shownOf, slottedOf } from "./machine.js";
 const childrenOf = (host) =>
   [...host.children].map((c) => ({ label: c.getAttribute("label") ?? c.localName, admin: c.hasAttribute("admin") }));
 
+// The tab picked, kept across reloads (3.1): the view's own UI state, so it follows the
+// browser, not the account, and losing it loses nothing. Wrapped like list-then-item's: a
+// browser refusing storage reads null and drops the write.
+const KEY = "settings-tabs:picked";
+const memory = {
+  recall() {
+    try {
+      return localStorage.getItem(KEY);
+    } catch {
+      return null;
+    }
+  },
+  remember(label) {
+    try {
+      if (label) localStorage.setItem(KEY, label);
+      else localStorage.removeItem(KEY);
+    } catch {
+      // No persistence available; the pick lives only for this page.
+    }
+  },
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -16,9 +38,17 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), children: childrenOf(this.host) },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        children: childrenOf(this.host),
+        picked: memory.recall(),
+      },
     });
-    this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    let kept = this.actor.getSnapshot().context.picked;
+    this.subscription = this.actor.subscribe(({ context }) => {
+      if (context.picked !== kept) memory.remember((kept = context.picked));
+      this.host.requestUpdate();
+    });
     // The composer (3.6) swaps a role element in place; a child list change is the one
     // thing outside the actor that must re-read the children.
     this.observer = new MutationObserver(() => this.actor.send({ type: "_children", children: childrenOf(this.host) }));
