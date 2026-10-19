@@ -170,6 +170,36 @@ test("a link jumps to a chapter and a block within it", async () => {
   assert.deepEqual(ctx(actor).pending, { chapter: 1, block: 7 });
 });
 
+const PLACE = { chapter: 2, contentVersion: 1, start: { block: 5, offset: 3 }, end: { block: 5, offset: 9 } };
+
+test("a source link into the open book goes to the passage's page and glows it", async () => {
+  const { actor } = await open();
+  actor.send({ type: "passage.selected", book: ID, id: ID2, place: PLACE });
+  await flush();
+  assert.ok(actor.getSnapshot().matches({ reading: "ready" }));
+  assert.equal(ctx(actor).chapter, 2, "the passage's chapter is fetched");
+  assert.deepEqual(ctx(actor).pending, { chapter: 2, block: 5 }, "owes the view the passage's block");
+  assert.deepEqual(ctx(actor).glow, { id: ID2, n: 1 });
+  actor.send({ type: "passage.selected", book: ID, id: ID2, place: PLACE });
+  await flush();
+  assert.equal(ctx(actor).glow.n, 2, "following it again glows again");
+});
+
+test("a source link into another book opens at the passage once that book is read", async () => {
+  for (const order of ["link first", "open first"]) {
+    const { actor } = start({ read: bookReply({ position: { chapter: 0, block: 0 } }) });
+    await flush();
+    const link = { type: "passage.selected", book: ID, id: ID2, place: PLACE };
+    const opened = { type: "book.opened", id: ID };
+    for (const e of order === "link first" ? [link, opened] : [opened, link]) actor.send(e);
+    await flush();
+    assert.equal(ctx(actor).chapter, 2, `${order}: the passage's chapter, not the saved one`);
+    assert.deepEqual(ctx(actor).pending, { chapter: 2, block: 5 }, order);
+    assert.deepEqual(ctx(actor).glow, { id: ID2, n: 1 }, order);
+    assert.equal(ctx(actor).passage, null, `${order}: the owed place is used once`);
+  }
+});
+
 test("another device's move is adopted; the reader's own echo is not", async () => {
   const { actor, clock } = await open();
   // Record where this reader last settled.

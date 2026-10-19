@@ -41,6 +41,11 @@ const seedUser = async ({ highlight = false } = {}) => {
 const HL_ID = "01K00000000000000000000HG1";
 const HL_PLACE = { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 11 } };
 const LINK = `[Chapter One](note:${HL_ID})`;
+// A highlight of the heading half way through Chapter Two, several pages in, and a note
+// holding a source link to it.
+const MID_ID = "01K00000000000000000000HG2";
+const MID_PLACE = { chapter: 1, contentVersion: 1, start: { block: 32, offset: 0 }, end: { block: 32, offset: 10 } };
+const LIT_ID = "01K00000000000000000000NT1";
 // The text the page last put on the clipboard: writeText is recorded, so the test reads
 // what was copied without a clipboard permission prompt.
 const recordClipboard = () => {
@@ -170,6 +175,47 @@ for (const engine of ENGINES) {
         return (await bubble(page)).join(" · ") === "Copy · Copied · Remove";
       });
       assert.equal(await copied(page), LINK);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // A click on a source link in a note opens the page holding the passage, in another
+    // chapter, and its highlight glows for about a second.
+    // Browser: rendering and layout.
+    test(`following a source link opens the passage and glows it in ${engine.name}`, async () => {
+      const problems = [];
+      context = await browser.newContext({ viewport: { width: 1300, height: 800 } });
+      context.setDefaultTimeout(4000);
+      const cookie = await seedUser();
+      const put = async (id, note) => {
+        const res = await fetch(`${BASE_URL}/api/notes/${id}`, { method: "PUT", headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` }, body: JSON.stringify({ baseVersion: null, ...note }) });
+        assert.equal(res.status, 200);
+      };
+      await put(MID_ID, { title: "", body: "", about: [{ kind: "book", id: BOOK_ID, place: MID_PLACE, quote: { exact: "The Middle", prefix: "", suffix: "" } }] });
+      await put(LIT_ID, { title: "Lit", body: `Lit\n\nsee [The Middle](note:${MID_ID}) end`, about: [{ kind: "book", id: BOOK_ID }] });
+      await signedIn(context, cookie);
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), seed(false));
+      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await page.locator("note-list").getByText("Lit", { exact: true }).click();
+      await page.locator("note-editor .cm-source-link").click();
+      // The glowing mark is the passage, shown on the page in view, in Chapter Two.
+      const glow = () =>
+        page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot;
+          const mark = r.querySelector(".strip mark.glow");
+          if (!mark) return null;
+          const m = mark.getBoundingClientRect();
+          const p = r.querySelector(".page").getBoundingClientRect();
+          return { text: mark.textContent, chap: r.querySelector(".footer .chap").textContent.trim(), shown: m.left >= p.left && m.right <= p.right, tinted: getComputedStyle(mark).backgroundColor };
+        });
+      let lit = null;
+      await until(async () => (lit = await glow())?.shown === true);
+      assert.equal(lit.text, "The Middle");
+      assert.equal(lit.chap, "Chapter Two");
+      // The glow ends by itself: the mark goes back to the plain highlight.
+      await until(async () => (await glow()) === null, 3000);
+      assert.equal(await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".strip mark")?.textContent), "The Middle");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

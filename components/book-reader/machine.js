@@ -432,6 +432,12 @@ export const locate = (texts, link, sameChapter) => {
   return found[0];
 };
 
+// The chapter a followed source link opens, kept inside the book.
+const passageChapter = (passage, book) => Math.min(passage.place.chapter, Math.max(0, (book.chapters?.length ?? 1) - 1));
+
+// The glow one-shot for a followed link: the highlight's id and a fresh nonce.
+const glowFor = (context, passage = context.passage) => ({ id: passage.id, n: (context.glow?.n ?? 0) + 1 });
+
 export const machine = setup({
   actors: {
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
@@ -511,7 +517,9 @@ export const machine = setup({
       "words as a drag with the mouse is. A highlight's bubble offers Copy, Copy link and " +
       "Remove; Copy link puts a link to the highlight, its quote's first words as the label, " +
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
-      "the cursor inside a highlight opens its bubble and does the same.",
+      "the cursor inside a highlight opens its bubble and does the same. Following a source " +
+      "link in a note opens the page that holds the passage, in the book already open or " +
+      "after `books` opens its book, and the highlight glows for about a second.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded", "link.copied"],
     attributes: ["height", "highlights"],
@@ -547,6 +555,12 @@ export const machine = setup({
     // bus cannot route an internal message to a view, so the id rides in context with a
     // nonce the view acts on once. Null until the first such drag.
     reveal: null,
+    // A one-shot for the view, like reveal: the highlight a followed source link points
+    // at, which the view glows for about a second once the page holding it shows.
+    glow: null,
+    // A followed source link whose book is still being opened (passage.selected arrives
+    // before or after the book.opened it causes, 12): the read opens at its place.
+    passage: null,
     // A merge in flight (Decision 6): the involved notes' ids in book order (the survivor
     // first), and the union place and quote the survivor is saved with once their comments
     // are read. Set when a new highlight overlaps others, consumed by the read that follows.
@@ -590,7 +604,11 @@ export const machine = setup({
       {
         guard: ({ event }) => event.id != null,
         target: ".opening",
-        actions: assign({ id: ({ event }) => event.id, book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [] }),
+        actions: assign({
+          id: ({ event }) => event.id,
+          book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [],
+          passage: ({ context, event }) => (context.passage?.book === event.id ? context.passage : null),
+        }),
       },
       {
         target: ".empty",
@@ -599,6 +617,10 @@ export const machine = setup({
     ],
     // The fact's news that the open book is gone (4.3, fourth rule): back to the empty
     // page. A deletion of another book is left to the bus to record as ignored.
+    // The user followed a source link (note-editor emits passage.selected) to a book not
+    // open here: keep the place for the read that `books` opening it brings. The open book
+    // itself is handled in reading.
+    "passage.selected": { actions: assign({ passage: ({ event }) => ({ book: event.book, id: event.id, place: event.place }) }) },
     "book.deleted": {
       guard: ({ context, event }) => Boolean(context.book) && event.id === context.book.id,
       target: ".empty",
@@ -632,6 +654,18 @@ export const machine = setup({
         src: "read",
         input: ({ context }) => ({ ask: context.ask, id: context.id }),
         onDone: [
+          {
+            guard: ({ context, event }) => "book" in event.output && context.passage?.book === event.output.book.id,
+            target: "reading",
+            actions: assign({
+              book: ({ event }) => pickBook(event.output.book),
+              chapter: ({ context, event }) => passageChapter(context.passage, event.output.book),
+              pending: ({ context, event }) => ({ chapter: passageChapter(context.passage, event.output.book), block: context.passage.place.start.block }),
+              quiet: false,
+              glow: ({ context }) => glowFor(context),
+              passage: null,
+            }),
+          },
           {
             guard: "found",
             target: "reading",
@@ -834,6 +868,31 @@ export const machine = setup({
             actions: assign({ chapter: ({ event }) => event.chapter, pending: ({ event }) => ({ chapter: event.chapter, block: event.block }), quiet: false }),
           },
           { actions: assign({ pending: ({ event }) => ({ chapter: event.chapter, block: event.block }), quiet: false }) },
+        ],
+        // A followed source link into the open book: go to the page holding the passage
+        // and glow it. Another book falls through to the root, which keeps the place for
+        // the open `books` announces.
+        "passage.selected": [
+          {
+            guard: ({ context, event }) => event.book === context.book.id && passageChapter(event, context.book) !== context.chapter,
+            target: ".fetching",
+            actions: assign({
+              chapter: ({ context, event }) => passageChapter(event, context.book),
+              pending: ({ context, event }) => ({ chapter: passageChapter(event, context.book), block: event.place.start.block }),
+              quiet: false,
+              glow: ({ context, event }) => glowFor(context, event),
+              passage: null,
+            }),
+          },
+          {
+            guard: ({ context, event }) => event.book === context.book.id,
+            actions: assign({
+              pending: ({ context, event }) => ({ chapter: context.chapter, block: event.place.start.block }),
+              quiet: false,
+              glow: ({ context, event }) => glowFor(context, event),
+              passage: null,
+            }),
+          },
         ],
         // The fact's news for the open book (4.3, fourth rule): a re-import re-fetches
         // the chapter, another device's move opens the new place, and an echo of this

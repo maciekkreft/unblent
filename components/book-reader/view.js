@@ -311,6 +311,19 @@ class BookReader extends LitElement {
     .strip mark.removing {
       opacity: 0.5;
     }
+    /* The highlight a followed source link points at glows for about a second, so the eye
+       finds the passage on the page: the accent selection tone and a soft accent ring,
+       fading back to the plain highlight. A shadow, not a border, so the text never moves. */
+    .strip mark.glow {
+      animation: reader-glow calc(3 * var(--duration-slide)) var(--ease);
+    }
+    @keyframes reader-glow {
+      from,
+      60% {
+        background: var(--color-accent-selection);
+        box-shadow: 0 0 0 var(--space-2xs) var(--color-accent-selection);
+      }
+    }
     /* The highlight bubble (Decision 3): a small overlay above the tapped mark's first
        line, inside the clipped .page. Copy, Copy link and Remove; during the undo window it reads
        Removed · Undo with the draining bar note-list uses. Placed by --bx/--by set in JS
@@ -623,6 +636,11 @@ class BookReader extends LitElement {
   // The reveal nonce last acted on (machine one-shot): a drag inside an existing
   // highlight opens that highlight's bubble, told through context.reveal (Decision 6).
   #lastReveal = 0;
+  // The glow nonce last acted on (machine one-shot, passage.selected), the highlight
+  // glowing now and the timer that ends it; a repaint while it glows keeps the class.
+  #lastGlow = 0;
+  #glowing = null;
+  #glowTimer = 0;
 
   // The fragment element: a bare div with the click handler for in-text chapter links.
   // Made here so #swapStrip can build a second one for a chapter-crossing slide.
@@ -682,6 +700,7 @@ class BookReader extends LitElement {
     this.#leaving?.remove();
     this.#leaving = null;
     cancelAnimationFrame(this.#raf);
+    clearTimeout(this.#glowTimer);
     clearTimeout(this.#timer);
     clearTimeout(this.#copiedTimer);
     clearTimeout(this.#slideTimer);
@@ -1229,6 +1248,13 @@ class BookReader extends LitElement {
     if (this.#active) this.#actor.send({ type: "_undo", id: this.#active });
   }
 
+  // Marks repaint from scratch, so the glowing highlight's class is set again each render.
+  #reflectGlow() {
+    for (const mark of this.#strip?.querySelectorAll("mark") ?? []) {
+      mark.classList.toggle("glow", this.#glowing != null && mark.dataset.id === this.#glowing);
+    }
+  }
+
   // Dim the marks counting down to a removal, so the whole passage shows it is going,
   // not only the bubble (Decision 3). Runs every render, cheap, always in step with the
   // machine's discarding set.
@@ -1457,6 +1483,7 @@ class BookReader extends LitElement {
   // right), then again next frame in case the layout or the web font was not ready yet.
   #schedule() {
     cancelAnimationFrame(this.#raf);
+    clearTimeout(this.#glowTimer);
     clearTimeout(this.#timer);
     this.#settling = true;
     // Each measure lands on the wanted block until the user turns a page; a first
@@ -1480,6 +1507,7 @@ class BookReader extends LitElement {
   #endSettle() {
     this.#settling = false;
     cancelAnimationFrame(this.#raf);
+    clearTimeout(this.#glowTimer);
     clearTimeout(this.#timer);
   }
 
@@ -1683,6 +1711,19 @@ class BookReader extends LitElement {
       this.#lastReveal = reveal.n;
       this.#openBubble(reveal.id);
     }
+    // A followed source link glows its highlight once (machine one-shot, per nonce).
+    const glow = snapshot.context.glow;
+    if (glow && glow.n !== this.#lastGlow) {
+      this.#lastGlow = glow.n;
+      this.#glowing = glow.id;
+      clearTimeout(this.#glowTimer);
+      const ms = 3 * toMs(getComputedStyle(this).getPropertyValue("--duration-slide"), 300);
+      this.#glowTimer = setTimeout(() => {
+        this.#glowing = null;
+        this.#reflectGlow();
+      }, ms + 100);
+    }
+    this.#reflectGlow();
     // The removal countdown dims its marks; the open bubble is placed after the marks
     // are painted. A highlight the fact has removed (its window elapsed) closes the bubble.
     this.#reflectDiscarding(snapshot);

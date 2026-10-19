@@ -409,6 +409,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "chapter?") answerChapter(context, message, self);
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
   else if (message.type === "book.selected") applySelect(context, message, enqueue);
+  else if (message.type === "passage.selected") applySelect(context, { id: message.book }, enqueue);
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
@@ -512,7 +513,8 @@ export const machine = setup({
       "oldest first, with today's empty page last while no day has been started today, and " +
       "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
       "opened but never renamed or deleted here. On a try page the Journal is always the open " +
-      "book, and this browser's own open book is left as it was.",
+      "book, and this browser's own open book is left as it was. Following a source link in a " +
+      "note opens the link's book, the same as choosing it on the shelf.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
@@ -593,6 +595,7 @@ export const machine = setup({
         "book.progressed": { actions: queue },
         "book.renamed": { actions: queue },
         "book.selected": { actions: queue },
+        "passage.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
     },
@@ -646,6 +649,7 @@ export const machine = setup({
         "book.progressed": { actions: queue },
         "book.renamed": { actions: queue },
         "book.selected": { actions: queue },
+        "passage.selected": { actions: queue },
         "book.discarded": { actions: queue },
       },
     },
@@ -663,6 +667,9 @@ export const machine = setup({
         },
         "book.picked": { actions: enqueueActions(({ context, event, enqueue, self }) => applyPick(context, event, enqueue, self)) },
         "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
+        // The user followed a source link in a note (note-editor emits passage.selected):
+        // its book opens the same way as from the shelf; the reader goes to the passage.
+        "passage.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, { id: event.book }, enqueue)) },
         "_uploaded": { actions: enqueueActions(({ context, event, enqueue }) => applyUploaded(context, event, enqueue)) },
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
         "book.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
