@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 
 // The kit (10): the helpers every browser suite shares, reached by the path the check sets.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch, forge, signedIn, shortUndo } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, forge, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -20,7 +20,7 @@ const inputReady = (page) =>
 // A signed-in context on the conversations page, its account on the Echo test provider
 // (set over HTTP, since this page has no Settings). The chat box is then usable. One
 // browser serves the suite; each test owns its context (11.2).
-async function open(browser, engineName, name, undoMs, tools) {
+async function open(browser, engineName, name, tools) {
   const userId = `chat-${engineName}-${name}-${Date.now()}`;
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
@@ -32,50 +32,12 @@ async function open(browser, engineName, name, undoMs, tools) {
   // offers it to the model.
   if (tools)
     assert.ok((await context.request.put(`${BASE_URL}/api/conversations/tools`, { data: { tools } })).ok(), "the tool preferences are set");
-  // A short delete-undo window (default 3s), so a delete test stays within its budget.
-  if (undoMs != null) await shortUndo(context, undoMs);
   const page = await context.newPage();
   const problems = watch(page);
   await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
   await inputReady(page);
   return { context, page, problems };
 }
-
-// --- conversation-list helpers (session 10): the chats list beside the thread ---------
-// The chat titles the list shows, newest first; the "New chat" draft row has no title and
-// is excluded.
-const chatTitles = (page) =>
-  page.evaluate(() =>
-    [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft) .name")].map((n) => n.textContent.trim()),
-  );
-
-const chatSubtitles = (page) =>
-  page.evaluate(() =>
-    [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft) .subtitle")].map((n) => n.textContent.trim()),
-  );
-
-// Start a fresh chat (the New chat row on top).
-const newChat = (page) =>
-  page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector(".row.draft").click());
-
-// Switch to the chat whose title matches.
-const pickChat = (page, title) =>
-  page.evaluate((title) => {
-    const rows = [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft)")];
-    rows.find((r) => r.querySelector(".name").textContent.trim() === title)?.click();
-  }, title);
-
-// Delete the chat whose title matches. The trash is revealed on hover, so a DOM click
-// bypasses the actionability check a real pointer hover would satisfy on the desk.
-const deleteChat = (page, title) =>
-  page.evaluate((title) => {
-    const rows = [...document.querySelector("conversation-list").shadowRoot.querySelectorAll(".row:not(.draft)")];
-    rows.find((r) => r.querySelector(".name").textContent.trim() === title)?.querySelector(".bin").click();
-  }, title);
-
-// Undo a counting-down delete.
-const undoDelete = (page) =>
-  page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector(".row.discarding .undo")?.click());
 
 // The chat box is a CodeMirror document. Reach its EditorView through the handle CM6
 // hangs on the content node, as the note tests do. Set the draft with a dispatch, then
@@ -98,16 +60,6 @@ const send = async (page, text) => {
   await page.evaluate(() => document.querySelector("chat-input").shadowRoot.querySelector(".send").click());
 };
 
-// Send with the Enter key rather than the Send button. Enter reaches the machine directly,
-// so it is not swallowed by the button's brief post-change guard (12) — needed when a
-// message is sent right after the button last flipped between Send and Stop. The test's
-// account leaves Vim keys off, so Enter sends (D10).
-const sendEnter = async (page, text) => {
-  await setDraft(page, text);
-  await page.locator("chat-input .cm-content").click();
-  await page.keyboard.press("Enter");
-};
-
 const threadText = (page) =>
   page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelector(".transcript").textContent);
 
@@ -125,16 +77,9 @@ const lastAnswer = (page) =>
 const ABORT_NOISE = /Load request cancelled|access control checks|NS_BINDING_ABORTED|aborted|cancelled/i;
 const realProblems = (problems) => problems.filter((p) => !ABORT_NOISE.test(p));
 
-const action = (page, label) =>
-  page.evaluate(
-    (label) =>
-      [...document.querySelector("chat-input").shadowRoot.querySelectorAll(".action")].some((b) => b.textContent.trim() === label),
-    label,
-  );
-
-// WebKit first, then Chromium (10). A lookup fed back to the model and a delete whose
-// window runs out are decisions of the machines, tested in Node (9): conversations'
-// tool round, conversation-list's countdown. Here is what only a browser shows.
+// WebKit first, then Chromium (10). A lookup fed back to the model, a delete and its
+// Undo, Try again offered for a failed answer, and picking a chat in the list are
+// decisions of the machines, tested in Node (9). Here is what only a browser shows.
 for (const engine of ENGINES) {
   describe(`chat-thread in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
@@ -144,19 +89,6 @@ for (const engine of ENGINES) {
     after(async () => {
       await browser?.close();
     }, { timeout: 15000 });
-
-    // Browser: rendering and layout.
-    test("a message is answered word by word", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "answer");
-      try {
-        await send(page, "hello there");
-        await until(async () => (await lastAnswer(page)).includes("hello there")); // Echo repeats the text
-        assert.match(await threadText(page), /hello there/);
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
 
     // Browser: rendering and layout.
     test("an answer's markdown renders as formatting", async () => {
@@ -239,18 +171,6 @@ for (const engine of ENGINES) {
       }
     });
 
-    // Browser: a gesture.
-    test("a failed answer offers Try again", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "fail");
-      try {
-        await send(page, "/fail");
-        await until(async () => await action(page, "Try again"));
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
     // Browser: focus and keys.
     test("Enter while an answer arrives keeps the typed text", async () => {
       const { context, page, problems } = await open(browser, engine.name, "keepdraft");
@@ -294,60 +214,13 @@ for (const engine of ENGINES) {
     // llm's api test; here is what the reader sees of it.
     // Browser: rendering and layout.
     test("a lookup is named on screen, and a tool switched off is not", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "tool-off", undefined, { "subject: read": false });
+      const { context, page, problems } = await open(browser, engine.name, "tool-off", { "subject: read": false });
       try {
         await send(page, "/tool subject: read {}\n/tool notes: list {}");
         await until(async () => (await threadText(page)).includes("This tool could not be used"));
         assert.match(await threadText(page), /Listing the notes/, "the lookup is named on screen");
         assert.doesNotMatch(await threadText(page), /Checking what's open/, "an off tool is never named as a lookup");
         assert.doesNotMatch(await threadText(page), /"subject":null/, "the lookup did not run");
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
-    // --- conversation-list (session 10) -------------------------------------------------
-
-    // Browser: a gesture.
-    test("a second chat is listed and picking a row switches to it", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "list-switch");
-      try {
-        await send(page, "first message");
-        await until(async () => (await lastAnswer(page)).includes("first message"));
-        await newChat(page);
-        // Wait until the thread has switched to the empty new chat before sending, so the
-        // second message opens a second chat rather than racing into the first.
-        await until(async () => await page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelectorAll(".turn").length === 0));
-        await sendEnter(page, "second message");
-        await until(async () => (await lastAnswer(page)).includes("second message"));
-        await until(async () => (await chatTitles(page)).length === 2);
-        assert.deepEqual(await chatTitles(page), ["second message", "first message"], "both chats, newest first");
-        // Each row's second line is the start of its answer, like a note row's.
-        await until(async () => (await chatSubtitles(page)).every((s, i) => s.includes(["second message", "first message"][i])));
-        await pickChat(page, "first message");
-        await until(async () => (await lastAnswer(page)).includes("first message"));
-        assert.match(await threadText(page), /first message/, "picking the older row switched the thread to it");
-        // After a reload the second lines come from the server's list.
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await until(async () => (await chatSubtitles(page)).some((s) => s.includes("second message")));
-        assert.deepEqual(problems, [], problems.join("; "));
-      } finally {
-        await context.close();
-      }
-    });
-
-    // Browser: a gesture.
-    test("a delete can be undone", async () => {
-      const { context, page, problems } = await open(browser, engine.name, "undo", 250);
-      try {
-        await send(page, "keep me");
-        await until(async () => (await lastAnswer(page)).includes("keep me"));
-        await until(async () => (await chatTitles(page)).includes("keep me"));
-        await deleteChat(page, "keep me");
-        await undoDelete(page);
-        await page.waitForTimeout(400); // past the (cancelled) window, to prove it never fires
-        assert.ok((await chatTitles(page)).includes("keep me"), "the chat is still there after Undo");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

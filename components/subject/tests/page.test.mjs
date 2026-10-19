@@ -117,7 +117,7 @@ const highlightOn = (book) => [{
 }];
 
 // The subject stem in a context of its own (11.2): the user's cookie, empty storage.
-const openPage = async (browser, cookie, { phone = false, undoMs } = {}) => {
+const openPage = async (browser, cookie, { undoMs } = {}) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
@@ -133,7 +133,6 @@ const openPage = async (browser, cookie, { phone = false, undoMs } = {}) => {
   const page = await context.newPage();
   const problems = [];
   watch(page, problems);
-  if (phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
   await ready(page);
   return { page, problems };
@@ -212,12 +211,6 @@ const highlightsRow = (page) =>
 // Click the Notes container's Back bar (return from the shown item to the list).
 const clickNotesBack = (page) =>
   page.evaluate(() => document.querySelector("list-then-item#notes").shadowRoot.querySelector(".bar button").click());
-
-// Whether the "New note" draft row reads as the selected one, or null when it is absent.
-const draftSelected = (page) =>
-  page.evaluate(
-    () => document.querySelector("note-list").shadowRoot.querySelector(".row.draft")?.getAttribute("aria-selected") ?? null,
-  );
 
 // The reader's "Page N of M" footer, to prove a highlight never moves the text (D4).
 const pageLabel = (page) =>
@@ -599,7 +592,9 @@ for (const engine of ENGINES) {
 
   // The Highlights tab (session 5) as the page composes it: the row in Notes, the document
   // in the Notes pair, the book kept the subject. What the document does itself (a
-  // comment, the fixed quote line, removing with undo) is tested in highlight-notes.
+  // comment, the fixed quote line, removing with undo) is tested in highlight-notes; which
+  // row reads as open is note-list's machine test, and the pair on the phone preview is
+  // list-then-item's.
   describe(`the highlights tab in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
     before(async () => {
@@ -669,53 +664,5 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });
-
-    // Only one row is ever selected (Decision 7): opening a new note marks the New note row
-    // as open; then picking Highlights must move the selection, not add a second one. This is
-    // the New-note-first order, where the draft row is the open one when Highlights is picked.
-    // Browser: a page's composition.
-    test("opening New note then Highlights leaves only the Highlights row selected", async () => {
-      const { page, problems } = await openPage(browser, await withHighlight());
-      await until(async () => (await highlightsRow(page)) != null, 8000);
-
-      // Open a new note, then return to the list: the New note row reads as the open one.
-      await clickNew(page);
-      await until(async () => (await assignedNotes(page)).includes("note-editor"));
-      await clickNotesBack(page);
-      await until(async () => (await assignedNotes(page)).includes("note-list"));
-      await until(async () => (await draftSelected(page)) === "true");
-
-      // Pick Highlights and come back: the selection moves to it, and the New note row is
-      // no longer selected — never two selected rows at once.
-      await showHighlights(page);
-      await clickNotesBack(page);
-      await until(async () => (await assignedNotes(page)).includes("note-list"));
-      await until(async () => (await highlightsRow(page)).selected === "true");
-      assert.equal(await draftSelected(page), "false", "the New note row is no longer selected");
-
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-      await page.close();
-    });
-
-    // The phone preview shows either the list or the picked item in the Notes tab, so the
-    // row opens the document and Back returns to the list there too (Decision, phone flow).
-    if (engine.name === "webkit") {
-      // Browser: rendering and layout.
-      test("the Highlights row opens and closes on the phone preview", async () => {
-        const { page, problems } = await openPage(browser, await withHighlight(), { phone: true });
-        await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-
-        await showHighlights(page);
-        await until(async () => (await hnQuotes(page)).length > 0);
-        assert.equal(await notesBarLabel(page), "Notes", "the document opens under the Notes Back bar");
-
-        await clickNotesBack(page);
-        await until(async () => (await assignedNotes(page)).includes("note-list"));
-        assert.equal(await notesBarLabel(page), null, "Back returns to the list");
-
-        assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-        await page.close();
-      });
-    }
   });
 }

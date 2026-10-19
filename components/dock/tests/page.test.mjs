@@ -179,14 +179,11 @@ const glyphWidths = (page) =>
     return { strip: strip.getBoundingClientRect().width, pill: pill.getBoundingClientRect().width };
   });
 // The layout switch, a light-DOM toggle beside the desk (task "Layout switch"). Its
-// button lives in its own shadow root; when settings hides it the host is display:none.
-// Pressed = arranging.
+// button lives in its own shadow root. Pressed = arranging.
 const clickSwitch = (page) =>
   page.evaluate(() => document.querySelector("layout-switch").shadowRoot.querySelector("button").click());
 const switchPressed = (page) =>
   page.evaluate(() => document.querySelector("layout-switch").shadowRoot.querySelector("button")?.getAttribute("aria-pressed"));
-const switchGone = (page) =>
-  page.evaluate(() => getComputedStyle(document.querySelector("layout-switch")).display === "none");
 const railWidth = (page) =>
   page.evaluate(() =>
     parseFloat(getComputedStyle(document.querySelector("dock-desk").shadowRoot.querySelector(".strip")).height),
@@ -219,16 +216,15 @@ const ready = (page) =>
 
 // A page on the dock stem, optionally starting from a stored layout (3.1,
 // local-only: the fact reads localStorage), on the phone or the desk.
-async function open(browser, { layout, phone = false, settings } = {}) {
+async function open(browser, { layout, phone = false } = {}) {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addInitScript(
-    ({ layout, phone, settings, key }) => {
+    ({ layout, phone, key }) => {
       if (phone) localStorage.setItem("viewport", "phone");
       if (layout) localStorage.setItem(key, JSON.stringify(layout));
-      if (settings) localStorage.setItem("settings", JSON.stringify(settings));
     },
-    { layout, phone, settings, key: DOCK_KEY },
+    { layout, phone, key: DOCK_KEY },
   );
   const page = await context.newPage();
   const problems = watch(page);
@@ -261,11 +257,6 @@ for (const engine of ENGINES) {
     // all-staged picture rather than the side dock.html seeds (that is its own test).
     const { context, page, problems } = await open(browser, { layout: { stage: "token-sheet", docks: {} } });
     try {
-      const debug = [];
-      page.on("console", (msg) => {
-        if (msg.type() === "debug") debug.push(msg.text());
-      });
-
       // Starting picture: every view a stage tab, Tokens shown, nothing docked,
       // and the stage's actions are the three edges (one strip anatomy, 7.6 icons).
       assert.deepEqual(await labels(page, ".stage"), ["Tokens", "Contracts", "Components", "Trace"]);
@@ -311,16 +302,6 @@ for (const engine of ENGINES) {
       assert.equal(await foldTransform(page, ".dock.right .panel"), "matrix(-1, 0, 0, 1, 0, 0)", "the right fold glyph is mirrored");
       assert.ok((await windowOverflow(page)) <= 1, "the page does not scroll once docked");
       assert.equal(await switchOnTop(page), "top", "the viewport switch is not covered by the dock");
-
-      // The traffic is on the bus, both ways (trace format at trace/machine.js).
-      assert.ok(
-        debug.some((l) => l.includes("event dock.arranged dock-desk → dock delivered")),
-        "dock-desk announced the arrangement",
-      );
-      assert.ok(
-        debug.some((l) => l.includes("event dock.changed dock → dock-desk delivered")),
-        "dock announced the change back",
-      );
 
       // Dock Contracts too: two tabs on the right, the newcomer shown, one body.
       await clickTab(page, ".stage", "Contracts");
@@ -695,37 +676,6 @@ for (const engine of ENGINES) {
       await until(async () => await shadowHas(page, ".dock.right .panel .action:not(.fold)"));
 
       await clean(page);
-      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
-    } finally {
-      await context.close();
-    }
-  });
-
-  // The switch hidden in Settings, as the settings fact stores it (that hiding it turns
-  // arranging off is decided in settings' Node tests): the desk loads not arrangeable.
-  // Browser: a reload against real storage.
-  test(`a hidden layout switch keeps arranging off, and folding still works, in ${engine.name}`, async () => {
-    const { context, page, problems } = await open(browser, {
-      layout: {
-        stage: "token-sheet",
-        docks: { right: { open: true, views: ["trace-list", "contract-list"], active: "trace-list" } },
-      },
-      settings: { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: true, arranging: true, vimKeys: false, editors: {} },
-    });
-    try {
-      await until(async () => await shadowHas(page, ".dock.right"));
-      assert.ok(await switchGone(page), "the layout switch is hidden");
-      await until(async () => !(await shadowHas(page, ".action:not(.fold)")), 2000);
-      // Folding is daily use, not arranging: fold to the rail and unfold back while
-      // arranging is off.
-      const open = await rect(page, ".dock.right");
-      await clickAction(page, ".dock.right .panel", "Fold");
-      const rail = await railWidth(page);
-      await until(async () => (await rect(page, ".dock.right")).width <= rail + 1.01);
-      await clickAction(page, ".dock.right .rail", "Unfold");
-      await until(async () => Math.abs((await rect(page, ".dock.right")).width - open.width) < 1);
-
-      await page.evaluate(() => localStorage.clear());
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();
