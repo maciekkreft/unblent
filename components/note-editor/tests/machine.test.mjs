@@ -863,6 +863,9 @@ test("the title is the first line, with its level marker stripped", () => {
   assert.equal(titleOf("\n\n  # Second  \nmore"), "Second");
   assert.equal(titleOf("#no-space stays"), "#no-space stays"); // a hashtag is not a marker
   assert.equal(titleOf(""), "");
+  // A list item's bullet is not part of the title.
+  assert.equal(titleOf("- Groceries\n- milk"), "Groceries");
+  assert.equal(titleOf("  * Starred"), "Starred");
 });
 
 test("parseBody splits markers into a marker-free doc plus per-line levels", () => {

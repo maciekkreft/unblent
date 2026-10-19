@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText } from "./machine.js";
+import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, sendable } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
 
@@ -378,7 +378,7 @@ class ChatInput extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot?.matches("ready")) return;
     if (pendingTurn(snapshot.context.conversation)) return;
-    if (!this.#draft.trim()) return;
+    if (!sendable(this.#draft)) return;
     this.#actor.send({ type: "_send", text: this.#draft });
     this.#clearDraft();
   }
@@ -415,7 +415,7 @@ class ChatInput extends LitElement {
     const pending = Boolean(pendingTurn(context.conversation));
     const showContinue = !blocked && !pending && canContinue(context.conversation);
     const showRetry = !blocked && !pending && retryText(context.conversation) != null;
-    const canSend = pending || (!disabled && Boolean(this.#draft.trim()));
+    const canSend = pending || (!disabled && Boolean(sendable(this.#draft)));
 
     return html`
       <div class="box">

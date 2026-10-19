@@ -1,5 +1,5 @@
 import { EditorState, EditorSelection, RangeSetBuilder, StateField, Prec, Compartment } from "@codemirror/state";
-import { EditorView, Decoration, keymap, drawSelection } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
 import { history, historyKeymap, standardKeymap, isolateHistory } from "@codemirror/commands";
 import { vim } from "@replit/codemirror-vim";
 
@@ -54,6 +54,131 @@ export function pastGap(blank, count, n, dir) {
   return m;
 }
 
+// --- Lists ------------------------------------------------------------------------
+// A line that begins with "- " or "* ", after any spaces, is a list item (10). Items of
+// one list are one "\n" apart, and the marker stays in the text, so it stays markdown.
+
+const ITEM = /^( *)([-*]) /;
+
+// The list item on the line holding pos: where the line starts and ends, its indent,
+// its marker and where its text starts. Null when that line is not an item.
+export function itemAt(text, pos) {
+  const from = pos === 0 ? 0 : text.lastIndexOf("\n", pos - 1) + 1;
+  let to = text.indexOf("\n", pos);
+  if (to < 0) to = text.length;
+  const m = ITEM.exec(text.slice(from, to));
+  if (!m) return null;
+  return { from, to, indent: m[1].length, marker: m[2], textFrom: from + m[0].length };
+}
+
+// Enter (or the line-break key) on an item: the next item, at the same indent. On an
+// empty item it steps out one level, or, at the top level, ends the list: the item
+// becomes the blank line of a new paragraph, a gap apart from the text around it.
+export function nextItemAt(text, from, to = from) {
+  const item = itemAt(text, from);
+  if (!item || from < item.textFrom || to > item.to) return null;
+  const empty = from === to && text.slice(item.textFrom, item.to).trim() === "";
+  if (!empty) {
+    const insert = "\n" + " ".repeat(item.indent) + item.marker + " ";
+    return { from, to, insert, cursor: from + insert.length };
+  }
+  if (item.indent > 0) {
+    const cut = Math.min(2, item.indent);
+    return { from: item.from, to: item.from + cut, insert: "", cursor: from - cut };
+  }
+  const textBefore = item.from > 1 && text[item.from - 2] !== "\n";
+  const textAfter = item.to + 1 < text.length && text[item.to + 1] !== "\n";
+  const insert = (textBefore ? "\n" : "") + (textAfter ? "\n" : "");
+  return { from: item.from, to: item.to, insert, cursor: item.from + (textBefore ? 1 : 0) };
+}
+
+// Backspace at the start of an item's text: the bullet (and its indent) goes, the text
+// stays. Anywhere else null.
+export function unbulletAt(text, pos) {
+  const item = itemAt(text, pos);
+  if (!item || pos !== item.textFrom) return null;
+  return { from: item.from, to: item.textFrom, insert: "", cursor: item.from };
+}
+
+// The items on the lines from..to spans, each with its line, in order.
+function itemsIn(text, from, to) {
+  const out = [];
+  let pos = from === 0 ? 0 : text.lastIndexOf("\n", from - 1) + 1;
+  while (pos <= to) {
+    const item = itemAt(text, pos);
+    let end = text.indexOf("\n", pos);
+    if (end < 0) end = text.length;
+    if (item) out.push(item);
+    pos = end + 1;
+  }
+  return out;
+}
+
+// Rewrite the lines from..to spans with `per(item)` spaces added (or removed, when
+// negative) before each item, and move the selection with its text.
+function reindent(text, from, to, per) {
+  const items = itemsIn(text, from, to);
+  const deltas = items.map(per);
+  if (deltas.every((d) => d === 0)) return null;
+  const start = items[0].from;
+  const end = items[items.length - 1].to;
+  let insert = "";
+  let at = start;
+  items.forEach((item, i) => {
+    const d = deltas[i];
+    insert += text.slice(at, item.from) + (d > 0 ? " ".repeat(d) : "") + text.slice(item.from - Math.min(d, 0), item.to);
+    at = item.to;
+  });
+  const map = (pos) => {
+    let out = pos;
+    items.forEach((item, i) => {
+      const d = deltas[i];
+      if (d > 0 && pos >= item.textFrom) out += d;
+      if (d < 0 && pos >= item.from - d) out += d;
+    });
+    return out;
+  };
+  return { from: start, to: end, insert, anchor: map(from), cursor: map(to) };
+}
+
+// Tab: every item the selection touches moves one level in, when the line above is an
+// item at least as deep as the first of them, so a list never skips a level. Null when
+// it cannot, so Tab is left to the browser.
+export function indentAt(text, from, to = from) {
+  const first = itemAt(text, from);
+  if (!first || first.from === 0) return null;
+  const above = itemAt(text, first.from - 1);
+  if (!above || above.indent < first.indent) return null;
+  return reindent(text, from, to, () => 2);
+}
+
+// Shift+Tab: every item the selection touches moves one level out. Null when none is
+// indented.
+export function outdentAt(text, from, to = from) {
+  if (!itemAt(text, from)) return null;
+  return reindent(text, from, to, (item) => -Math.min(2, item.indent));
+}
+
+// Where a bare cursor that lands inside an item's marker (or before it) should rest
+// instead, so it never stops there. `before` is where it came from; `by` is "pointer"
+// (a click), "key" (CodeMirror's own moves), "back" (Vim's b or ge, a word back) or
+// "other" (Vim's other motions). From another line, by a click, or from inside the text,
+// it rests at the start of the text. From the start of the text, a step back by an arrow
+// key goes on to the end of the line above, and Vim's word back on to the last word above,
+// past any gap; Vim's h, 0, ^ and I stay, as they never leave a line.
+export function markerStop(text, head, before, by) {
+  const item = itemAt(text, head);
+  if (!item || head >= item.textFrom) return null;
+  const sameLine = before >= item.textFrom && before <= item.to;
+  if (by === "pointer" || !sameLine || item.from === 0 || before !== item.textFrom) return item.textFrom;
+  if (by === "key") return head === before - 1 ? item.from - 1 : item.textFrom;
+  if (by !== "back") return item.textFrom;
+  let word = item.from - 1;
+  while (word > 0 && /\s/.test(text[word - 1])) word--;
+  while (word > 0 && !/\s/.test(text[word - 1])) word--;
+  return word;
+}
+
 // --- What every editor needs ------------------------------------------------------
 
 // Low precedence, so an editor's own theme overrides any of it at equal specificity.
@@ -70,7 +195,7 @@ const theme = Prec.low(
     ".cm-line": { fontSize: "var(--text-body)", padding: "0" },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
     ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
-    ".cm-placeholder": { color: "var(--color-mute)" },
+    ".cm-placeholder": { color: "var(--color-body-mid)" },
   }),
 );
 
@@ -142,13 +267,62 @@ const gapTheme = EditorView.theme({
 
 const never = () => false;
 
+// Vim moves the cursor with no word of which motion did it, and its b lands on a marker
+// just as its ^, 0 and I do, so the key itself is watched: the one being handled, and
+// the one before it, for ge. At the highest precedence, so it is seen before Vim's own
+// handler moves the cursor; one keyboard per page, so one record serves every editor.
+let keyNow = null;
+let keyBefore = null;
+const keyWatch = Prec.highest(
+  EditorView.domEventHandlers({
+    keydown: (event) => {
+      keyNow = event.key;
+      queueMicrotask(() => {
+        keyBefore = keyNow;
+        keyNow = null;
+      });
+      return false;
+    },
+  }),
+);
+const vimBack = () => keyNow === "b" || keyNow === "B" || ((keyNow === "e" || keyNow === "E") && keyBefore === "g");
+
+// The dot an item's marker is drawn as. Every dot is alike, so one is as good as another.
+class Dot extends WidgetType {
+  eq() {
+    return true;
+  }
+  toDOM() {
+    const dot = document.createElement("span");
+    dot.className = "cm-item-dot";
+    dot.textContent = "\u2022";
+    return dot;
+  }
+}
+const dot = Decoration.replace({ widget: new Dot() });
+
+// An item hangs: its first line starts one dot column left of the rest, so the dot sits
+// in the column and the text of every line of the item lines up. Margin, not padding,
+// so an editor's own side padding stays; the depth is a unitless factor in the line's
+// style (11.2).
+const itemLine = (depth) =>
+  Decoration.line({ class: "cm-item", attributes: { style: `margin-left: calc(var(--space-lg) * ${depth + 1})` } });
+const itemTheme = EditorView.theme({
+  ".cm-line.cm-item": { textIndent: "calc(-1 * var(--space-lg))" },
+  ".cm-item-dot": { display: "inline-block", width: "var(--space-lg)", textIndent: "0", textAlign: "center", color: "var(--color-body-mid)" },
+});
+
 // Enter makes a paragraph, Shift+Enter a line break, the cursor steps over gaps, and
 // Backspace or Delete at a paragraph's edge joins across the gap in one step (10).
 // `enter: false` leaves Enter to the editor (a box that sends on it); Shift+Enter, the
 // gaps, the stepping and the joins stay. `keepBlank(state, line)` names a blank line
 // that must stay a place to type: never drawn as a gap, never stepped over, never
 // removed by a join.
-export function paragraphs({ enter = true, keepBlank = never } = {}) {
+//
+// Lines that begin with "- " or "* " are list items (see Lists above). `notList(state,
+// line)` names a line that is never one (a heading, a fixed quote); `lists: false`
+// leaves lists off.
+export function paragraphs({ enter = true, keepBlank = never, lists = true, notList = never } = {}) {
   const gapAt = (state, line) => line.length === 0 && !keepBlank(state, line);
 
   // A field rather than a computed facet, so a keepBlank reading another field of the
@@ -217,7 +391,7 @@ export function paragraphs({ enter = true, keepBlank = never } = {}) {
     dispatch(
       state.update({
         changes: { from: edit.from, to: edit.to, insert: edit.insert },
-        selection: EditorSelection.cursor(edit.cursor),
+        selection: edit.anchor == null ? EditorSelection.cursor(edit.cursor) : EditorSelection.range(edit.anchor, edit.cursor),
         scrollIntoView: true,
         userEvent,
         annotations: isolate ? isolateHistory.of("full") : [],
@@ -236,5 +410,55 @@ export function paragraphs({ enter = true, keepBlank = never } = {}) {
     { key: "Delete", run: apply(collapsed(deleteAt), "delete.forward", true) },
   ];
 
-  return [gaps, overGaps, gapTheme, keymap.of(keys)];
+  if (!lists) return [gaps, overGaps, gapTheme, keymap.of(keys)];
+
+  const itemLineAt = (state, pos) => {
+    const line = state.doc.lineAt(pos);
+    return !notList(state, line) && ITEM.test(line.text) ? line : null;
+  };
+
+  const buildItems = (state) => {
+    const found = [];
+    for (let n = 1; n <= state.doc.lines; n++) {
+      const line = state.doc.line(n);
+      const m = ITEM.exec(line.text);
+      if (!m || notList(state, line)) continue;
+      found.push(itemLine(Math.floor(m[1].length / 2)).range(line.from));
+      found.push(dot.range(line.from, line.from + m[0].length));
+    }
+    return Decoration.set(found, true);
+  };
+  const items = StateField.define({
+    create: buildItems,
+    update: (value, tr) => (tr.docChanged || tr.effects.length || tr.reconfigured ? buildItems(tr.state) : value),
+    provide: (f) => EditorView.decorations.from(f),
+  });
+
+  // A bare cursor never rests inside a marker (markerStop). Listed before overGaps so it
+  // runs after it (filters run last first) and also moves a cursor overGaps placed.
+  const overMarkers = EditorState.transactionFilter.of((tr) => {
+    if (tr.docChanged || !tr.selection || tr.selection.ranges.length !== 1 || !tr.selection.main.empty) return tr;
+    const head = tr.selection.main.head;
+    if (!itemLineAt(tr.startState, head)) return tr;
+    const by = tr.isUserEvent("select.pointer") ? "pointer" : tr.isUserEvent("select") ? "key" : vimBack() ? "back" : "other";
+    const to = markerStop(tr.startState.doc.toString(), head, tr.startState.selection.main.head, by);
+    if (to === null || to === head) return tr;
+    return [tr, { selection: EditorSelection.cursor(to), sequential: true }];
+  });
+
+  // The list keys act only on an item's line; anywhere else they fall through, to the
+  // paragraph keys or, for Tab, to the browser, which moves focus.
+  const onItem = (fn, userEvent, isolate) => {
+    const run = apply(fn, userEvent, isolate);
+    return (target) => itemLineAt(target.state, target.state.selection.main.from) !== null && run(target);
+  };
+  const listKeys = [
+    { key: "Enter", run: enter ? onItem(nextItemAt, "input") : never },
+    { key: "Shift-Enter", run: onItem(nextItemAt, "input") },
+    { key: "Backspace", run: onItem(collapsed(unbulletAt), "delete.backward", true) },
+    { key: "Tab", run: onItem(indentAt, "input.indent") },
+    { key: "Shift-Tab", run: onItem(outdentAt, "delete.dedent") },
+  ];
+
+  return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, keymap.of([...listKeys, ...keys])];
 }

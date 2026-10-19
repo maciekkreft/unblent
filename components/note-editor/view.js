@@ -143,6 +143,29 @@ function levelsOf(state) {
   return levels;
 }
 
+// A list item is a Body line (architecture.md 10): a line with another level is never
+// one, and giving an item a level drops its bullet, in the same step.
+const leveled = (state, line) => {
+  let found = false;
+  state.field(levelField).between(line.from, line.from, (from) => {
+    if (from === line.from) found = true;
+  });
+  return found;
+};
+const toLevel = (state, level) => {
+  const changes = [];
+  if (level !== "body") {
+    const first = state.doc.lineAt(state.selection.main.from).number;
+    const last = state.doc.lineAt(state.selection.main.to).number;
+    for (let n = first; n <= last; n++) {
+      const line = state.doc.line(n);
+      const bullet = /^ *[-*] /.exec(line.text);
+      if (bullet) changes.push({ from: line.from, to: line.from + bullet[0].length });
+    }
+  }
+  return { changes, effects: setLevel.of(level) };
+};
+
 // Vim normal-mode level maps, registered at import. The leader is "\" (Vim's
 // default), mapped literally — more reliably honoured than the <leader> token.
 // defineAction (not Vim.map, which is key->key only) lets a mapped key reach the live
@@ -425,7 +448,7 @@ class NoteEditor extends LitElement {
   #extensions() {
     return [
       ...baseExtensions({ vim: this.#actor.snapshot?.context.vimKeys === true, history: false }),
-      paragraphs(),
+      paragraphs({ notList: leveled }),
       levelField,
       levelTheme,
       this.#history.of(history()),
@@ -436,7 +459,7 @@ class NoteEditor extends LitElement {
         },
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
         level: (e, view) => {
-          view.dispatch({ effects: setLevel.of(e.detail) });
+          view.dispatch(toLevel(view.state, e.detail));
           return true;
         },
       }),
@@ -552,7 +575,7 @@ class NoteEditor extends LitElement {
   // selection spans; focus goes back to the text so typing continues.
   #setLevel(level) {
     if (!this.#view) return;
-    this.#view.dispatch({ effects: setLevel.of(level) });
+    this.#view.dispatch(toLevel(this.#view.state, level));
     this.#view.focus();
   }
 

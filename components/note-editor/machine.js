@@ -27,11 +27,11 @@ const THROTTLE_MS = 200;
 // representations meet; both are pure, so they and titleOf are tested in Node.
 const PREFIX = { title: "# ", heading: "## ", subheading: "### ", body: "" };
 
-// The note's title is its first line that says anything, with its level marker off so
-// a list row and note.saved.title never show a "#".
+// The note's title is its first line that says anything, with its level marker or its
+// bullet off so a list row and note.saved.title never show a "#" or a "- ".
 export function titleOf(body) {
   const line = body.split("\n").find((l) => l.trim() !== "");
-  return line ? line.trim().replace(/^#{1,3} /, "").trim() : "";
+  return line ? line.trim().replace(/^#{1,3} /, "").replace(/^[-*] /, "").trim() : "";
 }
 
 // markdown -> { doc: marker-free text, levels: one level per line }. An empty note

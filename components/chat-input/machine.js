@@ -120,8 +120,16 @@ const focusIfNew = (context, conversation) => ({
   focusRequest: turns(conversation).length === 0 ? context.focusRequest + 1 : context.focusRequest,
 });
 
+// A list ended by sending leaves an empty item behind ("- "), which is not part of the
+// question.
+export const sendable = (text) => {
+  let body = text.trim();
+  while (/(^|\n) *[-*]$/.test(body)) body = body.replace(/ *[-*]$/, "").trim();
+  return body;
+};
+
 const submit = (context, enqueue, text) => {
-  const body = text.trim();
+  const body = sendable(text);
   if (!body) return;
   if (pendingTurn(context.conversation)) return; // an answer is arriving; the button is Stop
   const conversationId = context.openId ?? context.mint();

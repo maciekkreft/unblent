@@ -193,6 +193,46 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: rendering and layout.
+    test("a list item is drawn as a dot with a hanging indent, its marker kept in the text", async () => {
+      const context = await browser.newContext({ viewport: { width: 700, height: 600 } });
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), NO_VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.type("- one item long enough to wrap onto a second line in this narrow editor, and on again past it");
+      await page.keyboard.press("Enter");
+      await page.keyboard.type("two");
+
+      await until(async () => (await lines(page)).filter((l) => l.className.includes("cm-item")).length === 2);
+      const shape = await page.evaluate(() => {
+        const root = document.querySelector("note-editor").shadowRoot;
+        const line = root.querySelector(".cm-line.cm-item");
+        const dot = line.querySelector(".cm-item-dot");
+        const text = [...line.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rows = [...range.getClientRects()].map((r) => Math.round(r.left));
+        return { dot: dot.textContent, dotRight: dot.getBoundingClientRect().right, rows, text: text.textContent.slice(0, 3) };
+      });
+      assert.equal(shape.dot, "•", "the marker is drawn as a dot");
+      assert.equal(shape.text, "one", "the dot stands in for the marker; the text follows it");
+      assert.ok(shape.rows.length >= 2, `the item wraps, saw ${shape.rows.length} rows`);
+      assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dot stands left of the text");
+      assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
+
+      // The text keeps the markdown marker, one line per item.
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      const body = await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
+      assert.match(body, /^- one item .*\n- two$/);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
     // Browser: a page's composition.
     test("a choice the composer cannot load leaves the page's default", async () => {
       const context = await browser.newContext();

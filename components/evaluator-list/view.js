@@ -125,7 +125,7 @@ const GLYPHS = {
 
 // The Evaluate box is a CodeMirror editor built on the editor kit (10), so marks can stand
 // at a line's end, it takes Vim's keys when the "Vim keys" preference (12) is on, and Enter
-// makes a paragraph. It grows with its text; the panel scrolls with the list around it.
+// makes a paragraph. It has no lists: each line is evaluated on its own. It grows with its text; the panel scrolls with the list around it.
 const boxTheme = EditorView.theme({
   ".cm-content": {
     padding: "var(--space-xs) 0",
@@ -803,7 +803,7 @@ class EvaluatorList extends LitElement {
         doc: context.text,
         extensions: [
           ...baseExtensions({ vim: this.#boxVim }),
-          paragraphs(),
+          paragraphs({ lists: false }),
           boxTheme,
           placeholder("Write or paste your text. Each line is evaluated on its own."),
           EditorView.contentAttributes.of({ "aria-label": "Write one sentence per line", id: "text" }),

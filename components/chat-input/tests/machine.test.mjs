@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText } from "../machine.js";
+import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText, sendable } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -175,6 +175,18 @@ test("an empty draft sends nothing", async () => {
   const h = start();
   await ready(h);
   h.actor.send({ type: "_send", text: "   " });
+  await flush();
+  assert.equal(emittedOf(h, "turn.submitted").length, 0);
+});
+
+test("an empty list item left at the end is not sent", async () => {
+  assert.equal(sendable("- milk\n- eggs\n- "), "- milk\n- eggs");
+  assert.equal(sendable("Buy:\n- milk\n  - "), "Buy:\n- milk");
+  assert.equal(sendable("- "), "");
+  assert.equal(sendable("a - b"), "a - b");
+  const h = start();
+  await ready(h);
+  h.actor.send({ type: "_send", text: "- " });
   await flush();
   assert.equal(emittedOf(h, "turn.submitted").length, 0);
 });

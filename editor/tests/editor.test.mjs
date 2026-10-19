@@ -3,7 +3,23 @@ import assert from "node:assert/strict";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
-import { baseExtensions, setVim, paragraphs, enterAt, breakAt, backspaceAt, deleteAt, isGap, pastGap } from "../editor.js";
+import {
+  baseExtensions,
+  setVim,
+  paragraphs,
+  enterAt,
+  breakAt,
+  backspaceAt,
+  deleteAt,
+  isGap,
+  pastGap,
+  itemAt,
+  nextItemAt,
+  unbulletAt,
+  indentAt,
+  outdentAt,
+  markerStop,
+} from "../editor.js";
 
 // The kit can break every editor (architecture.md 10), so its rule is tested here
 // without a browser: the pure text functions, and the extensions on an EditorState
@@ -55,6 +71,87 @@ test("a move landing on a gap carries on to text, or stops at the first or last 
   assert.equal(pastGap(blank, lines.length, 3, 1), null);
   const top = ["", "", "One"];
   assert.equal(pastGap((n) => top[n] === "", top.length, 1, -1), 0);
+});
+
+test("a line beginning with \"- \" or \"* \" is an item; its text starts after the marker", () => {
+  assert.deepEqual(itemAt("One\n- two", 6), { from: 4, to: 9, indent: 0, marker: "-", textFrom: 6 });
+  assert.equal(itemAt("  * a", 0).textFrom, 4);
+  assert.equal(itemAt("-no space", 0), null);
+  assert.equal(itemAt("text - not", 6), null);
+  // The line start of a text that begins with a blank line.
+  assert.equal(itemAt("\n- a", 0), null);
+});
+
+test("Enter on an item makes the next one; on an empty one it steps out or ends the list", () => {
+  assert.equal(run("- one", nextItemAt("- one", 5)), "- one\n- ");
+  assert.equal(nextItemAt("- one", 5).cursor, 8);
+  // Split at the cursor, keeping the indent and the marker.
+  assert.equal(run("  * onetwo", nextItemAt("  * onetwo", 7)), "  * one\n  * two");
+  // An empty indented item steps out one level.
+  assert.equal(run("- a\n  - ", nextItemAt("- a\n  - ", 8)), "- a\n- ");
+  assert.equal(nextItemAt("- a\n  - ", 8).cursor, 6);
+  // An empty top-level item ends the list with a new paragraph.
+  const end = nextItemAt("- a\n- ", 6);
+  assert.equal(run("- a\n- ", end), "- a\n\n");
+  assert.equal(end.cursor, 5);
+  // Ending it in the middle leaves a gap on both sides.
+  assert.equal(run("- a\n- \n- b", nextItemAt("- a\n- \n- b", 6)), "- a\n\n\n\n- b");
+  assert.equal(run("- ", nextItemAt("- ", 2)), "");
+  // Not on an item.
+  assert.equal(nextItemAt("one", 3), null);
+});
+
+test("Backspace at the start of an item's text removes the bullet, keeping the text", () => {
+  assert.equal(run("a\n  - b", unbulletAt("a\n  - b", 6)), "a\nb");
+  assert.equal(unbulletAt("a\n  - b", 6).cursor, 2);
+  assert.equal(unbulletAt("- b", 3), null);
+  assert.equal(unbulletAt("b", 0), null);
+});
+
+test("Tab indents an item under the one above; Shift+Tab outdents", () => {
+  const text = "- a\n- b\n- c";
+  const once = indentAt(text, 6);
+  assert.equal(run(text, once), "- a\n  - b\n- c");
+  assert.equal(once.cursor, 8);
+  // Not deeper than one level under the item above, and never the first item.
+  assert.equal(indentAt(run(text, once), 8), null);
+  assert.equal(indentAt(text, 2), null);
+  assert.equal(indentAt("x\n- b", 4), null);
+  assert.equal(indentAt("no", 1), null);
+  // A selection moves every item it touches and keeps its text selected.
+  const both = indentAt(text, 6, 11);
+  assert.equal(run(text, both), "- a\n  - b\n  - c");
+  assert.deepEqual([both.anchor, both.cursor], [8, 15]);
+  assert.equal(run("- a\n  - b", outdentAt("- a\n  - b", 8)), "- a\n- b");
+  assert.equal(outdentAt("- a\n  - b", 8).cursor, 6);
+  assert.equal(outdentAt("- a", 2), null);
+  assert.equal(outdentAt("a", 0), null);
+});
+
+test("a cursor never rests inside a marker", () => {
+  const text = "One\n- two";
+  // From another line, or by a click, it rests at the start of the text.
+  assert.equal(markerStop(text, 4, 1, "key"), 6);
+  assert.equal(markerStop(text, 5, 9, "pointer"), 6);
+  // Home, or Vim's 0, from inside the text.
+  assert.equal(markerStop(text, 4, 8, "key"), 6);
+  assert.equal(markerStop(text, 4, 8, "other"), 6);
+  // An arrow step back from the text's start goes on to the end of the line above;
+  // Home stays.
+  assert.equal(markerStop(text, 5, 6, "key"), 3);
+  assert.equal(markerStop(text, 4, 6, "key"), 6);
+  // Vim's h, 0, ^ and I stay; its b goes on to the last word above, past a gap.
+  assert.equal(markerStop(text, 5, 6, "other"), 6);
+  assert.equal(markerStop(text, 4, 6, "other"), 6);
+  assert.equal(markerStop(text, 4, 6, "back"), 0);
+  assert.equal(markerStop(text, 4, 8, "back"), 6);
+  assert.equal(markerStop("a bc  \n- d", 7, 9, "back"), 2);
+  assert.equal(markerStop("a\n\n- d", 3, 5, "back"), 0);
+  // The first line has nothing above.
+  assert.equal(markerStop("- a", 1, 2, "key"), 2);
+  // Outside a marker, nothing to do.
+  assert.equal(markerStop(text, 7, 6, "key"), null);
+  assert.equal(markerStop(text, 1, 6, "key"), null);
 });
 
 // --- On an EditorState ---------------------------------------------------------------
@@ -161,4 +258,81 @@ test("setVim switches in place and only on a change", () => {
   const on = target("One", 0, baseExtensions({ vim: true }));
   setVim(on, true);
   assert.equal(on.dispatched, 0);
+});
+
+const items = (state) => {
+  const found = [];
+  for (const source of state.facet(EditorView.decorations)) {
+    if (typeof source === "function") continue;
+    source.between(0, state.doc.length, (from, _to, deco) => {
+      if (deco.spec.class === "cm-item") found.push(state.doc.lineAt(from).number);
+    });
+  }
+  return found;
+};
+
+test("item lines are drawn as items, except the ones an editor names, and none with lists off", () => {
+  const doc = "- a\nb\n  * c\n- d";
+  assert.deepEqual(items(target(doc, 0, [paragraphs()]).state), [1, 3, 4]);
+  const named = target(doc, 0, [paragraphs({ notList: (_s, line) => line.number === 4 })]);
+  assert.deepEqual(items(named.state), [1, 3]);
+  assert.deepEqual(items(target(doc, 0, [paragraphs({ lists: false })]).state), []);
+});
+
+test("Enter and Shift+Enter on an item make the next one, undone in one step", () => {
+  const t = target("- one", 5, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(t, "Enter"));
+  assert.equal(t.state.doc.toString(), "- one\n- ");
+  assert.ok(press(t, "Enter"));
+  assert.equal(t.state.doc.toString(), "- one\n\n");
+  assert.ok(undo(t));
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "- one");
+  const s = target("- one", 5, [paragraphs({ enter: false })]);
+  assert.equal(press(s, "Enter"), false);
+  assert.ok(press(s, "Shift-Enter"));
+  assert.equal(s.state.doc.toString(), "- one\n- ");
+  // Off a list, the paragraph keys as before.
+  const p = target("one", 3, [paragraphs()]);
+  assert.ok(press(p, "Enter"));
+  assert.equal(p.state.doc.toString(), "one\n\n");
+});
+
+test("a named line or lists off keep the paragraph keys", () => {
+  const named = target("- one", 5, [paragraphs({ notList: () => true })]);
+  assert.ok(press(named, "Enter"));
+  assert.equal(named.state.doc.toString(), "- one\n\n");
+  const off = target("- one", 2, [paragraphs({ lists: false })]);
+  assert.ok(press(off, "Backspace") === false);
+  assert.equal(press(off, "Tab"), false);
+});
+
+test("Backspace unbullets in one Undo step; Tab indents only in a list", () => {
+  const t = target("- a\n- b", 6, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(t, "Tab"));
+  assert.equal(t.state.doc.toString(), "- a\n  - b");
+  assert.ok(press(t, "Shift-Tab"));
+  assert.equal(t.state.doc.toString(), "- a\n- b");
+  assert.ok(press(t, "Backspace"));
+  assert.equal(t.state.doc.toString(), "- a\nb");
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "- a\n- b");
+  // Outside a list, or where the item cannot move, Tab is the browser's.
+  assert.equal(press(target("text", 2, [paragraphs()]), "Tab"), false);
+  assert.equal(press(target("- a", 2, [paragraphs()]), "Tab"), false);
+  assert.equal(press(target("- a", 2, [paragraphs()]), "Shift-Tab"), false);
+});
+
+test("a move into a marker rests at the text; a click too", () => {
+  const t = target("One\n- two", 1, [paragraphs()]);
+  move(t, 4);
+  assert.equal(t.state.selection.main.head, 6);
+  move(t, 5, "select");
+  assert.equal(t.state.selection.main.head, 3);
+  move(t, 5, "select.pointer");
+  assert.equal(t.state.selection.main.head, 6);
+  // A named line is plain text, so the cursor may rest anywhere in it.
+  const named = target("One\n- two", 1, [paragraphs({ notList: () => true })]);
+  move(named, 4);
+  assert.equal(named.state.selection.main.head, 4);
 });

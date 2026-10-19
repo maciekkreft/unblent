@@ -95,6 +95,29 @@ function levelsOf(state) {
   return levels;
 }
 
+// A list item is a Body line (architecture.md 10): a line with another level is never
+// one, and giving an item a level drops its bullet, in the same step.
+const leveled = (state, line) => {
+  let found = false;
+  state.field(levelField).between(line.from, line.from, (from) => {
+    if (from === line.from) found = true;
+  });
+  return found;
+};
+const toLevel = (state, level) => {
+  const changes = [];
+  if (level !== "body") {
+    const first = state.doc.lineAt(state.selection.main.from).number;
+    const last = state.doc.lineAt(state.selection.main.to).number;
+    for (let n = first; n <= last; n++) {
+      const line = state.doc.line(n);
+      const bullet = /^ *[-*] /.exec(line.text);
+      if (bullet) changes.push({ from: line.from, to: line.from + bullet[0].length });
+    }
+  }
+  return { changes, effects: setLevel.of(level) };
+};
+
 // Vim's maps are one per page, so the level keys have one meaning for every editor on
 // it: the action sends a "level" event to the focused editor's own element, and each
 // editor applies it to its own levels. note-editor registers the identical action and
@@ -429,7 +452,7 @@ class JournalEntry extends LitElement {
   #extensions(editable, vimOn) {
     return [
       ...baseExtensions({ vim: vimOn }),
-      paragraphs(),
+      paragraphs({ notList: leveled }),
       this.#editable.of(editability(editable)),
       levelField,
       levelTheme,
@@ -458,7 +481,7 @@ class JournalEntry extends LitElement {
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel); an
         // earlier day takes no level, as it takes no typing.
         level: (e, view) => {
-          if (this.#editableOn) view.dispatch({ effects: setLevel.of(e.detail) });
+          if (this.#editableOn) view.dispatch(toLevel(view.state, e.detail));
           return true;
         },
       }),
@@ -580,7 +603,7 @@ class JournalEntry extends LitElement {
   // spans; the keyboard goes back to the text so typing continues.
   #setLevel(level) {
     if (!this.#view || !this.#editableOn) return;
-    this.#view.dispatch({ effects: setLevel.of(level) });
+    this.#view.dispatch(toLevel(this.#view.state, level));
     this.#view.focus();
   }
 
