@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf } from "../machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -747,17 +747,48 @@ test("a docked child's tabs are drawn on its side", async () => {
   assert.deepEqual(stripOf(context, "stage").map((e) => e.view), ["token-sheet"]);
 });
 
-test("while arranging, or with no tabs, the child is its one tab", async () => {
+test("a child's tabs are drawn while arranging too; with no tabs it is its one tab", async () => {
   const { actor } = await withTabs({ arranging: true });
-  assert.deepEqual(stripOf(actor.getSnapshot().context, "stage"), [
-    { view: "token-sheet" },
-    { view: "contract-list" },
-    { view: "trace-list" },
-  ]);
-  assert.deepEqual(entryOf(actor.getSnapshot().context, "contract-list"), { view: "contract-list" });
-  actor.send({ type: "settings.changed", arranging: false, vimKeys: false });
+  assert.deepEqual(
+    stripOf(actor.getSnapshot().context, "stage").map((e) => e.id ?? e.view),
+    ["token-sheet", "journal", "b1", "b2", "trace-list"],
+  );
+  assert.deepEqual(entryOf(actor.getSnapshot().context, "contract-list"), { view: "contract-list", id: "b1" });
   actor.send({ ...BOOKS, tabs: [], active: null });
   assert.deepEqual(stripOf(actor.getSnapshot().context, "stage").map((e) => e.view), ["token-sheet", "contract-list", "trace-list"]);
+  assert.deepEqual(entryOf(actor.getSnapshot().context, "contract-list"), { view: "contract-list" });
+});
+
+test("the move buttons are offered only while arranging", async () => {
+  const { actor } = await withTabs();
+  const moved = [];
+  actor.on("tab.moved", (e) => moved.push(e));
+  assert.equal(offersMove(actor.getSnapshot().context, "contract-list"), false);
+  actor.send({ type: "_moveTab", name: "contract-list", step: 1 });
+  assert.deepEqual(moved, []);
+});
+
+test("the move buttons emit tab.moved for the tab in front, never past an end", async () => {
+  const { actor } = await withTabs({ arranging: true });
+  const moved = [];
+  actor.on("tab.moved", (e) => moved.push(e));
+  assert.equal(offersMove(actor.getSnapshot().context, "contract-list"), true);
+  actor.send({ type: "_moveTab", name: "contract-list", step: -1 });
+  actor.send({ type: "_moveTab", name: "contract-list", step: 1 });
+  assert.deepEqual(moved, [
+    { type: "tab.moved", view: "contract-list", id: "b1", step: -1 },
+    { type: "tab.moved", view: "contract-list", id: "b1", step: 1 },
+  ]);
+  actor.send({ ...BOOKS, active: "journal" });
+  actor.send({ type: "_moveTab", name: "contract-list", step: -1 });
+  actor.send({ ...BOOKS, active: "b2" });
+  actor.send({ type: "_moveTab", name: "contract-list", step: 1 });
+  actor.send({ ...BOOKS, tabs: BOOKS.tabs.slice(0, 1), active: "journal" });
+  actor.send({ type: "_moveTab", name: "contract-list", step: 1 });
+  actor.send({ type: "_moveTab", name: "token-sheet", step: 1 });
+  assert.equal(moved.length, 2, "nothing moves past an end, a lone tab, or a child with no tabs");
+  const { context } = actor.getSnapshot();
+  assert.equal(canMove(context, "contract-list", 1), false);
 });
 
 test("tabs.shown from a view not on the desk is ignored", async () => {

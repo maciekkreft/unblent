@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry } from "./machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry, canMove, offersMove } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
 import tabPicked from "./events/tab.picked.json" with { type: "json" };
 import tabClosed from "./events/tab.closed.json" with { type: "json" };
@@ -258,27 +258,68 @@ class DockDesk extends LitElement {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
     }
-    /* A child's own tab and its close button read as one tab: the button sits tight
-       after the label, a quiet glyph that darkens on hover. */
+    /* A child's own tab is one pill holding its label and its × (Norman: the × is seen
+       to belong to its tab). The tab button fills the pill up to the ×, so the whole
+       pill picks it. On the rail, which has no room for pills, they stay plain labels. */
     .own {
       flex: none;
       display: inline-flex;
       align-items: center;
     }
-    .own [role="tab"] {
-      padding-right: var(--space-2xs);
-    }
     .close {
       display: inline-flex;
       align-items: center;
       padding: var(--space-2xs);
+      border-radius: var(--radius-full);
       color: var(--color-body-mid);
-    }
-    .close:hover {
-      color: var(--color-ink);
     }
     .close svg {
       display: block;
+    }
+    .strip .own {
+      padding: var(--space-xs) var(--space-xs) var(--space-xs) 0;
+      border-radius: var(--radius-full);
+    }
+    .strip .own [role="tab"] {
+      align-self: stretch;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 var(--space-2xs) 0 calc(var(--space-sm) + var(--space-2xs));
+      border-radius: inherit;
+    }
+    .strip .own.lone [role="tab"] {
+      padding-right: calc(var(--space-sm) + var(--space-2xs) - var(--space-xs));
+    }
+    .strip .own [role="tab"]:hover,
+    .strip .own .close:hover {
+      background: none;
+    }
+    .strip .own.front {
+      background: var(--color-surface-hover);
+    }
+    .strip .own.front .close {
+      color: var(--color-body);
+    }
+    .strip .own:not(.front):hover {
+      background: var(--color-canvas-soft);
+      box-shadow: inset 0 0 0 var(--border-width) var(--color-border);
+    }
+    .strip .own:not(.front):hover .close {
+      background: var(--color-border);
+      color: var(--color-ink);
+    }
+    /* The child's ‹ ›, a little after its last pill, round like it. */
+    .moves {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      margin-left: var(--space-sm);
+    }
+    .moves .action {
+      border-radius: var(--radius-full);
+    }
+    .rail .moves {
+      display: none;
     }
     .actions {
       flex: none;
@@ -1064,25 +1105,45 @@ class DockDesk extends LitElement {
         ${entry.id !== undefined ? entry.label : labelOf(entry.view)}
       </button>
     `;
+    const context = this.#actor.snapshot.context;
+    const own = (entry, i) => html`<span class="own ${i === selected ? "front" : ""} ${entry.closable ? "" : "lone"}" role="presentation">
+      ${tab(entry, i)}
+      ${entry.closable
+        ? html`<button class="close" aria-label="Close ${entry.label}" title="Close ${entry.label}" @click=${(e) => this.#close(e, entry)}>
+            ${CLOSE}
+          </button>`
+        : nothing}
+    </span>`;
+    // After a child's last tab, while arranging and when it has two or more, the pair
+    // that moves its tab in front.
+    const moves = (entry, i) => {
+      if (entries[i + 1]?.view === entry.view || !offersMove(context, entry.view)) return nothing;
+      const mine = entries.filter((e) => e.view === entry.view);
+      const front = mine.find((e) => e.id === context.tabs[entry.view]?.active);
+      const label = front?.label ?? labelOf(entry.view);
+      return html`<span class="moves" data-view=${entry.view}>
+        ${this.#action(icon("caret-left"), `Move ${label} earlier`, () => this.#moveTab(entry.view, -1), !canMove(context, entry.view, -1))}
+        ${this.#action(icon("caret-right"), `Move ${label} later`, () => this.#moveTab(entry.view, 1), !canMove(context, entry.view, 1))}
+      </span>`;
+    };
     return html`
       <div role="tablist" aria-label="${group} tabs" @keydown=${(e) => this.#arrow(e, entries, active, activate)}>
-        ${entries.map((entry, i) =>
-          entry.closable
-            ? html`<span class="own" role="presentation">
-                ${tab(entry, i)}
-                <button
-                  class="close"
-                  aria-label="Close ${entry.label}"
-                  title="Close ${entry.label}"
-                  @click=${(e) => this.#close(e, entry)}
-                >
-                  ${CLOSE}
-                </button>
-              </span>`
-            : tab(entry, i),
-        )}
+        ${entries.map((entry, i) => (entry.id !== undefined ? html`${own(entry, i)}${moves(entry, i)}` : tab(entry, i)))}
       </div>
     `;
+  }
+
+  // The child reorders and answers with its tabs. The keyboard stays on the button
+  // pressed, or on the other one once the moved tab reaches an end and its own goes dead;
+  // Safari does not focus a clicked button, so it is focused here.
+  #moveTab(view, step) {
+    this.#actor.send({ type: "_moveTab", name: view, step });
+    this.updateComplete.then(() => {
+      const pair = [...this.renderRoot.querySelectorAll(".strip .moves")].find((m) => m.dataset.view === view);
+      const [earlier, later] = pair?.querySelectorAll("button") ?? [];
+      const pressed = step < 0 ? earlier : later;
+      (pressed?.disabled ? (step < 0 ? later : earlier) : pressed)?.focus();
+    });
   }
 
   // The child decides what closing means and answers with its tabs; the keyboard stays
@@ -1258,12 +1319,16 @@ class DockDesk extends LitElement {
       if (want != null && body.scrollTop !== want) body.scrollTop = want;
     }
     // The selected tab is what the strip is about, so it is never left clipped
-    // behind the actions: scroll its strip just far enough to show it.
+    // behind the actions: scroll its strip just far enough to show it, and its child's
+    // ‹ › after its tabs too, while that leaves the tab itself in view.
     for (const tab of this.renderRoot.querySelectorAll('.strip [role="tab"][aria-selected="true"]')) {
-      const list = tab.parentElement;
-      const t = tab.getBoundingClientRect();
+      const list = tab.closest('[role="tablist"]');
+      const t = (tab.closest(".own") ?? tab).getBoundingClientRect();
       const l = list.getBoundingClientRect();
-      const dx = t.right > l.right ? t.right - l.right : t.left < l.left ? t.left - l.left : 0;
+      let right = t.right;
+      for (let n = tab.closest(".own")?.nextElementSibling; n && (n.classList.contains("own") || n.classList.contains("moves")); n = n.nextElementSibling)
+        if (n.classList.contains("moves")) right = n.getBoundingClientRect().right;
+      const dx = right > l.right ? Math.min(right - l.right, t.left - l.left) : t.left < l.left ? t.left - l.left : 0;
       if (dx) list.scrollBy({ left: dx });
     }
     this.#start(snapshot);

@@ -12,8 +12,8 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const SETTINGS = JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: false, vimKeys: true });
 
 // Stands in for a view that shows tabs of its own: it announces them for the desk's
-// Contracts child, follows tab.picked and tab.closed as the view would, and keeps what
-// it heard in window.heard.
+// Contracts child, follows tab.picked, tab.closed and tab.moved as the view would, and
+// keeps what it heard in window.heard.
 const harness = (page) =>
   page.evaluate(async () => {
     const [{ mount }, { setup, emit }] = await Promise.all([import("/static/bus/bus.js"), import("xstate")]);
@@ -46,6 +46,18 @@ const harness = (page) =>
               window.heard.push(["closed", event.id]);
               tabs = tabs.filter((t) => t.id !== event.id);
               if (active === event.id) active = tabs[0].id;
+            },
+            emit(shown),
+          ],
+        },
+        "tab.moved": {
+          actions: [
+            ({ event }) => {
+              window.heard.push(["moved", event.id, event.step]);
+              const at = tabs.findIndex((t) => t.id === event.id);
+              const next = [...tabs];
+              [next[at], next[at + event.step]] = [next[at + event.step], next[at]];
+              tabs = next;
             },
             emit(shown),
           ],
@@ -83,6 +95,8 @@ for (const engine of ENGINES) {
       await harness(page);
       await until(async () => (await strip(page)).join() === "*Tokens,Journal,Walden,Emma,Components");
 
+      assert.equal(await page.locator("dock-desk").getByRole("button", { name: /^Move .* (earlier|later)$/ }).count(), 0, "‹ › only while arranging");
+
       await tab(page, "Emma").click();
       await until(async () => (await strip(page)).includes("*Emma"));
       assert.deepEqual(await heard(page), [["picked", "b2"]]);
@@ -99,6 +113,47 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Control+.");
       await until(async () => (await strip(page)).includes("*Walden"));
       assert.equal((await heard(page)).length, 3, "Walden was already the child's tab in front");
+
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+}
+
+for (const engine of ENGINES) {
+  // Browser: a gesture.
+  test(`‹ › move a child's tab in front while arranging, and the keyboard stays on them in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    context.setDefaultTimeout(4000);
+    try {
+      const arranging = JSON.stringify({ ...JSON.parse(SETTINGS), arranging: true });
+      await context.addInitScript((value) => {
+        localStorage.setItem("settings", value);
+        localStorage.setItem("settings:workshop", value);
+      }, arranging);
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE_URL}/workshop/design/dock`);
+      await page.waitForFunction(() => document.querySelector("dock-desk")?.shadowRoot?.querySelector(".stage .strip [role=tab]"));
+      await harness(page);
+      await until(async () => (await strip(page)).join() === "*Tokens,Journal,Walden,Emma,Components");
+      await tab(page, "Walden").click();
+      await until(async () => (await strip(page)).includes("*Walden"));
+
+      const desk = page.locator("dock-desk");
+      await desk.getByRole("button", { name: "Move Walden earlier" }).click();
+      await until(async () => (await strip(page)).join() === "Tokens,*Walden,Journal,Emma,Components");
+      assert.ok(await desk.getByRole("button", { name: "Move Walden earlier" }).isDisabled(), "greyed at the start");
+      await until(() => page.evaluate(() => document.querySelector("dock-desk").shadowRoot.activeElement?.getAttribute("aria-label") === "Move Walden later"));
+
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
+      await until(async () => (await strip(page)).join() === "Tokens,Journal,Emma,*Walden,Components");
+      assert.ok(await desk.getByRole("button", { name: "Move Walden later" }).isDisabled(), "greyed at the end");
+      assert.deepEqual((await heard(page)).filter((h) => h[0] === "moved"), [["moved", "b1", -1], ["moved", "b1", 1], ["moved", "b1", 1]]);
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

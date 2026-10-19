@@ -197,12 +197,25 @@ export const nextGroup = (from, key, present) => {
 export const tabsOf = ({ views, docks }, group) =>
   group === "stage" ? names(views).filter((n) => !dockedNames(docks).includes(n)) : (docks[group]?.views ?? []);
 
-// A child's own tabs as its last tabs.shown announced them, while the desk draws them:
-// never while arranging, when the child is one tab the move and dock buttons act on
-// whole, and never an empty list, which leaves the child its one labelled tab.
+// A child's own tabs as its last tabs.shown announced them, which the desk draws, also
+// while arranging, when the move and dock buttons still act on the child whole; never an
+// empty list, which leaves the child its one labelled tab.
 const ownTabs = (context, name) => {
   const own = context.tabs?.[name];
-  return !context.arranging && own?.tabs.length ? own : undefined;
+  return own?.tabs.length ? own : undefined;
+};
+
+// Whether the child's ‹ › are offered: only while arranging, like every other change to
+// the order of tabs, and only for a child with two or more tabs.
+export const offersMove = (context, name) => context.arranging === true && (ownTabs(context, name)?.tabs.length ?? 0) >= 2;
+
+// Whether the child's tab in front can move one place by `step`: the pair is offered,
+// and the tab is not already at that end of the child's tabs.
+export const canMove = (context, name, step) => {
+  const own = ownTabs(context, name);
+  if (!offersMove(context, name)) return false;
+  const at = own.tabs.findIndex((t) => t.id === own.active);
+  return at >= 0 && at + step >= 0 && at + step < own.tabs.length;
 };
 
 // What one group's strip draws, left to right: one entry per child, `{ view }`, or a
@@ -260,6 +273,12 @@ const pick = (local) =>
     if (context.tabs[event.name].active !== event.id) enqueue.emit({ type: "tab.picked", view: event.name, id: event.id });
   });
 
+// The child's ‹ › move its tab in front; the child reorders and announces its tabs again.
+const moveTab = {
+  guard: ({ context, event }) => canMove(context, event.name, event.step),
+  actions: emit(({ context, event }) => ({ type: "tab.moved", view: event.name, id: context.tabs[event.name].active, step: event.step })),
+};
+
 const close = { guard: isClosable, actions: emit(({ event }) => ({ type: "tab.closed", view: event.name, id: event.id })) };
 
 const isStageTab = ({ context, event }) =>
@@ -291,13 +310,16 @@ export const machine = setup({
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. " +
       "A child that announces tabs of its own (`tabs.shown`) is drawn, wherever it sits and " +
-      "outside arranging, as those tabs in place of its one tab, in its place in the strip, " +
+      "also while arranging, as those tabs in place of its one tab, in its place in the strip, " +
       "with a close button (\"Close <label>\") on each tab it marks closable and its tab in " +
       "front selected while the child is shown; picking one shows the child and tells it " +
       "which tab (`tab.picked`, unless that tab is already in front), and the close button " +
       "tells it which tab to close (`tab.closed`); the child decides and announces its tabs " +
-      "again. While arranging the child is its one labelled tab, which the move and dock " +
-      "buttons act on whole. Clicks, the arrow keys, Home and End, and Ctrl+. and Ctrl+, " +
+      "again. While arranging the move and dock buttons still act on the child whole, and a " +
+      "child with two or more tabs also has two buttons after them, \"Move <label> earlier\" and \"Move " +
+      "<label> later\", which move its tab in front one place (`tab.moved`), the one at an end " +
+      "greyed. Each of a child's tabs is one round pill holding its label and its ×, the one " +
+      "in front filled. Clicks, the arrow keys, Home and End, and Ctrl+. and Ctrl+, " +
       "step through the child's tabs inside the group's order. " +
       "While the \"Vim keys\" preference is on, on the desk and not on the phone, Ctrl+h and " +
       "Ctrl+l move the keyboard focus between the left dock, the stage and the right dock, " +
@@ -456,6 +478,7 @@ export const machine = setup({
         // A child's own tab clicked, or reached by a key, and its × pressed.
         _pick: { guard: isOwnTab, actions: pick(false) },
         _close: close,
+        _moveTab: moveTab,
         // A child follows a selection gesture (6.4): bring its tab forward.
         "book.selected": show,
         "note.selected": show,
@@ -478,6 +501,7 @@ export const machine = setup({
         },
         _pick: { guard: isOwnTab, actions: pick(true) },
         _close: close,
+        _moveTab: moveTab,
         // A child follows a selection gesture (6.4); with no dock fact the desk is a
         // plain tab switcher, so a followed stage tab is staged locally, and the
         // detour ends.
