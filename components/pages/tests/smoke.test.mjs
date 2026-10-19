@@ -47,17 +47,33 @@ const composed = () => {
   return tags.length > 0 && tags.every((e) => customElements.get(e.localName) && e.shadowRoot);
 };
 
+// Counts the requests still open, so a load waits for its own fetches to end rather
+// than for "networkidle"'s fixed half second of silence, which was a third of this file.
+function inFlight(page) {
+  const open = new Set();
+  page.on("request", (r) => open.add(r));
+  for (const done of ["requestfinished", "requestfailed"]) page.on(done, (r) => open.delete(r));
+  return open;
+}
+
 async function load(context, path, { phone = false } = {}) {
   const problems = [];
   const page = await context.newPage();
   watch(page, problems);
+  const open = inFlight(page);
   if (phone) await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
   await page.goto(`${BASE_URL}${path}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(composed);
   if (phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
   await page.waitForLoadState("load");
   // The cold API fetches settle, or the cap passes; a failed one is already in problems.
-  await page.waitForLoadState("networkidle", { timeout: 2000 }).catch(() => {});
+  // Quiet twice in a row, a frame apart, so a fetch a reply starts is waited for too.
+  const quiet = async () => {
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50))));
+    return open.size === 0;
+  };
+  const cap = Date.now() + 2000;
+  while (Date.now() < cap && !((await quiet()) && (await quiet()))) {}
   return { page, problems };
 }
 
