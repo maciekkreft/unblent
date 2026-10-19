@@ -252,7 +252,7 @@ export const machine = setup({
       "or dock whose view holds the keyboard wears a frame in the focus ring's accent, so a move " +
       "between panels is seen; there is no frame on the phone, where one panel fills the screen.",
     kind: "view",
-    emits: ["dock.arranged"],
+    emits: ["dock.arranged", "tab.picked", "tab.closed"],
     attributes: [],
     asks: ["dock: read", "settings: read"],
   },
@@ -428,5 +428,8 @@ export const machine = setup({
     "settings.changed": {
       actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
     },
+    // A child's own tabs are part of the contract before the desk draws them (9, step
+    // 2): received and, for now, left alone.
+    "tabs.shown": { actions: () => {} },
   },
 });

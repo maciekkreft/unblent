@@ -36,8 +36,8 @@ export const machine = setup({
       "keyboard moves into the newly shown one. It emits nothing; it asks `books` which book is " +
       "open and whether it is written, and follows the open book after.",
     kind: "view",
-    emits: [],
-    asks: ["books: open", "books: read"],
+    emits: ["tabs.shown", "book.switched"],
+    asks: ["books: open", "books: read", "books: list"],
     attributes: ["height"],
   },
   context: ({ input }) => ({ ask: input.ask, openId: null, written: false }),
@@ -75,5 +75,10 @@ export const machine = setup({
       target: ".ready",
       actions: assign({ openId: null, written: false }),
     },
+    // The tab gestures are part of the contract before the tab list that decides them
+    // exists (9, step 2): received and, for now, left alone.
+    "tab.picked": { actions: () => {} },
+    "tab.closed": { actions: () => {} },
+    "book.closed": { actions: () => {} },
   },
 });

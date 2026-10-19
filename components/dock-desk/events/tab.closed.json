@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user closed one of a view's own tabs, by pressing its ×.",
+  "type": "object",
+  "properties": {
+    "view": { "type": "string", "description": "The address (4.1) of the view whose tab it is." },
+    "id": { "type": "string", "description": "The tab's id, as the view announced it in tabs.shown." }
+  },
+  "required": ["view", "id"],
+  "additionalProperties": false
+}

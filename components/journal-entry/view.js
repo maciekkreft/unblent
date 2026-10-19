@@ -8,6 +8,7 @@ import { baseExtensions, setVim, paragraphs } from "editor";
 import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
+import closed from "./events/book.closed.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // The theme, Vim and the paragraphs come from the editor kit (architecture.md 10). The
@@ -171,7 +172,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
-      events: { "day.saved": saved, "day.shown": dayShown },
+      events: { "day.saved": saved, "day.shown": dayShown, "book.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

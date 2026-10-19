@@ -7,6 +7,7 @@ import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import linkCopied from "./events/link.copied.json" with { type: "json" };
+import closed from "./events/book.closed.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window
 // (the note-list idiom); the token is the one clock, shared with the bubble bar's
@@ -38,7 +39,7 @@ class ActorController {
         // knowing whether it paints and makes highlights (Decision 3).
         highlighting: this.host.highlights,
       },
-      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied },
+      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied, "book.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

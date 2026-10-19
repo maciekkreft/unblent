@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The view now shows these tabs, in this order, with this one in front: a container that holds it can draw them in place of the view's own single tab.",
+  "type": "object",
+  "properties": {
+    "view": { "type": "string", "description": "The address (4.1) of the view that shows the tabs." },
+    "tabs": {
+      "type": "array",
+      "description": "The view's tabs, in the order they are shown.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "What the tab stands for, as the view names it." },
+          "label": { "type": "string", "description": "The text on the tab." },
+          "closable": { "type": "boolean", "description": "The user may close this tab." }
+        },
+        "required": ["id", "label", "closable"],
+        "additionalProperties": false
+      }
+    },
+    "active": { "type": ["string", "null"], "description": "The id of the tab in front, or null when there is none." }
+  },
+  "required": ["view", "tabs", "active"],
+  "additionalProperties": false
+}

@@ -211,7 +211,7 @@ export const machine = setup({
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day.",
     kind: "view",
-    emits: ["day.saved", "day.shown"],
+    emits: ["day.saved", "day.shown", "book.closed"],
     attributes: ["height"],
     asks: ["journal: read", "settings: read", "books: read"],
   },

@@ -521,7 +521,7 @@ export const machine = setup({
       "link in a note opens the page that holds the passage, in the book already open or " +
       "after `books` opens its book, and the highlight glows for about a second.",
     kind: "view",
-    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied"],
+    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "book.closed"],
     attributes: ["height", "highlights"],
     asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "settings: read"],
   },

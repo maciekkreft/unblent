@@ -3,6 +3,8 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { machine, nextGroup, nextTab, tabsOf } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
+import tabPicked from "./events/tab.picked.json" with { type: "json" };
+import tabClosed from "./events/tab.closed.json" with { type: "json" };
 
 const SIDES = ["left", "right", "bottom"];
 // The four groups in one fixed order, so the action for "send to X" sits in the
@@ -101,7 +103,7 @@ class ActorController {
         // the seed is chosen, and compared to the same breakpoint as the CSS.
         narrow: () => this.host.getBoundingClientRect().width < NARROW_REM * ROOT_EM(),
       },
-      events: { "dock.arranged": arranged },
+      events: { "dock.arranged": arranged, "tab.picked": tabPicked, "tab.closed": tabClosed },
     });
     let kept = this.actor.getSnapshot().context.pressed;
     this.subscription = this.actor.subscribe(({ context }) => {
