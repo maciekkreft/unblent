@@ -658,7 +658,6 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Evaluators reading the journal, with Jev's answers shown beside a day, as a component of its own: a fact that owns those answers, not something added back into `journal`, which owns only the days (3.1).
 - A jump from a highlight to its passage, with one step back to the reading place.
 - Making highlights from the keyboard, Vim style.
-- Making highlights on a phone.
 - The model in a chat looking things up by asking the queries fact components already answer, each one opted in by its owner and switched on by the user.
 - Sending a note's text to the chat as the next message, so a note that holds a useful question can be used again with any book.
 - A second model provider, OpenAI.

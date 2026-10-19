@@ -205,14 +205,13 @@ class BookReader extends LitElement {
         animation: none;
       }
     }
-    /* A mouse can select the text to copy it; a finger cannot, so a horizontal
-       finger drag stays the turn gesture and never starts a selection (the viewport's
-       user-select: none, above). The pointer handlers already refuse a mouse swipe. */
-    @media (hover: hover) and (pointer: fine) {
-      .strip {
-        user-select: text;
-        -webkit-user-select: text;
-      }
+    /* The text selects for a mouse drag and for a finger's press and hold, which is how a
+       phone makes a highlight (the Highlight button). A touch screen starts a selection
+       only after a long press, so a quick horizontal swipe stays a page turn. The viewport
+       keeps user-select: none (above), so the margins and the footer never select. */
+    .strip {
+      user-select: text;
+      -webkit-user-select: text;
     }
     /* The book's own text in the app's type and tokens; the importer dropped its CSS
        (Decision 3). Everything is held to the page so nothing overflows a column. */
@@ -668,6 +667,15 @@ class BookReader extends LitElement {
   #lastGlow = 0;
   #glowing = null;
   #glowTimer = 0;
+  // The kind of the last pointer pressed on the page, so a finger's selection offers the
+  // Highlight button while a mouse's becomes a highlight at pointerup, as before.
+  #lastPointer = null;
+  // The last line of a finger's selection in the strip (a client rect), while it lasts:
+  // the Highlight button sits under it. Null when no button shows. View UI state (3.1).
+  #pending = null;
+  // A long press hands the gesture to the system, which reports the selection it makes
+  // and every move of its handles only through the document's selectionchange.
+  #followSelection = () => this.#selectionChanged();
 
   // The fragment element: a bare div with the click handler for in-text chapter links.
   // Made here so #swapStrip can build a second one for a chapter-crossing slide.
@@ -719,9 +727,11 @@ class BookReader extends LitElement {
     // The web font changes the text's measure once it loads, so a chapter measured
     // before it lands would paginate wrongly; re-measure when it is ready.
     document.fonts?.ready.then(() => this.#relayout());
+    document.addEventListener("selectionchange", this.#followSelection);
   }
 
   disconnectedCallback() {
+    document.removeEventListener("selectionchange", this.#followSelection);
     this.#ro?.disconnect();
     this.#ro = null;
     this.#leaving?.remove();
@@ -733,6 +743,7 @@ class BookReader extends LitElement {
     clearTimeout(this.#slideTimer);
     this.#focused = false;
     this.#visual = null;
+    this.#pending = null;
     this.#paintCursor();
     super.disconnectedCallback();
   }
@@ -776,6 +787,7 @@ class BookReader extends LitElement {
   #setFragment(htmlText) {
     // The cursor and a highlight in progress were counted in the old fragment's text.
     this.#forgetCursor();
+    this.#dropPending();
     this.#strip.replaceChildren();
     // A fresh fragment starts at its first page at once, with no transform transition: a
     // jump reuses the strip, which may still be slid or mid-slide to the old page, and a
@@ -911,6 +923,43 @@ class BookReader extends LitElement {
     const q = this.#pointOf(range.endContainer, range.endOffset);
     this.#clearSelection();
     return this.#sendHighlight(p, q);
+  }
+
+  // A finger's selection inside the strip shows the Highlight button under its last line;
+  // anything else hides it. A mouse is left out, its drag being made into a highlight at
+  // pointerup, and so is a selection made before any pointer was pressed (the keyboard).
+  #selectionChanged() {
+    const touch = this.highlights && this.#lastPointer != null && this.#lastPointer !== "mouse";
+    const range = touch ? this.#selectionRange() : null;
+    let line = null;
+    if (range && this.#pointOf(range.startContainer, range.startOffset) && this.#pointOf(range.endContainer, range.endOffset)) {
+      // A composed range is static and has no rects; a live one over the same ends does.
+      const live = document.createRange();
+      live.setStart(range.startContainer, range.startOffset);
+      live.setEnd(range.endContainer, range.endOffset);
+      line = [...live.getClientRects()].filter((r) => r.width > 0 || r.height > 0).at(-1) ?? null;
+    }
+    if (!line && !this.#pending) return;
+    this.#pending = line;
+    if (line) this.#closeBubble();
+    this.requestUpdate();
+  }
+
+  // The selection and its Highlight button go together: a turn, a new chapter or Escape
+  // leaves the passage, so neither stays behind on a page that no longer shows it.
+  #dropPending() {
+    if (!this.#pending) return;
+    this.#pending = null;
+    this.#clearSelection();
+    this.requestUpdate();
+  }
+
+  // Tapping Highlight makes the finger's selection a highlight, the same message a mouse
+  // drag sends; the new mark's own bubble then offers Remove (Norman: forgiveness).
+  #makePending() {
+    this.#makeHighlight();
+    this.#pending = null;
+    this.requestUpdate();
   }
 
   // Two places as the _highlight message, whichever comes first: the tail the mouse and
@@ -1249,6 +1298,8 @@ class BookReader extends LitElement {
     clearTimeout(this.#copiedTimer);
     this.#active = id;
     this.#copied = false;
+    // One overlay at a time: the highlight's bubble replaces the Highlight button.
+    this.#pending = null;
     this.requestUpdate();
   }
 
@@ -1315,7 +1366,7 @@ class BookReader extends LitElement {
   // are set as custom properties (7.4). A mark gone (the chapter changed, the note
   // removed) closes the bubble.
   #positionBubble() {
-    const bubble = this.renderRoot.querySelector(".bubble");
+    const bubble = this.renderRoot.querySelector(".bubble:not(.make)");
     const page = this.renderRoot.querySelector(".page");
     if (!bubble || !page) return;
     const mark = this.#strip.querySelector(`mark[data-id="${this.#active}"]`);
@@ -1334,6 +1385,26 @@ class BookReader extends LitElement {
     y = Math.max(0, Math.min(Math.max(0, box.height - bh), y));
     bubble.style.setProperty("--bx", `${Math.round(x)}px`);
     bubble.style.setProperty("--by", `${Math.round(y)}px`);
+  }
+
+  // Place the Highlight button under the selection's last line, where the system's own
+  // menu (Copy, Look Up), which sits above a selection, does not cover it; above the
+  // selection's last line when there is no room below. Clamped in .page like the bubble.
+  #positionMake() {
+    const button = this.renderRoot.querySelector(".bubble.make");
+    const page = this.renderRoot.querySelector(".page");
+    if (!button || !page) return;
+    const line = this.#pending;
+    const box = page.getBoundingClientRect();
+    const bw = button.offsetWidth;
+    const bh = button.offsetHeight;
+    let x = line.left - box.left + line.width / 2 - bw / 2;
+    x = Math.max(0, Math.min(Math.max(0, box.width - bw), x));
+    let y = line.bottom - box.top + BUBBLE_GAP;
+    if (y + bh > box.height) y = line.top - box.top - bh - BUBBLE_GAP;
+    y = Math.max(0, Math.min(Math.max(0, box.height - bh), y));
+    button.style.setProperty("--bx", `${Math.round(x)}px`);
+    button.style.setProperty("--by", `${Math.round(y)}px`);
   }
 
   // The chapter's highlights as one key, so updated() repaints only when the set changes.
@@ -1492,6 +1563,7 @@ class BookReader extends LitElement {
 
   // A turn: the anchor becomes the top of the page turned to.
   #turn(page) {
+    this.#dropPending();
     this.#anchor = this.#anchorOnPage(Math.max(0, Math.min(this.#pages - 1, page)));
     this.#show(page);
   }
@@ -1605,6 +1677,10 @@ class BookReader extends LitElement {
       e.preventDefault();
       e.stopPropagation();
       this.#closeBubble();
+    } else if (e.key === "Escape" && this.#pending) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.#dropPending();
     }
   }
 
@@ -1617,6 +1693,7 @@ class BookReader extends LitElement {
 
   #pointerdown(e) {
     if (e.button != null && e.button !== 0) return;
+    this.#lastPointer = e.pointerType;
     this.#endVisual(false);
     this.#drag = {
       pointerId: e.pointerId,
@@ -1653,6 +1730,10 @@ class BookReader extends LitElement {
     if (!d || e.pointerId !== d.pointerId) return;
     this.#drag = null;
     const dx = e.clientX - d.x0;
+    // A finger that leaves text selected was making or widening that selection (a press
+    // and hold, or a handle drag, which iOS still reports as a moving pointer), never a
+    // swipe or a tap: the page stays, and the Highlight button waits under it.
+    if (!d.mouse && this.#selectionRange()) return;
     if (d.dragging && Math.abs(dx) >= SWIPE) {
       if (dx < 0) this.#next();
       else this.#prev();
@@ -1692,7 +1773,10 @@ class BookReader extends LitElement {
     if (!snapshot) return;
     const reading = snapshot.matches("reading");
     const clip = this.renderRoot.querySelector(".page");
-    if (clip && this.#strip.parentNode !== clip) clip.append(this.#strip);
+    // First in .page: Lit clears every node after the page's last part whenever that part
+    // changes, so a strip after it was taken out and put back each time the bubble or the
+    // Highlight button came or went, and a finger's selection in it was lost.
+    if (clip && this.#strip.parentNode !== clip) clip.prepend(this.#strip);
     if (!reading) {
       // Nothing to read: drop the fragment so a return starts clean.
       if (this.#lastHtml !== null) {
@@ -1778,6 +1862,7 @@ class BookReader extends LitElement {
       if (snapshot.context.highlights.some((h) => h.id === this.#active)) this.#positionBubble();
       else this.#closeBubble();
     }
+    if (this.#pending) this.#positionMake();
   }
 
   // The bubble for the open highlight (session 3): Copy, Copy link and Remove, or, while the removal
@@ -1805,6 +1890,19 @@ class BookReader extends LitElement {
               </button>
               <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
             `}
+      </div>
+    `;
+  }
+
+  // The Highlight button for a finger's selection. Its press never reaches the page, so
+  // it is never a turn, and is not let move the focus, which could end the selection
+  // before the tap lands. The focus is held at mousedown, not pointerdown: WebKit drops
+  // the click of a touch whose pointerdown was cancelled.
+  #makeButton() {
+    if (!this.#pending) return nothing;
+    return html`
+      <div class="bubble make" @pointerdown=${(e) => e.stopPropagation()} @mousedown=${(e) => e.preventDefault()}>
+        <button class="act highlight" type="button" @click=${() => this.#makePending()}>Highlight</button>
       </div>
     `;
   }
@@ -1873,7 +1971,7 @@ class BookReader extends LitElement {
           @pointerup=${(e) => this.#pointerup(e)}
           @pointercancel=${() => (this.#drag = null)}
         >
-          <div class="page"><span class="cursor" aria-hidden="true" hidden></span>${this.#bubble(snapshot)}</div>
+          <div class="page"><span class="cursor" aria-hidden="true" hidden></span>${this.#bubble(snapshot)}${this.#makeButton()}</div>
         </div>
         <div class="footer">
           <span class="chap">${title}</span>

@@ -532,9 +532,10 @@ export const machine = setup({
       "never a page number, because page numbers differ between devices; each device opens the " +
       "page that holds the saved place. The place is saved a short time after page turns stop, " +
       "so a run of turns saves once. It paints the book's highlights and lets the user mark a " +
-      "new passage. After a re-import it finds each highlight's quote again and saves its " +
-      "corrected place; a highlight whose quote is no longer in the book stays a note with its " +
-      "quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
+      "new passage. On a touch screen, pressing and holding selects the text, and a Highlight " +
+      "button under the selection marks it. After a re-import it finds each highlight's quote " +
+      "again and saves its corrected place; a highlight whose quote is no longer in the book " +
+      "stays a note with its quote and its comment. With the \"Vim keys\" preference on and the reader focused, a " +
       "one-character cursor shows, starting at the top of the page and kept while the reader " +
       "is left and returned to; w, b, ), (, }, {, 0, $, j, k, l and h move it (l and h one " +
       "letter, as in Vim), a click on the text puts it there, and a cursor that leaves the " +
