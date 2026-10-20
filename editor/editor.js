@@ -199,6 +199,17 @@ const theme = Prec.low(
   }),
 );
 
+// Vim's command line (:) is a CodeMirror panel, which CodeMirror paints a fixed light
+// grey, while the input in it takes the browser's text colour, white in dark mode. Both
+// follow the tokens instead, as the reader's own command line does. "&.cm-editor"
+// outranks the library's "&light" rule, which carries one class more than a plain one.
+const panelTheme = EditorView.theme({
+  "&.cm-editor .cm-panels": { backgroundColor: "var(--color-canvas)", color: "var(--color-ink)" },
+  "&.cm-editor .cm-panels-bottom": { borderTop: "var(--border-width) solid var(--color-border)" },
+  ".cm-vim-panel": { fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)" },
+  ".cm-vim-panel input": { color: "inherit", font: "inherit" },
+});
+
 // The Vim plugin ships its own Prec.highest theme for the block cursor in colours that
 // are not tokens; this one outranks it and marks the competing properties !important.
 // Unfocused, the cursor is hollowed with an inset shadow, because Safari clips the
@@ -221,7 +232,7 @@ const fatCursor = Prec.highest(
 // One compartment serves every editor on the page: a compartment is a key into each
 // state's own configuration, so sharing it shares nothing between editors.
 const vimSlot = new Compartment();
-const vimContent = (on) => (on ? [vim(), fatCursor] : []);
+const vimContent = (on) => (on ? [vim(), fatCursor, panelTheme] : []);
 
 // The "Vim keys" preference (12) turned on or off in place, keeping the text and the
 // undo history. Safe to call on every update: it dispatches only on a change.
