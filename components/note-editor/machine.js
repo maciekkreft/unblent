@@ -304,7 +304,8 @@ export const machine = setup({
       "highlight is gone turns grey and struck through and opens nothing. With `subject` the " +
       "header also has Open on stage, before the pin (and `:tab split` or `:tab sp` while Vim " +
       "keys is on), which shows the note on the stage as a tab of its own; the button is " +
-      "accent while the note has a tab there, its arrow points towards the stage, and it is " +
+      "accent while the note has a tab there, its arrow points towards the stage, also after the " +
+      "desk moves its dock, and it is " +
       "disabled while the editor holds no note. With `stage` it is the editor the stage shows " +
       "for a note tab: it follows no subject, no selection and no pin, has no header, never " +
       "announces its note, shows the note the stage names by `load`, and `:q`, `:tabc` or " +
@@ -331,6 +332,9 @@ export const machine = setup({
     // The tab ids each stage last announced (tabs.shown), by the stage's address, so the
     // Open on stage button knows whether the open note is there already.
     stageTabs: {},
+    // How many desk layouts it has seen (dock.changed): a dock moved without changing size
+    // fires no resize, so this is what tells the view to point the arrow again.
+    layouts: 0,
     // The note pinned under this editor's own key before `pins` owned the pin, read
     // through input so the machine stays importable in Node; `forget` clears that key.
     forget: input.forget,
@@ -383,6 +387,7 @@ export const machine = setup({
     onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
   },
   on: {
+    "dock.changed": { actions: assign({ layouts: ({ context }) => context.layouts + 1 }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A command addressing this instance (4.4).
     load: { target: ".loading", actions: "open" },

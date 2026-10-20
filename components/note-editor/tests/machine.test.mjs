@@ -1048,6 +1048,14 @@ test("the open note is staged while any stage's tabs name it", async () => {
   assert.equal(isStaged(actor.getSnapshot().context), false);
 });
 
+test("a new desk layout tells the view to point the arrow again", async () => {
+  const { actor } = editor({ subjecting: true, ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  const before = actor.getSnapshot().context.layouts;
+  actor.send({ type: "dock.changed", stage: "book-stage", docks: {} });
+  assert.equal(actor.getSnapshot().context.layouts, before + 1);
+});
+
 test("the stage's editor shows what load names and never announces it", async () => {
   const notes = { notes: [{ id: ID2, title: "Newest", updatedAt: 10, about: [] }] };
   const { actor, opened, toggled } = editor({ staged: true, ask: asking({ list: notes, note: { note: NOTE } }) });

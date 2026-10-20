@@ -714,8 +714,10 @@ class NoteEditor extends LitElement {
   }
 
   updated() {
-    // A dock can move without changing size (it slides in, or the desk is rearranged).
+    // A dock can move without changing size (it slides in, or the desk is rearranged):
+    // measured again once the desk has laid out the move.
     this.#place();
+    requestAnimationFrame(this.#place);
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
     const { body, vimKeys, removed } = snapshot.context;
