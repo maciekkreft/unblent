@@ -362,3 +362,11 @@ test(":q and :quit run the editor's own quit handler; one without a handler does
   Vim.handleEx(exLine(one), "q");
   assert.equal(quits.length, 3);
 });
+
+test(":tabc and :tabclose run the same quit handler as :q", () => {
+  const quits = [];
+  const one = target("One", 0, baseExtensions({ vim: true, quit: (view) => quits.push(view) }));
+  Vim.handleEx(exLine(one), "tabc");
+  Vim.handleEx(exLine(one), "tabclose");
+  assert.deepEqual(quits, [one, one]);
+});

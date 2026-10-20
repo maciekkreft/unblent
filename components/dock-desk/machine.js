@@ -303,7 +303,7 @@ export const machine = setup({
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
       "arrives, and is still pressed after a reload in this browser (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
-      "`note.selected`, `conversation.selected`, `evaluator.selected`), which " +
+      "`note.selected`, `conversation.selected`, `evaluator.selected`, or `note.staged`, a note opened on the stage), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
       "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
@@ -483,6 +483,7 @@ export const machine = setup({
         // A child follows a selection gesture (6.4): bring its tab forward.
         "book.selected": show,
         "note.selected": show,
+        "note.staged": show,
         "conversation.selected": show,
         "evaluator.selected": show,
       },
@@ -508,6 +509,7 @@ export const machine = setup({
         // detour ends.
         "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "note.staged": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "evaluator.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },

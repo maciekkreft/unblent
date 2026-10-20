@@ -140,6 +140,17 @@ export function passageOf(reply, id) {
 
 const assignTyped = assign({ body: ({ event }) => event.body });
 
+// The note shown is announced (6.4) by every editor but the stage's: `pins` takes the
+// announced note as the pinned one, and a note on the stage is never the panel's.
+const announceOpened = (context, enqueue, id) => {
+  if (!context.staged) enqueue.emit({ type: "note.opened", id });
+};
+
+// Whether the open note has a tab on a stage, from the stages' tabs.shown. Ids are
+// ULIDs, so a note's id never names a book's tab.
+export const isStaged = (context) =>
+  context.id != null && Object.values(context.stageTabs).some((ids) => ids.includes(context.id));
+
 // A first keystroke into an editor holding no note mints its id (a ULID, the
 // browser's own, 5) and starts editing it. The id changed, so the note it now shows
 // is announced (note.opened), the same as a load or a reopen does on entering
@@ -149,7 +160,7 @@ const mintAndType = {
   actions: enqueueActions(({ context, event, enqueue }) => {
     const id = context.mint();
     enqueue.assign({ id, body: event.body });
-    enqueue.emit({ type: "note.opened", id });
+    announceOpened(context, enqueue, id);
   }),
 };
 
@@ -290,10 +301,17 @@ export const machine = setup({
       "the reader's y while Vim keys is on), is drawn as one tag, the link icon and the start of " +
       "the quote, that the cursor steps over and Backspace or x removes whole; a click on it, " +
       "or Enter on it in Vim's normal mode, opens the book at the passage, and a tag whose " +
-      "highlight is gone turns grey and struck through and opens nothing.",
+      "highlight is gone turns grey and struck through and opens nothing. With `subject` the " +
+      "header also has Open on stage, before the pin (and `:tab split` or `:tab sp` while Vim " +
+      "keys is on), which shows the note on the stage as a tab of its own; the button is " +
+      "accent while the note has a tab there, its arrow points towards the stage, and it is " +
+      "disabled while the editor holds no note. With `stage` it is the editor the stage shows " +
+      "for a note tab: it follows no subject, no selection and no pin, has no header, never " +
+      "announces its note, shows the note the stage names by `load`, and `:q`, `:tabc` or " +
+      "`:tabclose` closes the tab without changing the note.",
     kind: "view",
     emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"],
-    attributes: ["height", "follows", "subject"],
+    attributes: ["height", "follows", "subject", "stage"],
     asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read"],
   },
   context: ({ input }) => ({
@@ -307,6 +325,12 @@ export const machine = setup({
     // The `subject` attribute (D5): present means follow the stage — open the note about
     // it, re-follow on a change, and offer the pin. Off is exactly today's behaviour.
     subjecting: Boolean(input.subjecting),
+    // The `stage` attribute: the editor a stage shows for a note tab, told what to show by
+    // `load` alone.
+    staged: Boolean(input.staged),
+    // The tab ids each stage last announced (tabs.shown), by the stage's address, so the
+    // Open on stage button knows whether the open note is there already.
+    stageTabs: {},
     // The note pinned under this editor's own key before `pins` owned the pin, read
     // through input so the machine stays importable in Node; `forget` clears that key.
     forget: input.forget,
@@ -366,6 +390,20 @@ export const machine = setup({
     // selection. An unfollowing editor leaves it to the bus to record as ignored.
     "note.selected": { guard: ({ context }) => context.follows, target: ".loading", actions: "open" },
     focus: { actions: ({ context }) => context.focus() },
+    "tabs.shown": {
+      actions: assign({ stageTabs: ({ context, event }) => ({ ...context.stageTabs, [event.view]: event.tabs.map((t) => t.id) }) }),
+    },
+    // Open on stage, or `:tab split` (4.3, fifth rule): the stage decides what that means.
+    // Pressed again while the note is on the stage, it brings that tab to the front.
+    _stage: {
+      guard: ({ context }) => context.subjecting && !context.staged && context.id != null,
+      actions: emit(({ context }) => ({ type: "note.staged", id: context.id })),
+    },
+    // `:q`, `:tabc` or `:tabclose` in the stage's editor closes the note's tab.
+    _quit: {
+      guard: ({ context }) => context.staged && context.id != null,
+      actions: emit(({ context }) => ({ type: "note.closed", id: context.id })),
+    },
     // The reader copied a link to a highlight: Vim's p reads Vim's own register, not the
     // system clipboard, so the link goes there too.
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
@@ -505,7 +543,7 @@ export const machine = setup({
               if (context.id == null) {
                 const id = context.mint();
                 enqueue.assign({ id });
-                enqueue.emit({ type: "note.opened", id });
+                announceOpened(context, enqueue, id);
               }
               enqueue.assign({ body: event.body });
             }),
@@ -529,6 +567,8 @@ export const machine = setup({
     // never lands here.
     choosing: {
       always: [
+        // The stage's editor opens only what `load` names.
+        { guard: ({ context }) => context.staged, target: "empty" },
         {
           guard: "hasPin",
           target: "loading",
@@ -545,7 +585,7 @@ export const machine = setup({
     // No note yet: typing starts one. Announced, so the note last shown is not taken
     // for the open one (12, "Which note is open").
     empty: {
-      entry: emit({ type: "note.opened", id: null }),
+      entry: enqueueActions(({ context, enqueue }) => announceOpened(context, enqueue, null)),
       on: {
         _typed: mintAndType,
         // A note about the subject arrived after the choice was made (12): from the
@@ -561,7 +601,7 @@ export const machine = setup({
     // notes for the note; the reply decides where we land. Entering here the id has just
     // changed, so the note now shown is announced once (note.opened).
     loading: {
-      entry: emit(({ context }) => ({ type: "note.opened", id: context.id })),
+      entry: enqueueActions(({ context, enqueue }) => announceOpened(context, enqueue, context.id)),
       invoke: {
         src: "read",
         input: ({ context }) => ({ ask: context.ask, id: context.id }),

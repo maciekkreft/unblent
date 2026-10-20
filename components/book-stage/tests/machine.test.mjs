@@ -273,3 +273,124 @@ test("another view's move is ignored", async () => {
   assert.equal(shownEvents.length, before);
   assert.deepEqual(ids(last()), [BOOK, OTHER]);
 });
+
+// Note tabs: notes the user opened on the stage, labelled from `notes`, shown by the
+// stage's note editor, which the stage tells what to show by command (4.4).
+const NOTE_A = "01J0000000000000000000000A";
+const NOTE_B = "01J0000000000000000000000B";
+const NOTES = [{ id: NOTE_A, title: "Plans" }, { id: NOTE_B, title: "" }];
+
+const NOTES_KEY = KEY + ".notes";
+
+const staging = async ({ openId = BOOK, stored, storedNotes, notes = NOTES } = {}) => {
+  const initial = {};
+  if (stored) initial[KEY] = JSON.stringify(stored);
+  if (storedNotes) initial[NOTES_KEY] = JSON.stringify(storedNotes);
+  const storage = fakeStorage(initial);
+  const books = fakeAsk({ openId, books: LIBRARY });
+  const ask = (target, name, payload) =>
+    target === "notes" && name === "list" ? Promise.resolve({ notes }) : books(target, name, payload);
+  const sent = [];
+  const send = (target, name, payload) => sent.push({ target, name, ...payload });
+  const actor = createActor(machine, { input: { ask, send, address: "book-stage", storage } });
+  const shownEvents = [];
+  const switched = [];
+  actor.on("tabs.shown", (e) => shownEvents.push(e));
+  actor.on("book.switched", (e) => switched.push(e.id));
+  actor.start();
+  await flush();
+  return { actor, storage, sent, switched, last: () => shownEvents.at(-1) };
+};
+
+test("a staged note gets a tab at the end, in front, labelled by its title, and its editor is told", async () => {
+  const { actor, last, sent, switched, storage } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  assert.deepEqual(last().tabs, [
+    { id: BOOK, label: "Dune", closable: true },
+    { id: NOTE_A, label: "Plans", closable: true },
+  ]);
+  assert.equal(last().active, NOTE_A);
+  assert.equal(shownOf(actor.getSnapshot().context), "note");
+  assert.deepEqual(sent, [{ target: "note-editor#stage", name: "load", id: NOTE_A }]);
+  assert.deepEqual(switched, [], "the open book stays, so the subject does not move");
+  assert.deepEqual(JSON.parse(storage.data[KEY]), [BOOK, NOTE_A]);
+  assert.deepEqual(JSON.parse(storage.data[NOTES_KEY]), [NOTE_A]);
+});
+
+test("a note with no title says Untitled, and a renamed note's tab follows note.changed", async () => {
+  const { actor, last } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_B });
+  assert.equal(last().tabs[1].label, "Untitled");
+  actor.send({ type: "note.changed", id: NOTE_B, title: "Later" });
+  assert.equal(last().tabs[1].label, "Later");
+});
+
+test("staging a note already on the stage brings its tab forward without a second tab", async () => {
+  const { actor, last, sent } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "note.staged", id: NOTE_B });
+  actor.send({ type: "note.staged", id: NOTE_A });
+  assert.deepEqual(ids(last()), [BOOK, NOTE_A, NOTE_B]);
+  assert.equal(last().active, NOTE_A);
+  actor.send({ type: "note.staged", id: NOTE_A });
+  assert.deepEqual(sent.map((c) => c.id), [NOTE_A, NOTE_B, NOTE_A], "the tab in front is not reloaded");
+});
+
+test("picking a note tab shows it; picking the book's tab, or opening a book, brings the book back", async () => {
+  const { actor, last, sent, switched } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "tab.picked", view: "book-stage", id: BOOK });
+  assert.equal(last().active, BOOK);
+  assert.equal(shownOf(actor.getSnapshot().context), "reader");
+  assert.deepEqual(switched, [], "the book is already open");
+  actor.send({ type: "tab.picked", view: "book-stage", id: NOTE_A });
+  assert.equal(last().active, NOTE_A);
+  assert.equal(sent.length, 2);
+  await open(actor, OTHER);
+  assert.equal(last().active, OTHER);
+  assert.deepEqual(ids(last()), [BOOK, NOTE_A, OTHER], "the note tab stays when another book opens");
+  assert.equal(shownOf(actor.getSnapshot().context), "reader");
+});
+
+test("closing a note tab, by its × or by :q in its editor, removes it and leaves the note alone", async () => {
+  const { actor, last, switched } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "note.staged", id: NOTE_B });
+  actor.send({ type: "tab.closed", view: "book-stage", id: NOTE_B });
+  assert.deepEqual(ids(last()), [BOOK, NOTE_A]);
+  assert.equal(last().active, NOTE_A, "the tab to its left comes forward");
+  actor.send({ type: "note.closed", id: NOTE_A });
+  assert.deepEqual(ids(last()), [BOOK]);
+  assert.equal(last().active, BOOK);
+  assert.deepEqual(switched, [], "the open book comes back without opening anything");
+});
+
+test("the last tab cannot be closed, even a note's", async () => {
+  const { actor, last } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "tab.closed", view: "book-stage", id: BOOK });
+  assert.deepEqual(ids(last()), [NOTE_A]);
+  actor.send({ type: "note.closed", id: NOTE_A });
+  assert.deepEqual(ids(last()), [NOTE_A]);
+});
+
+test("a deleted note loses its tab, and the book beside it comes forward", async () => {
+  const { actor, last } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "note.deleted", id: NOTE_A });
+  assert.deepEqual(ids(last()), [BOOK]);
+  assert.equal(shownOf(actor.getSnapshot().context), "reader");
+});
+
+test("stored note tabs come back with the book tabs, and one the account does not have is dropped", async () => {
+  const gone = "01J000000000000000000000ZZ";
+  const { last, storage } = await staging({ stored: [NOTE_A, BOOK, gone], storedNotes: [NOTE_A, gone] });
+  assert.deepEqual(ids(last()), [NOTE_A, BOOK]);
+  assert.equal(last().active, BOOK, "after a reload the open book is in front");
+  assert.deepEqual(JSON.parse(storage.data[NOTES_KEY]), [NOTE_A]);
+});
+
+test("a list stored before note tabs reads as books", async () => {
+  const { last } = await staging({ stored: [OTHER, BOOK] });
+  assert.deepEqual(ids(last()), [OTHER, BOOK]);
+});

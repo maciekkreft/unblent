@@ -7,13 +7,15 @@ import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn, isStaged } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
 import staged from "./events/note.staged.json" with { type: "json" };
 import closed from "./events/note.closed.json" with { type: "json" };
+import load from "./commands/load.json" with { type: "json" };
+import focus from "./commands/focus.json" with { type: "json" };
 
 // The note editor's view: a CodeMirror 6 document. The fact stays one plain markdown
 // string; the document the user edits is marker-free, and per-line level lives in a
@@ -183,6 +185,13 @@ Vim.defineAction("setLineLevel", (cm, args) => {
 for (const [key, level] of [["\\1", "title"], ["\\2", "heading"], ["\\3", "subheading"], ["\\0", "body"]]) {
   Vim.mapCommand(key, "action", "setLineLevel", { level }, { context: "normal" });
 }
+
+// `:tab split` (or `:tab sp`) shows the note on the stage. Ex commands are one set for the
+// page, like the level maps, so it reaches the focused editor's own element as a
+// "tabsplit" event, and an editor that does not listen ignores it.
+Vim.defineEx("tab", "tab", (cm, params) => {
+  if (["split", "sp"].includes(params.args?.[0])) cm.cm6?.contentDOM.dispatchEvent(new CustomEvent("tabsplit"));
+});
 
 // --- Source links ------------------------------------------------------------------
 // A source link, `[label](note:<id>)`, stays raw in the document, so serialize and the
@@ -358,15 +367,21 @@ class ActorController {
   }
 
   hostConnected() {
+    // 4.1: a page may hold this editor twice (the Notes panel and the stage), so each
+    // mounts and asks under its own id.
+    const instance = this.host.id || undefined;
     this.actor = mount(machine, {
+      instance,
+      commands: { load, focus },
       input: {
-        ask: (target, name, payload) => ask(machine, target, name, payload),
+        ask: (target, name, payload) => ask(machine, target, name, payload, instance),
         mint: ulid,
         focus: () => this.host.focusEditor?.(),
         // The attributes are parsed by the time hostConnected runs, so the actor is
         // born knowing whether it follows the selection (6.4) and the stage (D5).
         follows: this.host.follows,
         subjecting: this.host.subject,
+        staged: this.host.stage,
         recall: legacyPin.recall,
         forget: legacyPin.forget,
         recallTitles: titleStore.recall,
@@ -404,6 +419,8 @@ class NoteEditor extends LitElement {
     // page's bare `subject` reads as true and the manifest attribute is visible. Off is
     // exactly today's behaviour.
     subject: { type: Boolean, reflect: true },
+    // The editor the stage shows for a note tab: it opens only what `load` names.
+    stage: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -445,7 +462,8 @@ class NoteEditor extends LitElement {
     }
     /* The pin: a toggle, muted while following, accent when pinned (D7). One icon,
        sized by the caption type. */
-    .pin {
+    .pin,
+    .open {
       flex: none;
       display: inline-flex;
       appearance: none;
@@ -459,20 +477,29 @@ class NoteEditor extends LitElement {
       cursor: pointer;
       color: var(--color-body-mid);
     }
-    .pin svg {
+    .pin svg,
+    .open svg {
       display: block;
     }
-    .pin:hover:not(:disabled):not([aria-pressed="true"]) {
+    /* The arrow points towards the stage: up-left from a dock right of the middle. */
+    .open.mirrored svg {
+      transform: scaleX(-1);
+    }
+    .pin:hover:not(:disabled):not([aria-pressed="true"]),
+    .open:hover:not(:disabled):not([aria-pressed="true"]) {
       color: var(--color-ink);
     }
-    .pin[aria-pressed="true"] {
+    .pin[aria-pressed="true"],
+    .open[aria-pressed="true"] {
       color: var(--color-accent);
     }
-    .pin:disabled {
+    .pin:disabled,
+    .open:disabled {
       color: var(--color-mute);
       cursor: default;
     }
-    .pin:focus-visible {
+    .pin:focus-visible,
+    .open:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
@@ -588,7 +615,11 @@ class NoteEditor extends LitElement {
 
   #extensions() {
     return [
-      ...baseExtensions({ vim: this.#actor.snapshot?.context.vimKeys === true, history: false }),
+      ...baseExtensions({
+        vim: this.#actor.snapshot?.context.vimKeys === true,
+        history: false,
+        quit: this.stage ? () => this.#actor.send({ type: "_quit" }) : null,
+      }),
       paragraphs({ notList: leveled }),
       levelField,
       levelTheme,
@@ -606,6 +637,11 @@ class NoteEditor extends LitElement {
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
         level: (e, view) => {
           view.dispatch(toLevel(view.state, e.detail));
+          return true;
+        },
+        // `:tab split` typed in this editor (the "tab" Ex command above).
+        tabsplit: () => {
+          this.#actor.send({ type: "_stage" });
           return true;
         },
         // A click on a source link's tag, or Enter on it (enterFollows).
@@ -643,6 +679,24 @@ class NoteEditor extends LitElement {
     this.requestUpdate();
   }
 
+  // Whether the arrow is mirrored: layout reading only. The left edge, not the centre,
+  // decides, because a phone's drawer is nearly as wide as the screen and sits just right
+  // of its middle, where the stage is not beside it but behind it.
+  #mirrored = false;
+  #resized = new ResizeObserver(() => this.#place());
+  #place = () => {
+    const mirrored = this.getBoundingClientRect().left >= globalThis.innerWidth / 2;
+    if (mirrored === this.#mirrored) return;
+    this.#mirrored = mirrored;
+    this.requestUpdate();
+  };
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.#resized.observe(this);
+    globalThis.addEventListener("resize", this.#place);
+  }
+
   firstUpdated() {
     const parent = this.renderRoot.querySelector(".region");
     const body = this.#actor.snapshot?.context.body ?? "";
@@ -660,6 +714,8 @@ class NoteEditor extends LitElement {
   }
 
   updated() {
+    // A dock can move without changing size (it slides in, or the desk is rearranged).
+    this.#place();
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
     const { body, vimKeys, removed } = snapshot.context;
@@ -680,6 +736,8 @@ class NoteEditor extends LitElement {
   }
 
   disconnectedCallback() {
+    this.#resized.disconnect();
+    globalThis.removeEventListener("resize", this.#place);
     this.#view?.destroy();
     this.#view = null;
     super.disconnectedCallback();
@@ -736,6 +794,12 @@ class NoteEditor extends LitElement {
     this.requestUpdate();
   };
 
+  // The keyboard stays where it was (the mousedown above keeps it): the stage shows the
+  // note, and the user goes on in the panel.
+  #stageNote() {
+    this.#actor.send({ type: "_stage" });
+  }
+
   #togglePin() {
     this.#actor.send({ type: "_togglePin" });
   }
@@ -750,10 +814,23 @@ class NoteEditor extends LitElement {
   // The header shown only while following the stage (D7): the About line, and the pin
   // toggle. The pin is disabled while the editor holds no note; its label names the
   // action for assistive tech, and its colour follows the state (accent when pinned).
-  #header(aboutTitle, pinned, id) {
+  #header(aboutTitle, pinned, id, onStage, vimKeys) {
+    const label = `${onStage ? "Show on stage" : "Open on stage"}${vimKeys ? " (:tab split)" : ""}`;
     return html`
       <div class="header">
         <span class="about">${aboutTitle ? html`About: ${aboutTitle}` : nothing}</span>
+        <button
+          class=${this.#mirrored ? "open mirrored" : "open"}
+          type="button"
+          aria-pressed=${onStage}
+          aria-label=${label}
+          title=${label}
+          ?disabled=${!id}
+          @mousedown=${(e) => e.preventDefault()}
+          @click=${this.#stageNote}
+        >
+          ${icon("arrow-square-out")}
+        </button>
         <button
           class="pin"
           type="button"
@@ -783,7 +860,7 @@ class NoteEditor extends LitElement {
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
       <div class="editor">
-        ${subjecting ? this.#header(aboutTitle, pinned, id) : nothing}
+        ${subjecting ? this.#header(aboutTitle, pinned, id, isStaged(snapshot.context), vimKeys) : nothing}
         <div class="region" role="textbox" aria-label="Note"></div>
         <div class="footer">
           <p class="status">

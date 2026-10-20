@@ -53,7 +53,7 @@ async function until(fn, timeout = 4000) {
 // composer swapped in, which carries data-role (3.6).
 const slotted = (page) =>
   page.evaluate(() => {
-    const el = document.querySelector('note-editor, [data-role="note-editor"]');
+    const el = document.querySelector('note-editor:not([stage]), [data-role="note-editor"]');
     return el ? { tag: el.localName, role: el.dataset.role ?? null } : null;
   });
 
@@ -269,17 +269,17 @@ for (const engine of ENGINES) {
       const page = await context.newPage();
       watch(page, problems);
       // The notes stem page loads no composer, so this runs on the product, whose
-      // editor shows once a note is picked from the Notes list.
+      // editor in the Notes panel shows once a note is picked from the Notes list.
       await page.addInitScript((v) => localStorage.setItem("settings:product", v), settings(false, { "note-editor": "no-such-editor" }));
       await page.goto(`${BASE_URL}/`);
       await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row.draft"));
       await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
-      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await page.waitForFunction(() => document.querySelector("#notes-editor")?.shadowRoot?.querySelector(".cm-content"));
       assert.deepEqual(await slotted(page), { tag: "note-editor", role: null }, "the page's own editor stayed");
 
-      await page.locator("note-editor .cm-content").click();
+      await page.locator("#notes-editor .cm-content").click();
       await page.keyboard.type("Still here");
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(async () => (await page.locator("#notes-editor .status > span:first-child").textContent())?.trim() === "Saved");
       // The one failed request is the missing component the stored choice names; the
       // browser also logs it as a console error, which names no URL.
       const missing = "/static/components/no-such-editor/view.js";

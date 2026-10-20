@@ -5,12 +5,26 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // child is shown, and the tab list, which follows the device in localStorage (3.1) and
 // loses nothing when lost. It points at `books`: it asks books: open, books: read and
 // books: list for the starting picture and follows book.opened, book.changed and
-// book.deleted after (4.3, fourth rule). The asks and the storage arrive through
-// `input`, so the machine is importable in Node.
+// book.deleted after (4.3, fourth rule). It also keeps a tab per note the user opened on
+// the stage (note.staged), labelled from notes: list and note.changed, and tells the
+// stage's note editor which note to show by the load command (4.4). The asks, the send
+// and the storage arrive through `input`, so the machine is importable in Node.
 
-// Which child the view shows: "written" while the open book is the one the user writes,
-// "reader" otherwise, also when no book is open or the open book cannot be read.
-export const shownOf = (context) => (context.written ? "written" : "reader");
+// Which child the view shows: "note" while a note's tab is in front, else "written" while
+// the open book is the one the user writes, "reader" otherwise, also when no book is open
+// or the open book cannot be read.
+export const shownOf = (context) =>
+  context.notes.includes(context.front) ? "note" : context.written ? "written" : "reader";
+
+// The address of the editor that shows a note tab: the page gives it the id "stage" (4.1).
+const STAGE_EDITOR = "note-editor#stage";
+
+// A note's tab says its title, or Untitled while it has none.
+const noteLabel = (title) => (title === "" ? "Untitled" : title);
+
+// A tab's label, or undefined while it is not known yet, so the tab is not drawn.
+const labelFor = (context, id) =>
+  context.notes.includes(id) ? (id in context.titles ? noteLabel(context.titles[id]) : undefined) : context.labels[id];
 
 // The journal is the book with `written` set (books: list); every other book shows the
 // title the user gave it.
@@ -27,9 +41,12 @@ const recall = (storage, key) => {
   }
 };
 
+// The order of every tab stays in the one list under `key`, and which of them are notes in
+// a second list beside it, so a list stored before notes had tabs still reads as books.
 const remember = (context) => {
   try {
     context.storage?.setItem(context.key, JSON.stringify(context.tabs));
+    context.storage?.setItem(`${context.key}.notes`, JSON.stringify(context.notes));
   } catch {
     // A full or blocked storage keeps the tabs for this page load only.
   }
@@ -39,45 +56,47 @@ const remember = (context) => {
 // else on the left, since a tab with no label yet is not drawn (tabsOf); only when none
 // is drawn does a hidden one come forward.
 const neighbourOf = (context, id) => {
-  const { tabs, labels } = context;
+  const { tabs } = context;
   const at = tabs.indexOf(id);
-  const drawn = (t) => t !== undefined && labels[t] !== undefined;
+  const drawn = (t) => t !== undefined && labelFor(context, t) !== undefined;
   const right = tabs.slice(at + 1).find(drawn);
   const left = tabs.slice(0, at).reverse().find(drawn);
   return right ?? left ?? tabs[at + 1] ?? tabs[at - 1] ?? null;
 };
 
 // How many tabs the desk draws: a tab with no label yet is left out (tabsOf).
-const drawnCount = (context) => context.tabs.filter((id) => context.labels[id] !== undefined).length;
+const drawnCount = (context) => context.tabs.filter((id) => labelFor(context, id) !== undefined).length;
 
 // What tabs.shown announces. A tab with no label yet (a book books has not listed) is
 // left out until its label is known, so no tab is ever blank.
 export const tabsOf = (context) => {
-  const tabs = context.tabs.filter((id) => context.labels[id] !== undefined);
+  const tabs = context.tabs.filter((id) => labelFor(context, id) !== undefined);
   return {
     view: context.address,
-    tabs: tabs.map((id) => ({ id, label: context.labels[id], closable: tabs.length > 1 })),
+    tabs: tabs.map((id) => ({ id, label: labelFor(context, id), closable: tabs.length > 1 })),
     active: tabs.includes(context.front) ? context.front : null,
   };
 };
 
 // Announces the tabs once the labels are known (the list replied), and only when what
 // the desk would draw changed, so a reading position saved on book.changed is silent.
+// Returns the context as it now stands, so several changes in one step can follow each other.
 const announce = (context, enqueue) => {
-  if (!context.listed) return;
+  if (!context.listed) return context;
   const shown = tabsOf(context);
   const said = JSON.stringify(shown);
-  if (said === context.said) return;
+  if (said === context.said) return context;
   enqueue.assign({ said });
   enqueue.emit({ type: "tabs.shown", ...shown });
+  return { ...context, said };
 };
 
 // The one path every change to the list takes: store it, then announce it.
 const settle = (context, enqueue, change) => {
   const next = { ...context, ...change };
   enqueue.assign(change);
-  if (change.tabs) remember(next);
-  announce(next, enqueue);
+  if (change.tabs || change.notes) remember(next);
+  return announce(next, enqueue);
 };
 
 // Brings a tab's book to the front through `books`, which answers with book.opened. The
@@ -87,15 +106,33 @@ const switchTo = (enqueue, id) => {
   enqueue.emit({ type: "book.switched", id });
 };
 
+// Brings any tab to the front. A note's tab tells the stage's editor which note to show;
+// it never touches `books`, so the open book, and with it the subject, stays. The open
+// book's own tab needs no book.switched, since `books` already holds it open.
+const bringForward = (context, enqueue, id) => {
+  if (id != null && context.notes.includes(id)) {
+    enqueue.assign({ front: id });
+    enqueue(() => context.send?.(STAGE_EDITOR, "load", { id }));
+  } else if (id == null || id === context.openId) enqueue.assign({ front: id });
+  else switchTo(enqueue, id);
+};
+
+// Removes a tab whatever took it away (a close, a deletion, a list that lacks it); the
+// tab beside it comes forward if it was in front.
+const drop = (context, enqueue, id) => {
+  const tabs = context.tabs.filter((t) => t !== id);
+  const notes = context.notes.filter((t) => t !== id);
+  const front = context.front === id ? neighbourOf(context, id) : context.front;
+  if (context.front === id) bringForward(context, enqueue, front);
+  return settle({ ...context, front }, enqueue, { tabs, notes });
+};
+
 // Removes a tab the user closed. The last drawn tab stays, so the stage always shows a
 // book the user can see, the same count that marks a tab closable (tabsOf).
 const close = ({ context, event, enqueue }) => {
   const { id } = event;
   if (!context.tabs.includes(id) || drawnCount(context) < 2) return;
-  const tabs = context.tabs.filter((t) => t !== id);
-  if (context.front === id) switchTo(enqueue, neighbourOf(context, id));
-  const front = context.front === id ? neighbourOf(context, id) : context.front;
-  settle({ ...context, front }, enqueue, { tabs });
+  drop(context, enqueue, id);
 };
 
 // Moves a tab one place in the order the desk draws: it trades places with the nearest
@@ -103,9 +140,9 @@ const close = ({ context, event, enqueue }) => {
 // either end does nothing, and the front tab stays in front.
 const move = ({ context, event, enqueue }) => {
   const at = context.tabs.indexOf(event.id);
-  if (at < 0 || context.labels[event.id] === undefined) return;
+  if (at < 0 || labelFor(context, event.id) === undefined) return;
   let to = at + event.step;
-  while (to >= 0 && to < context.tabs.length && context.labels[context.tabs[to]] === undefined) to += event.step;
+  while (to >= 0 && to < context.tabs.length && labelFor(context, context.tabs[to]) === undefined) to += event.step;
   if (to < 0 || to >= context.tabs.length) return;
   const tabs = [...context.tabs];
   [tabs[at], tabs[to]] = [tabs[to], tabs[at]];
@@ -125,6 +162,7 @@ export const machine = setup({
     open: fromPromise(({ input }) => input.ask("books", "open", {})),
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
     list: fromPromise(({ input }) => input.ask("books", "list", {})),
+    noteList: fromPromise(({ input }) => input.ask("notes", "list", {})),
   },
   guards: {
     hasBook: ({ context }) => context.openId != null,
@@ -146,24 +184,40 @@ export const machine = setup({
       "its right comes forward, or the one to its left if there is none; the last tab cannot be " +
       "closed. The desk's ‹ › move the tab in front one place earlier or later, and the new " +
       "order is kept like the rest; a move past either end does nothing. A deleted book's tab goes the same way, and a book the account no longer has " +
-      "(after View as) loses its tab. It announces its tabs so the desk can draw them in place " +
-      "of the stage's own tab.",
+      "(after View as) loses its tab. A note opened on the stage (`note.staged`, the Notes " +
+      "panel's Open on stage) gets a tab of its own at the end, or its tab comes to the front; " +
+      "while a note's tab is in front the stage shows a third view, the note editor with id " +
+      "`stage`, which it tells which note to show. A note's tab says the note's title, or " +
+      "Untitled; picking it never opens a book, so the open book, and what the panels follow, " +
+      "stays. Picking a book's tab, or a book opened anywhere, brings the book back to the " +
+      "front. A note's tab closes like a book's, also by `:q` or `:tabc` in its editor, and the " +
+      "note itself is unchanged; a deleted note, or one the account does not have, loses its " +
+      "tab. Note tabs are kept in the browser beside the book tabs, and after a reload the open " +
+      "book is in front. It announces its tabs so the desk can draw them in place of the " +
+      "stage's own tab.",
     kind: "view",
     emits: ["tabs.shown", "book.switched"],
-    asks: ["books: open", "books: read", "books: list"],
+    asks: ["books: open", "books: read", "books: list", "notes: list"],
+    sends: ["note-editor: load"],
     attributes: ["height"],
   },
   context: ({ input }) => {
     const key = input.address && input.address !== "book-stage" ? `book-stage.tabs${input.address.slice("book-stage".length)}` : "book-stage.tabs";
+    const tabs = recall(input.storage, key);
     return {
       ask: input.ask,
+      send: input.send,
       address: input.address ?? "book-stage",
       storage: input.storage ?? null,
       key,
       openId: null,
       written: false,
-      tabs: recall(input.storage, key),
+      tabs,
+      // Which tabs are notes; every other tab is a book.
+      notes: recall(input.storage, `${key}.notes`).filter((id) => tabs.includes(id)),
       labels: {},
+      // Every note's title, by id, from notes: list and note.changed.
+      titles: {},
       front: null,
       listed: false,
       said: null,
@@ -239,7 +293,7 @@ export const machine = setup({
                 // No answer (no books on the page, offline) keeps the stored list as it is.
                 if (!Array.isArray(books)) return;
                 const labels = Object.fromEntries(books.map((b) => [b.id, labelOf(b)]));
-                let tabs = context.tabs.filter((id) => labels[id] !== undefined);
+                let tabs = context.tabs.filter((id) => labels[id] !== undefined || context.notes.includes(id));
                 if (context.openId != null && labels[context.openId] !== undefined && !tabs.includes(context.openId)) tabs = [...tabs, context.openId];
                 settle({ ...context, listed: true }, enqueue, { labels, tabs, listed: true });
               }),
@@ -250,8 +304,62 @@ export const machine = setup({
         known: {},
       },
     },
+    // The notes' titles, and which note tabs the account still has (notes: list). A
+    // note.changed or note.deleted that races it is held until the reply (4.2).
+    noteTitles: {
+      initial: "listing",
+      states: {
+        listing: {
+          invoke: {
+            src: "noteList",
+            input: ({ context }) => ({ ask: context.ask }),
+            onDone: {
+              target: "known",
+              actions: enqueueActions(({ context, event, enqueue }) => {
+                const notes = event.output?.notes;
+                // No answer (no notes on the page, offline) keeps the note tabs as stored.
+                if (!Array.isArray(notes)) return;
+                // A title kept before the reply is a note staged while it was on its way.
+                const titles = { ...context.titles, ...Object.fromEntries(notes.map((n) => [n.id, n.title])) };
+                let next = settle(context, enqueue, { titles });
+                for (const id of context.notes.filter((n) => !(n in titles))) next = drop(next, enqueue, id);
+              }),
+            },
+            onError: "known",
+          },
+        },
+        known: {},
+      },
+    },
   },
   on: {
+    // The Notes panel's Open on stage (4.3, fifth rule): a tab for the note at the end, or
+    // its tab to the front.
+    "note.staged": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        const { id } = event;
+        const fresh = !context.tabs.includes(id);
+        const tabs = fresh ? [...context.tabs, id] : context.tabs;
+        const notes = fresh ? [...context.notes, id] : context.notes;
+        // A note just written may not be listed yet; it shows as Untitled until it is.
+        const titles = id in context.titles ? context.titles : { ...context.titles, [id]: "" };
+        const next = { ...context, tabs, notes, titles };
+        if (context.front !== id) bringForward(next, enqueue, id);
+        settle({ ...next, front: id }, enqueue, { tabs, notes, titles });
+      }),
+    },
+    "note.changed": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (context.titles[event.id] === event.title) return;
+        settle(context, enqueue, { titles: { ...context.titles, [event.id]: event.title } });
+      }),
+    },
+    "note.deleted": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (context.notes.includes(event.id)) drop(context, enqueue, event.id);
+      }),
+    },
+    "note.closed": { actions: enqueueActions(close) },
     "book.changed": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         if (event.id === context.openId) enqueue.assign({ written: event.written === true });
@@ -262,19 +370,16 @@ export const machine = setup({
     "book.deleted": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         const { id } = event;
-        if (id === context.openId) enqueue.assign({ openId: null, written: false });
-        if (!context.tabs.includes(id)) return;
-        const tabs = context.tabs.filter((t) => t !== id);
-        const next = context.front === id ? neighbourOf(context, id) : context.front;
-        if (context.front === id && next != null) switchTo(enqueue, next);
-        settle({ ...context, front: next }, enqueue, { tabs });
+        const gone = id === context.openId ? { openId: null, written: false } : {};
+        enqueue.assign(gone);
+        if (context.tabs.includes(id)) drop({ ...context, ...gone }, enqueue, id);
       }),
     },
     // The desk's tab gestures name the view they belong to (4.1); another view's are not ours.
     "tab.picked": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         if (!mine({ context, event }) || !context.tabs.includes(event.id) || event.id === context.front) return;
-        switchTo(enqueue, event.id);
+        bringForward(context, enqueue, event.id);
         announce({ ...context, front: event.id }, enqueue);
       }),
     },

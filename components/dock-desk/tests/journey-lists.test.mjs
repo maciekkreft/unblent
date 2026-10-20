@@ -128,7 +128,7 @@ const look = ({ page }) =>
       place: peers.length ? `${peers.indexOf(deep) + 1} of ${peers.length}` : null,
       shown,
       notes: shows("notes"),
-      editor: cm("note-editor"),
+      editor: cm("note-editor#notes-editor"),
       chatBox: cm("chat-input"),
       rows: `${rows.length}: ${rows.slice(0, 5).join(", ")}`,
     };

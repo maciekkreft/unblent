@@ -439,11 +439,11 @@ const passageChapter = (passage, book) => Math.min(passage.place.chapter, Math.m
 const glowFor = (context, passage = context.passage) => ({ id: passage.id, n: (context.glow?.n ?? 0) + 1 });
 
 // The command line (Vim keys on): ":" opens it, typed letters build it, Backspace on an
-// empty line or Escape cancels it, and Enter runs it. The only command is q (or quit),
-// which closes the open book; any other text is named back for NOT_A_COMMAND_MS, then
+// empty line or Escape cancels it, and Enter runs it. The only command is q (or quit,
+// or tabc and tabclose, since the book is a tab on the stage), which closes the open book; any other text is named back for NOT_A_COMMAND_MS, then
 // the line is gone.
 export const NOT_A_COMMAND_MS = 2000;
-export const QUIT = ["q", "quit"];
+export const QUIT = ["q", "quit", "tabc", "tabclose"];
 
 const commandKey = enqueueActions(({ context, event, enqueue }) => {
   const { key } = event;
@@ -553,7 +553,7 @@ export const machine = setup({
       "link in a note opens the page that holds the passage, in the book already open or " +
       "after `books` opens its book, and the highlight glows for about a second. With Vim keys " +
       "on and the reader focused, : opens a one-line command line at the reader's foot, as in " +
-      "Vim, and the reader's other keys wait while it is open; q or quit and Enter close the " +
+      "Vim, and the reader's other keys wait while it is open; q, quit, tabc or tabclose and Enter close the " +
       "book, any other text shows \"Not a command\" with that text for a moment, and Escape, " +
       "Backspace on an empty line or leaving the reader cancels it.",
     kind: "view",

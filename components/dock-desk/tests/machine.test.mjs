@@ -833,3 +833,18 @@ test("the close button emits tab.closed for a closable tab only", async () => {
   actor.send({ type: "_close", name: "contract-list", id: "b2" });
   assert.deepEqual(closed, [{ type: "tab.closed", view: "contract-list", id: "journal" }]);
 });
+
+test("on a narrow desk, a note opened on the stage brings the stage forward and folds the drawer (6.4)", async () => {
+  const views = [
+    { name: "book-stage", label: "Reader", showsOn: "note.staged" },
+    { name: "notes", label: "Notes", side: "right" },
+  ];
+  const { actor, emitted } = await settle(stored({ stage: "book-stage", docks: { right: { open: true, views: ["notes"] } } }), {
+    views,
+    narrow: () => true,
+  });
+  actor.send({ type: "note.staged", id: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
+  assert.deepEqual(emitted, [
+    { type: "dock.arranged", stage: "book-stage", docks: { right: { open: false, views: ["notes"] } } },
+  ]);
+});

@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, isStaged } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
 // the view edits are pure functions, tested at the end.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "pin.toggled", "passage.selected"].map((n) => [n, schemaOf(n)]));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"].map((n) => [n, schemaOf(n)]));
 // Every emit of every test, checked against its schema by the last test.
 const recorded = [];
 
@@ -41,6 +41,7 @@ function editor({
   follows = false,
   mint = () => ID,
   subjecting = false,
+  staged = false,
   recall,
   forget,
   recallTitles,
@@ -54,18 +55,22 @@ function editor({
   const saved = [];
   const opened = [];
   const toggled = [];
+  const stagedIds = [];
+  const closed = [];
   const asked = (target, name, payload) =>
     target === "pins" ? Promise.resolve({ note: pinned, chat: null, evaluators: null }) : ask(target, name, payload);
   const actor = createActor(machine, {
-    input: { ask: asked, mint, focus, follows, subjecting, recall, forget, recallTitles, rememberTitles, pushRegister },
+    input: { ask: asked, mint, focus, follows, subjecting, staged, recall, forget, recallTitles, rememberTitles, pushRegister },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.opened", (e) => opened.push(e.id));
   actor.on("pin.toggled", (e) => toggled.push(e.id));
+  actor.on("note.staged", (e) => stagedIds.push(e.id));
+  actor.on("note.closed", (e) => closed.push(e.id));
   for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
   actor.start();
-  return { actor, clock, saved, opened, toggled };
+  return { actor, clock, saved, opened, toggled, staged: stagedIds, closed };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -1003,6 +1008,89 @@ test("a copied link goes into Vim's register", async () => {
   const { actor } = await started({ pushRegister: (text) => pushed.push(text) });
   actor.send({ type: "link.copied", id: HL, text: `[q](note:${HL})` });
   assert.deepEqual(pushed, [`[q](note:${HL})`]);
+});
+
+// Open on stage: the panel editor asks the stage to show its note, and the stage's own
+// editor shows what the stage names without ever announcing it.
+test("Open on stage, or :tab split, asks the stage to show the open note; never with no note", async () => {
+  const { actor, staged } = editor({ subjecting: true, ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  actor.send({ type: "_stage" });
+  assert.deepEqual(staged, [], "no note is open yet");
+  actor.send({ type: "load", id: ID });
+  await settle();
+  actor.send({ type: "_stage" });
+  actor.send({ type: "_stage" });
+  assert.deepEqual(staged, [ID, ID], "pressed again, it asks again, so the stage brings the tab forward");
+});
+
+test("an editor without `subject` offers no Open on stage", async () => {
+  const { actor, staged } = editor({ ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  actor.send({ type: "load", id: ID });
+  await settle();
+  actor.send({ type: "_stage" });
+  assert.deepEqual(staged, []);
+});
+
+test("the open note is staged while any stage's tabs name it", async () => {
+  const { actor } = editor({ subjecting: true, ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  actor.send({ type: "load", id: ID });
+  await settle();
+  assert.equal(isStaged(actor.getSnapshot().context), false);
+  const tab = (id) => ({ id, label: "x", closable: true });
+  actor.send({ type: "tabs.shown", view: "book-stage", tabs: [tab(ID2), tab(ID)], active: ID2 });
+  assert.equal(isStaged(actor.getSnapshot().context), true);
+  actor.send({ type: "tabs.shown", view: "other-stage", tabs: [], active: null });
+  assert.equal(isStaged(actor.getSnapshot().context), true, "another view's tabs leave this one's alone");
+  actor.send({ type: "tabs.shown", view: "book-stage", tabs: [tab(ID2)], active: ID2 });
+  assert.equal(isStaged(actor.getSnapshot().context), false);
+});
+
+test("the stage's editor shows what load names and never announces it", async () => {
+  const notes = { notes: [{ id: ID2, title: "Newest", updatedAt: 10, about: [] }] };
+  const { actor, opened, toggled } = editor({ staged: true, ask: asking({ list: notes, note: { note: NOTE } }) });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "empty", "it opens nothing by itself");
+  actor.send({ type: "load", id: ID });
+  await settle();
+  assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+  assert.equal(actor.getSnapshot().context.body, NOTE.body);
+  actor.send({ type: "note.deleted", id: ID });
+  assert.deepEqual(opened, [], "`pins` never takes a note on the stage for the pinned one");
+  assert.deepEqual(toggled, []);
+});
+
+test("the stage's editor ignores the list's selection, the subject and the pin", async () => {
+  const { actor } = editor({ staged: true, ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  actor.send({ type: "load", id: ID });
+  await settle();
+  actor.send({ type: "note.selected", id: ID2 });
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: "b", title: "B" } });
+  actor.send({ type: "_togglePin" });
+  actor.send({ type: "_stage" });
+  const { context } = actor.getSnapshot();
+  assert.equal(context.id, ID);
+  assert.equal(context.pinned, false);
+});
+
+test(":q or :tabc in the stage's editor closes its tab; elsewhere it does nothing", async () => {
+  const stage = editor({ staged: true, ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  stage.actor.send({ type: "_quit" });
+  assert.deepEqual(stage.closed, [], "no note on the stage yet");
+  stage.actor.send({ type: "load", id: ID });
+  await settle();
+  stage.actor.send({ type: "_quit" });
+  assert.deepEqual(stage.closed, [ID]);
+  const panel = editor({ subjecting: true, ask: asking({ note: { note: NOTE } }) });
+  await settle();
+  panel.actor.send({ type: "load", id: ID });
+  await settle();
+  panel.actor.send({ type: "_quit" });
+  assert.deepEqual(panel.closed, []);
 });
 
 test("every payload matches its schema", () => {

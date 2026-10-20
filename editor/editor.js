@@ -235,15 +235,18 @@ export function setVim(view, on) {
 // editor says what quitting means for it through this facet; one without a handler
 // quits nothing. The facet sits outside the Vim compartment, so setVim keeps it.
 const quitHandler = Facet.define();
-Vim.defineEx("quit", "q", (cm) => {
+const quitEditor = (cm) => {
   for (const quit of cm.cm6.state.facet(quitHandler)) quit(cm.cm6);
-});
+};
+Vim.defineEx("quit", "q", quitEditor);
+// A stage keeps a tab per thing it shows, so closing the tab is quitting the editor in it.
+Vim.defineEx("tabclose", "tabc", quitEditor);
 
 // The shared setup. Put first in an editor's extensions: the Vim plugin must see a key
 // before any keymap does. The standard and history keys are low precedence, so an
 // editor's own keymap (and paragraphs()) wins over them. `history: false` is for an
 // editor that holds history in a compartment of its own, to empty it by reconfiguring.
-// `quit(view)` runs when the user types :q or :quit with Vim on.
+// `quit(view)` runs when the user types :q, :quit, :tabc or :tabclose with Vim on.
 export function baseExtensions({ vim: vimOn = false, history: withHistory = true, quit = null } = {}) {
   return [
     vimSlot.of(vimContent(vimOn)),

@@ -1103,6 +1103,13 @@ test(":q and :quit Enter close the open book and the line", async () => {
   assert.deepEqual(closed, [{ type: "book.closed", id: ID }, { type: "book.closed", id: ID }]);
 });
 
+test(":tabc and :tabclose Enter close the open book like :q", async () => {
+  const { actor, closed } = await commanding();
+  keys(actor, [":", ..."tabc", "Enter"]);
+  keys(actor, [":", ..."tabclose", "Enter"]);
+  assert.deepEqual(closed, [{ type: "book.closed", id: ID }, { type: "book.closed", id: ID }]);
+});
+
 test("Escape, Backspace on an empty line and an empty Enter cancel without closing", async () => {
   const { actor, closed } = await commanding();
   keys(actor, [":", "q", "Escape"]);

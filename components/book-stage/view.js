@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from "lit";
-import { mount, unmount, ask } from "bus";
+import { mount, unmount, ask, send } from "bus";
 import { machine, shownOf } from "./machine.js";
 import tabsShown from "./events/tabs.shown.json" with { type: "json" };
 import switched from "./events/book.switched.json" with { type: "json" };
@@ -26,6 +26,7 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload, instance),
+        send: (target, name, payload) => send(machine, target, name, payload, instance),
         address: instance ? `book-stage#${instance}` : "book-stage",
         storage: deviceStorage(),
       },
@@ -75,9 +76,10 @@ class BookStage extends LitElement {
   #shownWas;
   #hadFocus = false;
 
-  // The first child reads an ordinary book, the second shows the written one.
+  // The first child reads an ordinary book, the second shows the written one, the third
+  // the note whose tab is in front.
   #child(shown) {
-    return this.children[shown === "written" ? 1 : 0] ?? this.children[0];
+    return this.children[{ reader: 0, written: 1, note: 2 }[shown]] ?? this.children[0];
   }
 
   #shown() {

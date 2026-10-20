@@ -109,7 +109,7 @@ const look = ({ page }) =>
       rightTab: desk.querySelector('.dock.right .panel [role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
       notes: shows("notes"),
       chats: shows("chats"),
-      editor: cm("note-editor"),
+      editor: cm("note-editor#notes-editor"),
       rows: names("note-list", "li.row").join(", "),
       chatRows: names("conversation-list", "li.row"),
       chatOpen: names("conversation-list", 'li.row[aria-selected="true"]')[0] ?? null,
