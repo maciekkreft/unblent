@@ -5,6 +5,8 @@ journal, chats with a language model about your own library, and evaluators
 that answer yes / no questions about a text. It runs at
 [unblent.com](https://unblent.com).
 
+![Unblent on the desk: Books on the left, Settings in the middle, Chats on the right](screenshot.png)
+
 ## How it is built
 
 The application is built like Niklas Luhmann's slip-box. Each component is
