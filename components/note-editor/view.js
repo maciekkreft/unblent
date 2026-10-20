@@ -12,6 +12,8 @@ import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
+import staged from "./events/note.staged.json" with { type: "json" };
+import closed from "./events/note.closed.json" with { type: "json" };
 
 // The note editor's view: a CodeMirror 6 document. The fact stays one plain markdown
 // string; the document the user edits is marker-free, and per-line level lives in a
@@ -372,7 +374,7 @@ class ActorController {
         // Vim's registers are one per page, so the link lands where any editor's p reads.
         pushRegister: (text) => Vim.getRegisterController().pushText(null, "yank", text, false, false),
       },
-      events: { "note.saved": saved, "note.opened": opened, "pin.toggled": pinToggled, "passage.selected": passageSelected },
+      events: { "note.saved": saved, "note.opened": opened, "pin.toggled": pinToggled, "passage.selected": passageSelected, "note.staged": staged, "note.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
