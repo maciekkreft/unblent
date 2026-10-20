@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user asked to close this note's stage tab (`:tabc` or `:q` with Vim keys on, in the editor the stage shows): a stage that keeps a tab for it closes the tab. The note itself is unchanged.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

@@ -292,7 +292,7 @@ export const machine = setup({
       "or Enter on it in Vim's normal mode, opens the book at the passage, and a tag whose " +
       "highlight is gone turns grey and struck through and opens nothing.",
     kind: "view",
-    emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected"],
+    emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject"],
     asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read"],
   },
