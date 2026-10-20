@@ -19,6 +19,7 @@ The admin alone reads what guests spent (GET "/spending"), changes the limits
 """
 
 import json
+import logging
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -33,6 +34,20 @@ from server.user import require_user, session_of, user_dir
 
 from . import anthropic_adapter, crypto, jev_adapter, spending
 from .adapters import complete
+
+_log = logging.getLogger("uvicorn.error")
+
+
+def _log_usage(provider: str, model: str, usage: dict) -> None:
+    # One line per answer, for every account, so the owner can read in the server log
+    # whether the provider's prompt cache holds across a chat (7.7): a cache read near
+    # the whole input means everything before the new message was reused.
+    n = lambda field: int(usage.get(field) or 0)  # noqa: E731
+    _log.info(
+        "llm usage: provider=%s model=%s input=%d cache_read=%d cache_write=%d output=%d",
+        provider, model, n("input_tokens"), n("cache_read_input_tokens"), n("cache_creation_input_tokens"), n("output_tokens"),
+    )
+
 
 router = APIRouter()
 
@@ -256,6 +271,8 @@ async def do_complete(request: Request, user_id: str = Depends(require_user)):
             async for piece in complete(provider, settings, key, body):
                 if piece["type"] == "end":
                     piece = {**piece, "provider": provider, "model": settings["model"]}
+                    if isinstance(piece.get("usage"), dict):
+                        _log_usage(provider, settings["model"], piece["usage"])
                     if guest and provider == "anthropic":
                         cost = spending.anthropic_cost(settings["model"], piece.get("usage"))
                         await run_in_threadpool(spending.add, user_id, provider, cost)

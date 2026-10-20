@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, sendable } from "./machine.js";
+import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, canSend, sendLabel, unsentComments } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
 
@@ -195,6 +195,14 @@ class ChatInput extends LitElement {
     .send svg {
       display: block;
     }
+    /* With comments waiting, Send says how many it sends, so an empty box can be sent. */
+    .send.wide {
+      width: auto;
+      gap: var(--space-xs);
+      padding: 0 var(--space-sm) 0 var(--space-md);
+      font-size: var(--text-sm);
+      white-space: nowrap;
+    }
     .send:hover:not(:disabled) {
       background: var(--color-accent-hover);
     }
@@ -378,7 +386,7 @@ class ChatInput extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot?.matches("ready")) return;
     if (pendingTurn(snapshot.context.conversation)) return;
-    if (!sendable(this.#draft)) return;
+    if (!canSend(snapshot.context.conversation, this.#draft)) return;
     this.#actor.send({ type: "_send", text: this.#draft });
     this.#clearDraft();
   }
@@ -415,7 +423,9 @@ class ChatInput extends LitElement {
     const pending = Boolean(pendingTurn(context.conversation));
     const showContinue = !blocked && !pending && canContinue(context.conversation);
     const showRetry = !blocked && !pending && retryText(context.conversation) != null;
-    const canSend = pending || (!disabled && Boolean(sendable(this.#draft)));
+    const sendOn = pending || (!disabled && canSend(context.conversation, this.#draft));
+    const comments = !pending && unsentComments(context.conversation) > 0;
+    const label = pending ? "Stop" : sendLabel(context.conversation);
 
     return html`
       <div class="box">
@@ -437,13 +447,13 @@ class ChatInput extends LitElement {
         <div class="row" ?hidden=${blocked}>
           <div class="region" role="textbox" aria-label="Message"></div>
           <button
-            class="send"
+            class="send ${comments ? "wide" : ""}"
             type="button"
-            aria-label=${pending ? "Stop" : "Send"}
-            ?disabled=${!canSend}
+            aria-label=${label}
+            ?disabled=${!sendOn}
             @click=${() => this.#primary(pending)}
           >
-            ${pending ? icon("stop") : icon("arrow-up")}
+            ${comments ? html`<span>${label}</span>` : nothing}${pending ? icon("stop") : icon("arrow-up")}
           </button>
         </div>
       </div>

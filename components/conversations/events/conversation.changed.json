@@ -42,6 +42,11 @@
                   "required": ["callId"],
                   "additionalProperties": false
                 }
+              },
+              "marks": {
+                "description": "The comments on the answer before this turn that were sent with it, read only from then on.",
+                "type": "array",
+                "items": { "$ref": "#/$defs/mark" }
               }
             },
             "required": ["id", "role", "text"],
@@ -86,8 +91,34 @@
     },
     "pending": { "type": "boolean" },
     "updatedAt": { "type": "integer" },
-    "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none. A list shows it under the title." }
+    "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none. A list shows it under the title." },
+    "marks": { "$ref": "#/$defs/unsent" }
   },
   "required": ["id", "title", "about", "start", "turns", "pending", "updatedAt"],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "mark": {
+      "description": "One comment on a passage of an answer: `start` and `end` are character positions in the answer's text, `quote` is that passage.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "quote": { "type": "string" },
+        "comment": { "type": "string" }
+      },
+      "required": ["id", "start", "end", "quote", "comment"],
+      "additionalProperties": false
+    },
+    "unsent": {
+      "description": "The comments on the last finished answer not yet sent, kept with the chat until the next message carries them; absent when there are none.",
+      "type": "object",
+      "properties": {
+        "answerId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+        "marks": { "type": "array", "items": { "$ref": "#/$defs/mark" } }
+      },
+      "required": ["answerId", "marks"],
+      "additionalProperties": false
+    }
+  }
 }

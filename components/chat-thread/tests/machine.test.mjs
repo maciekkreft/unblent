@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { createActor } from "xstate";
+import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, canPin, parseMarkdown, userParagraphs } from "../machine.js";
+import { machine, canPin, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -16,6 +16,7 @@ const other = (component, name) =>
 const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
 const PIN_TOGGLED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "pin.toggled.json"), "utf8"));
+const MARKS_EDITED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "marks.edited.json"), "utf8"));
 
 const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
 const CHAT2 = "01HQ8ZK7M4N5P6Q7R8S9T0V1W5";
@@ -62,7 +63,11 @@ function start(options = {}) {
   return { actor, toggled };
 }
 
-const state = (h) => h.actor.getSnapshot().value;
+// The top state only: showing has substates of its own (the comment being written).
+const state = (h) => {
+  const value = h.actor.getSnapshot().value;
+  return typeof value === "string" ? value : Object.keys(value)[0];
+};
 const conv = (h) => h.actor.getSnapshot().context.conversation;
 const emptyChat = (id, over = {}) => ({ id, title: "", about: [], start: "", turns: [], pending: false, updatedAt: 0, ...over });
 
@@ -257,7 +262,7 @@ test("a blockquote holds its own blocks", () => {
 test("a fenced code block keeps its text literally, without inline parsing", () => {
   const [code] = parseMarkdown("```\nlet x = **not bold**\n```");
   assert.equal(code.type, "code");
-  assert.equal(code.text, "let x = **not bold**");
+  assert.deepEqual(code.lines.map((l) => l.value), ["let x = **not bold**"]);
 });
 
 test("a link becomes its text alone", () => {
@@ -280,14 +285,6 @@ test("markup the model cannot control stays plain text (no HTML leaks)", () => {
   assert.equal(inlineText(para.inline), "a <script>alert(1)</script> tag and a * b = c and snake_case");
 });
 
-test("every query payload matches its schema", () => {
-  assert.ok(recorded.length > 0, "the tests above recorded traffic");
-  for (const { value, schema } of recorded) {
-    const result = new Validator(schema, "2020-12").validate(value);
-    assert.ok(result.valid, `${JSON.stringify(value)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
-  }
-});
-
 test("a user message splits into paragraphs on blank lines, one gap per blank line", () => {
   assert.deepEqual(userParagraphs("one"), ["one"]);
   assert.deepEqual(userParagraphs("one\ntwo"), ["one\ntwo"], "a single line break stays inside the paragraph");
@@ -295,4 +292,195 @@ test("a user message splits into paragraphs on blank lines, one gap per blank li
   assert.deepEqual(userParagraphs("one\n\n\ntwo"), ["one", "", "", "two"], "extra blank lines are extra space");
   assert.deepEqual(userParagraphs("\n\none\r\n\r\ntwo\n\n"), ["one", "", "two"], "ends trimmed, CRLF read as LF");
   assert.deepEqual(userParagraphs("<b>x</b>"), ["<b>x</b>"], "text stays text");
+});
+
+test("every text run is the exact piece of the answer its offset names", () => {
+  const source = "# Title\r\n\r\nA **bold** and *em* with `code`; [a link](x).\nSecond line.\n\n> quoted\n\n1. one\n   - two\n\n| a | b |\n|---|---|\n| c | `d` |\n\n```\ncode\n```\n\n---";
+  const all = [];
+  const inline = (nodes) => nodes.forEach((n) => (n.type === "text" || n.type === "code" ? all.push(n) : n.inline && inline(n.inline)));
+  const walk = (bs) =>
+    bs.forEach((b) => {
+      if (b.inline) inline(b.inline);
+      if (b.blocks) walk(b.blocks);
+      if (b.items) b.items.forEach((item) => walk(item.blocks));
+      if (b.type === "code") all.push(...b.lines);
+      if (b.type === "table") [b.head, ...b.rows].flat().forEach(inline);
+    });
+  const blocks = parseMarkdown(source);
+  walk(blocks);
+  assert.deepEqual(blocks.map((b) => b.type), ["heading", "paragraph", "quote", "list", "table", "code", "rule"]);
+  assert.ok(all.length > 10);
+  for (const r of all) assert.equal(source.slice(r.s, r.s + r.value.length), r.value, `run at ${r.s}`);
+});
+
+test("a run is split at the edges of the comments; a selection loses its white space", () => {
+  assert.deepEqual(pieces("A book was", 10, [{ id: "b", start: 12, end: 16 }]), [
+    { text: "A ", s: 10, id: null },
+    { text: "book", s: 12, id: "b" },
+    { text: " was", s: 16, id: null },
+  ]);
+  assert.deepEqual(trimRange("a word here", 1, 7), { start: 2, end: 6 });
+  assert.equal(trimRange("a   b", 1, 4), null);
+  assert.equal(overlaps([{ start: 5, end: 10 }], 9, 12), true);
+  assert.equal(overlaps([{ start: 5, end: 10 }], 10, 12), false);
+});
+
+// --- Comments on the last answer ---------------------------------------------------------
+
+const UNDO_MS = 100;
+const IDS = ["01ARZ3NDEKTSV4RRFFQ69G5FA0", "01ARZ3NDEKTSV4RRFFQ69G5FA1", "01ARZ3NDEKTSV4RRFFQ69G5FA2"];
+const ANSWER_TEXT = "# Title\n\nA book was a path through the box.";
+const ASK = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1Q1", role: "user", text: "tell me" };
+const ANSWER = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1A1", role: "assistant", text: ANSWER_TEXT, status: "done" };
+const at = (word) => ({ start: ANSWER_TEXT.indexOf(word), end: ANSWER_TEXT.indexOf(word) + word.length });
+const SAVED = { id: IDS[2], ...at("book"), quote: "book", comment: "x" };
+const answered = (over = {}) => emptyChat(CHAT, { title: "tell me", turns: [ASK, ANSWER], ...over });
+
+async function commenting(chat = answered(), more = {}) {
+  const clock = new SimulatedClock();
+  let n = 0;
+  const actor = createActor(machine, {
+    input: {
+      ask: (target, name) => {
+        if (target === "pins") return Promise.resolve({ note: null, chat: null, evaluators: null });
+        if (name === "open") return Promise.resolve({ id: CHAT });
+        return Promise.resolve({ conversation: chat, ...more });
+      },
+      mint: () => IDS[n++],
+      undoMs: UNDO_MS,
+    },
+    clock,
+  });
+  const emitted = [];
+  actor.on("marks.edited", (e) => {
+    emitted.push(e);
+    const { type, ...rest } = e;
+    see(rest, MARKS_EDITED);
+  });
+  actor.start();
+  await until(() => actor.getSnapshot().matches("showing"), "showing");
+  return { actor, emitted, clock, state: () => actor.getSnapshot(), ctx: () => actor.getSnapshot().context };
+}
+
+test("only a finished last answer with text and no lookups takes comments", () => {
+  assert.equal(lastAnswer(answered())?.id, ANSWER.id);
+  assert.equal(lastAnswer(answered({ turns: [ASK, { ...ANSWER, status: "pending" }] })), null, "still arriving");
+  assert.equal(lastAnswer(answered({ turns: [ASK, { ...ANSWER, calls: [{ callId: "c", name: "x", input: {} }] }] })), null);
+  assert.equal(lastAnswer(answered({ turns: [ASK, ANSWER, ASK] })), null, "a question after it");
+  assert.equal(lastAnswer(answered({ turns: [ASK, { ...ANSWER, status: "failed" }] })), null);
+});
+
+test("a selection opens a comment; typing saves the whole list at a throttle", async () => {
+  const { actor, emitted, clock, state, ctx } = await commenting();
+  actor.send({ type: "_selected", start: at("book").start - 1, end: at("book").end + 1 });
+  assert.ok(state().matches({ showing: "commenting" }));
+  assert.deepEqual([ctx().draft.start, ctx().draft.end, ctx().draft.quote], [at("book").start, at("book").end, "book"]);
+  actor.send({ type: "_typed", text: "s" });
+  actor.send({ type: "_typed", text: "sa" });
+  actor.send({ type: "_typed", text: "say" });
+  assert.equal(emitted.length, 0);
+  clock.increment(200);
+  assert.equal(emitted.length, 1);
+  assert.deepEqual(emitted[0], {
+    type: "marks.edited",
+    conversationId: CHAT,
+    answerId: ANSWER.id,
+    marks: [{ id: IDS[0], ...at("book"), quote: "book", comment: "say" }],
+  });
+  assert.deepEqual(ctx().conversation.marks, { answerId: ANSWER.id, marks: emitted[0].marks }, "shown at once, before the echo");
+  actor.send({ type: "_closed" });
+  assert.equal(emitted.length, 1, "closing what was saved saves nothing more");
+  assert.ok(state().matches({ showing: "idle" }));
+});
+
+test("the first key typed over a selection opens the comment with that key in it", async () => {
+  const { actor, emitted, clock } = await commenting();
+  actor.send({ type: "_selected", ...at("path"), text: "W" });
+  clock.increment(200);
+  assert.equal(emitted.at(-1).marks[0].comment, "W");
+});
+
+test("a white-space selection, one over a comment, or one on an answer still arriving opens nothing", async () => {
+  const { actor, state } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
+  actor.send({ type: "_selected", start: 7, end: 9 });
+  assert.ok(state().matches({ showing: "idle" }));
+  actor.send({ type: "_selected", start: at("A book").start, end: at("was").end });
+  assert.ok(state().matches({ showing: "idle" }), "crosses the comment on book");
+  const arriving = await commenting(answered({ turns: [ASK, { ...ANSWER, status: "pending" }] }));
+  arriving.actor.send({ type: "_selected", ...at("path") });
+  assert.ok(arriving.state().matches({ showing: "idle" }));
+});
+
+test("comments kept for an earlier answer are not shown on the last one", async () => {
+  const { ctx } = await commenting(answered({ marks: { answerId: ASK.id, marks: [SAVED] } }));
+  assert.deepEqual(marks(ctx()), []);
+});
+
+test("closing an empty comment leaves no comment, and removes one emptied", async () => {
+  const { actor, emitted, ctx } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
+  actor.send({ type: "_selected", ...at("path") });
+  actor.send({ type: "_closed" });
+  assert.equal(emitted.length, 0, "a new empty comment is dropped");
+  actor.send({ type: "_opened", id: SAVED.id });
+  assert.equal(ctx().draft.comment, "x");
+  actor.send({ type: "_typed", text: "" });
+  actor.send({ type: "_closed" });
+  assert.deepEqual(emitted.at(-1).marks, []);
+  assert.equal("marks" in ctx().conversation, false, "no comments, no marks on the chat");
+});
+
+test("selecting elsewhere while writing saves the open comment first", async () => {
+  const { actor, emitted, ctx } = await commenting();
+  actor.send({ type: "_selected", ...at("book") });
+  actor.send({ type: "_typed", text: "one" });
+  actor.send({ type: "_selected", ...at("path") });
+  assert.equal(emitted.at(-1).marks.length, 1);
+  assert.equal(ctx().draft.quote, "path");
+});
+
+test("removing a comment takes it off the saved list at once; undo puts it back", async () => {
+  const { actor, emitted, clock, ctx, state } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
+  actor.send({ type: "_opened", id: SAVED.id });
+  actor.send({ type: "_remove", id: SAVED.id });
+  assert.ok(state().matches({ showing: "idle" }), "the box closes");
+  assert.ok(ctx().discarding.has(SAVED.id), "it stays dimmed for the undo window");
+  assert.deepEqual(emitted.at(-1).marks, [], "a message sent now does not carry it");
+  actor.send({ type: "_undo", id: SAVED.id });
+  assert.equal(ctx().discarding.size, 0);
+  assert.deepEqual(emitted.at(-1).marks, [SAVED]);
+  const count = emitted.length;
+  actor.send({ type: "_remove", id: SAVED.id });
+  clock.increment(UNDO_MS);
+  assert.equal(ctx().discarding.size, 0, "the window ends");
+  assert.equal(emitted.length, count + 1, "nothing more is sent when it ends");
+  actor.send({ type: "_undo", id: SAVED.id });
+  assert.equal(emitted.length, count + 1, "too late to undo");
+});
+
+test("a new last answer drops the comment being written", async () => {
+  const { actor, state, ctx } = await commenting();
+  actor.send({ type: "_selected", ...at("book") });
+  actor.send({ type: "_typed", text: "half" });
+  const next = { ...ANSWER, id: "01HQ8ZK7M4N5P6Q7R8S9T0V1A2", status: "pending", text: "" };
+  actor.send({ type: "conversation.changed", ...answered({ turns: [ASK, ANSWER, ASK, next] }) });
+  assert.ok(state().matches({ showing: "idle" }));
+  assert.equal(ctx().draft, null);
+});
+
+test("opening another chat saves the comment being written and carries out a waiting removal", async () => {
+  const other = { id: IDS[1], ...at("path"), quote: "path", comment: "y" };
+  const { actor, emitted } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED, other] } }));
+  actor.send({ type: "_remove", id: SAVED.id });
+  actor.send({ type: "_opened", id: other.id });
+  actor.send({ type: "_typed", text: "yes" });
+  actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.deepEqual(emitted.at(-1).marks, [{ ...other, comment: "yes" }]);
+});
+
+test("every query payload and marks.edited matches its schema", () => {
+  assert.ok(recorded.length > 0, "the tests above recorded traffic");
+  for (const { value, schema } of recorded) {
+    const result = new Validator(schema, "2020-12").validate(value);
+    assert.ok(result.valid, `${JSON.stringify(value)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
+  }
 });

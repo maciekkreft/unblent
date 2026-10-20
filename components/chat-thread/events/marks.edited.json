@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user changed the comments on the chat's last finished answer: added, edited or removed one (4, fifth rule). It carries the whole list, empty when the last comment was removed. `start` and `end` are character positions in the answer's text, so a comment belongs to the text and not to the page; `quote` is that passage.",
+  "type": "object",
+  "properties": {
+    "conversationId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "answerId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "marks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+          "start": { "type": "integer", "minimum": 0 },
+          "end": { "type": "integer", "minimum": 0 },
+          "quote": { "type": "string" },
+          "comment": { "type": "string" }
+        },
+        "required": ["id", "start", "end", "quote", "comment"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["conversationId", "answerId", "marks"],
+  "additionalProperties": false
+}

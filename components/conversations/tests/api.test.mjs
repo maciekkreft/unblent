@@ -135,3 +135,18 @@ test("the tool preferences round trip (7.7)", async () => {
   const list = await (await get("", cookie)).json();
   assert.deepEqual(list.tools, { tools: { "notes: list": false }, approval: "auto" });
 });
+
+test("the unsent comments are last write wins, kept until cleared with null", async () => {
+  const cookie = cookieFor(freshUser());
+  const marks = { answerId: U("A2"), marks: [{ id: U("M1"), start: 0, end: 5, quote: "first", comment: "why?" }] };
+  await put(CHAT, chat({ turns: [turn(U("A1"), "user", "q"), turn(U("A2"), "assistant", "first answer", { status: "done" })] }), cookie);
+  assert.equal((await (await get(`/${CHAT}`, cookie)).json()).marks, undefined, "absent while there are none");
+  const saved = await (await put(CHAT, chat({ turns: [], marks }), cookie)).json();
+  assert.deepEqual((await (await get(`/${CHAT}`, cookie)).json()).marks, marks, "read back as saved");
+  // A body without the key leaves them alone, and an unchanged write is no change.
+  const again = await (await put(CHAT, chat({ turns: [] }), cookie)).json();
+  assert.equal(again.updatedAt, saved.updatedAt, "a write without marks changes nothing");
+  assert.deepEqual((await (await get(`/${CHAT}`, cookie)).json()).marks, marks, "kept by a write without the key");
+  await put(CHAT, chat({ turns: [], marks: null }), cookie);
+  assert.equal((await (await get(`/${CHAT}`, cookie)).json()).marks, undefined, "null clears them");
+});

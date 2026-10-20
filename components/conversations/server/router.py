@@ -30,6 +30,11 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "conversations.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    # CREATE IF NOT EXISTS never adds a column to an existing table, so a file from
+    # before comments on an answer is migrated here (notes/server/router.py does the same).
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)")}
+    if "marks" not in columns:
+        connection.executescript("ALTER TABLE conversations ADD COLUMN marks TEXT")
     try:
         with connection:
             yield connection
@@ -104,7 +109,7 @@ def read_conversation(conversation_id: str, user_id: str = Depends(require_user)
         turns = connection.execute(
             "SELECT body FROM turns WHERE conversation_id = ? ORDER BY rowid", (conversation_id,)
         ).fetchall()
-    return {
+    conversation = {
         "id": row["id"],
         "title": row["title"],
         "about": json.loads(row["about"]),
@@ -112,6 +117,10 @@ def read_conversation(conversation_id: str, user_id: str = Depends(require_user)
         "turns": [json.loads(turn["body"]) for turn in turns],
         "updatedAt": row["updated_at"],
     }
+    # Absent rather than null when there are none, so the reply keeps to read.json.
+    if row["marks"] is not None:
+        conversation["marks"] = json.loads(row["marks"])
+    return conversation
 
 
 @router.put("/{conversation_id}")
@@ -119,13 +128,17 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
     # Upsert the row and add each finished turn by id (5): a turn already stored is left
     # alone, so a resend or a retry is harmless and a turn is never rewritten. start is
     # written once, when the row is created (12). updated_at bumps only when something
-    # actually changed, so a pure resend does not reorder the list.
+    # actually changed, so a pure resend does not reorder the list. marks, the unsent
+    # comments on the last answer, are last write wins like the title; a body without
+    # the key leaves them as they are, and null clears them.
     payload = await request.json()
     title = str(payload.get("title", ""))
     about = payload.get("about") or []
     start = str(payload.get("start", ""))
     turns = payload.get("turns") or []
     about_json = json.dumps(about)
+    has_marks = "marks" in payload
+    marks = payload.get("marks") or None
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
@@ -139,6 +152,13 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
         elif row["title"] != title or json.loads(row["about"]) != about:
             connection.execute(
                 "UPDATE conversations SET title = ?, about = ? WHERE id = ?", (title, about_json, conversation_id)
+            )
+            changed = True
+        stored_marks = json.loads(row["marks"]) if row is not None and row["marks"] is not None else None
+        if has_marks and marks != stored_marks:
+            connection.execute(
+                "UPDATE conversations SET marks = ? WHERE id = ?",
+                (json.dumps(marks) if marks is not None else None, conversation_id),
             )
             changed = True
         for turn in turns:

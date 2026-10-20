@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, toMarkdown } from "../machine.js";
+import { machine, toMarkdown, commentsBlock, forModel } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -826,6 +826,104 @@ test("the recorded tool exchange is what the machine emits (seam for the views)"
     return;
   }
   assert.deepEqual(events, JSON.parse(readFileSync(file, "utf8")), "changed-tools.json is stale; re-run with RECORD=1");
+});
+
+// --- comments on the last answer ---------------------------------------------------
+
+const MARK1 = U("Y1");
+const MARK2 = U("Y2");
+const mark = (id, start, end, quote, comment) => ({ id, start, end, quote, comment });
+const ANSWER_TEXT = "Cats sleep a lot. Dogs bark. Cats purr when happy.";
+
+// A chat loaded from the server whose last turn is a finished answer, ready to comment on.
+async function answered(over = {}) {
+  const chat = { id: CHAT, title: "t", about: [], start: "s", turns: [{ id: USER, role: "user", text: "q" }, { id: ANSWER2, role: "assistant", text: ANSWER_TEXT, status: "done" }], updatedAt: 5, ...over };
+  const h = start({ conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5 }], chatsById: { [CHAT]: chat }, ids: [ANSWER] });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length > 0, "loaded");
+  return h;
+}
+
+test("comments on the last answer are kept and saved; on an older answer they are ignored", async () => {
+  const h = await answered();
+  const marks = [mark(MARK1, 0, 4, "Cats", "Which cats?")];
+  h.actor.send({ type: "marks.edited", conversationId: CHAT, answerId: USER, marks });
+  await flush();
+  assert.equal(lastChange(h).marks, undefined, "a list for another turn is ignored");
+  h.actor.send({ type: "marks.edited", conversationId: CHAT, answerId: ANSWER2, marks });
+  await flush();
+  assert.deepEqual(lastChange(h).marks, { answerId: ANSWER2, marks });
+  assert.equal(lastChange(h).pending, false, "unsent comments do not make the chat pending");
+  await until(() => h.calls.saved.some((s) => s.body.marks), "comments saved");
+  assert.deepEqual(h.calls.saved.at(-1).body.marks, { answerId: ANSWER2, marks });
+  assert.deepEqual(h.calls.saved.at(-1).body.turns, [], "no turn is resent with them");
+  h.actor.send({ type: "marks.edited", conversationId: CHAT, answerId: ANSWER2, marks: [] });
+  await until(() => h.calls.saved.some((s) => s.body.marks === null), "cleared on the server");
+  assert.equal(lastChange(h).marks, undefined, "an empty list removes them");
+});
+
+test("sending moves the comments onto the new message and clears them from the chat", async () => {
+  const h = await answered();
+  const marks = [mark(MARK1, 0, 4, "Cats", "Which cats?")];
+  h.actor.send({ type: "marks.edited", conversationId: CHAT, answerId: ANSWER2, marks });
+  await flush();
+  submit(h, { turn: { id: U("Y3"), text: "" } });
+  await flush();
+  const change = lastChange(h);
+  assert.equal(change.marks, undefined, "the chat holds no unsent comments");
+  assert.deepEqual(change.turns.find((t) => t.id === U("Y3")).marks, marks, "the message carries them");
+  await until(() => h.calls.saved.some((s) => s.body.turns.some((t) => t.id === U("Y3"))), "message saved");
+  const saved = h.calls.saved.find((s) => s.body.turns.some((t) => t.id === U("Y3")));
+  assert.deepEqual(saved.body.turns.find((t) => t.id === U("Y3")).marks, marks);
+  await until(() => h.calls.saved.some((s) => s.body.marks === null), "cleared on the server");
+});
+
+test("Continue drops the unsent comments", async () => {
+  const marks = [mark(MARK1, 0, 4, "Cats", "Which cats?")];
+  const h = await answered({ turns: [{ id: USER, role: "user", text: "q" }], marks: { answerId: ANSWER2, marks } });
+  assert.deepEqual(lastChange(h).marks, { answerId: ANSWER2, marks }, "loaded from the server");
+  h.actor.send({ type: "turn.steered", conversationId: CHAT, turnId: USER, action: "continue" });
+  await flush();
+  assert.equal(lastChange(h).marks, undefined);
+  await until(() => h.calls.saved.some((s) => s.body.marks === null), "cleared on the server");
+});
+
+test("commentsBlock numbers the comments in reading order, with the sentence only for a repeated quote", () => {
+  const block = commentsBlock(ANSWER_TEXT, [mark(MARK2, 29, 33, "Cats", "And these?"), mark(MARK1, 18, 28, "Dogs bark.", "Loudly?")]);
+  assert.equal(
+    block,
+    "<comments_on_your_last_answer>\n" +
+      "The user selected passages of your previous answer and commented on them. The\n" +
+      "numbers were added by the interface to tie each comment to its passage. They are\n" +
+      "not in your answer, you did not write them, and you should not number passages or\n" +
+      "add notes like these in your own answers. Answer the comments as part of your reply.\n" +
+      "\n" +
+      '¹ "Dogs bark."\n' +
+      "Comment: Loudly?\n" +
+      "\n" +
+      '² "Cats"\n' +
+      'In: "Cats purr when happy."\n' +
+      "Comment: And these?\n" +
+      "</comments_on_your_last_answer>",
+  );
+  assert.equal(commentsBlock(ANSWER_TEXT, []), "");
+  const many = Array.from({ length: 12 }, (_, i) => mark(U("Z" + B32[i]), i, i + 1, ANSWER_TEXT[i], "c"));
+  assert.match(commentsBlock(ANSWER_TEXT, many), /\n¹² "/, "numbers above 9 are composed");
+});
+
+test("forModel sends the comments before the message, the same bytes every time, and leaves the answer alone", () => {
+  const marks = [mark(MARK1, 18, 28, "Dogs bark.", "Loudly?")];
+  const answer = { id: ANSWER2, role: "assistant", text: ANSWER_TEXT, status: "done", raw: [{ type: "text", text: ANSWER_TEXT }] };
+  const turns = [{ id: USER, role: "user", text: "q" }, answer, { id: U("Y3"), role: "user", text: "Also, birds?", marks }];
+  const first = forModel(turns);
+  assert.equal(first[2].text, commentsBlock(ANSWER_TEXT, marks) + "\n\nAlso, birds?");
+  assert.equal(first[2].marks, undefined, "the model gets text only");
+  assert.equal(JSON.stringify(forModel(turns)), JSON.stringify(first), "the same bytes on every call");
+  assert.equal(first[1].text, ANSWER_TEXT, "the answer is sent as stored");
+  assert.deepEqual(first[1].raw, answer.raw);
+  const empty = forModel([...turns.slice(0, 2), { id: U("Y3"), role: "user", text: "", marks }]);
+  assert.equal(empty[2].text, commentsBlock(ANSWER_TEXT, marks), "an empty message is the block alone");
 });
 
 test("every payload matches its schema", () => {

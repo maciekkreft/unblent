@@ -1,8 +1,26 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
+import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, canPin, parseMarkdown, userParagraphs } from "./machine.js";
+import { machine, canPin, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
+import marksEdited from "./events/marks.edited.json" with { type: "json" };
+
+// The gap between a passage's last line and the comment box under it, in px; the box is
+// placed in JS, so the value is not a style (7.4 covers styles).
+const POPOVER_GAP = 6;
+// How long a finger's selection must stay still before its comment box opens: a touch
+// selection is adjusted with handles that send no pointer events, only selection changes.
+const TOUCH_SETTLE_MS = 700;
+
+// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
+// the token is the one clock (7.4).
+const toMs = (text, fallback = 3000) => {
+  const t = (text || "").trim();
+  const n = parseFloat(t);
+  if (Number.isNaN(n)) return fallback;
+  return t.endsWith("ms") ? n : n * 1000;
+};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -12,11 +30,14 @@ class ActorController {
   }
 
   hostConnected() {
+    const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        mint: ulid,
+        undoMs,
       },
-      events: { "pin.toggled": pinToggled },
+      events: { "pin.toggled": pinToggled, "marks.edited": marksEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -240,6 +261,194 @@ class ChatThread extends LitElement {
     .answer.prose strong {
       font-weight: var(--weight-semibold);
     }
+    .answer.prose .md-rule {
+      margin: 0;
+      border: 0;
+      border-top: var(--border-width) solid var(--color-border);
+    }
+    .answer.prose .md-table {
+      overflow-x: auto;
+    }
+    .answer.prose table {
+      border-collapse: collapse;
+      font-size: var(--text-sm);
+    }
+    .answer.prose th,
+    .answer.prose td {
+      border: var(--border-width) solid var(--color-border);
+      padding: var(--space-xs) var(--space-sm);
+      text-align: left;
+      vertical-align: top;
+    }
+    .answer.prose th {
+      background: var(--color-canvas-soft);
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+    }
+    /* The last answer, the one that takes comments; the box is placed inside it. */
+    .turn.assistant.last {
+      position: relative;
+    }
+    /* A commented passage: the marker yellow books use (7.4), with its number raised
+       after it. The one being written carries the accent underline; one in its undo
+       window fades. */
+    mark {
+      background: var(--color-highlight);
+      color: inherit;
+      border-radius: var(--radius-sm);
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+    }
+    .markable mark {
+      cursor: pointer;
+    }
+    mark.open {
+      box-shadow: inset 0 calc(var(--border-width) * -2) 0 var(--color-accent);
+    }
+    mark.removing,
+    .comments li.removing .body {
+      opacity: 0.4;
+    }
+    sup.num {
+      padding-left: var(--space-2xs);
+      font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
+      line-height: 0;
+      color: var(--color-accent);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* The comments under the answer: number, the passage, the comment. */
+    .comments {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+      font-size: var(--text-sm);
+    }
+    .comments li {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-xs);
+      padding: var(--space-xs) var(--space-sm);
+      border-radius: var(--radius-sm);
+      background: var(--color-canvas-soft);
+    }
+    .comments .n {
+      flex: none;
+      font-weight: var(--weight-semibold);
+      color: var(--color-accent);
+    }
+    .comments .body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+    }
+    .comments .quote {
+      color: var(--color-body-mid);
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .comments .text {
+      appearance: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      font: inherit;
+      text-align: left;
+      color: var(--color-ink);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    button.text {
+      cursor: pointer;
+    }
+    button.text:hover {
+      text-decoration: underline;
+    }
+    .comments .removed {
+      color: var(--color-body-mid);
+    }
+    .act {
+      flex: none;
+      appearance: none;
+      font: inherit;
+      cursor: pointer;
+      border: 0;
+      border-radius: var(--radius-sm);
+      padding: 0 var(--space-2xs);
+      background: transparent;
+      color: var(--color-body-mid);
+    }
+    .act:hover {
+      color: var(--color-danger);
+      background: var(--color-surface-hover);
+    }
+    .act.undo {
+      color: var(--color-accent);
+    }
+    .act.undo:hover {
+      color: var(--color-accent);
+    }
+    .act:focus-visible,
+    button.text:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    /* The comment box: under the passage's last line, placed by --bx/--by set in JS. */
+    .popover {
+      position: absolute;
+      top: 0;
+      left: 0;
+      translate: var(--bx, 0) var(--by, 0);
+      z-index: 1;
+      box-sizing: border-box;
+      width: calc(var(--space-2xl) * 5);
+      max-width: 100%;
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-2xs);
+      padding: var(--space-xs);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border-strong);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-card);
+    }
+    /* One line to start, growing with what is typed (#fit sets --h). */
+    .popover textarea {
+      flex: 1;
+      min-width: 0;
+      box-sizing: border-box;
+      height: var(--h, auto);
+      overflow: hidden;
+      resize: none;
+      border: 0;
+      outline: none;
+      background: transparent;
+      font: inherit;
+      font-size: var(--text-sm);
+      line-height: var(--leading-normal);
+      color: var(--color-ink);
+      padding: var(--space-2xs) var(--space-xs);
+    }
+    .popover .remove {
+      display: inline-flex;
+      padding: var(--space-2xs);
+      color: var(--color-mute);
+    }
+    /* A message sent with comments says so above its text. */
+    .turn.user .sent-marks {
+      margin: 0;
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
     /* The waiting line before any text: a neutral pulse while the model works, and the
        word "Thinking" only when the model is actually thinking (not while it merely
        processes the request). */
@@ -333,6 +542,29 @@ class ChatThread extends LitElement {
   // Whether the transcript is pinned to the bottom, so it follows a streaming answer
   // but leaves the reader where they scrolled if they scrolled up.
   #stick = true;
+  // The pointer that pressed last on the last answer, and the comment box last focused.
+  #pointer = null;
+  #focused = null;
+  #settle;
+  // Answers parsed once per text, not per keystroke in the comment box.
+  #parsed = new Map();
+
+  #onSelectionChange = () => {
+    if (this.#pointer !== "touch") return;
+    clearTimeout(this.#settle);
+    this.#settle = setTimeout(() => this.#sendSelection(), TOUCH_SETTLE_MS);
+  };
+
+  connectedCallback() {
+    super.connectedCallback();
+    document.addEventListener("selectionchange", this.#onSelectionChange);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    document.removeEventListener("selectionchange", this.#onSelectionChange);
+    clearTimeout(this.#settle);
+  }
 
   #onScroll(event) {
     const el = event.currentTarget;
@@ -340,6 +572,7 @@ class ChatThread extends LitElement {
   }
 
   updated() {
+    this.#afterComment();
     if (!this.#stick) return;
     const el = this.renderRoot.querySelector(".transcript");
     if (el) el.scrollTop = el.scrollHeight;
@@ -363,7 +596,14 @@ class ChatThread extends LitElement {
     const snapshot = this.#actor.snapshot;
     return html`
       ${this.#header(snapshot)}
-      <div class="transcript" @scroll=${(e) => this.#onScroll(e)}>${this.#body(snapshot)}</div>
+      <div
+        class="transcript"
+        @scroll=${(e) => this.#onScroll(e)}
+        @pointerdown=${(e) => this.#pointerdown(e)}
+        @pointerup=${(e) => this.#pointerup(e)}
+      >
+        ${this.#body(snapshot)}
+      </div>
       <div class="composer"><slot></slot></div>
     `;
   }
@@ -397,24 +637,53 @@ class ChatThread extends LitElement {
   #body(snapshot) {
     if (!snapshot) return nothing;
     if (snapshot.matches("unavailable")) return html`<p class="offline">Chats need a connection.</p>`;
-    const chat = snapshot.context.conversation;
+    const { context } = snapshot;
+    const chat = context.conversation;
     const turns = chat?.turns ?? [];
+    const last = snapshot.matches("showing") ? lastAnswer(chat) : null;
     return html`
-      ${turns.map((turn) => (turn.role === "user" ? this.#user(turn) : this.#assistant(turn)))}
+      ${turns.map((turn, k) => {
+        if (turn.role === "user") return this.#user(turn);
+        if (turn === last) return this.#assistant(turn, this.#editable(snapshot));
+        // An answer whose comments went with the next message shows them read only.
+        const next = turns[k + 1];
+        const sent = next?.role === "user" && next.marks?.length ? [...next.marks].sort((a, b) => a.start - b.start) : null;
+        return this.#assistant(turn, sent ? { list: sent, comments: sent, markable: false } : null);
+      })}
       ${chat?.pending ? html`<p class="unsaved">Not saved yet</p>` : nothing}
     `;
   }
 
+  // What the last answer paints: every comment and the one being written, and the
+  // saved ones listed under it, the open one as it is being typed.
+  #editable(snapshot) {
+    const { context } = snapshot;
+    const draft = snapshot.matches({ showing: "commenting" }) ? context.draft : null;
+    // A removed comment is already off the saved list; it stays dimmed until its undo
+    // window ends.
+    const answerId = lastAnswer(context.conversation)?.id;
+    const removed = [...context.discarding.values()].filter((d) => d.answerId === answerId).map((d) => d.mark);
+    const byStart = (a, b) => a.start - b.start;
+    const list = [...marks({ conversation: context.conversation, draft }), ...removed].sort(byStart);
+    const comments = [...savedMarks(context.conversation).map((m) => (m.id === draft?.id ? { ...m, comment: draft.comment } : m)), ...removed].sort(byStart);
+    return { list, comments, markable: true, draft, discarding: context.discarding };
+  }
+
   // The reader's own message. A turn that only carries tool results has no text (7.7): it
   // is for the model, not the reader, so it shows nothing rather than an empty bubble.
+  // One sent with comments says how many, even with no text of its own.
   #user(turn) {
-    if (!turn.text) return nothing;
+    const count = turn.marks?.length ?? 0;
+    if (!turn.text && !count) return nothing;
     return html`<div class="turn user">
-      ${userParagraphs(turn.text).map((block) => (block ? html`<p class="para">${block}</p>` : html`<div class="gap"></div>`))}
+      ${count ? html`<p class="sent-marks">${count === 1 ? "1 comment" : `${count} comments`} on the answer above</p>` : nothing}
+      ${turn.text
+        ? userParagraphs(turn.text).map((block) => (block ? html`<p class="para">${block}</p>` : html`<div class="gap"></div>`))
+        : nothing}
     </div>`;
   }
 
-  #assistant(turn) {
+  #assistant(turn, marking = null) {
     const pending = turn.status === "pending";
     const hasText = Boolean(turn.text);
     // Before any text: a neutral pulse, or "Thinking…" only when the model is really
@@ -425,19 +694,37 @@ class ChatThread extends LitElement {
           ? html`<p class="working">Thinking…</p>`
           : html`<p class="working"><span class="dots">● ● ●</span></p>`
         : nothing;
-    return html`
-      <div class="turn assistant">
+    this.#marking = marking;
+    const markable = Boolean(marking?.markable);
+    const cls = `answer${this.markdown ? " prose" : ""}${markable ? " markable" : ""}`;
+    const answer = hasText
+      ? html`<div class=${cls}>
+          ${this.markdown ? this.#parse(turn.text).map((block) => this.#block(block)) : this.#run(turn.text, 0)}
+        </div>`
+      : nothing;
+    const out = html`
+      <div class="turn assistant${markable ? " last" : ""}">
         ${turn.thinking && !(pending && !hasText) ? this.#thinking(turn) : nothing}
         ${waiting}
-        ${hasText
-          ? this.markdown
-            ? html`<div class="answer prose">${parseMarkdown(turn.text).map((block) => this.#block(block))}</div>`
-            : html`<div class="answer">${turn.text}</div>`
-          : nothing}
+        ${answer}
         ${this.#lookups(turn)}
         ${this.#foot(turn)}
+        ${marking ? this.#comments(marking) : nothing}
+        ${marking?.draft ? this.#popover(marking.draft, marking) : nothing}
       </div>
     `;
+    this.#marking = null;
+    return out;
+  }
+
+  #parse(text) {
+    let blocks = this.#parsed.get(text);
+    if (!blocks) {
+      if (this.#parsed.size > 100) this.#parsed.clear();
+      blocks = parseMarkdown(text);
+      this.#parsed.set(text, blocks);
+    }
+    return blocks;
   }
 
   // The lookups this answer asked for (7.7): a dim line per recognised tool call. A call
@@ -464,7 +751,16 @@ class ChatThread extends LitElement {
       case "quote":
         return html`<blockquote class="md-quote">${block.blocks.map((b) => this.#block(b))}</blockquote>`;
       case "code":
-        return html`<pre class="md-code"><code>${block.text}</code></pre>`;
+        return html`<pre class="md-code"><code>${block.lines.map((l, k) => [k ? "\n" : "", this.#run(l.value, l.s)])}</code></pre>`;
+      case "rule":
+        return html`<hr class="md-rule" />`;
+      case "table":
+        return html`<div class="md-table">
+          <table>
+            <thead><tr>${block.head.map((cell) => html`<th>${this.#inline(cell)}</th>`)}</tr></thead>
+            <tbody>${block.rows.map((row) => html`<tr>${row.map((cell) => html`<td>${this.#inline(cell)}</td>`)}</tr>`)}</tbody>
+          </table>
+        </div>`;
       default:
         return html`<p class="md-p">${this.#inline(block.inline)}</p>`;
     }
@@ -494,15 +790,215 @@ class ChatThread extends LitElement {
         case "break":
           return html`<br />`;
         case "code":
-          return html`<code class="md-code-inline">${node.value}</code>`;
+          return html`<code class="md-code-inline">${this.#run(node.value, node.s)}</code>`;
         case "strong":
           return html`<strong>${this.#inline(node.inline)}</strong>`;
         case "em":
           return html`<em>${this.#inline(node.inline)}</em>`;
         default:
-          return node.value;
+          return this.#run(node.value, node.s);
       }
     });
+  }
+
+  // The comments of the answer being drawn, set by #assistant for its own runs.
+  #marking = null;
+
+  // One text run. In the last answer, a span per piece carries its offset in the answer,
+  // so a selection maps back to the text; a commented piece sits in its mark, the
+  // comment's number raised after its last piece. Every run is an escaped text node.
+  #run(value, s) {
+    const marking = this.#marking;
+    if (!marking) return value;
+    const list = marking.list;
+    return pieces(value, s, list).map((p) => {
+      const text = marking.markable ? html`<span data-s=${p.s}>${p.text}</span>` : p.text;
+      if (!p.id) return text;
+      const n = list.findIndex((m) => m.id === p.id);
+      const end = p.s + p.text.length >= list[n].end;
+      const cls = p.id === marking.draft?.id ? "open" : marking.discarding?.has(p.id) ? "removing" : "";
+      return html`<mark data-id=${p.id} class=${cls}>${text}</mark>${end ? html`<sup class="num">${n + 1}</sup>` : nothing}`;
+    });
+  }
+
+  // The list under the answer: number, passage, comment. On the last answer a comment
+  // opens to be edited and has Remove, which waits out the undo window with Undo; a
+  // sent answer's list is read only.
+  #comments(marking) {
+    const { list, comments, markable } = marking;
+    if (!comments.length) return nothing;
+    const number = (id) => list.findIndex((m) => m.id === id) + 1;
+    return html`<ol class="comments" aria-label="Comments on this answer">
+      ${comments.map((m) => {
+        const removing = markable && marking.discarding.has(m.id);
+        const comment = markable
+          ? html`<button class="text" title="Edit comment" @click=${() => this.#actor.send({ type: "_opened", id: m.id })}>${m.comment}</button>`
+          : html`<p class="text">${m.comment}</p>`;
+        return html`<li class=${removing ? "removing" : ""} data-id=${m.id}>
+          <span class="n">${number(m.id)}</span>
+          <div class="body">
+            <span class="quote">${m.quote}</span>
+            ${comment}
+          </div>
+          ${!markable
+            ? nothing
+            : removing
+              ? html`<span class="removed">Removed.</span><button class="act undo" @click=${() => this.#actor.send({ type: "_undo", id: m.id })}>Undo</button>`
+              : html`<button class="act remove" @click=${() => this.#actor.send({ type: "_remove", id: m.id })}>Remove</button>`}
+        </li>`;
+      })}
+    </ol>`;
+  }
+
+  #popover(draft, marking) {
+    const saved = marking.comments.some((m) => m.id === draft.id);
+    return html`
+      <div class="popover" @mousedown=${(e) => e.target.localName !== "textarea" && e.preventDefault()}>
+        <textarea
+          rows="1"
+          aria-label="Comment"
+          placeholder="Your comment on this passage"
+          .value=${draft.comment}
+          @input=${(e) => {
+            this.#fit(e.currentTarget);
+            this.#actor.send({ type: "_typed", text: e.currentTarget.value });
+          }}
+          @keydown=${(e) => {
+            e.stopPropagation();
+            if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
+              e.preventDefault();
+              this.#actor.send({ type: "_closed" });
+            }
+          }}
+          @blur=${() => this.#actor.send({ type: "_closed" })}
+        ></textarea>
+        <button
+          class="act remove"
+          aria-label="Remove comment"
+          title="Remove comment"
+          @click=${() => this.#actor.send({ type: saved ? "_remove" : "_closed", id: draft.id })}
+        >
+          ${icon("trash-simple")}
+        </button>
+      </div>
+    `;
+  }
+
+  // --- Gestures on the last answer ----------------------------------------------------
+
+  #pointerdown(e) {
+    this.#pointer = e.pointerType;
+    clearTimeout(this.#settle);
+  }
+
+  // A selection in the last answer ends: its comment box opens. A click on a highlight
+  // there opens its comment.
+  #pointerup(e) {
+    if (e.composedPath().some((el) => el.classList?.contains("popover"))) return;
+    if (this.#sendSelection()) return;
+    const mark = e.composedPath().find((el) => el.localName === "mark" && el.closest?.(".markable"));
+    if (mark) this.#actor.send({ type: "_opened", id: mark.dataset.id });
+  }
+
+  // The selection as offsets into the answer, sent as _selected; false when there is
+  // none in the last answer. The machine decides whether it may become a comment.
+  #sendSelection() {
+    const range = this.#selectionRange();
+    if (!range) return false;
+    const start = this.#offsetOf(range, "start");
+    const end = this.#offsetOf(range, "end");
+    if (start == null || end == null || end <= start) return false;
+    this.#clearSelection();
+    this.#actor.send({ type: "_selected", start, end });
+    return true;
+  }
+
+  // A boundary of the range as an offset into the answer. Inside a text run it is exact;
+  // elsewhere (a line break, a list item, a number, outside the answer) it is the edge
+  // of the first or last run the range touches.
+  #offsetOf(range, edge) {
+    const node = edge === "start" ? range.startContainer : range.endContainer;
+    const offset = edge === "start" ? range.startOffset : range.endOffset;
+    const span = node.nodeType === Node.TEXT_NODE ? node.parentElement : null;
+    if (span?.dataset?.s != null && span.closest(".markable")) return Number(span.dataset.s) + offset;
+    const spans = [...this.renderRoot.querySelectorAll(".markable [data-s]")].filter((el) => range.intersectsNode(el));
+    if (!spans.length) return null;
+    if (edge === "start") return Number(spans[0].dataset.s);
+    const last = spans[spans.length - 1];
+    return Number(last.dataset.s) + last.textContent.length;
+  }
+
+  // The current selection inside the thread as a DOM range, or null. getComposedRanges
+  // reaches across the shadow boundary (WebKit); a scoped getSelection is the fallback
+  // (Chromium). A collapsed range is no selection.
+  #selectionRange() {
+    const doc = document.getSelection();
+    if (doc && typeof doc.getComposedRanges === "function") {
+      const [range] = doc.getComposedRanges({ shadowRoots: [this.renderRoot] });
+      if (range && !(range.startContainer === range.endContainer && range.startOffset === range.endOffset)) return this.#live(range);
+    }
+    const scoped = this.renderRoot.getSelection?.();
+    if (scoped && !scoped.isCollapsed && scoped.rangeCount) return scoped.getRangeAt(0);
+    return null;
+  }
+
+  // A StaticRange as a Range, for intersectsNode.
+  #live(range) {
+    if (typeof range.intersectsNode === "function") return range;
+    const live = document.createRange();
+    live.setStart(range.startContainer, range.startOffset);
+    live.setEnd(range.endContainer, range.endOffset);
+    return live;
+  }
+
+  #clearSelection() {
+    document.getSelection()?.removeAllRanges?.();
+    this.renderRoot.getSelection?.()?.removeAllRanges?.();
+  }
+
+  // After each render: a newly opened comment box is placed under its passage and takes
+  // the keys, its caret at the end of what it holds.
+  #afterComment() {
+    const snapshot = this.#actor.snapshot;
+    const draft = snapshot?.matches({ showing: "commenting" }) ? snapshot.context.draft : null;
+    if (!draft) {
+      this.#focused = null;
+      return;
+    }
+    this.#positionPopover(draft.id);
+    if (this.#focused === draft.id) return;
+    this.#focused = draft.id;
+    const box = this.renderRoot.querySelector(".popover textarea");
+    if (box) {
+      this.#fit(box);
+      box.focus({ preventScroll: true });
+      box.setSelectionRange(box.value.length, box.value.length);
+    }
+  }
+
+  // The comment box as tall as what it holds; set as a custom property (7.4).
+  #fit(box) {
+    box.style.setProperty("--h", "auto");
+    box.style.setProperty("--h", `${box.scrollHeight}px`);
+  }
+
+  // Under the passage's last line, aligned with that line's start, clamped inside the
+  // answer; placed with custom properties so no length is a literal style (7.4).
+  #positionPopover(id) {
+    const popover = this.renderRoot.querySelector(".popover");
+    const turn = this.renderRoot.querySelector(".turn.assistant.last");
+    const marked = this.renderRoot.querySelectorAll(`.markable mark[data-id="${id}"]`);
+    if (!popover || !turn || !marked.length) return;
+    const last = marked[marked.length - 1];
+    const rects = last.getClientRects();
+    const line = rects[rects.length - 1] ?? last.getBoundingClientRect();
+    const box = turn.getBoundingClientRect();
+    const width = popover.offsetWidth;
+    let x = line.left - box.left;
+    x = Math.max(0, Math.min(Math.max(0, box.width - width), x));
+    const y = line.bottom - box.top + POPOVER_GAP;
+    popover.style.setProperty("--bx", `${Math.round(x)}px`);
+    popover.style.setProperty("--by", `${Math.round(y)}px`);
   }
 
   #thinking(turn) {

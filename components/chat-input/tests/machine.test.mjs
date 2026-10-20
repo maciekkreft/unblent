@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText, sendable } from "../machine.js";
+import { machine, draftKey, startText, inputState, pendingTurn, canContinue, retryText, sendable, canSend, sendLabel } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -177,6 +177,25 @@ test("an empty draft sends nothing", async () => {
   h.actor.send({ type: "_send", text: "   " });
   await flush();
   assert.equal(emittedOf(h, "turn.submitted").length, 0);
+});
+
+test("comments on the last answer can be sent with an empty box, and Send counts them", async () => {
+  const MARK = "01HQ8ZK7M4N5P6Q7R8S9T0V1Y1";
+  const mark = { id: MARK, start: 0, end: 2, quote: "An", comment: "Why?" };
+  const turns = [{ id: USER, role: "user", text: "q" }, { id: ANSWER, role: "assistant", text: "An answer.", status: "done" }];
+  const conversation = { id: CHAT, title: "t", about: [], start: "s", turns, pending: false, updatedAt: 1, marks: { answerId: ANSWER, marks: [mark] } };
+  assert.equal(sendLabel(conversation), "Send 1 comment");
+  assert.equal(sendLabel({ ...conversation, marks: { answerId: ANSWER, marks: [mark, { ...mark, id: "01HQ8ZK7M4N5P6Q7R8S9T0V1Y2" }] } }), "Send 2 comments");
+  assert.equal(sendLabel({ ...conversation, marks: undefined }), "Send");
+  assert.equal(canSend({ ...conversation, marks: { answerId: USER, marks: [mark] } }, ""), false, "comments on another turn do not count");
+
+  const h = start({ openId: CHAT, conversation });
+  await ready(h);
+  h.actor.send({ type: "_send", text: "  " });
+  await flush();
+  const e = emittedOf(h, "turn.submitted").at(-1);
+  assert.equal(e.conversationId, CHAT);
+  assert.equal(e.turn.text, "", "the comments go alone");
 });
 
 test("an empty list item left at the end is not sent", async () => {

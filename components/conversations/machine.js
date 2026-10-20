@@ -74,6 +74,10 @@ const stripTurn = (turn) => {
   };
 };
 
+// Unsent comments are tracked apart from unsent turns: they are not a finished turn, so
+// they do not make the chat pending, but a reload must still not replace them.
+const hasUnsentMarks = (context, id) => context.unsentMarks.has(id);
+
 const hasUnsent = (context, id) => {
   const chat = context.chats.get(id);
   return chat ? chat.turns.some((t) => context.unsent.has(t.id)) : false;
@@ -81,17 +85,22 @@ const hasUnsent = (context, id) => {
 
 // The whole conversation as it rides the bus (4.3, third rule): results without
 // their content, and pending while a finished turn is not yet on the server (5).
-const changedPayload = (context, chat) => ({
-  type: "conversation.changed",
-  id: chat.id,
-  title: chat.title,
-  about: chat.about,
-  start: chat.start,
-  turns: chat.turns.map(stripTurn),
-  pending: hasUnsent(context, chat.id),
-  updatedAt: chat.updatedAt,
-  subtitle: subtitleOf(latestAnswer(chat.turns)),
-});
+// The unsent comments are left out when there are none, as the schema has no null.
+const changedPayload = (context, chat) => {
+  const payload = {
+    type: "conversation.changed",
+    id: chat.id,
+    title: chat.title,
+    about: chat.about,
+    start: chat.start,
+    turns: chat.turns.map(stripTurn),
+    pending: hasUnsent(context, chat.id),
+    updatedAt: chat.updatedAt,
+    subtitle: subtitleOf(latestAnswer(chat.turns)),
+  };
+  if (chat.marks) payload.marks = chat.marks;
+  return payload;
+};
 
 // The read reply's conversation, shaped like the event minus the `type`.
 const readShape = (context, chat) => {
@@ -101,7 +110,60 @@ const readShape = (context, chat) => {
 
 const heading = (chat) => ({ id: chat.id, title: chat.title, about: chat.about, updatedAt: chat.updatedAt, subtitle: subtitleOf(latestAnswer(chat.turns)) });
 
-const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0 });
+const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0, marks: null });
+
+// The one answer the user may comment on: the chat's last turn when it is a finished
+// answer with text and no lookups. Only this one, so everything sent before the next
+// message stays byte for byte what the provider has cached (7.7).
+export const lastAnswer = (chat) => {
+  const last = chat && chat.turns[chat.turns.length - 1];
+  if (!last || last.role !== "assistant" || last.status !== "done" || last.text.trim() === "") return null;
+  if (last.calls && last.calls.length) return null;
+  return last;
+};
+
+// What the model reads before a message that carries comments. The note is fixed text
+// so the same comments always produce the same bytes and the cache holds; it says the
+// numbers are the interface's, so the model does not start numbering its own answers.
+const COMMENTS_OPEN = "<comments_on_your_last_answer>";
+const COMMENTS_CLOSE = "</comments_on_your_last_answer>";
+const COMMENTS_NOTE =
+  "The user selected passages of your previous answer and commented on them. The\n" +
+  "numbers were added by the interface to tie each comment to its passage. They are\n" +
+  "not in your answer, you did not write them, and you should not number passages or\n" +
+  "add notes like these in your own answers. Answer the comments as part of your reply.";
+const SUPERSCRIPT = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+const superscript = (n) => [...String(n)].map((d) => SUPERSCRIPT[Number(d)]).join("");
+
+const occurrences = (text, quote) => {
+  if (!quote) return 0;
+  let count = 0;
+  for (let i = text.indexOf(quote); i >= 0; i = text.indexOf(quote, i + quote.length)) count += 1;
+  return count;
+};
+
+// A quote that appears more than once does not say which place was meant, so the
+// sentence around it is added: from the previous . ! ? or line break to the next one.
+const sentenceAround = (text, start, end) => {
+  let from = start;
+  while (from > 0 && !/[.!?\n]/.test(text[from - 1])) from -= 1;
+  let to = end;
+  while (to < text.length && !/[.!?\n]/.test(text[to])) to += 1;
+  if (to < text.length && text[to] !== "\n") to += 1;
+  return text.slice(from, to).trim();
+};
+
+export const commentsBlock = (answerText, marks) => {
+  if (!marks || !marks.length) return "";
+  const ordered = [...marks].sort((a, b) => a.start - b.start || a.end - b.end);
+  const entries = ordered.map((mark, i) => {
+    const lines = [superscript(i + 1) + ' "' + mark.quote + '"'];
+    if (occurrences(answerText, mark.quote) > 1) lines.push('In: "' + sentenceAround(answerText, mark.start, mark.end) + '"');
+    lines.push("Comment: " + mark.comment);
+    return lines.join("\n");
+  });
+  return COMMENTS_OPEN + "\n" + COMMENTS_NOTE + "\n\n" + entries.join("\n\n") + "\n" + COMMENTS_CLOSE;
+};
 
 // A completion.progressed `status` mapped to how the turn stores its end: a turn knows
 // only done, stopped and failed, so refused and truncated are kept as failed with the
@@ -320,13 +382,22 @@ const finalize = (turn, e, meta) => {
 // unchanged) unless it carries tool calls nobody answered — those `raw` and `calls` hold
 // tool_use blocks that demand results, so an unanswered round is sent as text alone; the
 // calls go back only when the next turn holds their results. User turns carry their
-// results with content.
-const forModel = (turns) => {
+// results with content. A user turn with comments is sent as the comments block, then its
+// own text; the stored turn keeps the two apart and the answer they are about is sent
+// unchanged, so the provider's cache still holds everything before this turn.
+export const forModel = (turns) => {
   const out = [];
   for (let i = 0; i < turns.length; i++) {
     const turn = turns[i];
     if (turn.role === "user") {
-      const u = { id: turn.id, role: "user", text: turn.text };
+      let text = turn.text;
+      if (turn.marks && turn.marks.length) {
+        let prev = null;
+        for (let j = i - 1; j >= 0 && !prev; j--) if (turns[j].role === "assistant") prev = turns[j];
+        const block = commentsBlock(prev ? prev.text : "", turn.marks);
+        text = block + (turn.text ? "\n\n" + turn.text : "");
+      }
+      const u = { id: turn.id, role: "user", text };
       if (turn.at !== undefined) u.at = turn.at;
       if (turn.results && turn.results.length)
         u.results = turn.results.map((r) => {
@@ -365,7 +436,7 @@ const findTurn = (context, turnId) => {
 
 const chatsWithUnsent = (context) => {
   const ids = new Set();
-  for (const chat of context.chats.values()) if (chat.turns.some((t) => context.unsent.has(t.id))) ids.add(chat.id);
+  for (const chat of context.chats.values()) if (chat.turns.some((t) => context.unsent.has(t.id)) || hasUnsentMarks(context, chat.id)) ids.add(chat.id);
   return [...ids];
 };
 
@@ -381,17 +452,34 @@ const upsertHeading = (context, chat) => {
 // internal message, so the actor stays a mailbox processed one message at a time
 // (3.2). Saves are idempotent on the server (add by id), so a retry is harmless.
 
+// The comments are last write wins on the server, so only one save carrying them is in
+// flight per chat: two could land out of order and leave the older list stored. A change
+// made meanwhile is sent when that save comes back (onSaved).
 const fireSave = (context, self, chatId) => {
   const chat = context.chats.get(chatId);
   if (!chat) return;
   const turns = chat.turns.filter((t) => context.unsent.has(t.id));
-  if (!turns.length) return;
+  const sendMarks = hasUnsentMarks(context, chatId) && !context.marksInFlight.has(chatId);
+  if (!turns.length && !sendMarks) return;
   const body = { title: chat.title, about: chat.about, start: chat.start, turns };
+  const marks = sendMarks ? chat.marks ?? null : undefined;
+  if (sendMarks) {
+    body.marks = chat.marks ?? null;
+    context.marksInFlight.add(chatId);
+  }
   const turnIds = turns.map((t) => t.id);
   context
     .saveChat(chatId, body)
-    .then((r) => self.send({ type: "_saved", chatId, turnIds, updatedAt: r ? r.updatedAt : undefined }))
-    .catch(() => self.send({ type: "_saveFailed", chatId }));
+    .then((r) => self.send({ type: "_saved", chatId, turnIds, sendMarks, marks, updatedAt: r ? r.updatedAt : undefined }))
+    .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks }));
+};
+
+// The comments go away when a new answer starts: sent with the message, or dropped by
+// Continue. The server is told too, so a reload does not bring them back.
+const clearMarks = (context, chat) => {
+  if (!chat.marks) return;
+  chat.marks = null;
+  context.unsentMarks.add(chat.id);
 };
 
 const fireLoad = (context, self, id) => {
@@ -465,10 +553,14 @@ const onSubmit = (context, event, enqueue, self) => {
   const { conversationId, turn, about, start } = event;
   let chat = context.chats.get(conversationId);
   if (!chat) {
-    chat = { id: conversationId, title: firstLine(turn.text), about: about ?? [], start: start ?? "", turns: [], updatedAt: context.now() };
+    chat = { id: conversationId, title: firstLine(turn.text), about: about ?? [], start: start ?? "", turns: [], updatedAt: context.now(), marks: null };
     context.chats.set(conversationId, chat);
   }
-  chat.turns.push({ id: turn.id, role: "user", text: turn.text, at: context.now() });
+  const userTurn = { id: turn.id, role: "user", text: turn.text, at: context.now() };
+  const answered = lastAnswer(chat);
+  if (answered && chat.marks && chat.marks.answerId === answered.id && chat.marks.marks.length) userTurn.marks = chat.marks.marks;
+  clearMarks(context, chat);
+  chat.turns.push(userTurn);
   const answerId = context.ulid();
   chat.turns.push({ id: answerId, role: "assistant", text: "", status: "pending", at: context.now() });
   context.running = { chatId: conversationId, turnId: answerId, phase: "contracts", tools: [], meta: {}, rounds: 0 };
@@ -493,6 +585,8 @@ const onContinue = (context, event, enqueue, self) => {
   const endsAtQuestion = last.role === "user";
   const endsAtUnrunCalls = last.role === "assistant" && last.status === "done" && Boolean(last.calls && last.calls.length);
   if (!endsAtQuestion && !endsAtUnrunCalls) return;
+  clearMarks(context, chat);
+  if (hasUnsentMarks(context, chat.id)) enqueue(() => fireSave(context, self, chat.id));
   const answerId = context.ulid();
   chat.turns.push({ id: answerId, role: "assistant", text: "", status: "pending", at: context.now() });
   context.running = { chatId: chat.id, turnId: answerId, phase: "contracts", tools: [], meta: {}, rounds: 0 };
@@ -635,9 +729,22 @@ const onSelect = (context, event, enqueue, self) => {
     enqueue(() => fireLoad(context, self, event.id));
 };
 
+// The user's comments on the last answer (marks.edited carries the whole list). A list for
+// any other answer is ignored, since only the last one may be commented on (lastAnswer).
+const onMarksEdited = (context, event, enqueue, self) => {
+  const chat = context.chats.get(event.conversationId);
+  const answered = lastAnswer(chat);
+  if (!answered || answered.id !== event.answerId) return;
+  chat.marks = event.marks.length ? { answerId: event.answerId, marks: event.marks } : null;
+  context.unsentMarks.add(chat.id);
+  enqueue(() => fireSave(context, self, chat.id));
+  enqueue.emit(changedPayload(context, chat));
+};
+
 const onDiscard = (context, event, enqueue) => {
   const { id } = event;
   const chat = context.chats.get(id);
+  context.unsentMarks.delete(id);
   if (chat) for (const turn of chat.turns) context.unsent.delete(turn.id);
   context.chats.delete(id);
   context.headings = context.headings.filter((h) => h.id !== id);
@@ -710,7 +817,7 @@ const answerRead = (context, event, enqueue, self) => {
 const onLoaded = (context, event, enqueue) => {
   context.loading.delete(event.id);
   const c = event.conversation;
-  const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0 };
+  const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0, marks: c.marks ?? null };
   context.chats.set(event.id, chat);
   upsertHeading(context, chat);
   const held = context.reading.get(event.id);
@@ -730,9 +837,15 @@ const onLoadFailed = (context, event) => {
   }
 };
 
-const onSaved = (context, event, enqueue) => {
+const onSaved = (context, event, enqueue, self) => {
   for (const turnId of event.turnIds) context.unsent.delete(turnId);
   const chat = context.chats.get(event.chatId);
+  if (event.sendMarks) {
+    context.marksInFlight.delete(event.chatId);
+    // Only the list that was sent is now on the server; one changed meanwhile goes next.
+    if (!chat || (chat.marks ?? null) === event.marks) context.unsentMarks.delete(event.chatId);
+    else enqueue(() => fireSave(context, self, chat.id));
+  }
   if (!chat) return;
   if (event.updatedAt != null) chat.updatedAt = event.updatedAt;
   upsertHeading(context, chat);
@@ -761,7 +874,7 @@ const onFocus = (context, enqueue, self) => {
   // server's copy is missing them, so replacing memory with it would drop turns that can
   // never be sent (5: nothing that was completed is lost). A round in flight (running) is
   // not reloaded either, so it is not replaced under itself. Retry the save instead.
-  if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && context.headings.some((h) => h.id === context.openId))
+  if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && !hasUnsentMarks(context, context.openId) && context.headings.some((h) => h.id === context.openId))
     enqueue(() => fireLoad(context, self, context.openId));
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
 };
@@ -775,7 +888,7 @@ const onOnline = (context, enqueue, self) => {
 // the starting open chat (12). A failed list is reported so `list`/`read` answer
 // unavailable. Missing session or subject askers (a Node test) are treated as absent.
 const applyBoot = (context, out, self) => {
-  const base = { chats: new Map(), unsent: new Set(), reading: new Map(), loading: new Set(), running: null };
+  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
   } else if (out.failed) {
@@ -845,7 +958,10 @@ export const machine = setup({
       "created, and never changes. When the subject changes the open chat becomes the most " +
       "recently updated chat about it, or none, so the panel shows an empty new chat; while " +
       "the open chat is pinned, as `pins` says, it stays open whatever the subject, once it has " +
-      "its first message; a new chat with none follows the subject like an unpinned one.",
+      "its first message; a new chat with none follows the subject like an unpinned one. " +
+      "The user's comments on the last finished answer are kept with the chat until the next " +
+      "message, which carries them; the model gets them as quotes before the message, and the " +
+      "answer itself is never changed, so the provider's cache holds.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",
@@ -875,6 +991,8 @@ export const machine = setup({
     headings: [],
     chats: new Map(), // id -> { id, title, about, start, turns, updatedAt }; turns keep their results' content
     unsent: new Set(), // finished turn ids not yet confirmed by the server; pending is derived from this
+    unsentMarks: new Set(), // chat ids whose comments the server does not have yet
+    marksInFlight: new Set(), // chat ids with a save carrying comments on its way
     reading: new Map(), // id -> [reply]; read replies held while a chat loads
     loading: new Set(),
     openId: null,
@@ -916,6 +1034,7 @@ export const machine = setup({
         "conversation.selected": { actions: queue },
         "conversation.discarded": { actions: queue },
         "tools.edited": { actions: queue },
+        "marks.edited": { actions: queue },
       },
     },
     ready: {
@@ -936,6 +1055,7 @@ export const machine = setup({
         "conversation.selected": { actions: enqueueActions(({ context, event, enqueue, self }) => onSelect(context, event, enqueue, self)) },
         "conversation.discarded": { actions: enqueueActions(({ context, event, enqueue }) => onDiscard(context, event, enqueue)) },
         "tools.edited": { actions: enqueueActions(({ context, event, enqueue }) => onToolsEdited(context, event, enqueue)) },
+        "marks.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onMarksEdited(context, event, enqueue, self)) },
         "subject.changed": { actions: enqueueActions(({ context, event, enqueue, self }) => onSubjectChanged(context, event, enqueue, self)) },
         // The fact's own news about who is signed in (4.3): a different user re-boots
         // the chats; signing out clears them.
@@ -945,8 +1065,13 @@ export const machine = setup({
         _contracts: { actions: enqueueActions(({ context, event, enqueue, self }) => onContracts(context, event, enqueue, self)) },
         _lookups: { actions: enqueueActions(({ context, event, enqueue, self }) => onLookups(context, event, enqueue, self)) },
         _completeReply: { actions: enqueueActions(({ context, event, enqueue, self }) => onCompleteReply(context, event, enqueue, self)) },
-        _saved: { actions: enqueueActions(({ context, event, enqueue }) => onSaved(context, event, enqueue)) },
-        _saveFailed: {}, // the unsent turns stay, so pending stays true; a later trigger retries
+        _saved: { actions: enqueueActions(({ context, event, enqueue, self }) => onSaved(context, event, enqueue, self)) },
+        // The unsent turns and comments stay, so pending stays true; a later trigger retries.
+        _saveFailed: {
+          actions: ({ context, event }) => {
+            if (event.sendMarks) context.marksInFlight.delete(event.chatId);
+          },
+        },
         _loaded: { actions: enqueueActions(({ context, event, enqueue }) => onLoaded(context, event, enqueue)) },
         _loadFailed: { actions: ({ context, event }) => onLoadFailed(context, event) },
         _listed: { actions: ({ context, event }) => onListed(context, event) },

@@ -128,9 +128,28 @@ export const sendable = (text) => {
   return body;
 };
 
+// How many comments on the chat's last answer are waiting to go with the next message.
+// They count only while that answer is still the last turn, as `conversations` keeps them.
+export const unsentComments = (conversation) => {
+  const marks = conversation?.marks;
+  const last = lastTurn(conversation);
+  if (!marks || !last || marks.answerId !== last.id) return 0;
+  return marks.marks?.length ?? 0;
+};
+
+// Comments alone are a message: the box may be empty when there are some to send.
+export const canSend = (conversation, text) => Boolean(sendable(text)) || unsentComments(conversation) > 0;
+
+// The Send button names what it sends when comments ride along.
+export const sendLabel = (conversation) => {
+  const n = unsentComments(conversation);
+  if (!n) return "Send";
+  return n === 1 ? "Send 1 comment" : "Send " + n + " comments";
+};
+
 const submit = (context, enqueue, text) => {
   const body = sendable(text);
-  if (!body) return;
+  if (!canSend(context.conversation, text)) return;
   if (pendingTurn(context.conversation)) return; // an answer is arriving; the button is Stop
   const conversationId = context.openId ?? context.mint();
   const event = { type: "turn.submitted", conversationId, turn: { id: context.mint(), text: body } };
@@ -197,7 +216,8 @@ export const machine = setup({
       "so a change of subject or a reload never moves the cursor. Unsent text is kept in this " +
       "browser for each chat, and for a new chat about each open item, so it is still there " +
       "after a reload or on coming back, and never shows up in another chat; sending clears " +
-      "it, and deleting a chat drops its text. It disables itself while nobody is signed in " +
+      "it, and deleting a chat drops its text. When the user has commented on the last answer, " +
+      "Send says how many comments it sends and works with an empty box. It disables itself while nobody is signed in " +
       "or the chosen provider has no key.",
     kind: "view",
     attributes: [],
