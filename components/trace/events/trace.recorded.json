@@ -6,7 +6,7 @@
     "seq": { "type": "integer" },
     "at": { "type": "integer" },
     "tab": { "type": "string" },
-    "kind": { "enum": ["event", "query", "reply"] },
+    "kind": { "enum": ["event", "query", "reply", "command"] },
     "name": { "type": "string" },
     "from": { "type": "string" },
     "fromKind": { "enum": ["fact", "view"] },
