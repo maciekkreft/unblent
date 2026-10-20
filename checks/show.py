@@ -69,7 +69,7 @@ def _component(c: dict) -> list:
     head = [c["name"], c["kind"] or "?", c["status"]]
     head += [c[key] for key in ("shape", "role") if c.get(key)]
     lines = ["  ".join(head)]
-    for key in ("emits", "consumes", "answers", "accepts", "asks"):
+    for key in ("emits", "consumes", "answers", "accepts", "asks", "sends"):
         if c.get(key):
             lines.append(f"    {key}: " + ", ".join(c[key]))
     if c.get("description"):

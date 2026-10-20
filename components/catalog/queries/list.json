@@ -31,6 +31,7 @@
                 "accepts": { "type": "array", "items": { "type": "string" } },
                 "answers": { "type": "array", "items": { "type": "string" } },
                 "asks": { "type": "array", "items": { "type": "string" } },
+                "sends": { "type": "array", "items": { "type": "string" } },
                 "interacts": {
                   "type": "array",
                   "items": {
@@ -38,7 +39,7 @@
                     "properties": {
                       "with": { "type": "string" },
                       "via": { "type": "string" },
-                      "how": { "enum": ["emits", "consumes", "asks", "answers"] }
+                      "how": { "enum": ["emits", "consumes", "asks", "answers", "sends", "accepts"] }
                     },
                     "required": ["with", "via", "how"],
                     "additionalProperties": false

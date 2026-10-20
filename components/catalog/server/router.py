@@ -54,6 +54,7 @@ def _records(manifests: dict) -> list:
             "accepts": manifest["accepts"],
             "answers": manifest["answers"],
             "asks": meta.get("asks", []),
+            "sends": meta.get("sends", []),
             "interacts": [],
             # Optional in the reply (7.1: an added field is never required), so a
             # machine without one still lists.
@@ -101,6 +102,14 @@ def _link(records: list) -> None:
                     continue
                 if f"{record['name']}: {query}" in other["asks"] or (is_tool and "*: tool" in other["asks"]):
                     record["interacts"].append({"with": other["name"], "via": query, "how": "answers"})
+        # Section 4.4: a send names the component, so it reaches every instance of it.
+        for entry in record["sends"]:
+            target, _, command = entry.partition(": ")
+            record["interacts"].append({"with": target, "via": command, "how": "sends"})
+        for command in record["accepts"]:
+            for other in records:
+                if other is not record and f"{record['name']}: {command}" in other["sends"]:
+                    record["interacts"].append({"with": other["name"], "via": command, "how": "accepts"})
         record["interacts"].sort(key=lambda i: (i["with"], i["via"], i["how"]))
 
 
@@ -145,6 +154,7 @@ def _contracts(records: list) -> dict:
                 "target": owner,
                 "name": name,
                 "payload": _schema(owner, "commands", name),
+                "senders": sorted(o["name"] for o in records if f"{owner}: {name}" in o["sends"]),
             })
     events.sort(key=lambda e: e["name"])
     queries.sort(key=lambda q: (q["target"], q["name"]))

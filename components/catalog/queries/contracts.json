@@ -59,7 +59,8 @@
               "properties": {
                 "target": { "type": "string" },
                 "name": { "type": "string" },
-                "payload": { "type": "object" }
+                "payload": { "type": "object" },
+                "senders": { "type": "array", "items": { "type": "string" } }
               },
               "required": ["target", "name", "payload"],
               "additionalProperties": false

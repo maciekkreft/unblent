@@ -1,5 +1,5 @@
 // The bus (architecture.md 3.3, 4): the one shared infrastructure that routes
-// events and queries between component actors and validates their names. It
+// events, commands and queries between component actors and validates their names. It
 // keeps no log; facts live in fact components. Pure module — no `document` — so
 // it imports in Node as well as the browser. Machines never import this; a fact
 // component's `fact.js` mounts its actor here, so `machine.js` stays importable
@@ -18,6 +18,9 @@ const queryRegistry = new Map(); // "target: name" → { payload, reply, superse
 const eventValidators = new Map();
 const queryPayloadValidators = new Map();
 const queryReplyValidators = new Map();
+// "<component>: <command>" → compiled validator for a command's payload (4.4), keyed by
+// the component, not the instance, because the schema belongs to the component.
+const commandValidators = new Map();
 const subscribers = new Map();
 // Section 4.2: while an asker's query is open, the events its schema declares as
 // superseding the answer are held for that asker alone, so it sees the starting
@@ -157,6 +160,12 @@ function compileFor(schema, id, what) {
   } catch (err) {
     throw new Error(`mount ${id}: cannot compile schema for ${what}: ${err.message}`);
   }
+}
+
+// The 7.2 key convention: a command is a handled message type that is neither a
+// consumed event (dotted), an answered query (`?`), nor internal (`_`).
+function isCommand(type) {
+  return !type.includes(".") && !type.endsWith("?") && !type.startsWith("_");
 }
 
 function subscribe(name, actor) {
@@ -322,7 +331,7 @@ function forward(machine, emitter, event) {
   }
 }
 
-export function mount(machine, { input, events = {}, queries = {}, instance } = {}) {
+export function mount(machine, { input, events = {}, queries = {}, commands = {}, instance } = {}) {
   const id = machine.config.id;
   // 4.1: the address, not the bare name, is the routing key, so two instances of one
   // view have separate mailboxes, emits and holds. Schemas below stay keyed by name
@@ -356,6 +365,14 @@ export function mount(machine, { input, events = {}, queries = {}, instance } = 
     queryRegistry.set(`${id}: ${name}`, schema);
     queryPayloadValidators.set(`${id}: ${name}`, compileFor(schema.payload, id, `query "${name}" payload`));
     queryReplyValidators.set(`${id}: ${name}`, compileFor(schema.reply, id, `query "${name}" reply`));
+  }
+  // Section 4.4: the acceptor hands the bus the schema of each command it wants sent to
+  // it, so every send is validated. A command whose schema is not passed is never
+  // delivered, so a component that accepts commands only from its own view need pass none.
+  for (const [name, schema] of Object.entries(commands)) {
+    if (!isCommand(name) || !machine.events.includes(name))
+      throw new Error(`mount ${id}: schema passed for command "${name}", which the machine does not accept`);
+    commandValidators.set(`${id}: ${name}`, compileFor(schema, id, `command "${name}"`));
   }
   const actor = createActor(machine, { input });
   // Subscriptions are derived by the 7.2 key convention: a dotted message type the
@@ -513,4 +530,68 @@ export function ask(machine, target, name, payload = {}, instance) {
       place,
     );
   });
+}
+
+// A command (4.4): an instruction addressed to one mounted instance, never replied to.
+// The target is an address (4.1), a bare name or `name#instance`; the declaration in
+// `meta.sends` names the component, so it covers every instance of it. An undeclared
+// send is a programming error and throws, like an undeclared emit or ask. Every other
+// way a command can fail to arrive is recorded and dropped, because no reply is
+// waiting to carry the news: nobody mounted at the address, a type the target does not
+// accept, no schema passed for it at the target's mount, or a payload that does not
+// match that schema (which also prints, like an invalid query payload).
+export function send(machine, target, name, payload = {}, instance) {
+  const sends = machine.config.meta?.sends ?? [];
+  const component = target.split("#")[0];
+  const key = `${component}: ${name}`;
+  const from = addressOf(machine, instance);
+  const fromKind = kindOf(machine);
+  const to = [target];
+  if (!sends.includes(key)) {
+    record({ kind: "command", name, from, fromKind, to, outcome: "refused", reason: "undeclared send", payload });
+    throw new Error(`undeclared send: ${machine.config.id} sent "${key}", not in meta.sends`);
+  }
+  const actor = mounted.get(target);
+  if (!actor) {
+    record({ kind: "command", name, from, fromKind, to, outcome: "dropped", reason: "nobody mounted at this address", payload });
+    return;
+  }
+  if (!isCommand(name) || !machines.get(target).events.includes(name)) {
+    record({ kind: "command", name, from, fromKind, to, outcome: "dropped", reason: "the target does not accept it", payload });
+    return;
+  }
+  const validator = commandValidators.get(key);
+  if (!validator) {
+    record({ kind: "command", name, from, fromKind, to, outcome: "dropped", reason: "no schema passed for it at mount", payload });
+    return;
+  }
+  const error = validator(payload);
+  if (error) {
+    invalid("command", name, from, fromKind, to, null, error);
+    console.error(`bus: invalid command ${name}: ${error}`);
+    return;
+  }
+  // `type` last, so a payload can never turn a command into a different message.
+  const message = { ...payload, type: name };
+  const handled = actor.getSnapshot().can(message);
+  const place = reserve();
+  try {
+    delivering(() => actor.send(message));
+  } finally {
+    record(
+      {
+        kind: "command",
+        name,
+        from,
+        fromKind,
+        to,
+        ignored: handled ? [] : to,
+        outcome: handled ? "delivered" : "ignored",
+        reason: handled ? null : `state ${JSON.stringify(actor.getSnapshot().value)} does not handle it`,
+        payload,
+        states: { [target]: JSON.stringify(actor.getSnapshot().value) },
+      },
+      place,
+    );
+  }
 }

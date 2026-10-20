@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMachine, emit, setup, fromPromise } from "xstate";
-import { mount, unmount, ask, tap } from "bus";
+import { mount, unmount, ask, send, tap } from "bus";
 import { compile } from "../validate.js";
 
 // The bus is infrastructure, not a component, so it is tested here rather than
@@ -1159,4 +1159,123 @@ test("a hold is per instance: a superseding event waits for the instance that as
   unmount(f);
   unmount(a);
   unmount(b);
+});
+
+// Commands (4.4): a sender names one address and a command it declared in
+// `meta.sends`; the acceptor passed the command's schema at mount. No reply comes, so
+// every way a command fails to arrive is a record on the tap.
+const LOAD = {
+  type: "object",
+  properties: { id: { type: "string" } },
+  required: ["id"],
+  additionalProperties: false,
+};
+
+function acceptor(id, received) {
+  return createMachine({
+    id,
+    meta: { kind: "view", emits: [], attributes: [] },
+    on: { load: { actions: ({ event }) => received.push(event) } },
+  });
+}
+
+function sender(id, sends = ["ed: load"]) {
+  return createMachine({ id, meta: { kind: "view", emits: [], attributes: [], sends } });
+}
+
+test("a command reaches only the addressed instance, as { type, ...payload }", () => {
+  const ra = [];
+  const rb = [];
+  const a = mount(acceptor("ed", ra), { commands: { load: LOAD }, instance: "stage" });
+  const b = mount(acceptor("ed", rb), { commands: { load: LOAD }, instance: "side" });
+  const { records, sub } = collect();
+  send(sender("st"), "ed#stage", "load", { id: "n1" }, "main");
+  sub();
+  assert.deepEqual(ra, [{ id: "n1", type: "load" }]);
+  assert.deepEqual(rb, []);
+  const r = records.find((x) => x.kind === "command");
+  assert.equal(r.outcome, "delivered");
+  assert.equal(r.from, "st#main");
+  assert.deepEqual(r.to, ["ed#stage"]);
+  assert.deepEqual(r.payload, { id: "n1" });
+  unmount(a);
+  unmount(b);
+});
+
+test("an undeclared send is refused on the tap and throws", () => {
+  const received = [];
+  const a = mount(acceptor("ed", received), { commands: { load: LOAD } });
+  const { records, sub } = collect();
+  assert.throws(() => send(sender("st", []), "ed", "load", { id: "n1" }), /undeclared send/);
+  sub();
+  assert.deepEqual(received, []);
+  assert.equal(records[0].outcome, "refused");
+  assert.equal(records[0].reason, "undeclared send");
+  unmount(a);
+});
+
+test("a command whose payload fails its schema is not delivered", (t) => {
+  t.mock.method(console, "error", () => {});
+  const received = [];
+  const a = mount(acceptor("ed", received), { commands: { load: LOAD } });
+  const { records, sub } = collect();
+  send(sender("st"), "ed", "load", { id: 7 });
+  sub();
+  assert.deepEqual(received, []);
+  assert.equal(records[0].outcome, "refused");
+  assert.match(records[0].reason, /^invalid payload/);
+  assert.equal(records[0].payload, null);
+  unmount(a);
+});
+
+test("a command to an address nobody mounted is dropped", () => {
+  const { records, sub } = collect();
+  send(sender("st"), "ed#nowhere", "load", { id: "n1" });
+  sub();
+  assert.equal(records[0].kind, "command");
+  assert.equal(records[0].outcome, "dropped");
+  assert.equal(records[0].reason, "nobody mounted at this address");
+});
+
+test("a command the target does not accept is dropped", () => {
+  const a = mount(acceptor("ed", []), { commands: { load: LOAD } });
+  const { records, sub } = collect();
+  send(sender("st", ["ed: focus"]), "ed", "focus");
+  sub();
+  assert.equal(records[0].outcome, "dropped");
+  assert.equal(records[0].reason, "the target does not accept it");
+  unmount(a);
+});
+
+test("a command whose schema the target did not pass at mount is dropped", () => {
+  const received = [];
+  // A fresh name: the bus keeps a component's schemas after unmount, as it does events'.
+  const a = mount(acceptor("bare", received), {});
+  const { records, sub } = collect();
+  send(sender("st", ["bare: load"]), "bare", "load", { id: "n1" });
+  sub();
+  assert.deepEqual(received, []);
+  assert.equal(records[0].outcome, "dropped");
+  assert.equal(records[0].reason, "no schema passed for it at mount");
+  unmount(a);
+});
+
+test("mount refuses a command schema for a command the machine does not accept", () => {
+  assert.throws(() => mount(acceptor("ed", []), { commands: { open: LOAD } }), /does not accept/);
+});
+
+test("a command the target's state passes on is recorded as ignored", () => {
+  const m = createMachine({
+    id: "gate",
+    meta: { kind: "view", emits: [], attributes: [] },
+    initial: "closed",
+    states: { closed: {}, open: { on: { load: { actions: () => {} } } } },
+  });
+  const a = mount(m, { commands: { load: LOAD } });
+  const { records, sub } = collect();
+  send(sender("st", ["gate: load"]), "gate", "load", { id: "n1" });
+  sub();
+  assert.equal(records[0].outcome, "ignored");
+  assert.deepEqual(records[0].ignored, ["gate"]);
+  unmount(a);
 });

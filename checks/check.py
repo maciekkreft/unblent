@@ -165,6 +165,11 @@ def check_manifests(manifests: dict) -> None:
         # other ask names one target and query.
         if not (isinstance(asks, list) and all(isinstance(a, str) and (a == "*: tool" or _ASK.match(a)) for a in asks)):
             fail(path, "manifest check (7.3)", 'meta.asks must be a list of "target: query" strings (or the wildcard "*: tool")')
+        # Section 4.4: a sender names the component it sends to, which covers every
+        # instance of it; there is no wildcard.
+        sends = meta.get("sends", [])
+        if not (isinstance(sends, list) and all(isinstance(a, str) and _ASK.match(a) for a in sends)):
+            fail(path, "manifest check (7.3)", 'meta.sends must be a list of "target: command" strings')
         if meta["kind"] == "fact":
             if meta.get("shape") not in _SHAPES:
                 fail(path, "manifest check (7.3)", f"a fact component's meta.shape must be one of {sorted(_SHAPES)}")
@@ -194,8 +199,8 @@ def check_manifests(manifests: dict) -> None:
 def check_roles(manifests: dict) -> None:
     """Section 11.2, roles are coherent: every view declaring a role exposes the
     same contract, so the composer can swap one member for another without
-    surprising a neighbour. The four the manifest names — emits, asks, accepts,
-    answers — are compared as sorted sets."""
+    surprising a neighbour. The five the manifest names — emits, asks, sends,
+    accepts, answers — are compared as sorted sets."""
     groups = {}
     for path, manifest in manifests.items():
         role = manifest["meta"].get("role")
@@ -208,6 +213,7 @@ def check_roles(manifests: dict) -> None:
             return (
                 tuple(sorted(set(m["meta"].get("emits", [])))),
                 tuple(sorted(set(m["meta"].get("asks", [])))),
+                tuple(sorted(set(m["meta"].get("sends", [])))),
                 tuple(sorted(set(m["accepts"]))),
                 tuple(sorted(set(m["answers"]))),
             )
@@ -216,7 +222,7 @@ def check_roles(manifests: dict) -> None:
         for path, manifest in members[1:]:
             if contract(manifest) != want:
                 fail(path, "role check (11.2)",
-                     f"role {role!r} members must share one contract (emits, asks, accepts, answers); "
+                     f"role {role!r} members must share one contract (emits, asks, sends, accepts, answers); "
                      f"{Path(path).parent.name} differs from {Path(first_path).parent.name}")
 
 
@@ -369,6 +375,27 @@ def check_contracts(manifests: dict) -> None:
                                  "a query's tool entry must be a { description, label } of non-empty strings (7.7)")
                 else:
                     _check_draft(schema_path, schema, "the schema")
+
+
+def send_problems(recs: dict) -> list:
+    """Section 4.4, 11.2: every `sends` entry names a component that exists and a
+    command its machine accepts, which the contract check above ties to a
+    commands/<name>.json. Pure over {name: manifest}; returns (sender, detail) pairs."""
+    out = []
+    for name in sorted(recs):
+        for entry in recs[name]["meta"].get("sends", []) or []:
+            target, _, command = entry.partition(": ")
+            if target not in recs:
+                out.append((name, f"{name} sends {entry!r} but no component {target!r} exists"))
+            elif command not in recs[target]["accepts"]:
+                out.append((name, f"{name} sends {entry!r} but {target} does not accept {command!r}"))
+    return out
+
+
+def check_sends(manifests: dict) -> None:
+    recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    for sender, detail in send_problems(recs):
+        fail(f"components/{sender}/machine.js", "contract check (11.2)", detail)
 
 
 # --- Supersession check (architecture.md 4.2, 4.3, 11.2) -------------------------
@@ -565,7 +592,7 @@ def _tool_queries(manifests: dict) -> list:
 def _contract_parties(manifests: dict) -> dict:
     """Section 7.3: who a contract's change affects, from manifests alone. For an
     event, its emitters and consumers; for a query, its answerer and askers; for a
-    command, only the acceptor, since nothing records who sends one. Reimplemented
+    command, its acceptors and senders. Reimplemented
     like _interaction_graph because the check cannot import a component (11.2)."""
     recs = {Path(p).parent.name: m for p, m in manifests.items()}
     tools = _tool_queries(manifests)
@@ -586,7 +613,10 @@ def _contract_parties(manifests: dict) -> dict:
             q = ask.split(":", 1)[1].strip() if ":" in ask else ask.strip()
             parties["queries"].setdefault(q, {"answerers": set(), "askers": set()})["askers"].add(name)
         for cmd in m["accepts"]:
-            parties["commands"].setdefault(cmd, {"acceptors": set()})["acceptors"].add(name)
+            parties["commands"].setdefault(cmd, {"acceptors": set(), "senders": set()})["acceptors"].add(name)
+        for entry in m["meta"].get("sends", []):
+            cmd = entry.split(":", 1)[1].strip() if ":" in entry else entry.strip()
+            parties["commands"].setdefault(cmd, {"acceptors": set(), "senders": set()})["senders"].add(name)
     return parties
 
 
@@ -604,7 +634,8 @@ def _affected_line(kind: str, name: str, parties: dict) -> str:
         return f"affected: answered by {ans} → asked by {ask}"
     p = parties["commands"].get(name, {})
     acc = ", ".join(sorted(p.get("acceptors", []))) or "?"
-    return f"affected: accepted by {acc} (senders are not recorded)"
+    snd = ", ".join(sorted(p.get("senders", []))) or "none"
+    return f"affected: accepted by {acc} → sent by {snd}"
 
 
 def removal_breaks(comp: str, kind: str, name: str, known: set, parties: dict) -> bool:
@@ -1556,6 +1587,11 @@ def _interaction_graph(manifests: dict) -> dict:
                 if target in recs and target != name:
                     adj[name].add(target)
                     adj[target].add(name)
+        for entry in m["meta"].get("sends", []):
+            target = entry.split(":", 1)[0].strip()
+            if target in recs and target != name:
+                adj[name].add(target)
+                adj[target].add(name)
     return adj
 
 
@@ -1623,6 +1659,7 @@ def contract_of(manifest: dict) -> tuple:
     meta = manifest.get("meta") or {}
     return (tuple(sorted(set(meta.get("emits") or []))),
             tuple(sorted(set(meta.get("asks") or []))),
+            tuple(sorted(set(meta.get("sends") or []))),
             tuple(sorted(set(manifest.get("consumes") or []))),
             tuple(sorted(set(manifest.get("accepts") or []))),
             tuple(sorted(set(manifest.get("answers") or []))))
@@ -2158,6 +2195,7 @@ def main() -> None:
     _timed(timings, "role check", check_roles, manifests)
     _timed(timings, "component dirs", check_component_dirs, manifests)
     _timed(timings, "contract check", check_contracts, manifests)
+    _timed(timings, "send check", check_sends, manifests)
     _timed(timings, "supersession check", check_supersession, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "kit", check_kit, manifests)
