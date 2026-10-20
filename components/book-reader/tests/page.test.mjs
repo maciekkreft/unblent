@@ -15,6 +15,9 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 const SAMPLE = resolve(HERE, "..", "..", "books", "tests", "fixtures", "sample.epub");
+// One chapter with a wide picture printed sideways, among paragraphs (make_plate.py).
+const PLATE = resolve(HERE, "fixtures", "plate.epub");
+const PLATE_ID = "01K00000000000000000000PTE";
 
 // The turn is announced once it settles (throttled), routed to books (section 10).
 const PROGRESSED = /event book\.progressed book-reader → .*\bbooks\b.* delivered/;
@@ -146,7 +149,7 @@ for (const engine of ENGINES) {
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot && document.querySelector("book-shelf")?.shadowRoot);
       if (opts.phone) await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-      await waitTile(page);
+      if (opts.shelf !== false) await waitTile(page);
       return { page, problems, debug };
     };
     const openAndRewind = async (opts) => {
@@ -669,6 +672,160 @@ for (const engine of ENGINES) {
           return (sel?.toString() ?? "").trim().length > 0;
         });
         assert.ok(selected, "the drag selected text instead of turning");
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    // A user of the test's own whose open book is the plate, set up through the server,
+    // so the reader opens on the page that holds the wide picture.
+    const openPlate = async (opts = {}) => {
+      const own = forgeCookie();
+      await importBook(own, PLATE_ID, PLATE);
+      await Promise.all([putJson(own, `/api/books/${PLATE_ID}/position`, { chapter: 0, block: 0 }), putJson(own, `/api/books/${PLATE_ID}/opened`, {})]);
+      const ctx = await open({ ...opts, cookie: own, shelf: false });
+      await waitChapterPage(ctx.page, "The Plate", 1);
+      await ctx.page.waitForFunction(() => document.querySelector("book-reader").shadowRoot.querySelector(".strip img")?.complete);
+      await settle(ctx.page);
+      return ctx;
+    };
+    const plateBox = (page) =>
+      page.evaluate(() => {
+        const r = document.querySelector("book-reader").shadowRoot.querySelector(".strip img").getBoundingClientRect();
+        return { x: r.x, y: r.y, w: r.width, h: r.height };
+      });
+    const viewer = (page) =>
+      page.evaluate(() => {
+        const f = document.querySelector("book-reader").shadowRoot.querySelector(".figure");
+        if (!f) return null;
+        const img = f.querySelector("img");
+        const r = img.getBoundingClientRect();
+        const b = f.getBoundingClientRect();
+        const prop = (n) => f.style.getPropertyValue(n);
+        return { rotate: getComputedStyle(img).rotate, turn: prop("--turn"), zoom: prop("--zoom"), x: prop("--x"), img: { w: r.width, h: r.height, x: r.x, y: r.y }, box: { w: b.width, h: b.height, x: b.x, y: b.y } };
+      });
+    const waitViewer = (page, open) => page.waitForFunction((o) => Boolean(document.querySelector("book-reader").shadowRoot.querySelector(".figure")) === o, open, WAIT);
+    const firstText = (page) => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".strip p").textContent);
+
+    // Browser: a gesture.
+    test("a tap on a picture at either edge opens it, never a page turn, and a tap beside it closes it", async () => {
+      const { page, problems } = await openPlate();
+      try {
+        const before = await rstate(page);
+        assert.ok(before.pages > 1, "the plate chapter has a page to turn to");
+        const img = await plateBox(page);
+        const vp = await page.evaluate(() => {
+          const r = document.querySelector("book-reader").shadowRoot.querySelector(".viewport").getBoundingClientRect();
+          return { x: r.x, w: r.width };
+        });
+        const left = img.x + 3;
+        const right = img.x + img.w - 3;
+        assert.ok((left - vp.x) / vp.w <= 0.3 && (right - vp.x) / vp.w >= 0.7, "both ends of the picture lie where a tap turns the page");
+        for (const x of [left, right]) {
+          await page.mouse.click(x, img.y + img.h / 2);
+          await waitViewer(page, true);
+          assert.deepEqual(await rstate(page), before, "the page did not turn");
+          const v = await viewer(page);
+          await page.mouse.click(v.box.x + v.box.w / 2, v.box.y + v.box.h - 4);
+          await waitViewer(page, false);
+        }
+        // A finger's tap at the edge, too.
+        await page.evaluate(({ x, y }) => {
+          const target = document.querySelector("book-reader").shadowRoot.querySelector(".strip img");
+          for (const type of ["pointerdown", "pointerup"])
+            target.dispatchEvent(new PointerEvent(type, { pointerId: 2, pointerType: "touch", isPrimary: true, button: 0, clientX: x, clientY: y, bubbles: true, composed: true }));
+        }, { x: right, y: img.y + img.h / 2 });
+        await waitViewer(page, true);
+        assert.deepEqual(await rstate(page), before, "a finger's tap did not turn the page");
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    // Browser: rendering and layout.
+    test("the picture turns clockwise a quarter at a time, on past a full turn, fitted to the long side, and the page under it is unchanged", async () => {
+      const { page, problems } = await openPlate();
+      try {
+        // The turn's own motion is not what is measured here; without it each turn lands
+        // at once.
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        const before = await rstate(page);
+        const text = await firstText(page);
+        const img = await plateBox(page);
+        await page.mouse.click(img.x + img.w / 2, img.y + img.h / 2);
+        await waitViewer(page, true);
+        const flat = await viewer(page);
+        const inside0 = (v) => v.img.x >= v.box.x - 1 && v.img.y >= v.box.y - 1 && v.img.x + v.img.w <= v.box.x + v.box.w + 1 && v.img.y + v.img.h <= v.box.y + v.box.h + 1;
+        const angles = [];
+        for (let i = 1; i <= 4; i++) {
+          await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".figure .rotate").click());
+          await page.waitForFunction((n) => document.querySelector("book-reader").shadowRoot.querySelector(".figure").style.getPropertyValue("--turn") === String(n), i, WAIT);
+          await waitStill(page);
+          const v = await viewer(page);
+          angles.push(v.rotate);
+          // Turned or not, the picture's box lies within the viewer: its long side
+          // follows the viewer's height while it stands upright, and nothing is cut.
+          const inside = (a, b) => a.x >= b.x - 2 && a.y >= b.y - 2 && a.x + a.w <= b.x + b.w + 2 && a.y + a.h <= b.y + b.h + 2;
+          assert.ok(inside(v.img, v.box), `turn ${i}: the picture fits the viewer (${JSON.stringify(v)})`);
+        }
+        assert.ok(inside0(flat), "lying flat, the picture fits the viewer");
+        assert.deepEqual(angles, ["90deg", "180deg", "270deg", "360deg"], "every turn goes on clockwise");
+        await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".figure .close").click());
+        await waitViewer(page, false);
+        assert.deepEqual(await rstate(page), before, "the reader is on the same page");
+        assert.equal(await firstText(page), text, "the text under the picture is unchanged");
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    // Browser: focus and keys.
+    test("while a picture is open the page keys do nothing, and Escape closes it and gives the reader the keyboard", async () => {
+      const { page, problems } = await openPlate();
+      try {
+        const before = await rstate(page);
+        const img = await plateBox(page);
+        await page.mouse.click(img.x + img.w / 2, img.y + img.h / 2);
+        await waitViewer(page, true);
+        await page.waitForFunction(() => document.querySelector("book-reader").shadowRoot.activeElement?.classList.contains("rotate"), undefined, WAIT);
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("PageDown");
+        await page.keyboard.press("End");
+        assert.deepEqual(await rstate(page), before, "the page did not turn");
+        await page.keyboard.press("Escape");
+        await waitViewer(page, false);
+        await page.waitForFunction(() => document.querySelector("book-reader").shadowRoot.activeElement?.classList.contains("reader"), undefined, WAIT);
+        await page.keyboard.press("ArrowRight");
+        await waitChapterPage(page, "The Plate", 2);
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await page.close();
+      }
+    });
+
+    // Browser: a gesture.
+    test("a double click zooms the picture, a drag moves it, and another double click fits it again", async () => {
+      const { page, problems } = await openPlate();
+      try {
+        const img = await plateBox(page);
+        await page.mouse.click(img.x + img.w / 2, img.y + img.h / 2);
+        await waitViewer(page, true);
+        const v = await viewer(page);
+        const cx = v.img.x + v.img.w / 2;
+        const cy = v.img.y + v.img.h / 2;
+        await page.mouse.dblclick(cx, cy);
+        assert.equal((await viewer(page)).zoom, "2", "zoomed to twice");
+        await page.mouse.move(cx, cy);
+        await page.mouse.down();
+        for (let i = 1; i <= 5; i++) await page.mouse.move(cx + i * 20, cy);
+        await page.mouse.up();
+        assert.notEqual((await viewer(page)).x, "0px", "the drag moved the picture");
+        await page.mouse.dblclick(cx, cy);
+        const back = await viewer(page);
+        assert.deepEqual([back.zoom, back.x], ["1", "0px"], "fitted again");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await page.close();

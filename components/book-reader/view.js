@@ -67,6 +67,10 @@ const EDGE = 0.3; // the fraction of the width, each side, that a tap turns from
 // The gap the bubble keeps from the mark it sits above (or below, when there is no room
 // above): a placement offset computed in JS, not a length that places a box in CSS (7.4).
 const BUBBLE_GAP = 6;
+// The picture viewer's zoom, from the picture fitted to the box up to four times that,
+// and how close in time two taps make a double tap: factors and a time, not lengths (7.4).
+const ZOOM_MAX = 4;
+const DOUBLE_TAP_MS = 300;
 // How long "Copied" stands on the Copy button after a copy, before it reads Copy again.
 const COPIED_MS = 1200;
 // The keyboard highlight's paint (12, "Vim keys"): the name in the document's one highlight
@@ -104,6 +108,7 @@ class BookReader extends LitElement {
       flex: 1;
     }
     .reader {
+      position: relative;
       display: flex;
       flex-direction: column;
       flex: 1;
@@ -428,6 +433,10 @@ class BookReader extends LitElement {
       object-fit: contain;
       break-inside: avoid;
     }
+    /* A picture opens in the viewer (below) on a tap, so it says it can be pressed. */
+    .strip img {
+      cursor: pointer;
+    }
     /* An image inside running text (a book's emoji, shipped as a PNG) is a glyph: the
        height of the text it sits in, never its file's size. Figures keep theirs. */
     .strip :is(p, pre, li, td, th, blockquote) img {
@@ -467,6 +476,9 @@ class BookReader extends LitElement {
     }
     .strip pre img {
       height: var(--text-caption);
+    }
+    .strip :is(p, pre, li, td, th, blockquote, a) img {
+      cursor: inherit;
     }
     .strip :is(figure, table, pre) {
       break-inside: avoid;
@@ -571,6 +583,70 @@ class BookReader extends LitElement {
       outline: none;
       box-shadow: var(--focus-ring);
     }
+    /* The picture viewer: one picture alone over the reader's own box, so the stage's
+       tabs, the docks and the bars stay where they are. A size container, so the picture
+       fits the box through 100cqw and 100cqh, swapped while it lies on its side, which is
+       how a sideways picture gets the box's long side. --turn counts quarter turns and
+       only grows, so every turn goes on clockwise; --zoom, --x and --y are set in JS
+       (#paintFigure). The touch gestures are its own, so the browser zooms nothing. */
+    .figure {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      overflow: hidden;
+      container-type: size;
+      background: var(--color-canvas);
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Centred by its own centre, so a picture on its side, whose box is wider than the
+       viewer until it turns, stays in the middle: the turn and the zoom are about that
+       centre and the pan moves it from there. */
+    .figure img {
+      position: absolute;
+      inset-block-start: 50%;
+      inset-inline-start: 50%;
+      inline-size: 100cqw;
+      block-size: 100cqh;
+      object-fit: contain;
+      rotate: calc(var(--turn, 0) * 90deg);
+      scale: var(--zoom, 1);
+      translate: calc(var(--x, 0px) - 50%) calc(var(--y, 0px) - 50%);
+      transition:
+        rotate var(--duration-slide) var(--ease),
+        scale var(--duration-slide) var(--ease);
+      cursor: zoom-in;
+      -webkit-user-drag: none;
+    }
+    .figure[data-odd] img {
+      inline-size: 100cqh;
+      block-size: 100cqw;
+    }
+    .figure[data-zoomed] img {
+      cursor: grab;
+    }
+    /* A finger or a wheel moves the picture with it, never behind it. */
+    .figure[data-moving] img {
+      transition: none;
+    }
+    .figure .bar {
+      position: absolute;
+      inset-block-start: var(--space-sm);
+      inset-inline-end: var(--space-sm);
+      display: inline-flex;
+      gap: var(--space-2xs);
+      padding: var(--space-2xs);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-card);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .figure img {
+        transition: none;
+      }
+    }
     /* A word said plainly, centred: nothing chosen, or the server out of reach. */
     .message {
       flex: 1;
@@ -670,6 +746,17 @@ class BookReader extends LitElement {
   // The kind of the last pointer pressed on the page, so a finger's selection offers the
   // Highlight button while a mouse's becomes a highlight at pointerup, as before.
   #lastPointer = null;
+  // The picture open in the viewer, the view's own UI state like the bubble: its source,
+  // the quarter turns so far (only ever counted up), the zoom and the pan. Null while
+  // closed; a new chapter closes it. Nothing of it is saved.
+  #figure = null;
+  // The viewer's pointers now down, by id, and the gesture they make (a tap, a pan or a
+  // pinch), with the last tap's time and place for a double tap.
+  #figurePointers = new Map();
+  #figureGesture = null;
+  #lastTap = null;
+  #gestureZoom = 1;
+  #wheelTimer = 0;
   // The last line of a finger's selection in the strip (a client rect), while it lasts:
   // the Highlight button sits under it. Null when no button shows. View UI state (3.1).
   #pending = null;
@@ -788,6 +875,7 @@ class BookReader extends LitElement {
     // The cursor and a highlight in progress were counted in the old fragment's text.
     this.#forgetCursor();
     this.#dropPending();
+    this.#figure = null;
     this.#strip.replaceChildren();
     // A fresh fragment starts at its first page at once, with no transform transition: a
     // jump reuses the strip, which may still be slid or mid-slide to the old page, and a
@@ -1653,6 +1741,16 @@ class BookReader extends LitElement {
   }
 
   #keydown(e) {
+    // While a picture is open the page under it keeps still: Escape closes the viewer,
+    // and no other key reaches the page.
+    if (this.#figure) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        this.#closeFigure();
+      }
+      return;
+    }
     if (this.#commandLine(e)) return;
     if (this.#vimKey(e)) return;
     if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
@@ -1746,6 +1844,14 @@ class BookReader extends LitElement {
     if (d.dragging || d.abandoned) return; // a drag that is neither a swipe nor a clean tap
     // A click that ends on a selection (a double-click on a word) is about the text.
     if (d.mouse && !(this.renderRoot.getSelection?.() ?? document.getSelection())?.isCollapsed) return;
+    // A tap on a picture opens it in the viewer, wherever on the page it lands, so a
+    // picture at the edge is never a page turn.
+    const img = e.target.closest?.("img");
+    if (img && this.#isPicture(img)) {
+      this.#closeBubble();
+      this.#openFigure(img);
+      return;
+    }
     // A tap or click on a highlight is about that highlight: it opens its bubble (Copy,
     // Remove), never a page turn (session 3).
     const mark = e.target.closest("mark");
@@ -1769,6 +1875,7 @@ class BookReader extends LitElement {
   // pending place in the open chapter re-opens it.
   updated() {
     this.#keepFocus();
+    this.#paintFigure();
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return;
     const reading = snapshot.matches("reading");
@@ -1939,6 +2046,225 @@ class BookReader extends LitElement {
     target.focus({ preventScroll: true });
   }
 
+  // A picture of the book, not a glyph in running text (the emoji rule above) and not
+  // the label of a link, which keeps opening its link.
+  #isPicture(img) {
+    return this.#strip.contains(img) && !img.closest("a") && !img.matches(":is(p, pre, li, td, th, blockquote) img");
+  }
+
+  #openFigure(img) {
+    this.#figure = { src: img.currentSrc || img.src, alt: img.alt, turn: 0, zoom: 1, x: 0, y: 0 };
+    this.#figurePointers.clear();
+    this.#figureGesture = null;
+    this.#lastTap = null;
+    this.requestUpdate();
+    // The keyboard goes with the eye, to the viewer; closing it gives the page back the
+    // keyboard (#keepFocus), on the page it was on.
+    this.updateComplete.then(() => this.renderRoot.querySelector(".figure .rotate")?.focus({ preventScroll: true }));
+  }
+
+  #closeFigure() {
+    if (!this.#figure) return;
+    this.#figure = null;
+    this.#figurePointers.clear();
+    this.#figureGesture = null;
+    this.requestUpdate();
+  }
+
+  // A quarter turn clockwise, counted on from the last, so the fourth turn goes on to a
+  // full circle rather than spinning back. Each turn starts from the fitted picture.
+  #turnFigure() {
+    const f = this.#figure;
+    if (!f) return;
+    Object.assign(f, { turn: f.turn + 1, zoom: 1, x: 0, y: 0 });
+    this.requestUpdate();
+  }
+
+  // Zoom to z about a point given from the box's centre, so what is under the finger or
+  // the pointer stays there, and keep the picture within the box.
+  #zoomFigure(z, px = 0, py = 0) {
+    const f = this.#figure;
+    if (!f) return;
+    const zoom = Math.min(ZOOM_MAX, Math.max(1, z));
+    const k = zoom / f.zoom;
+    f.x = px - (px - f.x) * k;
+    f.y = py - (py - f.y) * k;
+    f.zoom = zoom;
+    this.#clampFigure();
+    this.#paintFigure();
+  }
+
+  // The drawn picture, not the letterbox its element keeps around it: its size on screen
+  // at fit, from its own size, the box and the turn, beside the box's.
+  #drawn() {
+    const box = this.renderRoot.querySelector(".figure");
+    const img = box?.querySelector("img");
+    if (!this.#figure || !img) return null;
+    const w = box.clientWidth;
+    const h = box.clientHeight;
+    const odd = this.#figure.turn % 2 === 1;
+    const [bw, bh] = odd ? [h, w] : [w, h];
+    const nw = img.naturalWidth || bw;
+    const nh = img.naturalHeight || bh;
+    const fit = Math.min(bw / nw, bh / nh);
+    const [sw, sh] = odd ? [nh * fit, nw * fit] : [nw * fit, nh * fit];
+    return { w, h, sw, sh };
+  }
+
+  // The pan stops where the drawn picture's edge meets the box's.
+  #clampFigure() {
+    const f = this.#figure;
+    const d = this.#drawn();
+    if (!d) return;
+    const mx = Math.max(0, (d.sw * f.zoom - d.w) / 2);
+    const my = Math.max(0, (d.sh * f.zoom - d.h) / 2);
+    f.x = Math.min(mx, Math.max(-mx, f.x));
+    f.y = Math.min(my, Math.max(-my, f.y));
+  }
+
+  // Whether a point, from the box's centre, falls on the drawn picture.
+  #onPicture(at) {
+    const f = this.#figure;
+    const d = this.#drawn();
+    return Boolean(d) && Math.abs(at.x - f.x) <= (d.sw * f.zoom) / 2 && Math.abs(at.y - f.y) <= (d.sh * f.zoom) / 2;
+  }
+
+  // The turn, the zoom and the pan as the box's custom properties, set straight on it so a
+  // finger's move needs no render.
+  #paintFigure() {
+    const f = this.#figure;
+    const box = this.renderRoot.querySelector(".figure");
+    if (!f || !box) return;
+    box.style.setProperty("--turn", f.turn);
+    box.style.setProperty("--zoom", f.zoom);
+    box.style.setProperty("--x", `${f.x}px`);
+    box.style.setProperty("--y", `${f.y}px`);
+    box.toggleAttribute("data-odd", f.turn % 2 === 1);
+    box.toggleAttribute("data-zoomed", f.zoom > 1);
+  }
+
+  // A point of the viewer from its centre, where zoom and pan are counted from.
+  #fromCentre(box, x, y) {
+    const r = box.getBoundingClientRect();
+    return { x: x - (r.left + r.width / 2), y: y - (r.top + r.height / 2) };
+  }
+
+  #figureDown(e) {
+    if (e.target.closest(".bar") || (e.button != null && e.button !== 0)) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    this.#figurePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const f = this.#figure;
+    const points = [...this.#figurePointers.values()];
+    if (points.length === 2) {
+      const [a, b] = points;
+      this.#figureGesture = { kind: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, z0: f.zoom };
+    } else if (points.length === 1) {
+      const at = this.#fromCentre(e.currentTarget, e.clientX, e.clientY);
+      this.#figureGesture = { kind: "tap", x0: e.clientX, y0: e.clientY, fx: f.x, fy: f.y, onPicture: this.#onPicture(at) };
+    }
+    e.currentTarget.toggleAttribute("data-moving", true);
+  }
+
+  #figureMove(e) {
+    const p = this.#figurePointers.get(e.pointerId);
+    const g = this.#figureGesture;
+    if (!p || !g) return;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    const f = this.#figure;
+    if (g.kind === "pinch") {
+      const [a, b] = [...this.#figurePointers.values()];
+      const mid = this.#fromCentre(e.currentTarget, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      this.#zoomFigure((g.z0 * Math.hypot(a.x - b.x, a.y - b.y)) / g.d0, mid.x, mid.y);
+      return;
+    }
+    const dx = e.clientX - g.x0;
+    const dy = e.clientY - g.y0;
+    if (g.kind === "tap" && Math.hypot(dx, dy) > SLOP) g.kind = "pan";
+    if (g.kind === "pan" && f.zoom > 1) {
+      f.x = g.fx + dx;
+      f.y = g.fy + dy;
+      this.#clampFigure();
+      this.#paintFigure();
+    }
+  }
+
+  #figureUp(e) {
+    if (!this.#figurePointers.delete(e.pointerId)) return;
+    const g = this.#figureGesture;
+    if (this.#figurePointers.size > 0) {
+      // One finger of a pinch lifted: what is left is a pan from here, never a tap.
+      const [rest] = this.#figurePointers.values();
+      if (g?.kind === "pinch") this.#figureGesture = { kind: "pan", x0: rest.x, y0: rest.y, fx: this.#figure.x, fy: this.#figure.y };
+      return;
+    }
+    this.#figureGesture = null;
+    e.currentTarget.toggleAttribute("data-moving", false);
+    if (e.type !== "pointerup" || g?.kind !== "tap") return;
+    // A tap beside the picture closes the viewer; two taps on it go between the fitted
+    // picture and twice that, about the place tapped.
+    if (!g.onPicture) {
+      this.#closeFigure();
+      return;
+    }
+    const at = this.#fromCentre(e.currentTarget, e.clientX, e.clientY);
+    const last = this.#lastTap;
+    if (last && e.timeStamp - last.t < DOUBLE_TAP_MS && Math.hypot(at.x - last.x, at.y - last.y) < SWIPE) {
+      this.#lastTap = null;
+      this.#zoomFigure(this.#figure.zoom > 1 ? 1 : 2, at.x, at.y);
+    } else this.#lastTap = { t: e.timeStamp, ...at };
+  }
+
+  // The wheel, and a Mac trackpad's pinch, which Chromium sends as a wheel with Ctrl.
+  #figureWheel(e) {
+    e.preventDefault();
+    const f = this.#figure;
+    const box = e.currentTarget;
+    const at = this.#fromCentre(box, e.clientX, e.clientY);
+    box.toggleAttribute("data-moving", true);
+    this.#zoomFigure(f.zoom * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002)), at.x, at.y);
+    clearTimeout(this.#wheelTimer);
+    this.#wheelTimer = setTimeout(() => box.toggleAttribute("data-moving", false), 150);
+  }
+
+  // Safari's trackpad pinch. On a touch screen the same pinch also arrives as two
+  // pointers, which already zoom, so then these only keep the page from zooming.
+  #figureGestureEvent(e) {
+    e.preventDefault();
+    if (this.#figurePointers.size > 0 || !this.#figure) return;
+    if (e.type === "gesturestart") this.#gestureZoom = this.#figure.zoom;
+    else this.#zoomFigure(this.#gestureZoom * e.scale);
+  }
+
+  #figureView() {
+    const f = this.#figure;
+    if (!f) return nothing;
+    return html`
+      <div
+        class="figure"
+        role="dialog"
+        aria-label="Picture"
+        @pointerdown=${(e) => this.#figureDown(e)}
+        @pointermove=${(e) => this.#figureMove(e)}
+        @pointerup=${(e) => this.#figureUp(e)}
+        @pointercancel=${(e) => this.#figureUp(e)}
+        @wheel=${{ handleEvent: (e) => this.#figureWheel(e), passive: false }}
+        @gesturestart=${(e) => this.#figureGestureEvent(e)}
+        @gesturechange=${(e) => this.#figureGestureEvent(e)}
+      >
+        <img src=${f.src} alt=${f.alt} @load=${() => this.#clampFigure()} />
+        <span class="bar">
+          <button class="turn rotate" type="button" aria-label="Turn the picture" title="Turn" @click=${() => this.#turnFigure()}>
+            ${icon("arrow-clockwise")}
+          </button>
+          <button class="turn close" type="button" aria-label="Close the picture" title="Close" @click=${() => this.#closeFigure()}>
+            ${icon("x")}
+          </button>
+        </span>
+      </div>
+    `;
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
@@ -1986,6 +2312,7 @@ class BookReader extends LitElement {
           </span>
           ${this.#command(snapshot.context)}
         </div>
+        ${this.#figureView()}
       </div>
     `;
   }

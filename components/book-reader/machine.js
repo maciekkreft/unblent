@@ -555,7 +555,11 @@ export const machine = setup({
       "on and the reader focused, : opens a one-line command line at the reader's foot, as in " +
       "Vim, and the reader's other keys wait while it is open; q, quit, tabc or tabclose and Enter close the " +
       "book, any other text shows \"Not a command\" with that text for a moment, and Escape, " +
-      "Backspace on an empty line or leaving the reader cancels it.",
+      "Backspace on an empty line or leaving the reader cancels it. A tap or click on a picture, " +
+      "even at the page's edge, opens it alone over the reader, never a page turn: Turn turns it a " +
+      "quarter clockwise each time, on past a full turn, fitted to the reader's box so a sideways " +
+      "picture gets the long side; a double tap, the wheel or a pinch zooms it, a drag moves it, " +
+      "and Close, Escape or a tap beside it goes back to the same page. Nothing of it is saved.",
     kind: "view",
     emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "book.closed"],
     attributes: ["height", "highlights"],
