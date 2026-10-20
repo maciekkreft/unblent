@@ -16,10 +16,9 @@ UNITS_SRC=/opt/unblent/deploy/systemd
 command -v rclone >/dev/null || { echo "rclone not installed: the .deb from https://rclone.org/downloads/" >&2; exit 1; }
 
 # 1. Credentials file for rclone, derived from Litestream's, root-only.
-# The endpoint carries the R2 account id (it was inline in the committed
-# litestream.yml before it moved to the env); default to it if unset.
+# The endpoint carries the R2 account id, so it stays in the env and out of git.
 set -a; . "$LITESTREAM_ENV"; set +a
-: "${LITESTREAM_ENDPOINT:=https://<R2-ACCOUNT-ID>.r2.cloudflarestorage.com}"
+: "${LITESTREAM_ENDPOINT:?missing from $LITESTREAM_ENV}"
 umask 077
 mkdir -p "$(dirname "$RCLONE_ENV")"
 cat > "$RCLONE_ENV" <<EOF
