@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt } from "../machine.js";
+import { machine, NOT_A_COMMAND_MS, snapToWords, quoteOf, overlaps, segments, highlightsOf, hasComment, union, joined, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, linkLabel, sourceLink, highlightAt, textObject, passageText } from "../machine.js";
 
 // The actor is where the reader's decisions live (3.2): which chapter it shows, the
 // place it owes the view, and when it announces a turn. It is driven here with a fake
@@ -1064,6 +1064,45 @@ test("_copyLink announces link.copied with the stored link; an unknown id announ
   actor.send({ type: "_copyLink", id: HL_ID });
   await flush();
   assert.deepEqual(copied, [{ type: "link.copied", id: HL_ID, text: "[Hello](note:" + HL_ID + ")" }]);
+});
+
+// --- Copying text with Vim keys (yis, yip, y on a marked passage, yy) ------------------
+
+test("is and ip are the sentence and the paragraph holding the cursor, end spaces left out", () => {
+  const texts = ["Chapter One", "", "A short opening.  It ends\n   here! Then more. ", "Last block"];
+  const ch = chapterText(texts);
+  const at = (block, offset) => indexOf(ch, { block, offset });
+  const text = ([from, to]) => ch.flat.slice(from, to);
+  assert.equal(text(textObject(ch, at(2, 4), "s")), "A short opening.");
+  assert.equal(text(textObject(ch, at(2, 0), "s")), "A short opening.");
+  assert.equal(text(textObject(ch, at(2, 20), "s")), "It ends\n   here!");
+  // On the white space after a sentence: that sentence.
+  assert.equal(text(textObject(ch, at(2, 17), "s")), "A short opening.");
+  // The last sentence of a block ends at the block, never in the next one.
+  assert.equal(text(textObject(ch, at(2, 40), "s")), "Then more.");
+  assert.equal(text(textObject(ch, at(3, 0), "s")), "Last block");
+  assert.equal(text(textObject(ch, at(2, 20), "p")), "A short opening.  It ends\n   here! Then more.");
+  assert.equal(text(textObject(ch, at(0, 10), "p")), "Chapter One");
+});
+
+test("copied text reads as the page shows it, blocks a paragraph apart", () => {
+  const texts = ["Chapter One", "", "It ends\n   here!  Then", "Last block"];
+  const ch = chapterText(texts);
+  const at = (block, offset) => indexOf(ch, { block, offset });
+  assert.equal(passageText(ch, at(0, 8), at(3, 4)), "One\n\nIt ends here! Then\n\nLast");
+  assert.equal(passageText(ch, ...textObject(ch, at(2, 3), "s")), "It ends here!");
+});
+
+test("_copyText announces text.copied only with Vim keys on and some text", async () => {
+  const { actor } = await openHL();
+  const copied = [];
+  actor.on("text.copied", (e) => copied.push(e));
+  actor.send({ type: "_copyText", text: "Hello" });
+  actor.send({ type: "settings.changed", vimKeys: true });
+  actor.send({ type: "_copyText", text: "  " });
+  actor.send({ type: "_copyText", text: "Hello there." });
+  await flush();
+  assert.deepEqual(copied, [{ type: "text.copied", text: "Hello there." }]);
 });
 
 // --- The command line (Vim keys on) ----------------------------------------------------

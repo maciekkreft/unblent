@@ -286,6 +286,33 @@ export const passage = ({ flat }, start, cursor, letter = false) => {
   return [lo, hi + 1];
 };
 
+// The sentence or the paragraph holding the cursor (Vim's is and ip, after y), as
+// [from, to) flat indexes: from the start of the sentence or block at or before the
+// cursor to the last shown character before the next one, white space at the end left
+// out. A sentence never runs past its block.
+export const textObject = ({ flat }, i, kind) => {
+  const starts = kind === "s" ? sentenceStart : blockStart;
+  let from = i;
+  while (from > 0 && flat[from] !== SEP && !starts(flat, from)) from -= 1;
+  if (flat[from] === SEP) from += 1;
+  let to = i + 1;
+  while (to < flat.length && flat[to] !== SEP && !(kind === "s" && sentenceStart(flat, to))) to += 1;
+  while (to > from && blank(flat[to - 1])) to -= 1;
+  while (from < to && blank(flat[from])) from += 1;
+  return [from, to];
+};
+
+// The text copied for a passage of the chapter, as the page shows it: each run of white
+// space one space, and blocks a blank line apart, the way an editor stores paragraphs,
+// so a paste into a note keeps them.
+export const passageText = ({ flat }, from, to) =>
+  flat
+    .slice(from, to)
+    .split(SEP)
+    .map((t) => t.replace(/\s+/gu, " ").trim())
+    .filter((t) => t !== "")
+    .join("\n\n");
+
 // The first shown character at or after an index, where the cursor starts on a page: the page's
 // anchor may sit on white space or on a block with no text (a figure).
 export const nearest = ({ flat }, i) => seek(flat, i - 1, 1, shown) ?? seek(flat, flat.length, -1, shown);
@@ -549,7 +576,14 @@ export const machine = setup({
       "words as a drag with the mouse is. A highlight's bubble offers Copy, Copy link and " +
       "Remove; Copy link puts a link to the highlight, its quote's first words as the label, " +
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
-      "the cursor inside a highlight opens its bubble and does the same. Following a source " +
+      "the cursor inside a highlight opens its bubble and does the same, and y y does Copy, " +
+      "its quote's text. With Vim keys on, y copies instead of highlighting: on a passage " +
+      "marked with v or Ctrl+v it copies the passage and makes no highlight, and y i s and " +
+      "y i p copy the sentence or the paragraph holding the cursor; the text goes on the " +
+      "clipboard and into the Vim register of any editor, blocks a blank line apart, and " +
+      "\"Copied\" shows over the reader's foot for a moment. The second and third key of y y " +
+      "and y i s count within a second of the one before. A highlight split across pages " +
+      "shows its bubble beside its part on the page shown. Following a source " +
       "link in a note opens the page that holds the passage, in the book already open or " +
       "after `books` opens its book, and the highlight glows for about a second. With Vim keys " +
       "on and the reader focused, : opens a one-line command line at the reader's foot, as in " +
@@ -561,7 +595,7 @@ export const machine = setup({
       "picture gets the long side; a double tap, the wheel or a pinch zooms it, a drag moves it, " +
       "and Close, Escape or a tap beside it goes back to the same page. Nothing of it is saved.",
     kind: "view",
-    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "book.closed"],
+    emits: ["book.progressed", "note.saved", "note.discarded", "link.copied", "text.copied", "book.closed"],
     attributes: ["height", "highlights"],
     asks: ["books: open", "books: read", "books: chapter", "notes: list", "notes: read", "settings: read"],
   },
@@ -851,6 +885,13 @@ export const machine = setup({
             enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
             enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `remove:${event.id}` });
           }),
+        },
+        // Text copied with Vim keys (y on a passage marked with v, yis, yip, or yy on a
+        // highlight): announced whether or not the clipboard took it, so an editor's Vim
+        // register still gets it, as a copied link is.
+        _copyText: {
+          guard: ({ context, event }) => context.vimKeys && typeof event.text === "string" && event.text.trim() !== "",
+          actions: emit(({ event }) => ({ type: "text.copied", text: event.text })),
         },
         // Copy link (Copy link in the bubble, or y with Vim keys): announced whether or not
         // the clipboard took it, so an editor's Vim register still gets the link.

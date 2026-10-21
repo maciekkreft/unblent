@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user copied text from a book with Vim keys; an editor puts `text` in Vim's unnamed register, so p pastes it.",
+  "type": "object",
+  "properties": {
+    "text": { "type": "string", "minLength": 1, "description": "The copied text." }
+  },
+  "required": ["text"],
+  "additionalProperties": false
+}

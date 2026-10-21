@@ -23,7 +23,7 @@ const seed = (vimKeys) =>
   JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
 
 // A user set up straight through the server (5): the sample book, open.
-const seedUser = async ({ highlight = false } = {}) => {
+const seedUser = async ({ highlight = false, split = false } = {}) => {
   const cookie = forgeCookie("reader-keys");
   const put = async (path, type, body) => {
     const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
@@ -35,12 +35,21 @@ const seedUser = async ({ highlight = false } = {}) => {
     const about = [{ kind: "book", id: BOOK_ID, place: HL_PLACE, quote: { exact: "Chapter One", prefix: "", suffix: "" } }];
     await put(`/api/notes/${HL_ID}`, "application/json", JSON.stringify({ title: "", body: "", baseVersion: null, about }));
   }
+  if (split) {
+    await put(`/api/books/${BOOK_ID}/position`, "application/json", JSON.stringify({ chapter: 1, block: 0 }));
+    const about = [{ kind: "book", id: BOOK_ID, place: SPLIT_PLACE, quote: { exact: "A paragraph that outruns a page.", prefix: "", suffix: "" } }];
+    await put(`/api/notes/${SPLIT_ID}`, "application/json", JSON.stringify({ title: "", body: "", baseVersion: null, about }));
+  }
   return cookie;
 };
 // A highlight of the first page's heading, which the Vim cursor starts on.
 const HL_ID = "01K00000000000000000000HG1";
 const HL_PLACE = { chapter: 0, contentVersion: 1, start: { block: 0, offset: 0 }, end: { block: 0, offset: 11 } };
 const LINK = `[Chapter One](note:${HL_ID})`;
+// A highlight of Chapter Two's over-long first paragraph, from its start on the first
+// page far into the second.
+const SPLIT_ID = "01K00000000000000000000HG3";
+const SPLIT_PLACE = { chapter: 1, contentVersion: 1, start: { block: 1, offset: 0 }, end: { block: 1, offset: 2000 } };
 // A highlight of the heading half way through Chapter Two, several pages in, and a note
 // holding a source link to it.
 const MID_ID = "01K00000000000000000000HG2";
@@ -85,20 +94,20 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    const open = async (vimKeys, { highlight = false, touch = false } = {}) => {
+    const open = async (vimKeys, { highlight = false, split = false, touch = false } = {}) => {
       const problems = [];
       context = await browser.newContext({ hasTouch: touch });
       context.setDefaultTimeout(4000);
-      await signedIn(context, await seedUser({ highlight }));
+      await signedIn(context, await seedUser({ highlight, split }));
       const page = await context.newPage();
       watch(page, problems);
       await page.addInitScript((v) => localStorage.setItem("settings", v), seed(vimKeys));
       await page.addInitScript(recordClipboard);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => {
+      await page.waitForFunction((chap) => {
         const r = document.querySelector("book-reader")?.shadowRoot;
-        return r?.querySelector(".footer .chap")?.textContent.trim() === "Chapter One" && r.querySelector(".strip")?.textContent.includes("Chapter One");
-      });
+        return r?.querySelector(".footer .chap")?.textContent.trim() === chap && r.querySelector(".strip")?.textContent.includes(chap);
+      }, split ? "Chapter Two" : "Chapter One");
       await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".reader").focus());
       return { page, problems };
     };
@@ -164,6 +173,33 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
+    // A highlight split across a page turn: on the second page a click on its part there
+    // opens the bubble above that part, not beside the part on the page before.
+    // Browser: rendering and layout.
+    test(`the bubble of a highlight split across pages sits on the page shown in ${engine.name}`, async () => {
+      const { page, problems } = await open(false, { split: true });
+      await until(async () => (await marks(page)).length > 0);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(() => /Page 2 of/.test(document.querySelector("book-reader").shadowRoot.querySelector(".footer .pageno").textContent));
+      await page.waitForFunction(() => document.querySelector("book-reader").shadowRoot.getAnimations().every((a) => a.playState !== "running"));
+      // The mark's first line on the page shown, and a line in the middle of it to click.
+      const at = await page.evaluate(() => {
+        const r = document.querySelector("book-reader").shadowRoot;
+        const vp = r.querySelector(".viewport").getBoundingClientRect();
+        const lines = [...r.querySelectorAll(".strip mark")].flatMap((m) => [...m.getClientRects()]).filter((q) => q.width > 0 && q.left >= vp.left - 1 && q.right <= vp.right + 1);
+        return lines.length ? { first: lines[0].toJSON(), middle: lines[Math.floor(lines.length / 2)].toJSON() } : null;
+      });
+      assert.ok(at, "part of the highlight shows on the second page");
+      await page.mouse.click(at.middle.left + at.middle.width / 2, at.middle.top + at.middle.height / 2);
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Remove");
+      const b = await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".bubble").getBoundingClientRect().toJSON());
+      const line = at.first;
+      assert.ok(Math.abs(b.left + b.width / 2 - (line.left + line.width / 2)) <= 2, `the bubble is centred over the part shown (bubble ${b.left}–${b.right}, line ${line.left}–${line.right})`);
+      const gap = b.bottom <= line.top ? line.top - b.bottom : b.top - line.bottom;
+      assert.ok(gap >= 0 && gap <= 12, `the bubble sits next to the part shown (bubble ${b.top}–${b.bottom}, line ${line.top}–${line.bottom})`);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
     // On a touch screen a selection in the text offers a Highlight button under it; a tap
     // on it makes the highlight and leaves neither the button nor the selection behind.
     // Playwright cannot press and hold, so the selection the iPhone would make is set from
@@ -222,6 +258,63 @@ for (const engine of ENGINES) {
         return (await bubble(page)).join(" · ") === "Copy · Copied · Remove";
       });
       assert.equal(await copied(page), LINK);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // y on a passage marked with v copies it, says Copied over the footer and makes no
+    // highlight.
+    // Browser: focus and keys.
+    test(`v w w y copies the passage without highlighting it in ${engine.name}`, async () => {
+      const { page, problems } = await open(true);
+      await until(async () => {
+        await page.keyboard.press("v");
+        if ((await pending(page)) === "C") return true;
+        await page.keyboard.press("Escape");
+        return false;
+      });
+      await page.keyboard.press("w");
+      await page.keyboard.press("w");
+      await page.keyboard.press("y");
+      await until(async () => (await copied(page)) === "Chapter One");
+      assert.equal(await pending(page), "");
+      assert.equal(await page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".footer .command")?.textContent.trim()), "Copied");
+      await page.keyboard.press("Enter");
+      await new Promise((r) => setTimeout(r, 200));
+      assert.deepEqual(await marks(page), []);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // y i s and y i p copy the sentence and the paragraph under the cursor.
+    // Browser: focus and keys.
+    test(`y i s and y i p copy the sentence and the paragraph in ${engine.name}`, async () => {
+      const { page, problems } = await open(true);
+      // Vim arrives with the settings reply; ) moves the cursor only once it has.
+      const cursor = () => page.evaluate(() => document.querySelector("book-reader").shadowRoot.querySelector(".cursor")?.dataset.block ?? null);
+      await until(async () => {
+        await page.keyboard.press(")");
+        return (await cursor()) === "1";
+      });
+      await page.keyboard.press(")");
+      await page.keyboard.press("w");
+      for (const key of ["y", "i", "s"]) await page.keyboard.press(key);
+      await until(async () => (await copied(page)) === "A short opening chapter, one page long.");
+      for (const key of ["y", "i", "p"]) await page.keyboard.press(key);
+      await until(async () => (await copied(page)) === "A short opening chapter, one page long. It links to the third chapter, to the middle, and to a definition.");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // y y inside a highlight copies its quote; its bubble's Copy reads Copied.
+    // Browser: focus and keys.
+    test(`y y inside a highlight copies its text in ${engine.name}`, async () => {
+      const { page, problems } = await open(true, { highlight: true });
+      await until(async () => (await marks(page)).join(" ") === "Chapter One");
+      await until(async () => {
+        await page.keyboard.press("y");
+        return (await bubble(page)).join(" · ") === "Copy · Copied · Remove";
+      });
+      await page.keyboard.press("y");
+      await until(async () => (await bubble(page)).join(" · ") === "Copied · Copy link · Remove");
+      assert.equal(await copied(page), "Chapter One");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

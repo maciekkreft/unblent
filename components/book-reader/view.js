@@ -2,11 +2,12 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink } from "./machine.js";
+import { machine, segments, locate, chapterText, pointAt, indexOf, step, charStep, nearest, isMotion, passage, highlightAt, sourceLink, textObject, passageText } from "./machine.js";
 import progressed from "./events/book.progressed.json" with { type: "json" };
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import linkCopied from "./events/link.copied.json" with { type: "json" };
+import textCopied from "./events/text.copied.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window
@@ -39,7 +40,7 @@ class ActorController {
         // knowing whether it paints and makes highlights (Decision 3).
         highlighting: this.host.highlights,
       },
-      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied, "book.closed": closed },
+      events: { "book.progressed": progressed, "note.saved": saved, "note.discarded": discarded, "link.copied": linkCopied, "text.copied": textCopied, "book.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -71,7 +72,8 @@ const BUBBLE_GAP = 6;
 // and how close in time two taps make a double tap: factors and a time, not lengths (7.4).
 const ZOOM_MAX = 4;
 const DOUBLE_TAP_MS = 300;
-// How long "Copied" stands on the Copy button after a copy, before it reads Copy again.
+// How long "Copied" stands on the Copy button after a copy, before it reads Copy again,
+// and over the footer after text copied with Vim keys.
 const COPIED_MS = 1200;
 // The keyboard highlight's paint (12, "Vim keys"): the name in the document's one highlight
 // registry, which a page holding a single reader never shares, and how many characters a
@@ -731,8 +733,9 @@ class BookReader extends LitElement {
   // tap on a mark opens it, a page turn, a chapter change, Escape, or a tap elsewhere
   // closes it. Null when no bubble shows.
   #active = null;
-  // Which button is flashing "Copied" ("text" for Copy, "link" for Copy link, false for
-  // neither), so only the one pressed reads Copied, and the timer that clears it.
+  // Which button is flashing "Copied" ("text" for Copy, "link" for Copy link, "passage"
+  // for text copied with Vim keys outside a bubble, shown over the footer, false for
+  // none), so only the one pressed reads Copied, and the timer that clears it.
   #copied = false;
   #copiedTimer = 0;
   // The reveal nonce last acted on (machine one-shot): a drag inside an existing
@@ -1296,6 +1299,10 @@ class BookReader extends LitElement {
   // The reader's Vim keys; true when the key was one of them. Letters only while the
   // preference is on, never with Alt or Cmd held, and never inside a field.
   #gAt = 0;
+  // y and what follows it within a second, as gg (Vim's operator): y y copies the
+  // highlight's quote, y i s and y i p the sentence or paragraph; #yInner once i came.
+  #yAt = 0;
+  #yInner = false;
   #vimKey(e) {
     if (this.#actor.snapshot?.context.vimKeys !== true || e.metaKey || e.altKey) return false;
     const target = e.composedPath()[0];
@@ -1313,7 +1320,18 @@ class BookReader extends LitElement {
       const second = key === "g" && Date.now() - this.#gAt < 1000;
       this.#gAt = key === "g" && !second ? Date.now() : 0;
       if (this.#cursor == null) this.#placeCursor();
-      if (key === "g") {
+      const yHeld = !this.#visual && Date.now() - this.#yAt < 1000;
+      const inner = this.#yInner;
+      this.#yAt = 0;
+      this.#yInner = false;
+      if (yHeld && !inner && key === "i") {
+        // The y before it opened a highlight's bubble; y i copies text, not the link.
+        this.#closeBubble();
+        this.#yAt = Date.now();
+        this.#yInner = true;
+      } else if (yHeld && inner && (key === "s" || key === "p")) this.#yankObject(key);
+      else if (yHeld && !inner && key === "y") this.#yankQuote();
+      else if (key === "g") {
         if (second) this.#edge(0);
       } else if (key === "G") this.#edge(this.#pages - 1);
       // h and l move the cursor one letter, as in Vim, inside a highlight and outside
@@ -1322,7 +1340,11 @@ class BookReader extends LitElement {
         if (this.#cursor == null) return false;
         this.#move(key);
       } else if (key === "v") this.#visualKey();
-      else if (key === "y" && !this.#visual) this.#yankLink();
+      else if (key === "y" && this.#visual) this.#yankVisual();
+      else if (key === "y") {
+        this.#yAt = Date.now();
+        this.#yankLink();
+      }
       else if (key === "Enter" && this.#visual) this.#endVisual(true);
       else if (key === "Escape" && this.#visual) this.#endVisual(false);
       else return false;
@@ -1357,17 +1379,53 @@ class BookReader extends LitElement {
     else if (this.highlights && this.#actor.snapshot.context.highlighting && this.#cursor != null) this.#startVisual();
   }
 
-  // y: Copy link on the highlight holding the cursor, its bubble opened so the Copied is
-  // seen. With no highlight there, y does nothing.
-  #yankLink() {
-    if (this.#cursor == null) return;
+  // The highlight holding the cursor, if any.
+  #highlightAtCursor() {
+    if (this.#cursor == null) return null;
     const ctx = this.#actor.snapshot.context;
     const cv = ctx.book?.contentVersion;
     const painted = ctx.highlights.filter((h) => h.place.contentVersion === cv);
-    const h = highlightAt(painted, this.#chapter, pointAt(this.#chapterText(), this.#cursor));
+    return highlightAt(painted, this.#chapter, pointAt(this.#chapterText(), this.#cursor)) ?? null;
+  }
+
+  // y: Copy link on the highlight holding the cursor, its bubble opened so the Copied is
+  // seen. With no highlight there, y does nothing.
+  #yankLink() {
+    const h = this.#highlightAtCursor();
     if (!h) return;
     this.#openBubble(h.id);
     this.#copy("link", h);
+  }
+
+  // y y: Copy on the highlight holding the cursor, its quote's text; the bubble's Copy
+  // reads Copied.
+  #yankQuote() {
+    const h = this.#highlightAtCursor();
+    if (!h?.quote?.exact) return;
+    this.#openBubble(h.id);
+    this.#copyText(h.quote.exact, "text");
+  }
+
+  // y on a passage marked with v or Ctrl+v copies it and makes no highlight; Enter
+  // still makes one (12).
+  #yankVisual() {
+    const v = this.#visual;
+    this.#visual = null;
+    this.#paintCursor();
+    const chapter = this.#chapterText();
+    const [from, to] = passage(chapter, v.start, this.#cursor, v.letter);
+    this.#copyPassage(from, to);
+  }
+
+  // y i s and y i p: the sentence or the paragraph holding the cursor.
+  #yankObject(key) {
+    if (this.#cursor == null) return;
+    const [from, to] = textObject(this.#chapterText(), this.#cursor, key);
+    this.#copyPassage(from, to);
+  }
+
+  #copyPassage(from, to) {
+    this.#copyText(passageText(this.#chapterText(), from, to), "passage");
   }
 
   // gg and G: the chapter's first or last page, the cursor at its top.
@@ -1408,17 +1466,34 @@ class BookReader extends LitElement {
     const link = kind === "link";
     try {
       await navigator.clipboard.writeText(link ? sourceLink(h.id, h.quote) : (h.quote?.exact ?? ""));
-      clearTimeout(this.#copiedTimer);
-      this.#copied = kind;
-      this.requestUpdate();
-      this.#copiedTimer = setTimeout(() => {
-        this.#copied = false;
-        this.requestUpdate();
-      }, COPIED_MS);
+      this.#flashCopied(kind);
     } catch {
       // no clipboard permission (an insecure context, a denied prompt): leave the label.
     }
     if (link) this.#actor.send({ type: "_copyLink", id: h.id });
+  }
+
+  // Text copied with Vim keys: on the clipboard, with Copied shown for a moment, and
+  // announced either way, so an editor's Vim register gets it as it gets a link.
+  async #copyText(text, kind) {
+    if (!text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.#flashCopied(kind);
+    } catch {
+      // no clipboard permission: nothing reads Copied, as with the bubble's buttons.
+    }
+    this.#actor.send({ type: "_copyText", text });
+  }
+
+  #flashCopied(kind) {
+    clearTimeout(this.#copiedTimer);
+    this.#copied = kind;
+    this.requestUpdate();
+    this.#copiedTimer = setTimeout(() => {
+      this.#copied = false;
+      this.requestUpdate();
+    }, COPIED_MS);
   }
 
   // Remove and undo (Decision 3): the mouse's gesture is one message, the machine runs
@@ -1457,12 +1532,15 @@ class BookReader extends LitElement {
     const bubble = this.renderRoot.querySelector(".bubble:not(.make)");
     const page = this.renderRoot.querySelector(".page");
     if (!bubble || !page) return;
-    const mark = this.#strip.querySelector(`mark[data-id="${this.#active}"]`);
-    if (!mark) {
+    const marks = [...this.#strip.querySelectorAll(`mark[data-id="${this.#active}"]`)];
+    if (!marks.length) {
       this.#closeBubble();
       return;
     }
-    const line = mark.getClientRects()[0] ?? mark.getBoundingClientRect();
+    // A highlight split across pages sits beside its part on the page shown, the part
+    // clicked or holding the cursor, not beside its first line on a page turned away.
+    const lines = marks.flatMap((m) => [...m.getClientRects()]).filter((r) => r.width > 0 || r.height > 0);
+    const line = lines.find((r) => this.#columnOf(r) === this.#page) ?? lines[0] ?? marks[0].getBoundingClientRect();
     const box = page.getBoundingClientRect();
     const bw = bubble.offsetWidth;
     const bh = bubble.offsetHeight;
@@ -2017,6 +2095,8 @@ class BookReader extends LitElement {
   #command({ command, notACommand }) {
     if (command != null) return html`<div class="command" role="status">:${command}<span class="caret" aria-hidden="true"></span></div>`;
     if (notACommand != null) return html`<div class="command refused" role="status">Not a command: ${notACommand}</div>`;
+    // Text copied with Vim keys, said where Vim says it: over the footer.
+    if (this.#copied === "passage") return html`<div class="command copied" role="status">Copied</div>`;
     return nothing;
   }
 
