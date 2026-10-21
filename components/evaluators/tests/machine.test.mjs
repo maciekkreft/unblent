@@ -72,6 +72,13 @@ function fakeApi({ pull } = {}) {
       puts.push(row);
       const held = server.get(row.id);
       if (held?.deleted) return held;
+      // A row without a name only moves (5): its place is kept, no version is bumped.
+      if (!("name" in row)) {
+        if (!held) return { id: row.id, missing: true };
+        const moved = { ...held, position: row.position };
+        server.set(row.id, moved);
+        return moved;
+      }
       const { baseVersion, ...rest } = row;
       const r = { ...rest, deleted: Boolean(row.deleted), version: held ? held.version + 1 : (baseVersion || 0) + 1 };
       server.set(row.id, r);
@@ -160,7 +167,7 @@ test("signed out: a new evaluator is switched on at version 1, announced and lis
   assert.equal(api.puts.length, 0, "signed out never calls the api");
 });
 
-test("list answers one book's evaluators, or every book's without a book, oldest first", async () => {
+test("list answers one book's evaluators, or every book's without a book, each new one first", async () => {
   const { actor } = start(fakeStore());
   await ready(actor);
   actor.send(saved({ id: ID2, name: "Second" }));
@@ -169,7 +176,7 @@ test("list answers one book's evaluators, or every book's without a book, oldest
   assert.deepEqual((await list(actor)).map((e) => e.name), ["First", "Second"]);
   const every = await new Promise((reply) => actor.send({ type: "list?", cid: "c", payload: {}, reply }));
   assert.ok(listReply.validate(every).valid, JSON.stringify(every));
-  assert.deepEqual(every.evaluators.map((e) => e.name), ["First", "Second", "Elsewhere"]);
+  assert.deepEqual(every.evaluators.map((e) => e.name), ["Elsewhere", "First", "Second"]);
 });
 
 test("signed out: a save changes name and questions, keeps book and tick, and mints the next version", async () => {
@@ -370,7 +377,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "name", "on", "questions", "starterFor", "updatedAt"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "name", "on", "position", "questions", "starterFor", "updatedAt"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });
@@ -499,4 +506,72 @@ test("sign-in uploads what was made signed out, with its history, tombstones inc
   assert.equal(changed.at(-1).version, 3);
   assert.equal(store.outbox.size, 0);
   assert.equal(store.meta.get("userId"), "u1");
+});
+
+// --- Places in the list (5, an item's place is last write wins) ----------------------
+
+const ID3 = "01ARZ3NDEKTSV4RRFFQ69G5EV3";
+const old = (id, name) => ({ id, book: BOOK, name, on: true, questions: [yesno()], version: 2 });
+
+test("evaluators from before places keep their order, oldest first; a new one goes first and an edit moves none", async () => {
+  const { actor, changed } = start(fakeStore([old(ID2, "Second"), old(ID, "First")]));
+  await ready(actor);
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["First", "Second"]);
+  actor.send(saved({ id: ID3, name: "New" }));
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["New", "First", "Second"]);
+  actor.send(saved({ id: ID2, name: "Second, edited" }));
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["New", "First", "Second, edited"]);
+  assert.ok(changed.every((e) => typeof e.position === "string"), "every announcement carries the place");
+});
+
+test("a move puts an evaluator between its neighbours, changes no version, and is kept in the cache", async () => {
+  const store = fakeStore([old(ID, "First"), old(ID2, "Second"), old(ID3, "Third")]);
+  const { actor, changed } = start(store);
+  await ready(actor);
+  actor.send({ type: "evaluator.moved", id: ID3, after: null, before: ID });
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["Third", "First", "Second"]);
+  actor.send({ type: "evaluator.moved", id: ID, after: ID2, before: null });
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["Third", "Second", "First"]);
+  actor.send({ type: "evaluator.moved", id: ID2, after: ID3, before: ID });
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["Third", "Second", "First"], "already there");
+  assert.equal(changed.at(-1).version, 2, "a move is no new version");
+  assert.equal(store.rows.get(ID).position, changed.find((e) => e.id === ID).position);
+  actor.send({ type: "evaluator.moved", id: "01ARZ3NDEKTSV4RRFFQ69G5EV9", after: null, before: null });
+  assert.equal((await list(actor)).length, 3, "an unknown id moves nothing");
+});
+
+test("signed in: a move is sent alone and drains; a pulled move from elsewhere is taken", async () => {
+  const api = fakeApi();
+  const remote = [];
+  api.pull = async (since) => (api.pulls.push(since), { evaluators: remote.splice(0), cursor: since + 1 });
+  for (const r of [old(ID, "First"), old(ID2, "Second")]) api.server.set(r.id, { ...r, deleted: false });
+  const store = fakeStore([old(ID, "First"), old(ID2, "Second")]);
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "evaluator.moved", id: ID2, after: null, before: ID });
+  assert.deepEqual(Object.keys(store.outbox.get(ID2)).sort(), ["id", "position"]);
+  await drain(clock);
+  assert.deepEqual(Object.keys(api.puts.at(-1)).sort(), ["id", "position"], "only the place is sent");
+  assert.equal(store.outbox.size, 0, "drained");
+  assert.equal(api.server.get(ID2).version, 2);
+  // Another device moved First to the top.
+  remote.push({ ...api.server.get(ID), position: "1", deleted: false });
+  actor.send({ type: "_sync", pull: true });
+  await flush();
+  assert.deepEqual((await list(actor)).map((e) => e.name), ["First", "Second"]);
+});
+
+test("signed in: an edit after a move sends both, and an edit alone never carries a place", async () => {
+  const api = fakeApi();
+  for (const r of [old(ID, "First"), old(ID2, "Second")]) api.server.set(r.id, { ...r, deleted: false });
+  const { actor, clock } = start(fakeStore([old(ID, "First"), old(ID2, "Second")]), { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send(saved({ id: ID, name: "First, edited" }));
+  await drain(clock);
+  assert.equal("position" in api.puts.at(-1), false, "an edit alone keeps the place the server holds");
+  actor.send({ type: "evaluator.moved", id: ID, after: ID2, before: null });
+  actor.send(saved({ id: ID, name: "First, again" }));
+  await drain(clock);
+  assert.equal(api.puts.at(-1).name, "First, again");
+  assert.equal(typeof api.puts.at(-1).position, "string");
 });

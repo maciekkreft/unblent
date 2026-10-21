@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // The Evaluators try page (8): a visitor sees the Journal's evaluators with nothing made
-// on the server, and the first Evaluate makes the guest (3.4), who is told that free
+// on the server, and the first line checked makes the guest (3.4), who is told that free
 // trials are paused (no guest key here), with nothing failing in the console.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
@@ -23,7 +23,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: a page's composition.
-    test("a visitor writes an evaluator for the Journal, and the first Evaluate makes the guest", async () => {
+    test("a visitor writes an evaluator for the Journal, and the first line finished makes the guest", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
@@ -44,14 +44,15 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.getByRole("button", { name: "Evaluators" }).first().click();
         await until(async () => (await listText(page)).includes("Clear goal"));
         assert.deepEqual(writes, [], "opening the page and writing makes nothing on the server");
-        assert.equal((await context.cookies()).length, 0, "no account before the first Evaluate");
+        assert.equal((await context.cookies()).length, 0, "no account before the first check");
 
         await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
 
         await page.keyboard.insertText("Walk for ten minutes after lunch.");
-        await page.getByRole("button", { name: "Evaluate 1 line" }).click();
+        assert.deepEqual(writes, [], "a line being typed asks nothing");
+        await page.keyboard.press("Enter");
         await until(async () => (await listText(page)).includes("Free trials are paused for now."));
-        assert.equal(writes[0], "/api/session/guest", "the first Evaluate makes the guest");
+        assert.equal(writes[0], "/api/session/guest", "the first check makes the guest");
         const me = await (await context.request.get(`${BASE_URL}/api/session/me`)).json();
         assert.equal(me.guest, true);
         assert.match(me.name, /^Guest \d+$/);

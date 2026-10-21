@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user moved an evaluator in the list: it now stands between these neighbours, the evaluator above it (after) and the evaluator below it (before), null at the list's end. evaluators gives it a place between theirs.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "after": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] },
+    "before": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] }
+  },
+  "required": ["id", "after", "before"],
+  "additionalProperties": false
+}

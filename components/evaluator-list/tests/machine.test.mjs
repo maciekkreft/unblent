@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createActor } from "xstate";
+import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, stopLabel, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected, showing } from "../machine.js";
+import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected, showing, runsOf, waiting, stoppable, RECHECK_MS } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "removal.started"].map((n) => [n, schema(n)]));
 
 const A = "01K7TEST000000000000000BA1";
 const B = "01K7TEST000000000000000BB1";
@@ -24,7 +24,7 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts, freeUse, session, tryPage } = {}) => {
+const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts, freeUse, session, tryPage, memory, clock, undoMs } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
@@ -43,7 +43,10 @@ const start = async ({ subject = book(A), following = true, fail, kept = KEPT, v
       },
       mint: () => drafts.shift(),
       ...(texts ? { drafts: texts } : {}),
+      ...(memory ? { memory } : {}),
+      ...(undoMs ? { undoMs } : {}),
     },
+    ...(clock ? { clock } : {}),
   });
   const emitted = [];
   for (const type of Object.keys(SCHEMAS)) actor.on(type, (e) => emitted.push(e));
@@ -359,12 +362,7 @@ test("an answer is green when it is the one expected, red when not, plain when n
   assert.equal("score" in lone[id(2)], false, "no score");
 });
 
-test("the Evaluate button and the fold line say what will happen", () => {
-  assert.equal(evaluateLabel(0), "Evaluate");
-  assert.equal(evaluateLabel(1), "Evaluate 1 line");
-  assert.equal(evaluateLabel(3), "Evaluate 3 lines");
-  assert.equal(stopLabel(false), "Stop");
-  assert.equal(stopLabel(true), "Stopping…");
+test("the fold line says who evaluates", () => {
   const said = (names, anyOn = true) => foldLine(names, anyOn).map(([t, b]) => (b ? `<b>${t}</b>` : t)).join("");
   assert.equal(said([], false), "No evaluator is on");
   assert.equal(said([], true), "No evaluator has a question yet");
@@ -404,12 +402,13 @@ const ANSWERS = {
 };
 
 // Jev answers each request when the test settles it, in the order asked.
-const runner = async (replies = () => ANSWERS, freeUse) => {
+const runner = async (replies = () => ANSWERS, freeUse, extra = {}) => {
   const pending = [];
   const decided = [];
   let open = 0;
   let most = 0;
   const s = await start({
+    ...extra,
     freeUse,
     kept: { [A]: MIXED, [B]: [] },
     decide: (payload) => {
@@ -467,147 +466,184 @@ test("a text is judged line by line: blank lines are skipped and each keeps its 
   assert.deepEqual(lines(" \n "), []);
 });
 
-test("Run asks once per line, in order, never two at once, and keeps each line's answers", async () => {
-  const { actor, ctx, decided, settle, most } = await runner();
-  actor.send({ type: "_run" });
-  assert.equal(decided.length, 0, "no text, no run");
+const statuses = (ctx) => runsOf(ctx()).map((r) => r.status);
+
+test("a finished line is asked once, one at a time, and remembered; a line not finished is not asked", async () => {
+  const memory = new Map();
+  const { actor, ctx, decided, settle, most } = await runner(undefined, undefined, { memory: { get: (k) => memory.get(k), put: (k, v) => memory.set(k, v) } });
   actor.send({ type: "_type", text: "Hello\n\nWorld" });
-  actor.send({ type: "_run" });
-  assert.equal(ctx().running, true);
-  actor.send({ type: "_run" });
-  // Typing during the run changes nothing it asks.
-  actor.send({ type: "_type", text: "Other" });
+  assert.equal(decided.length, 0, "typing alone asks nothing");
+  assert.deepEqual(statuses(ctx), ["new", "new"]);
+  actor.send({ type: "_finish", lines: ["Hello "] });
   assert.equal(decided.length, 1);
   assert.deepEqual(decided[0], request("Hello", MIXED));
-  assert.deepEqual(ctx().runs.map((r) => r.status), ["asking", "waiting"]);
+  actor.send({ type: "_finish", lines: ["World", "Hello"] });
+  assert.deepEqual(statuses(ctx), ["asking", "waiting"]);
+  assert.equal(decided.length, 1, "never two at once");
   await settle();
-  assert.equal(decided.length, 2);
   assert.deepEqual(decided[1], request("World", MIXED));
-  assert.deepEqual(ctx().runs, [lineResults("done", "Hello", 1, { results: ONE }), lineResults("asking", "World", 3)]);
   await settle();
-  assert.equal(ctx().running, false);
-  assert.deepEqual(ctx().runs, [lineResults("done", "Hello", 1, { results: ONE }), lineResults("done", "World", 3, { results: ONE })]);
+  assert.deepEqual(runsOf(ctx()), [lineResults("done", "Hello", 1, { results: ONE }), lineResults("done", "World", 3, { results: ONE })]);
   assert.equal(most(), 1, "never two requests at once");
-  actor.send({ type: "_clear" });
-  assert.deepEqual(ctx().runs, []);
+  actor.send({ type: "_finish", lines: ["Hello"] });
+  assert.equal(decided.length, 2, "a line already answered is not asked again");
+  assert.equal(memory.size, 4, "one answer per evaluator and line");
+
+  // Another page with the same memory shows the marks and asks nothing.
+  const again = await runner(() => assert.fail("nothing is asked"), undefined, {
+    memory: { get: (k) => memory.get(k), put: () => assert.fail("nothing is kept") },
+    texts: { read: () => "Hello\n\nWorld", write: () => {} },
+  });
+  assert.deepEqual(runsOf(again.ctx()).map((r) => [r.status, Object.keys(r.results)]), [["done", [id(1), id(5)]], ["done", [id(1), id(5)]]]);
+  again.actor.send({ type: "_finish", all: true });
+  assert.equal(again.decided.length, 0);
 });
 
-test("a failed line keeps the lines before it, leaves the rest unasked, and Run starts over", async () => {
+test("a paste finishes every line; Stop shows while two or more wait and asks no more", async () => {
+  const { actor, ctx, decided, settle } = await runner();
+  actor.send({ type: "_type", text: "One\nTwo\nThree" });
+  actor.send({ type: "_finish", lines: ["One", "Two", "Three"] });
+  assert.deepEqual(statuses(ctx), ["asking", "waiting", "waiting"]);
+  assert.equal(waiting(ctx()), 3);
+  assert.equal(stoppable(ctx()), true);
+  await settle();
+  assert.equal(stoppable(ctx()), true, "one asked and one waiting are two");
+  actor.send({ type: "_stop" });
+  assert.equal(stoppable(ctx()), false);
+  await settle();
+  assert.deepEqual(statuses(ctx), ["done", "done", "new"]);
+  assert.equal(decided.length, 2, "the line in flight is answered, the rest is not asked");
+  actor.send({ type: "_finish", all: true });
+  assert.equal(decided.length, 3, "leaving the box finishes every line");
+  assert.equal(decided[2].state.text, "Three");
+});
+
+test("a deleted or edited line loses its marks; one waiting is not asked", async () => {
+  const { actor, ctx, decided, settle } = await runner();
+  actor.send({ type: "_type", text: "One\nTwo" });
+  actor.send({ type: "_finish", lines: ["One", "Two"] });
+  actor.send({ type: "_type", text: "One" });
+  await settle();
+  assert.deepEqual(statuses(ctx), ["done"]);
+  assert.equal(decided.length, 1, "Two left the box before its turn");
+  actor.send({ type: "_type", text: "One more" });
+  assert.deepEqual(runsOf(ctx()).map((r) => Object.keys(r.results).length), [0]);
+});
+
+test("a failed line says why, stops what waits, and is asked again once finished again", async () => {
   const { actor, ctx, decided, settle } = await runner((n) => (n === 2 ? { error: "no-key" } : ANSWERS));
   actor.send({ type: "_type", text: "One\nTwo\nThree" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["One", "Two", "Three"] });
   await settle();
   await settle();
-  assert.equal(ctx().running, false);
   assert.equal(decided.length, 2, "line 3 is not asked");
-  assert.deepEqual(ctx().runs, [
+  assert.deepEqual(runsOf(ctx()), [
     lineResults("done", "One", 1, { results: ONE }),
     lineResults("failed", "Two", 2, { error: "key" }),
-    lineResults("waiting", "Three", 3),
+    lineResults("new", "Three", 3),
   ]);
-  actor.send({ type: "_run" });
-  assert.deepEqual(ctx().runs.map((r) => r.status), ["asking", "waiting", "waiting"]);
-  assert.deepEqual(decided[2], request("One", MIXED));
+  actor.send({ type: "_finish", lines: ["Two"] });
+  assert.deepEqual(statuses(ctx), ["done", "asking", "new"]);
 });
 
-test("a guest made by this Run without a guest key is told trials are paused, not to add a key", async () => {
+test("a guest made by the first check without a guest key is told trials are paused, not to add a key", async () => {
   const { actor, ctx, settle } = await runner(() => ({ error: "no-key" }));
   actor.send({ type: "_type", text: "One" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["One"] });
   // session.changed reaches the list before llm's reply, since llm makes the guest first.
   actor.send({ type: "session.changed", userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" });
   await settle();
-  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "paused"]]);
+  assert.deepEqual(runsOf(ctx()).map((r) => [r.status, r.error]), [["failed", "paused"]]);
+  assert.equal(notice(ctx()), "paused");
 });
 
 test("a request that throws fails its line as one Jev could not answer", async () => {
   const { actor, ctx, settle } = await runner(() => new Error("down"));
   actor.send({ type: "_type", text: "One\nTwo" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["One", "Two"] });
   await settle();
-  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "failed"], ["waiting", null]]);
+  assert.deepEqual(runsOf(ctx()).map((r) => [r.status, r.error]), [["failed", "failed"], ["new", null]]);
 });
 
-test("Clear during a run stops it, so nothing still on its way comes back", async () => {
-  const { actor, ctx, decided, settle } = await runner();
-  actor.send({ type: "_type", text: "One\nTwo" });
-  actor.send({ type: "_run" });
-  actor.send({ type: "_clear" });
-  assert.equal(ctx().running, false);
-  await settle();
-  assert.deepEqual(ctx().runs, []);
-  assert.equal(decided.length, 1);
-});
-
-test("nothing switched on with a question to ask is no run", async () => {
+test("nothing switched on with a question to ask asks nothing", async () => {
   const decided = [];
   const { actor } = await start({ kept: { [A]: [MIXED[1], MIXED[3]] }, decide: (p) => (decided.push(p), Promise.resolve(ANSWERS)) });
   actor.send({ type: "_type", text: "Hello" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["Hello"] });
   assert.deepEqual(decided, []);
 });
 
-const kept = (ctx) => ctx().runs.map((r) => Object.keys(r.results));
+const kept = (ctx) => runsOf(ctx()).map((r) => Object.keys(r.results));
 
-test("a changed or deleted evaluator loses its results on every line, even ones still on their way; a rename keeps them", async () => {
-  const { actor, ctx, decided, settle } = await runner();
-  actor.send({ type: "_type", text: "One\nTwo" });
-  actor.send({ type: "_run" });
-  actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[4], on: false } });
+test("a change to what an evaluator asks takes its marks and checks every line again once it settles; a rename asks nothing", async () => {
+  const clock = new SimulatedClock();
+  const { actor, ctx, decided, settle } = await runner(undefined, undefined, { clock });
+  actor.send({ type: "_type", text: "One\nTwo\nThree" });
+  actor.send({ type: "_finish", lines: ["One", "Two"] });
   await settle();
-  assert.deepEqual(kept(ctx), [[id(1)], []]);
   await settle();
-  assert.deepEqual(kept(ctx), [[id(1)], [id(1)]]);
-  assert.deepEqual(decided[1].questions.map((x) => x.id.split(":")[0]), [id(1), id(1)], "the next line no longer asks it");
-  actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[0], name: "Renamed", version: 2 } });
-  assert.deepEqual(kept(ctx), [[id(1)], [id(1)]]);
-  actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[0], questions: [yesno(1, "Is it cruel?")] } });
-  assert.deepEqual(kept(ctx), [[], []]);
-
-  const again = await runner();
-  again.actor.send({ type: "_type", text: "One\nTwo" });
-  again.actor.send({ type: "_run" });
-  await again.settle();
-  await again.settle();
-  again.actor.send({ type: "evaluator.deleted", id: id(1), book: A });
-  assert.deepEqual(kept(again.ctx), [[id(5)], [id(5)]]);
+  assert.deepEqual(kept(ctx), [[id(1), id(5)], [id(1), id(5)], []]);
+  actor.send({ type: "evaluator.changed", evaluator: { ...MIXED[0], name: "Renamed", version: 2, position: MIXED[0].position } });
+  assert.deepEqual(statuses(ctx), ["done", "done", "new"], "a rename asks nothing");
+  const cruel = { ...MIXED[0], questions: [yesno(1, "Is it cruel?")] };
+  actor.send({ type: "evaluator.changed", evaluator: cruel });
+  assert.deepEqual(kept(ctx), [[id(5)], [id(5)], []], "its marks go at once");
+  assert.deepEqual(statuses(ctx), ["waiting", "waiting", "waiting"], "every line waits to be checked again");
+  clock.increment(RECHECK_MS - 1);
+  await flush();
+  assert.equal(decided.length, 2, "nothing is asked while the change may go on");
+  clock.increment(1);
+  await flush();
+  assert.equal(decided.length, 3);
+  assert.deepEqual(decided[2], request("One", [cruel]), "only the changed evaluator is asked");
+  await settle();
+  await settle();
+  await settle();
+  assert.deepEqual(kept(ctx), [[id(1), id(5)], [id(1), id(5)], [id(1), id(5)]], "every line, the one never finished too");
+  actor.send({ type: "evaluator.deleted", id: id(1), book: A });
+  assert.deepEqual(kept(ctx), [[id(5)], [id(5)], [id(5)]]);
 });
 
-test("switching a question off or on drops only that evaluator's results", async () => {
-  const { actor, ctx, settle } = await runner();
+test("switching a question off takes only that evaluator's marks; on again shows them without asking", async () => {
+  const clock = new SimulatedClock();
+  const { actor, ctx, decided, settle } = await runner(undefined, undefined, { clock });
   actor.send({ type: "_type", text: "Hello" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["Hello"] });
   await settle();
   const [first] = MIXED;
   const off = { ...first, questions: first.questions.map((x) => (x.id === Q(1) ? { ...x, on: false } : x)) };
   actor.send({ type: "evaluator.changed", evaluator: off });
   assert.deepEqual(kept(ctx), [[id(5)]]);
-
-  const again = await runner();
-  again.actor.send({ type: "_type", text: "Hello" });
-  again.actor.send({ type: "_run" });
-  await again.settle();
-  // A question already off, or one Run does not ask, changes nothing Run asked.
+  clock.increment(RECHECK_MS);
+  await flush();
+  assert.deepEqual(decided[1].questions.map((x) => x.id), [qid(id(1), Q(4))], "asked again with what it now asks");
+  await settle();
+  actor.send({ type: "evaluator.changed", evaluator: first });
+  clock.increment(RECHECK_MS);
+  await flush();
+  assert.deepEqual(kept(ctx), [[id(1), id(5)]]);
+  assert.equal(decided.length, 2, "the evaluator as it was is remembered");
+  // A question already off, or one never asked, changes nothing asked.
   const unasked = { ...first, questions: first.questions.map((x) => (x.id === Q(3) ? { ...x, on: false } : x)) };
-  again.actor.send({ type: "evaluator.changed", evaluator: unasked });
-  assert.deepEqual(kept(again.ctx), [[id(1), id(5)]]);
+  actor.send({ type: "evaluator.changed", evaluator: unasked });
+  assert.deepEqual(statuses(ctx), ["done"]);
 });
 
-test("another book drops every result and the text", async () => {
+test("another book drops what waits and the text", async () => {
   const { actor, ctx, settle } = await runner();
-  actor.send({ type: "_type", text: "Hello" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_type", text: "Hello\nWorld" });
+  actor.send({ type: "_finish", lines: ["Hello", "World"] });
   await settle();
   actor.send({ type: "subject.changed", subject: book(A) });
-  assert.equal(ctx().text, "Hello");
+  assert.equal(ctx().text, "Hello\nWorld");
   actor.send({ type: "subject.changed", subject: book(B) });
   await flush();
   assert.equal(ctx().text, "");
-  assert.deepEqual(ctx().runs, []);
-  assert.equal(ctx().running, false);
+  assert.deepEqual(runsOf(ctx()), []);
+  assert.deepEqual([ctx().queue, ctx().asking], [[], null]);
 });
 
-test("the Run text is kept per book and comes back after a reload", async () => {
+test("the text is kept per book and comes back after a reload", async () => {
   const kept = {};
   const texts = { read: (b) => kept[b] ?? "", write: (b, text) => (text ? (kept[b] = text) : delete kept[b]) };
   const first = await start({ texts, kept: { [A]: [], [B]: [] } });
@@ -627,7 +663,7 @@ test("the Run text is kept per book and comes back after a reload", async () => 
   assert.deepEqual(kept, { [B]: "Other" }, "an emptied box keeps nothing");
 });
 
-test("a guest out of free use, or paused, cannot Run, and the message under Run says why", async () => {
+test("a guest out of free use, or paused, is not checked, and the message under the box says why", async () => {
   assert.equal(freeStop(null), null);
   assert.equal(freeStop({ left: 0.66, blocked: false, paused: [] }), null);
   assert.equal(freeStop({ left: 0, blocked: false, paused: ["jev"] }), "used-up");
@@ -638,20 +674,21 @@ test("a guest out of free use, or paused, cannot Run, and the message under Run 
 
   const { actor, ctx, decided } = await runner(undefined, { left: 0, blocked: false, paused: [] });
   actor.send({ type: "_type", text: "One" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["One"] });
   await flush();
-  assert.deepEqual(decided, [], "Run is off");
+  assert.deepEqual(decided, [], "nothing is asked");
   assert.equal(notice(ctx()), "used-up");
   actor.send({ type: "llm.changed", signedIn: true, freeUse: { left: 0.5, blocked: false, paused: [] } });
   assert.equal(notice(ctx()), null, "a picture with use left clears it");
+  assert.equal(decided.length, 1, "and the line waiting is asked");
 });
 
-test("a Run refused as used up says so under Run, not on the line", async () => {
+test("a request refused as used up says so under the box, not on the line", async () => {
   const { actor, ctx, settle } = await runner(() => ({ error: "used-up" }), { left: 0.01, blocked: false, paused: [] });
   actor.send({ type: "_type", text: "One" });
-  actor.send({ type: "_run" });
+  actor.send({ type: "_finish", lines: ["One"] });
   await settle();
-  assert.deepEqual(ctx().runs.map((r) => [r.status, r.error]), [["failed", "used-up"]]);
+  assert.deepEqual(runsOf(ctx()).map((r) => [r.status, r.error]), [["failed", "used-up"]]);
   assert.equal(notice(ctx()), "used-up");
 });
 
@@ -740,34 +777,99 @@ test("the panel tells about the line just answered while running, else the line 
   assert.equal(focusOf({ runs: [{ ...run(1, "A", "failed"), error: "used-up" }], running: false, picked: null }), -1, "a refusal told under the button is no line to show");
 });
 
-test("Stop lets the line in flight be answered and asks no more; a point picks the panel's line", async () => {
-  const { actor, ctx, decided, settle } = await runner();
-  actor.send({ type: "_type", text: "One\nTwo\nThree" });
-  actor.send({ type: "_run" });
-  actor.send({ type: "_stop" });
-  assert.equal(ctx().stopping, true);
-  assert.equal(ctx().running, true);
-  await settle();
-  assert.equal(ctx().running, false);
-  assert.equal(ctx().stopping, false);
-  assert.deepEqual(ctx().runs.map((r) => r.status), ["done", "waiting", "waiting"]);
-  assert.equal(decided.length, 1);
+test("a point picks the panel's line", async () => {
+  const { actor, ctx } = await runner();
+  actor.send({ type: "_type", text: "One" });
   actor.send({ type: "_point", at: 1, line: " One " });
   assert.deepEqual(ctx().picked, { at: 1, line: "One" });
-  actor.send({ type: "_run" });
-  assert.equal(ctx().picked, null, "a new run starts the panel from its first answer");
+});
+
+// --- The list: its order and Vim's keys (12) ----------------------------------------------
+
+const placed = (n, position, extra = {}) => ({ ...evaluator(n, A, extra), position });
+const ORDERED = [placed(1, "V"), placed(2, "a"), placed(3, "b")];
+const shownIds = (ctx) => rows(ctx().evaluators).map((e) => e.id);
+
+test("the rows follow the places the fact gives, one without a place after them by id", async () => {
+  const { actor, ctx } = await start({ kept: { [A]: [placed(3, "b"), evaluator(5, A), placed(1, "V"), evaluator(4, A)] } });
+  assert.deepEqual(shownIds(ctx), [id(1), id(3), id(4), id(5)]);
+  actor.send({ type: "evaluator.changed", evaluator: placed(5, "0V") });
+  assert.deepEqual(shownIds(ctx), [id(5), id(1), id(3), id(4)]);
+});
+
+test("dd cuts a row and p puts it between neighbours; u puts a cut row back; New evaluator is never cut", async () => {
+  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED } });
+  actor.send({ type: "_cut", id: D1 });
+  assert.equal(ctx().cut, null, "New evaluator stays put");
+  actor.send({ type: "_cut", id: id(1) });
+  assert.deepEqual(ctx().cut, { id: id(1), name: "Evaluator 1" });
+  actor.send({ type: "_paste", after: id(2), before: id(3) });
+  assert.equal(ctx().cut, null);
+  assert.deepEqual(shownIds(ctx), [id(2), id(1), id(3)], "shown there at once");
+  assert.deepEqual(emitted.at(-1), { type: "evaluator.moved", id: id(1), after: id(2), before: id(3) });
+  actor.send({ type: "_cut", id: id(3) });
+  actor.send({ type: "_uncut" });
+  assert.equal(ctx().cut, null);
+  assert.equal(emitted.filter((e) => e.type === "evaluator.moved").length, 1);
+  valid(emitted);
+});
+
+test("Escape on a cut row counts down on the row; u takes it back; its end hands the delete to the corner notice", async () => {
+  const clock = new SimulatedClock();
+  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED }, clock, undoMs: 3000 });
+  actor.send({ type: "_cut", id: id(2) });
+  actor.send({ type: "_escape" });
+  assert.deepEqual([...ctx().discarding.keys()], [id(2)]);
+  actor.send({ type: "_undo", id: id(2) });
+  assert.equal(ctx().discarding.size, 0);
+  clock.increment(3000);
+  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 0, "taken back, nothing goes");
+  actor.send({ type: "_cut", id: id(2) });
+  actor.send({ type: "_escape" });
+  clock.increment(3000);
+  assert.deepEqual(emitted.at(-1), { type: "removal.started", kind: "evaluator", id: id(2), name: "Evaluator 2" });
+  assert.equal(ctx().discarding.size, 0);
+  valid(emitted);
+});
+
+test("the keyboard leaving the list, or a row opened, hands a cut or a countdown to the corner notice", async () => {
+  const clock = new SimulatedClock();
+  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED }, clock });
+  actor.send({ type: "_cut", id: id(1) });
+  actor.send({ type: "_escape" });
+  actor.send({ type: "_cut", id: id(2) });
+  actor.send({ type: "_left" });
+  assert.deepEqual(emitted.filter((e) => e.type === "removal.started").map((e) => e.id), [id(1), id(2)]);
+  assert.deepEqual([ctx().cut, ctx().discarding.size], [null, 0]);
+  clock.increment(5000);
+  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 2, "its own timer is gone");
+  actor.send({ type: "_cut", id: id(3) });
+  actor.send({ type: "_pick", id: D1 });
+  assert.deepEqual(emitted.slice(-2).map((e) => e.type), ["removal.started", "evaluator.selected"]);
+  valid(emitted);
+});
+
+test("o or O opens a new evaluator, which goes where it was started once it exists", async () => {
+  const { actor, emitted } = await start({ kept: { [A]: ORDERED } });
+  actor.send({ type: "_place", after: id(1), before: id(2) });
+  assert.deepEqual(emitted.at(-1), { type: "evaluator.selected", id: D1, book: A });
+  actor.send({ type: "evaluator.changed", evaluator: { ...evaluator(9, A), id: D1, position: "1" } });
+  assert.deepEqual(emitted.at(-1), { type: "evaluator.moved", id: D1, after: id(1), before: id(2) });
+  actor.send({ type: "evaluator.changed", evaluator: { ...evaluator(9, A), id: D1, position: "W" } });
+  assert.equal(emitted.filter((e) => e.type === "evaluator.moved").length, 1, "only once");
+  valid(emitted);
 });
 
 const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
 const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
 
-test("signed out the list asks to sign in, and a run is refused; signed in, or with no session to ask, it shows", async () => {
+test("signed out the list asks to sign in, and nothing is checked; signed in, or with no session to ask, it shows", async () => {
   assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
   const out = await start({ session: SIGNED_OUT, decide: () => assert.fail("a run is not asked signed out") });
   assert.equal(showing(out.ctx()), "sign-in");
   out.actor.send({ type: "_type", text: "One line" });
-  out.actor.send({ type: "_run" });
-  assert.equal(out.ctx().running, false);
+  out.actor.send({ type: "_finish", all: true });
+  assert.equal(out.ctx().asking, null);
   assert.equal(showing((await start({ session: SIGNED_IN })).ctx()), "show");
   assert.equal(showing((await start()).ctx()), "show", "a page without session counts as signed in");
 });

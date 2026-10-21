@@ -43,7 +43,7 @@ test("a create continues from the base the browser held, and any later write win
   const cookie = freshCookie();
   const created = await (await put(ID, body({ baseVersion: 3 }), cookie)).json();
   const { updatedAt, ...rest } = created;
-  assert.deepEqual(rest, { id: ID, book: BOOK, name: "Goals", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false });
+  assert.deepEqual(rest, { id: ID, book: BOOK, name: "Goals", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false, position: null });
   assert.ok(!Number.isNaN(Date.parse(updatedAt)), "a write without a time is stamped by the server");
   // Last write wins: a stale base is never refused.
   const res = await put(ID, body({ name: "Renamed", on: false, baseVersion: 1 }), cookie);
@@ -51,6 +51,23 @@ test("a create continues from the base the browser held, and any later write win
   assert.deepEqual([(await res.json()).version], [5]);
   const again = await (await put(ID, body({ name: "Renamed", on: false, baseVersion: 1 }), cookie)).json();
   assert.equal(again.version, 5, "the same content is not a new version");
+});
+
+test("a place is saved without a new version, alone or with a write, and pulled like a change", async () => {
+  const cookie = freshCookie();
+  assert.deepEqual(await (await put(ID, { position: "V", deleted: false }, cookie)).json(), { id: ID, missing: true }, "nothing to move");
+  await put(ID, body(), cookie);
+  const moved = await (await put(ID, { position: "V", deleted: false }, cookie)).json();
+  assert.deepEqual([moved.position, moved.version, moved.name], ["V", 1, "Goals"]);
+  const both = await (await put(ID, body({ name: "Renamed", position: "F" }), cookie)).json();
+  assert.deepEqual([both.position, both.version], ["F", 2]);
+  const kept = await (await put(ID, body({ name: "Again" }), cookie)).json();
+  assert.equal(kept.position, "F", "a write without a place keeps it");
+  assert.equal((await put(ID, { position: "0", deleted: false }, cookie)).status, 400, "a key never ends in 0");
+  const before = (await (await pull(0, cookie)).json()).cursor;
+  await put(ID, { position: "a", deleted: false }, cookie);
+  const after = await (await pull(before, cookie)).json();
+  assert.deepEqual(after.evaluators.map((e) => [e.position, e.version]), [["a", 3]]);
 });
 
 test("Show in journal is set by a write that carries it and kept by one that leaves it out", async () => {

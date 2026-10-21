@@ -13,7 +13,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The evaluators, of the book asked for or of every book, oldest first, each whole as evaluator.changed carries it.",
+    "description": "The evaluators, of the book asked for or of every book, in their places in the list (position), each whole as evaluator.changed carries it.",
     "type": "object",
     "properties": {
       "evaluators": {
@@ -134,6 +134,10 @@
             "version": {
               "type": "integer",
               "minimum": 1
+            },
+            "position": {
+              "type": "string",
+              "description": "The evaluator's place in the list: a key that sorts by plain comparison, the list in ascending order (5)."
             },
             "updatedAt": {
               "type": "string",

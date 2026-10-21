@@ -120,6 +120,10 @@
           "type": "integer",
           "minimum": 1
         },
+        "position": {
+          "type": "string",
+          "description": "The evaluator's place in the list: a key that sorts by plain comparison, the list in ascending order (5)."
+        },
         "updatedAt": {
           "type": "string",
           "format": "date-time",

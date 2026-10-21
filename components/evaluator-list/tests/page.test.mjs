@@ -98,6 +98,46 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: focus and keys.
+    test("with Vim keys on, dd cuts a row and p places it; Escape counts its delete down on the row and u takes it back; cc opens it in its name", async () => {
+      const { context, page, problems } = await open(true);
+      try {
+        const rowClass = (name) =>
+          inList(page, (root, n) => [...root.querySelectorAll(".row")].find((r) => r.querySelector(".name").textContent.trim() === n)?.className, name);
+        await page.keyboard.press("j");
+        await until(async () => (await focusedName(page)) === "Goals");
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await until(async () => (await rowClass("Goals")).includes("cut"));
+        await page.keyboard.press("j");
+        await until(async () => (await focusedName(page)) === "Values");
+        await page.keyboard.press("p");
+        await until(async () => (await names(page)).join() === "New evaluator,Values,Goals");
+        await until(async () => (await focusedName(page)) === "Goals");
+        assert.ok(!(await rowClass("Goals")).includes("cut"));
+        // Cut again, then Escape: the delete counts down on the row and the list keeps the keyboard.
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await until(async () => (await rowClass("Goals")).includes("cut"));
+        await page.keyboard.press("Escape");
+        await until(async () => (await rowClass("Goals")).includes("discarding"));
+        assert.equal(await focusedName(page), "Goals");
+        await page.keyboard.press("u");
+        await until(async () => !(await rowClass("Goals")).includes("discarding"));
+        await page.keyboard.press("c");
+        await page.keyboard.press("c");
+        await until(async () =>
+          page.evaluate(() => {
+            const title = document.querySelector("evaluator-editor").shadowRoot.querySelector("input.title");
+            return title?.value === "Goals" && document.querySelector("evaluator-editor").shadowRoot.activeElement === title;
+          }),
+        );
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing and the arrows move", async () => {
       const { context, page, problems } = await open(false);
       try {

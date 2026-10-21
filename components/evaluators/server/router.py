@@ -31,6 +31,10 @@ _STARTERS = (Path(__file__).parent / "starters.sql").read_text()
 
 _ULID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 
+# An evaluator's place in the list (5): a fractional-index key the browser computes
+# (evaluators/machine.js between), digits and letters, never ending in "0".
+_POSITION = re.compile(r"[0-9A-Za-z]{0,199}[1-9A-Za-z]")
+
 # A body that is not what the route takes is refused with this fixed reply rather than
 # FastAPI's 422, which would echo the body back.
 _BAD = {"error": "bad-request"}
@@ -54,6 +58,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN updated_at TEXT")
     if "starter_for" not in columns:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN starter_for TEXT NOT NULL DEFAULT '[]'")
+    if "position" not in columns:
+        connection.executescript("ALTER TABLE evaluators ADD COLUMN position TEXT")
     try:
         with connection:
             yield connection
@@ -125,6 +131,7 @@ def _record(row: sqlite3.Row) -> dict:
         "version": row["version"],
         "updatedAt": row["updated_at"],
         "deleted": bool(row["deleted"]),
+        "position": row["position"],
         # Only an evaluator that is a starter somewhere carries it, as on the bus.
         **({"starterFor": pages} if (pages := json.loads(row["starter_for"])) else {}),
     }
@@ -146,6 +153,20 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         payload = None
     if not (_is_id(evaluator_id) and isinstance(payload, dict)):
         return JSONResponse(_BAD, status_code=400)
+    # A place is last write wins (5): it is saved whatever the base, bumps no version (so
+    # the list's answers kept by what an evaluator asks stay), and bumps seq so a pull
+    # brings it to other devices. A write without a name only moves the evaluator.
+    position = payload.get("position")
+    if position is not None and not (isinstance(position, str) and _POSITION.fullmatch(position)):
+        return JSONResponse(_BAD, status_code=400)
+    if "name" not in payload and not payload.get("deleted", False):
+        if position is None:
+            return JSONResponse(_BAD, status_code=400)
+        with _connect(user_id) as connection:
+            if connection.execute("SELECT 1 FROM evaluators WHERE id = ?", (evaluator_id,)).fetchone() is None:
+                # Nothing here to move: the browser drops the row.
+                return {"id": evaluator_id, "missing": True}
+            return _place(connection, evaluator_id, position)
     book, name, on = payload.get("book"), payload.get("name"), payload.get("on")
     questions, base, deleted = payload.get("questions"), payload.get("baseVersion"), payload.get("deleted", False)
     journal, updated = payload.get("journal"), payload.get("updatedAt")
@@ -174,6 +195,8 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
     with _connect(user_id) as connection:
         pages = _pages(starter_for) if admin and starter_for is not None else None
         result = _write(connection, evaluator_id, book, name, on, journal, stored, base, deleted, updated, pages)
+        if position is not None:
+            result = _place(connection, evaluator_id, position)
         if admin:
             _publish(connection, user_id)
         return result
@@ -205,6 +228,15 @@ def _write(connection, evaluator_id, book, name, on, journal, stored, base, dele
         'UPDATE evaluators SET name = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ?, updated_at = ?, starter_for = ? WHERE id = ?',
         (name, int(on), shown, stored, row["version"] + 1, _next_seq(connection), int(deleted), updated, ticks, evaluator_id),
     )
+    return _reread(connection, evaluator_id)
+
+
+def _place(connection: sqlite3.Connection, evaluator_id: str, position: str) -> dict:
+    """Set a live evaluator's place in the list; a tombstone keeps what it had."""
+    row = connection.execute("SELECT * FROM evaluators WHERE id = ?", (evaluator_id,)).fetchone()
+    if row["deleted"] or row["position"] == position:
+        return _record(row)
+    connection.execute("UPDATE evaluators SET position = ?, seq = ? WHERE id = ?", (position, _next_seq(connection), evaluator_id))
     return _reread(connection, evaluator_id)
 
 

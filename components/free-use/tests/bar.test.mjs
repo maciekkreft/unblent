@@ -21,7 +21,7 @@ const listText = (page) => page.evaluate(() => document.querySelector("evaluator
 const runBox = (page) =>
   page.evaluate(() => {
     const root = document.querySelector("evaluator-list").shadowRoot;
-    return { notice: root.querySelector(".notice")?.textContent.trim() ?? null, off: root.querySelector(".go").disabled };
+    return { notice: root.querySelector(".notice")?.textContent.trim() ?? null };
   });
 
 // A guest made the way a try page makes one (3.4), with one switched-on evaluator kept
@@ -63,15 +63,16 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: rendering and layout.
-    test("a guest's Run goes through and the bar goes down", async () => {
+    test("a guest's finished line is checked and the bar goes down", async () => {
       const { context, page, problems } = await guestPage(browser, (n) => ({ left: n === 1 ? 1 : 0.9, blocked: false, paused: [] }));
       try {
         await until(async () => (await bar(page)) === "Free use 100% left");
         await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
         await page.keyboard.insertText("Walk for ten minutes after lunch.");
-        await page.getByRole("button", { name: "Evaluate 1 line" }).click();
+        // Enter finishes the line, which is checked at once.
+        await page.keyboard.press("Enter");
         await until(async () => (await bar(page)) === "Free use 90% left");
-        assert.deepEqual(await runBox(page), { notice: null, off: false });
+        assert.deepEqual(await runBox(page), { notice: null });
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -106,14 +107,13 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       ["blocked", { left: 0.4, blocked: true, paused: [] }, "Free use ended", "This trial has ended."],
     ]) {
       // Browser: rendering and layout.
-      test(`${name}: the bar says "${said}"${notice ? " and Run is off" : ""}`, async () => {
+      test(`${name}: the bar says "${said}"${notice ? " and the box says why" : ""}`, async () => {
         const { context, page, problems } = await guestPage(browser, () => freeUse);
         try {
           await until(async () => (await bar(page)) === said);
           await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
           await page.keyboard.insertText("Walk.");
           await until(async () => (await runBox(page)).notice === notice);
-          assert.equal((await runBox(page)).off, notice != null);
           assert.deepEqual(problems, []);
         } finally {
           await context.close();

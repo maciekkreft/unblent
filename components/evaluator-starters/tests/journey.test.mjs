@@ -109,9 +109,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
 
         await page.keyboard.insertText("You did your best today.");
-        await page.getByRole("button", { name: "Evaluate 1 line" }).click();
+        // Enter finishes the line, which is checked at once.
+        await page.keyboard.press("Enter");
         await until(async () => (await page.locator("evaluator-list .marks").count()) === 1);
-        assert.equal(writes[0], "/api/session/guest", "the first Run makes the guest");
+        assert.equal(writes[0], "/api/session/guest", "the first check makes the guest");
 
         // The copy is uploaded as the guest's own, with an id of its own, in the Journal.
         let mine = [];

@@ -5,7 +5,7 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // syncing to the per-user server when signed in. Unlike a note an evaluator never
 // conflicts: the last write wins, as the journal's detectors did, and a delete is a
 // tombstone that always wins (5). The view where the user acted emits evaluator.saved,
-// evaluator.switched and removal.started; notice-stack emits removal.undone or
+// evaluator.switched, evaluator.moved and removal.started; notice-stack emits removal.undone or
 // removal.settled when the undo window ends (4.3, fifth rule). Everything with a side
 // effect (the store, the network, the ask) arrives through input, so this stays a pure
 // definition importable in Node.
@@ -75,8 +75,70 @@ const record = (r) => ({
   removing: r.removing === true,
   starterFor: pagesOf(r.starterFor),
   ...(typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {}),
+  ...(isPosition(r.position) ? { position: r.position } : {}),
   ...(r.deleted === true ? { deleted: true } : {}),
 });
+
+// --- Places in the list -----------------------------------------------------------------
+
+// An evaluator's place in the list is a fractional index (5, an item's place is last
+// write wins), the same design as a note's (notes/machine.js): a string that sorts by
+// plain code-unit comparison, so an evaluator moved between two others takes a key
+// between theirs and no other evaluator changes. The digits are in ASCII order, and a key
+// never ends in the smallest digit, so there is always room before it.
+const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const KEY = /^[0-9A-Za-z]*[1-9A-Za-z]$/;
+export const isPosition = (value) => typeof value === "string" && value.length <= 200 && KEY.test(value);
+
+// The key between a and b (a < b); "" stands for before everything, null for after.
+function midpoint(a, b) {
+  if (b !== null) {
+    let n = 0;
+    while ((a[n] ?? "0") === b[n]) n += 1;
+    if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
+  }
+  const da = a ? DIGITS.indexOf(a[0]) : 0;
+  const db = b !== null ? DIGITS.indexOf(b[0]) : DIGITS.length;
+  if (db - da > 1) return DIGITS[Math.round((da + db) / 2)];
+  if (b !== null && b.length > 1) return b.slice(0, 1);
+  return DIGITS[da] + midpoint(a.slice(1), null);
+}
+
+// A key strictly between `after` and `before`, either null for the list's end. Out of
+// order neighbours (a move computed against a list that changed meanwhile) place the
+// evaluator just after `after`.
+export function between(after, before) {
+  const a = isPosition(after) ? after : "";
+  const b = isPosition(before) && before > a ? before : null;
+  return midpoint(a, b);
+}
+
+// An evaluator from before places existed has no key and keeps today's order, oldest
+// first: its key is "z", its id and "V", so it sorts after every key `between` makes for
+// a new evaluator and among its kind by id, the same on every device. The key is written
+// down only when it is moved, so an edit never moves it.
+export const positionOf = (r) => (isPosition(r.position) ? r.position : `z${r.id}V`);
+
+// List order: by key, then by id where two keys are equal.
+const byPosition = (a, b) => {
+  const pa = positionOf(a);
+  const pb = positionOf(b);
+  return pa < pb ? -1 : pa > pb ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+};
+
+// A new evaluator goes first (5): a key before every evaluator's.
+function firstPosition(context) {
+  let min = null;
+  for (const r of context.evaluators.values()) {
+    if (!visible(r)) continue;
+    const p = positionOf(r);
+    if (min === null || p < min) min = p;
+  }
+  return between(null, min);
+}
+
+// An outbox row with content (a save or a delete), as against one that only moves.
+const hasContent = (row) => row != null && "name" in row;
 
 // The questions as another device is told them: every mark stripped.
 const bare = (questions) =>
@@ -100,13 +162,13 @@ const visible = (r) => r && !r.deleted;
 // evaluators are announced as before.
 const announce = (context, r) => {
   const { deleted, starterFor, ...rest } = r;
-  return { ...rest, ...(starterFor?.length ? { starterFor } : {}), pending: context.outbox.has(r.id) };
+  return { ...rest, position: positionOf(r), ...(starterFor?.length ? { starterFor } : {}), pending: context.outbox.has(r.id) };
 };
 
 function replyList(context, book, reply) {
   const evaluators = [...context.evaluators.values()]
     .filter((r) => visible(r) && (book === undefined || r.book === book))
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .sort(byPosition)
     .map((r) => announce(context, r));
   reply({ evaluators });
 }
@@ -144,7 +206,10 @@ function commit(context, enqueue, given) {
   enqueue(() => context.store.put(r).catch(() => {}));
   if (changed && context.userId != null) {
     const existing = context.outbox.get(r.id);
-    const row = outboxRow(r, existing ? existing.baseVersion : current ? current.version : null);
+    const row = outboxRow(r, hasContent(existing) ? existing.baseVersion : current ? current.version : null);
+    // The place rides the write only when this device set it (5: last write wins), so an
+    // edit never carries a stale place over a move made on another device.
+    if (isPosition(r.position) && (existing?.position !== undefined || !isPosition(current?.position))) row.position = r.position;
     context.outbox.set(r.id, row);
     enqueue(() => context.store.outboxPut(row).catch(() => {}));
   }
@@ -179,7 +244,8 @@ function applySave(context, event, enqueue) {
   const was = live(context, event.id);
   if (!was) {
     if (!isId(event.book)) return;
-    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, questions: event.questions }));
+    const position = firstPosition(context);
+    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, questions: event.questions, position }));
   }
   const questions = keepMarked(
     was.questions,
@@ -237,6 +303,32 @@ function seed(context, enqueue) {
 // How long the try page waits for the starters and the Journal before it shows the
 // evaluators without them.
 const SEED_WAIT_MS = 4000;
+
+// The user moved an evaluator in the list (evaluator-list emits evaluator.moved, 4.3
+// fifth rule): it takes a key between its new neighbours'. A place is last write wins
+// (5): it bumps no version, so the list's remembered answers, kept by what an evaluator
+// asks, stay; signed in it rides the outbox alone, or on the row of an edit not yet sent.
+function applyMove(context, event, enqueue) {
+  const current = live(context, event.id);
+  if (!current) return;
+  const neighbour = (id) => {
+    const r = id && id !== event.id ? live(context, id) : null;
+    return r ? positionOf(r) : null;
+  };
+  const position = between(neighbour(event.after), neighbour(event.before));
+  if (position === current.position) return;
+  const r = { ...current, position };
+  context.evaluators.set(r.id, r);
+  enqueue(() => context.store.put(r).catch(() => {}));
+  if (context.userId != null) {
+    const existing = context.outbox.get(r.id);
+    const row = existing ? { ...existing, position } : { id: r.id, position };
+    context.outbox.set(r.id, row);
+    enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  }
+  enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+  if (context.userId != null) enqueue.raise({ type: "_drain" });
+}
 
 function applySwitch(context, { id, on }, enqueue) {
   const was = live(context, id);
@@ -301,6 +393,7 @@ function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.payload.book, message.reply);
   else if (message.type === "evaluator.saved") applySave(context, message, enqueue);
   else if (message.type === "evaluator.switched") applySwitch(context, message, enqueue);
+  else if (message.type === "evaluator.moved") applyMove(context, message, enqueue);
   else if (message.type === "starter.ticked") applyTick(context, message, enqueue);
   else if (message.type === "removal.started") applyMark(context, message, true, enqueue);
   else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
@@ -309,7 +402,7 @@ function flush(context, message, enqueue) {
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "evaluator.saved", "evaluator.switched", "starter.ticked", "removal.started", "removal.undone", "removal.settled"].map((t) => [t, { actions: queue }]),
+  ["list?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.started", "removal.undone", "removal.settled"].map((t) => [t, { actions: queue }]),
 );
 
 // A visitor on a try page (8) with nothing in this browser yet gets the page's
@@ -394,6 +487,7 @@ export const machine = setup({
           return { acks, networkError: true };
         }
         if (result.error === "unauthorized") return { acks, authFailed: true };
+        // A move for an evaluator the server never had: nothing to place (applySync).
         acks.push(result);
         await store.outboxDelete(row.id).catch(() => {});
       }
@@ -419,8 +513,12 @@ export const machine = setup({
       "of kind and back, which a removed option takes with it once its removal settles; and it is switched on or off. Each question is switched on or off too: one " +
       "switched off is kept, with its wording, but not asked, and a question without the " +
       "switch counts as on. `evaluators: list` answers one book's evaluators, " +
-      "or every book's when no book is given, oldest first, each with when its content last " +
-      "changed (`updatedAt`, absent on one kept from before it was recorded). A new evaluator starts switched on. It works signed out, numbering versions " +
+      "or every book's when no book is given, in their places in the list, each with when its content last " +
+      "changed (`updatedAt`, absent on one kept from before it was recorded). A new evaluator starts switched on and " +
+      "goes first in the list; an edit never moves an evaluator, and a move from the list " +
+      "(`evaluator.moved`) puts it between its new neighbours, the same on every device. A " +
+      "place is last write wins and changes no version. An evaluator from before places keeps " +
+      "the order it had, oldest first, until it is moved. It works signed out, numbering versions " +
       "itself, and syncs to the account when signed in (section 5); signing in uploads every " +
       "evaluator with its history. The last write wins, so two devices never conflict, and a " +
       "deleted evaluator is kept as a tombstone, which always wins. A removed evaluator, question " +
@@ -559,6 +657,7 @@ export const machine = setup({
         "list?": { actions: ({ context, event }) => replyList(context, event.payload.book, event.reply) },
         "evaluator.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "evaluator.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySwitch(context, event, enqueue)) },
+        "evaluator.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
         "starter.ticked": { actions: enqueueActions(({ context, event, enqueue }) => applyTick(context, event, enqueue)) },
         "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, true, enqueue)) },
         "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
@@ -586,6 +685,7 @@ export const machine = setup({
             for (const r of context.evaluators.values()) {
               if (context.outbox.has(r.id)) continue;
               const row = outboxRow(r, r.version);
+              if (isPosition(r.position)) row.position = r.position;
               context.outbox.set(r.id, row);
               enqueue(() => context.store.outboxPut(row).catch(() => {}));
             }
@@ -706,6 +806,10 @@ function applySync(context, output, enqueue) {
   const { acks = [], pulled = [], newCursor, authFailed } = output;
 
   for (const ack of acks) {
+    if (ack.missing) {
+      context.outbox.delete(ack.id);
+      continue;
+    }
     const row = context.outbox.get(ack.id);
     const held = context.evaluators.get(ack.id);
     // The server holds a tombstone (a delete always wins, 5): the evaluator is gone here too.
@@ -717,7 +821,8 @@ function applySync(context, output, enqueue) {
     }
     // A newer edit made during the sync leaves a newer row, which stays pending on the
     // acknowledged version; otherwise the row is drained.
-    const drained = row && JSON.stringify(content(record(row))) === JSON.stringify(content(record(ack)));
+    const placed = row && (row.position === undefined || row.position === ack.position);
+    const drained = row && placed && (!hasContent(row) || JSON.stringify(content(record(row))) === JSON.stringify(content(record(ack))));
     if (drained) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
@@ -735,7 +840,18 @@ function applySync(context, output, enqueue) {
 
   for (const server of pulled) {
     const current = context.evaluators.get(server.id);
-    if (current && server.version <= current.version) continue;
+    if (current && server.version <= current.version) {
+      // A move made elsewhere changes no version, so it is taken on its own, unless this
+      // device moved the evaluator since and has not sent it yet (the later write, 5).
+      const moving = context.outbox.get(server.id)?.position !== undefined;
+      if (visible(current) && !server.deleted && !moving && isPosition(server.position) && server.position !== current.position) {
+        const r = { ...current, position: server.position };
+        context.evaluators.set(r.id, r);
+        enqueue(() => context.store.put(r).catch(() => {}));
+        enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+      }
+      continue;
+    }
     // A local tombstone is never revived, and a local change not yet sent is the later
     // write, so it wins (last write wins) and is sent at the next drain.
     if (current && current.deleted) continue;

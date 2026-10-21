@@ -1,11 +1,12 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The Evaluate box: its marks at line ends and the panel under it after a line-by-line
-// run, the panel following a clicked line, a failed line, and that the box's keys stay in
-// it. Which questions are asked, how answers become words, which line the panel tells
-// about and Stop are decided by the machine and tested in Node; here Jev is answered by
-// request routing, so no real request is spent.
+// The Evaluate box: its marks at line ends and the panel under it as finished lines are
+// checked, the panel following a clicked line, a paste checked line by line with Stop, a
+// failed line, the answers kept across a reload, and that the box's keys stay in it.
+// Which questions are asked, how answers become words, which line the panel tells about,
+// the queue and Stop are decided by the machine and tested in Node; here Jev is answered
+// by request routing, so no real request is spent.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
@@ -70,9 +71,17 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await route.fulfill({ response, json: { ...picture, jev: { keySet: true } } });
       });
       const bodies = [];
+      // hold() keeps Jev's answers back until the function it returns is called.
+      let gate = Promise.resolve();
+      const hold = () => {
+        let open;
+        gate = new Promise((resolve) => (open = resolve));
+        return () => open();
+      };
       await context.route(/\/api\/llm\/decide$/, async (route) => {
         const body = route.request().postDataJSON();
         bodies.push(body);
+        await gate;
         const answers = body.questions.map((q) =>
           q.kind === "pick"
             ? { id: q.id, p: 0.81, choice: q.options[0].id, probabilities: [{ id: q.options[0].id, p: 0.81 }, { id: q.options[1].id, p: 0.19 }] }
@@ -82,41 +91,42 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       });
       await context.addInitScript(([v, kept]) => {
         localStorage.setItem("settings", v);
-        if (kept) localStorage.setItem("evaluator-list.drafts", kept);
+        // Only the first load: a reload keeps what the page saved since.
+        if (kept && localStorage.getItem("evaluator-list.drafts") == null) localStorage.setItem("evaluator-list.drafts", kept);
       }, [settings, stored && JSON.stringify(stored)]);
       const page = await context.newPage();
       const problems = watch(page);
       await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
       await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
-      return { context, page, problems, bodies };
+      return { context, page, problems, bodies, hold };
     };
 
     // Browser: rendering and layout.
-    test("each line gets its marks at its end and the panel tells one line; a click picks it; Clear removes them; keys stay in the box", async () => {
+    test("a finished line gets its marks at its end and the panel tells one line; a click picks it; keys stay in the box", async () => {
       const { context, page, problems, bodies } = await open("evaluator-run");
       try {
         const box = page.locator("evaluator-list .cm-content");
-        const run = page.locator("evaluator-list button.go");
         const by = () => inList(page, (root) => root.querySelector(".fold")?.textContent.replace(/\s+/g, " ").trim());
         await until(async () => (await by()) === "Evaluated by Recommendability and Kind of promise");
-        assert.equal((await run.textContent()).trim(), "Evaluate");
-        assert.ok(await run.isDisabled(), "no text, no run");
+        assert.equal(await inList(page, (root) => root.querySelectorAll(".actions button:not(.fold)").length), 0, "no button but the fold line");
 
         // With Vim keys on the box takes Vim's keys: i to insert, then letters are text and
-        // Enter a new paragraph; none of them reaches the list.
+        // Enter a new paragraph, which finishes the line; none of them reaches the list.
         await box.click();
         await page.keyboard.press("i");
         await page.keyboard.type("jkG");
         await page.keyboard.press("Enter");
+        await until(async () => bodies.length === 1);
         await page.keyboard.type("A title");
-        await page.keyboard.press("Escape");
         assert.equal(await textOf(page), "jkG\n\nA title");
         assert.ok(await inList(page, (root) => root.activeElement?.classList.contains("cm-content")), "the focus stays in the box");
         assert.equal(await inList(page, (root) => root.querySelector(".row.current")), null, "no row was opened");
-        assert.equal((await run.textContent()).trim(), "Evaluate 2 lines", "the blank line is not counted");
-        assert.equal(await panel(page), null, "nothing answered, no panel");
+        await until(async () => (await panel(page))?.[0] === "Line 1 of 2");
+        assert.equal(bodies.length, 1, "the line being typed is not asked");
 
-        await run.click();
+        // Leaving the box finishes the last line.
+        await page.keyboard.press("Escape");
+        await page.locator("evaluator-list button.fold").focus();
         await until(async () => (await panel(page))?.[0] === "Line 2 of 2");
         // Green where the expected answer was given, red where not, faded where Jev is not sure.
         const lineMarks = ["right|Says what the reader gets? Yes", "|Fits a need? Yes", "unsure|Easy to pass on? Probably no", "wrong|Resolve a fear"];
@@ -131,16 +141,12 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         ];
         assert.deepEqual(await panel(page), ["Line 2 of 2", "2 evaluated · 0 as expected", "“A title”", ...answers]);
         assert.deepEqual(bodies.map((b) => [b.state.text, b.questions.length]), [["jkG", 4], ["A title", 4]], "one request per line");
-        assert.equal((await run.textContent()).trim(), "Evaluate 2 lines");
 
-        // A click on another line puts it in the panel.
+        // A click on another line puts it in the panel, and asks nothing again.
         await page.locator("evaluator-list .cm-line", { hasText: "jkG" }).click();
         await until(async () => (await panel(page))?.[0] === "Line 1 of 2");
         assert.equal((await panel(page))[2], "“jkG”");
-
-        await page.locator("evaluator-list button.clear").click();
-        await until(async () => (await inList(page, (root) => root.querySelectorAll(".mark, .focus, .clear").length)) === 0);
-        assert.equal(await textOf(page), "jkG\n\nA title", "Clear keeps the text");
+        assert.equal(bodies.length, 2);
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();
@@ -148,31 +154,40 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test("a failed line keeps the marks before it, asks no more and says why in the panel", async () => {
-      const { context, page, problems, bodies } = await open("evaluator-fail", (text) => (text === "Two" ? { error: "rate-limited" } : null));
+    test("a paste checks every line in turn, with Stop while more than one waits; a failed line says why and stops the rest", async () => {
+      const { context, page, problems, bodies, hold } = await open("evaluator-fail", (text) => (text === "Four" ? { error: "rate-limited" } : null));
       try {
-        // As a paste would: one edit puts the three lines in the box.
         await page.locator("evaluator-list .cm-content").waitFor();
-        await page.locator("evaluator-list .cm-content").evaluate((el) => el.cmView.view.dispatch({ changes: { from: 0, insert: "One\nTwo\nThree" }, userEvent: "input.paste" }));
-        await page.locator("evaluator-list button.go", { hasText: "Evaluate 3 lines" }).click();
-        await until(async () => (await panel(page))?.[0] === "Line 2 of 3");
-        assert.deepEqual(await panel(page), ["Line 2 of 3", "1 evaluated · 0 as expected", "“Two”", "Jev is busy. Try again in a moment."]);
-        assert.deepEqual((await marks(page)).map(([t, m]) => [t, m.length]), [["One", 4], ["Two", 0], ["Three", 0]]);
-        assert.deepEqual(bodies.map((b) => b.state.text), ["One", "Two"]);
+        const release = hold();
+        await page.locator("evaluator-list .cm-content").evaluate((el) => el.cmView.view.dispatch({ changes: { from: 0, insert: "One\nTwo\nThree\nFour\nFive" }, userEvent: "input.paste" }));
+        await until(async () => (await marks(page))[0]?.[1][0] === "pending|Asking Jev");
+        assert.equal(await inList(page, (root) => root.querySelector("button.stop")?.textContent.trim()), "Stop");
+        release();
+        await until(async () => (await panel(page))?.[0] === "Line 4 of 5");
+        assert.deepEqual(await panel(page), ["Line 4 of 5", "3 evaluated · 0 as expected", "“Four”", "Jev is busy. Try again in a moment."]);
+        assert.deepEqual((await marks(page)).map(([t, m]) => [t, m.length]), [["One", 4], ["Two", 4], ["Three", 4], ["Four", 0], ["Five", 0]]);
+        assert.deepEqual(bodies.map((b) => b.state.text), ["One", "Two", "Three", "Four"]);
+        assert.equal(await inList(page, (root) => root.querySelector("button.stop")), null, "nothing waits, no Stop");
         assert.deepEqual(problems, [], problems.join("; "));
-
       } finally {
         await context.close();
       }
     });
 
     // Browser: a reload against real storage.
-    test("the text is kept per book in this browser: shown again in the box, and an edit kept", async () => {
-      const { context, page, problems } = await open("evaluator-kept", undefined, { [JOURNAL]: "One\nTwo" });
+    test("the text and Jev's answers are kept in this browser: a reload shows the marks again without asking", async () => {
+      const { context, page, problems, bodies } = await open("evaluator-kept", undefined, { [JOURNAL]: "One\nTwo" });
       try {
         await until(async () => (await page.locator("evaluator-list .cm-content").count()) === 1 && (await textOf(page)) === "One\nTwo");
+        assert.equal(bodies.length, 0, "nothing is asked when the page opens");
         await page.locator("evaluator-list .cm-content").evaluate((el) => el.cmView.view.dispatch({ changes: { from: 7, insert: "\nThree" }, userEvent: "input.paste" }));
         assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem("evaluator-list.drafts"))), { [JOURNAL]: "One\nTwo\nThree" });
+        await until(async () => (await marks(page)).find(([t]) => t === "Three")?.[1].length === 4);
+        assert.deepEqual(bodies.map((b) => b.state.text), ["Two", "Three"], "the lines the paste touched");
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await marks(page)).find(([t]) => t === "Three")?.[1].length === 4);
+        assert.deepEqual((await marks(page)).map(([t, m]) => [t, m.length]), [["One", 0], ["Two", 4], ["Three", 4]]);
+        assert.equal(bodies.length, 2, "the reload asked nothing");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

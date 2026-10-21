@@ -484,10 +484,32 @@ class EvaluatorEditor extends LitElement {
   // last used, else the evaluator's name. The shadow root does not delegate focus,
   // because Safari does not focus a pressed button, so a delegating root would hand a
   // press on any button to the name, scroll it into view and lose the click.
+  // An evaluator just picked in the list (Enter, a click, or cc with Vim keys) starts in
+  // its name, so it can be renamed at once.
+  #picksSeen = 0;
   focus(options) {
+    const picks = this.#actor.snapshot?.context.picks ?? 0;
+    if (picks !== this.#picksSeen) {
+      this.#picksSeen = picks;
+      this.#last = null;
+    }
     const target = this.#last?.isConnected && this.renderRoot.contains(this.#last) ? this.#last : this.renderRoot.querySelector("input.title");
+    this.#owed = target ? null : { options, at: Date.now() };
     if (target) target.focus(options);
     else super.focus(options);
+  }
+
+  // The focus asked for before the evaluator was drawn (a pick lands before the editor
+  // has drawn it), given to its name once it is, if that is within a moment, so a focus
+  // asked for long ago never takes the keyboard from where the user is now.
+  #owed = null;
+  #payFocus() {
+    if (!this.#owed) return;
+    const title = this.renderRoot.querySelector("input.title");
+    if (!title) return;
+    const { options, at } = this.#owed;
+    this.#owed = null;
+    if (Date.now() - at < 1000) title.focus(options);
   }
 
   // Safari does not focus a pressed button or choice, so the press would drop the
@@ -634,6 +656,7 @@ class EvaluatorEditor extends LitElement {
   // question removed above it): an editor whose region no longer carries its key is
   // dropped and made again, and every editor follows its draft text, label and Vim.
   updated() {
+    this.#payFocus();
     const vimOn = this.#actor.snapshot?.context.vimKeys === true;
     const regions = new Map([...this.renderRoot.querySelectorAll(".box[data-key]")].map((r) => [r.dataset.key, r]));
     for (const [key, box] of this.#boxes) {

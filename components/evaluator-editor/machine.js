@@ -378,7 +378,9 @@ export const machine = setup({
       "and no mean and each option's description are text boxes that grow with what is written " +
       "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
       "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
-      "back to the field last used, never jumping to the name. Whichever evaluator it opens, " +
+      "back to the field last used, never jumping to the name, except that an evaluator just " +
+      "picked in the list (with Enter, a click, or cc with Vim keys on) starts with the keyboard " +
+      "in its name. Whichever evaluator it opens, " +
       "picked or opened by itself, the list beside it marks. Signed out it shows no evaluator, " +
       "only \"Sign in to run evaluators.\", as the list beside it does, and signing in shows " +
       "it again without a reload; on a try page a visitor not yet signed in edits the starters.",
@@ -391,6 +393,9 @@ export const machine = setup({
     ask: input.ask,
     mint: input.mint,
     throttleMs: input.throttleMs ?? 200,
+    // How many times the user picked an evaluator in the list (evaluator.selected), so the
+    // view knows a pick from a return of the keyboard: a pick starts in the name.
+    picks: 0,
     following: Boolean(input.following),
     // The book the open evaluator was picked in, and every book's evaluators.
     book: null,
@@ -526,7 +531,7 @@ export const machine = setup({
           target: "fetching",
           reenter: true,
           actions: [
-            assign(({ event }) => ({ want: { id: event.id, book: event.book } })),
+            assign(({ context, event }) => ({ want: { id: event.id, book: event.book }, picks: context.picks + 1 })),
             ({ context, event }) => context.remember({ id: event.id, book: event.book }),
           ],
         },
@@ -628,7 +633,7 @@ export const machine = setup({
             reenter: true,
             actions: [
               save,
-              assign(({ context, event }) => ({ draft: opened(context, event.id, event.book) })),
+              assign(({ context, event }) => ({ draft: opened(context, event.id, event.book), picks: context.picks + 1 })),
               announce,
               ({ context, event }) => context.remember({ id: event.id, book: event.book }),
             ],
@@ -638,7 +643,7 @@ export const machine = setup({
             target: "fetching",
             actions: [
               save,
-              assign(({ event }) => ({ want: { id: event.id, book: event.book }, draft: null })),
+              assign(({ context, event }) => ({ want: { id: event.id, book: event.book }, draft: null, picks: context.picks + 1 })),
               ({ context, event }) => context.remember({ id: event.id, book: event.book }),
             ],
           },
