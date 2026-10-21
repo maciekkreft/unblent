@@ -237,6 +237,26 @@ for (const engine of ENGINES) {
     }
   });
 
+  // Browser: focus and keys.
+  test(`o in the chat list puts the cursor in the box, in insert mode under Vim, in ${engine.name}`, async () => {
+    const { browser, page, problems } = await open(engine, "olist", { vim: true });
+    try {
+      await until(async () => await vimOn(page), 4000);
+      await page.locator("conversation-list li.row", { hasText: "New chat" }).waitFor();
+      await page.evaluate(() => document.querySelector("conversation-list").shadowRoot.querySelector('[data-id][tabindex="0"]').focus());
+      await page.keyboard.press("o");
+      await until(
+        async () => await page.evaluate(() => document.querySelector("chat-input").shadowRoot.activeElement?.classList.contains("cm-content")),
+        4000,
+      );
+      await page.keyboard.type("hi");
+      assert.equal(await draftText(page), "hi", "the first keys typed are text");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await browser.close();
+    }
+  });
+
   // Browser: rendering and layout.
   test(`the box keeps its draft across sign-out and sign-in in ${engine.name}`, async () => {
     const { browser, page, problems } = await open(engine, "signout");

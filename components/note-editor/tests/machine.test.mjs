@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, isStaged, showing } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, isStaged, showing, startsTyping } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -226,6 +226,23 @@ test("load asks notes: read and lands per the reply", async () => {
   const failed = await withReply({ error: "no-answerer" });
   await tick();
   assert.equal(failed.getSnapshot().value, "failed");
+});
+
+test("only a picked note not yet written starts typing: not an existing note, the empty page, or the stage", async () => {
+  const picked = async (reply, options = {}) => {
+    const { actor } = await started({ follows: true, ask: answering({ list: { notes: [] }, read: reply }), ...options });
+    actor.send({ type: "note.selected", id: ID });
+    await settle();
+    return actor.getSnapshot();
+  };
+  assert.equal(startsTyping(await picked({ error: "not-found" })), true);
+  assert.equal(startsTyping(await picked({ note: NOTE })), false);
+  assert.equal(startsTyping((await started()).actor.getSnapshot()), false);
+  const { actor } = await started({ staged: true, ask: answering({ list: { notes: [] }, read: { error: "not-found" } }) });
+  actor.send({ type: "load", id: ID });
+  await settle();
+  assert.equal(actor.getSnapshot().value, "blank");
+  assert.equal(startsTyping(actor.getSnapshot()), false);
 });
 
 test("focus calls the focus callback", async () => {

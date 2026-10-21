@@ -7,7 +7,7 @@ import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn, isStaged, showing } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn, isStaged, showing, startsTyping } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -642,6 +642,9 @@ class NoteEditor extends LitElement {
         blur: () => {
           this.#actor.send({ type: "_blurred" });
         },
+        focus: () => {
+          this.#startTyping();
+        },
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
         level: (e, view) => {
           view.dispatch(toLevel(view.state, e.detail));
@@ -740,6 +743,13 @@ class NoteEditor extends LitElement {
     const { body, vimKeys, removed } = snapshot.context;
     setVim(this.#view, vimKeys);
     if (this.#view.state.field(linkField).removed !== removed) this.#view.dispatch({ effects: setRemoved.of(removed) });
+    // The new note can arrive after the keyboard did (the list focuses the editor while
+    // its read is in flight): start typing once per note picked.
+    const typingFor = startsTyping(snapshot) ? snapshot.context.id : null;
+    if (typingFor !== this.#typingFor) {
+      this.#typingFor = typingFor;
+      this.#startTyping();
+    }
     if (body === this.#shown) return; // never the user's own keystroke (set #shown first)
     const { doc, levels } = parseBody(body);
     this.#shown = body;
@@ -752,6 +762,19 @@ class NoteEditor extends LitElement {
 
   focusEditor() {
     this.#view?.focus();
+  }
+
+  // The note picked before it is written, for which updated() last started typing.
+  #typingFor = null;
+
+  // A new note picked from the list (startsTyping, 12): the keyboard here starts in Vim's
+  // insert mode, so the first letter is text, not a Vim command.
+  #startTyping() {
+    const view = this.#view;
+    const snapshot = this.#actor.snapshot;
+    if (!view?.hasFocus || snapshot?.context.vimKeys !== true || !startsTyping(snapshot)) return;
+    const cm = getCM(view);
+    if (cm?.state?.vim && !cm.state.vim.insertMode) Vim.handleKey(cm, "i", "user");
   }
 
   disconnectedCallback() {

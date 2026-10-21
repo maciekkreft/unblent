@@ -570,6 +570,43 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("with Vim keys a new note picked in the list starts in insert mode, an existing one in normal mode", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
+      const normal = () => page.evaluate(() => Boolean(document.querySelector("note-editor").shadowRoot.querySelector(".cm-scroller.cm-vimMode")));
+      // The empty page the editor starts on is nobody's pick: the keyboard arrives in normal mode.
+      await page.locator("note-editor .cm-content").click();
+      assert.equal(await normal(), true, "the starting empty page is in normal mode");
+      await page.keyboard.press("i");
+      await page.keyboard.type("First");
+      await page.keyboard.press("Escape");
+      await page.locator("note-list li.row", { hasText: "New note" }).click();
+      await page.locator("note-list li.row", { hasText: "First" }).waitFor();
+      await until(async () => (await docText(page)) === "");
+      await page.locator("note-editor .cm-content").click();
+      await until(async () => !(await normal()));
+      await page.keyboard.type("hi");
+      assert.equal(await docText(page), "hi", "the first letters typed are text");
+      await page.keyboard.press("Escape");
+      // Saved and listed first, so the list does not redraw under the click.
+      await page.locator("note-list li.row .name", { hasText: "hi" }).waitFor();
+      // On its name: the row's middle may be its Delete button.
+      await page.locator("note-list li.row .name", { hasText: "First" }).click();
+      await until(async () => (await docText(page)) === "First");
+      await page.locator("note-editor .cm-content").click();
+      assert.equal(await normal(), true, "an existing note opens in normal mode");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys o and O open a paragraph a gap apart, and on an item the next item", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

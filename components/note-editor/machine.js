@@ -197,6 +197,12 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // "show" otherwise. A try page (8) shows its visitor the editor.
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
+// A note picked before it is written (the list's New note row, or its o and O): with Vim
+// keys on, the keyboard arriving here starts in insert mode, so the user types at once.
+// Not the empty page waiting for a subject, which nobody picked, and not the stage's
+// editor, which shows only notes that exist.
+export const startsTyping = (snapshot) => snapshot.matches("blank") && !snapshot.context.staged;
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): every note, and — only while following the stage —
@@ -300,7 +306,10 @@ export const machine = setup({
       "Edits one note as a single page whose lines have four levels, Title, Heading, Subheading " +
       "and Body, set from four buttons at the bottom that mark the level of the line under the " +
       "cursor, flash when a level changes, and show their Vim keys while Vim keys is on. It " +
-      "saves a short time into typing and when the editor loses focus. With `subject` it opens " +
+      "saves a short time into typing and when the editor loses focus. With Vim keys on, a new " +
+      "note picked in the list (its New note row, or o or O there) starts in insert mode when " +
+      "the keyboard arrives, so the user types at once; an existing note, the empty page " +
+      "waiting for a subject and a note tab on the stage start in normal mode. With `subject` it opens " +
       "the most recently edited note about the subject whenever the subject changes, or an " +
       "empty page that a note about the subject arriving later fills; a new note is linked to " +
       "the subject at its first save, the About line shows that link, and a keystroke made " +

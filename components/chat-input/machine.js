@@ -211,7 +211,8 @@ export const machine = setup({
       "again. It writes the instructions a new chat starts with once, when the chat is created, " +
       "naming the open item on one line; they never change afterwards, so the provider's cache " +
       "holds and the chat is an honest record of what the model was told. When the user picks a " +
-      "chat with no messages yet, such as the New chat row, the box takes focus, in Vim's " +
+      "chat with no messages yet, such as the New chat row or a new chat made with o or O in " +
+      "the chat list, the box takes focus, in Vim's " +
       "insert mode when Vim keys is on; it follows the user's pick and not which chat is open, " +
       "so a change of subject or a reload never moves the cursor. Unsent text is kept in this " +
       "browser for each chat, and for a new chat about each open item, so it is still there " +
