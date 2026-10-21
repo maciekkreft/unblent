@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { EditorState, EditorSelection } from "@codemirror/state";
+import { EditorState, EditorSelection, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
-import { undo } from "@codemirror/commands";
+import { undo, redo, undoDepth } from "@codemirror/commands";
 import { Vim } from "@replit/codemirror-vim";
 import {
   baseExtensions,
@@ -22,6 +22,7 @@ import {
   markerStop,
   openAt,
   paragraphsOpener,
+  insertRun,
   sourceLinksIn,
   sourceLinks,
   missingLinks,
@@ -371,6 +372,92 @@ test("o and O open a paragraph, an item on an item, but never on a named line or
   assert.equal(off.state.doc.toString(), "- a\n\n");
   // An editor without paragraphs() has no opener, so Vim's own o runs there.
   assert.deepEqual(target("a", 0, baseExtensions()).state.facet(paragraphsOpener), []);
+});
+
+// A stand-in for Vim on the stand-in view: getCM reads `cm` off the view, and the kit
+// reads whether Vim is inserting from it.
+const inserting = (t, on) => {
+  t.cm = { state: { vim: { insertMode: on } } };
+  t.state.field(insertRun).view = t;
+  t.state.field(insertRun).started = false;
+};
+// A typed character, a pause of two seconds after the one before.
+let clock = Date.now();
+const type = (t, text) => {
+  const at = t.state.selection.main.head;
+  clock += 2000;
+  t.dispatch(
+    t.state.update({
+      changes: { from: at, insert: text },
+      selection: EditorSelection.cursor(at + text.length),
+      userEvent: "input.type",
+      annotations: Transaction.time.of(clock),
+    }),
+  );
+};
+// Vim's o as the kit's action runs it: the opener's paragraph, then the session begins
+// with that paragraph as its first change.
+const vimOpen = (t, below) => {
+  inserting(t, false);
+  const edit = t.state.facet(paragraphsOpener)[0](t.state, below);
+  t.dispatch(t.state.update({ changes: { from: edit.from, to: edit.to, insert: edit.insert }, selection: EditorSelection.cursor(edit.cursor), userEvent: "input" }));
+  inserting(t, true);
+  t.state.field(insertRun).started = true;
+};
+
+test("with Vim inserting, o, Enter and typing with pauses are one undo step, redone in one", () => {
+  const t = target("Head", 4, [...baseExtensions(), paragraphs()]);
+  vimOpen(t, true);
+  type(t, "a");
+  assert.ok(press(t, "Enter"));
+  type(t, "b");
+  assert.equal(t.state.doc.toString(), "Head\n\na\n\nb");
+  assert.equal(undoDepth(t.state), 1);
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "Head");
+  assert.ok(redo(t));
+  assert.equal(t.state.doc.toString(), "Head\n\na\n\nb");
+
+  // O on an item, the same.
+  const item = target("- a", 3, [...baseExtensions(), paragraphs()]);
+  vimOpen(item, false);
+  type(item, "b");
+  assert.equal(item.state.doc.toString(), "- b\n\n- a");
+  assert.ok(undo(item));
+  assert.equal(item.state.doc.toString(), "- a");
+
+  // i, typing, Enter, typing: the whole session goes at once, and nothing before it.
+  const i = target("One", 3, [...baseExtensions(), paragraphs()]);
+  inserting(i, true);
+  type(i, "x");
+  assert.ok(press(i, "Enter"));
+  type(i, "y");
+  inserting(i, false);
+  move(i, 2);
+  inserting(i, true);
+  type(i, "z");
+  assert.equal(i.state.doc.toString(), "Onzex\n\ny");
+  assert.ok(undo(i));
+  assert.equal(i.state.doc.toString(), "Onex\n\ny");
+  assert.ok(undo(i));
+  assert.equal(i.state.doc.toString(), "One");
+});
+
+test("without Vim inserting, undo groups as CodeMirror does; a change the editor makes ends a session", () => {
+  const t = target("Head", 4, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(t, "Enter"));
+  type(t, "a");
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "Head\n\n");
+
+  const s = target("", 0, [...baseExtensions(), paragraphs()]);
+  inserting(s, true);
+  type(s, "sent");
+  s.dispatch(s.state.update({ changes: { from: 0, to: s.state.doc.length, insert: "" } }));
+  type(s, "n");
+  type(s, "w");
+  assert.ok(undo(s));
+  assert.equal(s.state.doc.toString(), "");
 });
 
 test("a named line or lists off keep the paragraph keys", () => {

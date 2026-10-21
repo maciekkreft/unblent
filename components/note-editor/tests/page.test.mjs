@@ -682,6 +682,40 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
+    // Browser: focus and keys.
+    test("with Vim keys one u takes back o and what was typed after it, and Ctrl+r brings it back", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.press("i");
+      await page.keyboard.type("Plan");
+      await page.keyboard.press("Escape");
+      await page.keyboard.type("\\2");
+      await until(async () => (await lines(page))[0]?.className.includes("cm-level-heading"));
+      const shown = async () => (await lines(page)).map((l) => [l.text, l.className.includes("cm-level-heading")]);
+      // Pauses longer than CodeMirror's own grouping, so only the insert session joins them.
+      await page.keyboard.press("o");
+      await page.keyboard.type("Ab", { delay: 600 });
+      await page.keyboard.press("Escape");
+      const opened = [["Plan", true], ["", false], ["Ab", false]];
+      assert.deepEqual(await shown(), opened);
+      await page.keyboard.press("u");
+      await until(async () => (await lines(page)).length === 1);
+      assert.deepEqual(await shown(), [["Plan", true]]);
+      await page.keyboard.press("Control+r");
+      await until(async () => (await lines(page)).length === 3);
+      assert.deepEqual(await shown(), opened);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
     // Browser: rendering and layout.
     test("a source link is drawn as one tag, the link icon and its label, its text kept as stored", async () => {
       const { context, page, problems, link } = await withLink(browser, false, true);

@@ -1,5 +1,5 @@
 import { EditorState, EditorSelection, RangeSetBuilder, StateField, StateEffect, Transaction, Prec, Compartment, Facet } from "@codemirror/state";
-import { EditorView, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
+import { EditorView, ViewPlugin, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
 import { history, historyKeymap, standardKeymap, isolateHistory } from "@codemirror/commands";
 import { vim, Vim, getCM } from "@replit/codemirror-vim";
 
@@ -294,6 +294,9 @@ Vim.defineAction("openParagraph", function (cm, args, vimState) {
     userEvent: "input",
   });
   this.enterInsertMode(cm, { repeat: args.repeat }, vimState);
+  // The new paragraph is the first change of the insert run it opens.
+  const run = view.state.field(insertRun, false);
+  if (run) run.started = true;
 });
 for (const [key, after] of [["o", true], ["O", false]]) {
   Vim.mapCommand(key, "action", "openParagraph", { after }, { isEdit: true, interlaceInsertRepeat: true, context: "normal" });
@@ -336,6 +339,61 @@ const gapTheme = EditorView.theme({
 });
 
 const never = () => false;
+
+// With Vim on, an insert run (i, o, O … Escape) is one change, as in Vim, so one u
+// takes back the new paragraph and everything typed into it, Enters and joins included.
+// CodeMirror's history joins two changes only when they come quickly and side by side,
+// except a change marked "input.type.compose", which always joins the one before; the
+// Vim plugin marks its own edits so for the same reason. So every edit the user makes
+// in a run after its first is marked so. A paste stays a change of its own, since an
+// editor may tell it by its mark. The field holds the editor's view, which the Vim state
+// hangs on, and whether the run has had its first change; it is mutable because
+// Vim's mode changes come from outside any transaction.
+export const insertRun = StateField.define({
+  create: () => ({ view: null, started: false }),
+  update: (value) => value,
+});
+
+const runWatch = ViewPlugin.define((view) => {
+  let watched = null;
+  const attach = (v) => {
+    v.state.field(insertRun).view = v;
+    const cm = getCM(v);
+    if (!cm || cm === watched) return;
+    watched = cm;
+    cm.on("vim-mode-change", () => {
+      v.state.field(insertRun).started = false;
+    });
+  };
+  attach(view);
+  return { update: (update) => attach(update.view) };
+});
+
+const runJoin = EditorState.transactionFilter.of((tr) => {
+  if (!tr.docChanged || tr.annotation(Transaction.addToHistory) === false) return tr;
+  const run = tr.startState.field(insertRun, false);
+  if (!run?.view || getCM(run.view)?.state.vim?.insertMode !== true) return tr;
+  // A change the editor made itself (a load, a cleared box after sending) ends the
+  // run, so typing after it is never undone together with it.
+  if (!tr.isUserEvent("input") && !tr.isUserEvent("delete")) {
+    run.started = false;
+    return tr;
+  }
+  if (!run.started || tr.isUserEvent("input.paste") || tr.isUserEvent("input.drop")) {
+    run.started = true;
+    return tr;
+  }
+  if (tr.isUserEvent("input.type.compose")) return tr;
+  return {
+    changes: tr.changes,
+    selection: tr.selection,
+    effects: tr.effects,
+    scrollIntoView: tr.scrollIntoView,
+    annotations: tr.annotations.filter((a) => a.type !== Transaction.userEvent && a.type !== Transaction.time),
+    userEvent: "input.type.compose",
+  };
+});
+const insertRuns = [insertRun, runWatch, runJoin];
 
 // Vim moves the cursor with no word of which motion did it, and its b lands on a marker
 // just as its ^, 0 and I do, so the key itself is watched: the one being handled, and
@@ -387,7 +445,8 @@ const itemTheme = EditorView.theme({
 // `enter: false` leaves Enter to the editor (a box that sends on it); Shift+Enter, the
 // gaps, the stepping and the joins stay. `keepBlank(state, line)` names a blank line
 // that must stay a place to type: never drawn as a gap, never stepped over, never
-// removed by a join. With Vim on, o and O open a paragraph with the same gap as Enter.
+// removed by a join. With Vim on, o and O open a paragraph with the same gap as Enter,
+// and an insert run is one undo step (insertRun).
 //
 // Lines that begin with "- " or "* " are list items (see Lists above). `notList(state,
 // line)` names a line that is never one (a heading, a fixed quote); `lists: false`
@@ -493,7 +552,7 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     return openAt(text, head, below, itemLineAt(state, head) ? itemAt(text, head) : null);
   });
 
-  if (!lists) return [gaps, overGaps, gapTheme, opener, keymap.of(keys)];
+  if (!lists) return [gaps, overGaps, gapTheme, opener, insertRuns, keymap.of(keys)];
 
   const buildItems = (state) => {
     const found = [];
@@ -538,7 +597,7 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     { key: "Shift-Tab", run: onItem(outdentAt, "delete.dedent") },
   ];
 
-  return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, keymap.of([...listKeys, ...keys])];
+  return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, insertRuns, keymap.of([...listKeys, ...keys])];
 }
 
 // --- Source links -------------------------------------------------------------------
