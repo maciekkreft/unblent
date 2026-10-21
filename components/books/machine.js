@@ -429,6 +429,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
+  else if (message.type === "removal.settled") applyDiscard(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -528,7 +529,8 @@ export const machine = setup({
       "presents the journal as the first book, signed in or out: its chapters are the days, " +
       "oldest first, with today's empty page last while no day has been started today, and " +
       "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
-      "opened but never renamed or deleted here. On a try page the Journal is always the open " +
+      "opened but never renamed or deleted here. A book whose delete the shelf handed to the " +
+      "corner notice is deleted when that notice's Undo runs out. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
       "book's tab to the front on the stage. Signing out keeps the library, the reading places " +
@@ -627,6 +629,7 @@ export const machine = setup({
         "book.switched": { actions: queue },
         "passage.selected": { actions: queue },
         "book.discarded": { actions: queue },
+        "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
       },
     },
     // The store is loaded; confirm who is signed in before flushing, so an early pick
@@ -671,6 +674,7 @@ export const machine = setup({
         "book.switched": { actions: queue },
         "passage.selected": { actions: queue },
         "book.discarded": { actions: queue },
+        "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
       },
     },
     ready: {
@@ -696,6 +700,12 @@ export const machine = setup({
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
         "book.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
+        // A delete the shelf handed to the corner notice when the keyboard left it: the
+        // notice's undo window ran out, so the book goes, as on book.discarded.
+        "removal.settled": {
+          guard: ({ event }) => event.kind === "book",
+          actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)),
+        },
         // The fact's own news of who is signed in (4.3, fourth rule). A book is only
         // ever created signed in, so there is nothing anonymous to adopt: signing in
         // resets the pull cursor and pulls, after emptying another account's copy;

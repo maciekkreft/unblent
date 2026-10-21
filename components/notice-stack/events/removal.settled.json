@@ -15,7 +15,8 @@
         "guest",
         "trial",
         "note",
-        "conversation"
+        "conversation",
+        "book"
       ]
     },
     "id": {

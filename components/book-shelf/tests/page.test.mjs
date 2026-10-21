@@ -384,6 +384,30 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("the keyboard leaving the shelf during a delete hands it to the corner notice, whose Undo brings the book back", async () => {
+      const cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+      const { page, problems, debug } = await open({ cookie, vimKeys: true });
+      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
+      await focusShelf(page);
+      await until(async () => (await focusedTile(page)) === "Sample Book");
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(async () =>
+        page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.discarding"))),
+      );
+      const box = await page.locator("book-reader").boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await until(async () => (await noticeTexts(page)).includes("Book “Sample Book” deleted."));
+      assert.ok(!(await tiles(page)).some((t) => t.title === "Sample Book"), "the tile waits off the shelf");
+      await page.locator("notice-stack .removal .undo").click();
+      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
+      assert.ok(!debug.some((l) => DISCARDED.test(l)), "nothing was deleted");
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing on the shelf", async () => {
       const { page, problems } = await twoBooks(false);
       const [first] = (await tiles(page)).map((t) => t.title);

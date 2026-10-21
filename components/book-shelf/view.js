@@ -2,8 +2,9 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, showing } from "./machine.js";
+import { machine, showing, shown } from "./machine.js";
 import picked from "./events/book.picked.json" with { type: "json" };
+import removalStarted from "./events/removal.started.json" with { type: "json" };
 import selected from "./events/book.selected.json" with { type: "json" };
 import discarded from "./events/book.discarded.json" with { type: "json" };
 import renamed from "./events/book.renamed.json" with { type: "json" };
@@ -36,7 +37,7 @@ class ActorController {
         // A try page (8) shows the shelf signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
-      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed },
+      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed, "removal.started": removalStarted },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -365,7 +366,7 @@ class BookShelf extends LitElement {
   #editingId = null;
 
   #tiles(snapshot) {
-    return snapshot.context.books;
+    return shown(snapshot.context);
   }
 
   #focusTile(tiles, selected) {
@@ -576,10 +577,48 @@ class BookShelf extends LitElement {
 
   #dragover = false;
 
+  // The keyboard leaving the shelf while a tile counts down hands the delete to the
+  // corner notice (12), as the note and chat lists do. Checked once the focus has
+  // landed; a window losing focus (another app) is not leaving the shelf.
+  constructor() {
+    super();
+    this.addEventListener("focusout", () =>
+      setTimeout(() => {
+        if (!document.hasFocus() || this.matches(":focus-within")) return;
+        if (this.#actor.snapshot?.context.discarding.size) this.#actor.send({ type: "_left" });
+      }),
+    );
+  }
+
+  // The shelf can also go out of sight with no focus to lose: on the phone another panel
+  // takes its place after a delete by mouse. While a tile counts down, the shelf checks
+  // a few times a second whether it is still drawn, and hands the delete over if not.
+  // The containers hide it by display or by visibility, and neither fires an event here.
+  #sightTimer = null;
+  #watchSight() {
+    const counting = this.#actor.snapshot?.context.discarding.size > 0;
+    if (counting && !this.#sightTimer) {
+      this.#sightTimer = setInterval(() => {
+        const seen = this.checkVisibility ? this.checkVisibility({ visibilityProperty: true }) : this.getClientRects().length > 0;
+        if (!seen) this.#actor.send({ type: "_left" });
+      }, 200);
+    } else if (!counting && this.#sightTimer) {
+      clearInterval(this.#sightTimer);
+      this.#sightTimer = null;
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this.#sightTimer);
+    this.#sightTimer = null;
+  }
+
   // Rows are drawn by position (lit-core has no keyed repeat), so a reorder (an edited
   // note moving to the top) would leave the focus on whatever now fills the focused
   // element: the keyboard follows the roving row, which is keyed by id, instead.
   updated() {
+    this.#watchSight();
     const active = this.renderRoot.activeElement;
     if (!active?.matches('[data-id][tabindex]')) return;
     const roving = this.renderRoot.querySelector('[data-id][tabindex="0"]');

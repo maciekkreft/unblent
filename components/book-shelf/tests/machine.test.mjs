@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, showing } from "../machine.js";
+import { machine, showing, shown } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
 // blur into a _rename gesture carrying the field's text, and the machine announces it
@@ -162,4 +162,44 @@ test("signing out hides the tiles without dropping them, and takes back a delete
   await flush();
   assert.equal(showing(ctx()), "show");
   assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID]);
+});
+
+// --- The corner notice (12, Vim keys: a delete never happens out of sight) --------------
+
+test("leaving the shelf hands a counting-down tile to the corner notice, hidden until it ends", async () => {
+  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
+  const started = [];
+  actor.on("removal.started", (e) => started.push({ kind: e.kind, id: e.id, name: e.name }));
+  actor.send({ type: "_left" });
+  assert.deepEqual(started, [], "nothing counting down, nothing handed");
+  actor.send({ type: "_discard", id: ID });
+  actor.send({ type: "_left" });
+  assert.deepEqual(started, [{ kind: "book", id: ID, name: "Dune" }]);
+  assert.equal(ctx().discarding.size, 0);
+  assert.deepEqual(shown(ctx()).map((b) => b.id), [JRN], "the tile is off the shelf");
+  actor.send({ type: "_elapsed", id: ID });
+  assert.deepEqual(discarded, [], "the notice settles it now, not the tile's timer");
+  actor.send({ type: "_discard", id: ID });
+  assert.equal(ctx().discarding.size, 0, "a handed tile cannot be deleted again");
+  actor.send({ type: "removal.undone", kind: "note", id: ID });
+  assert.equal(shown(ctx()).length, 1, "another kind's undo is not ours");
+  actor.send({ type: "removal.undone", kind: "book", id: ID });
+  assert.deepEqual(shown(ctx()).map((b) => b.id), [JRN, ID], "Undo in the notice brings it back");
+});
+
+test("opening a book while another counts down hands that delete to the corner notice", async () => {
+  const { actor, ctx } = await shelf(SIGNED_IN);
+  const OTHER = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+  actor.send({ ...changed(OTHER, "Emma"), addedAt: 0 });
+  const started = [];
+  const selected = [];
+  actor.on("removal.started", (e) => started.push(e.id));
+  actor.on("book.selected", (e) => selected.push(e.id));
+  actor.send({ type: "_discard", id: ID });
+  actor.send({ type: "_select", id: OTHER });
+  assert.deepEqual(started, [ID]);
+  assert.deepEqual(selected, [OTHER]);
+  assert.ok(ctx().handed.has(ID));
+  actor.send({ type: "book.deleted", id: ID });
+  assert.equal(ctx().handed.size, 0, "the fact's deletion ends the wait");
 });

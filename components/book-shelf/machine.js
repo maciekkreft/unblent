@@ -55,6 +55,24 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // neither the tiles nor the sign-in line flashes; "sign-in" signed out, since the books
 // kept in this browser are the account's; "show" otherwise. A try page (8) shows the
 // shelf to a visitor who is not yet a guest.
+// The tiles to show: a book whose delete waits in the corner notice (handOff) is not
+// shown while it waits there.
+export const shown = ({ books, handed }) => books.filter((b) => !handed?.has(b.id));
+
+// The keyboard or the panel left the shelf while a tile was counting down (12, Vim keys):
+// its delete goes to the corner notice, which keeps its Undo in sight and settles it there
+// (books deletes on removal.settled). The tile stays off the shelf meanwhile.
+function handOff(context, enqueue) {
+  const ids = [...context.discarding];
+  if (!ids.length) return;
+  for (const id of ids) {
+    enqueue.cancel(`undo:${id}`);
+    const book = context.books.find((b) => b.id === id);
+    if (book) enqueue.emit({ type: "removal.started", kind: "book", id, name: book.title ?? "" });
+  }
+  enqueue.assign({ handed: ({ context }) => new Set([...context.handed, ...ids]), discarding: new Set() });
+}
+
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
@@ -82,7 +100,10 @@ export const machine = setup({
       "add a book from an epub file, open one, or remove one. A book being added shows as a " +
       "placeholder tile until the book arrives or the import is refused with a reason. Removing " +
       "a book waits out the undo window before it becomes a deletion, so it can be taken back in " +
-      "one step. The journal, the book the user writes, reads \"Written by you\" under its title, " +
+      "one step. If the keyboard leaves the shelf, or the shelf goes out of sight (another " +
+      "panel shown in its place, or a book opened), while a tile is counting down, the delete " +
+      "moves to the corner notice with its Undo, and the tile leaves the shelf until the notice " +
+      "ends: Undo there brings it back, and the notice running out deletes it. The journal, the book the user writes, reads \"Written by you\" under its title, " +
       "shows no chapter count, and has no rename or delete, so it is always on the shelf. " +
       "The arrow keys move through the tiles as a grid: left and right to the next tile, up " +
       "and down to the tile above or below, and with Vim keys on h, j, k and l do the same, " +
@@ -95,7 +116,7 @@ export const machine = setup({
       "in its undo window when the user signs out is taken back. On a try page a visitor not " +
       "yet signed in still sees the shelf.",
     kind: "view",
-    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
+    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed", "removal.started"],
     attributes: ["renames"],
     asks: ["books: list", "session: read", "books: open", "settings: read"],
   },
@@ -118,6 +139,8 @@ export const machine = setup({
     selected: null,
     // The ids counting down to a discard, each with its own cancelable timer.
     discarding: new Set(),
+    // The tiles whose delete waits in the corner notice (handOff), hidden until it ends.
+    handed: new Set(),
     // Whether a user is signed in (3.4): null until session answers.
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
@@ -187,6 +210,7 @@ export const machine = setup({
           importing: ({ context }) => context.importing.filter((p) => p.id !== event.id),
           selected: ({ context }) => (context.selected === event.id ? null : context.selected),
           discarding: ({ context }) => without(context.discarding, event.id),
+          handed: ({ context }) => without(context.handed, event.id),
         });
         if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
       }),
@@ -215,10 +239,23 @@ export const machine = setup({
       actions: assign({ selected: ({ event }) => event.id }),
     },
     // The user opened a book (7.2, internal gesture): announce it. The highlight comes
-    // back as book.opened from the fact, so there is one source of what is open.
+    // back as book.opened from the fact, so there is one source of what is open. The
+    // panel then shows the book's contents in place of the shelf, so a tile still
+    // counting down is handed to the corner notice first (handOff).
     _select: {
-      guard: ({ context, event }) => context.books.some((b) => b.id === event.id) && !context.discarding.has(event.id),
-      actions: emit(({ event }) => ({ type: "book.selected", id: event.id })),
+      guard: ({ context, event }) =>
+        context.books.some((b) => b.id === event.id) && !context.discarding.has(event.id) && !context.handed.has(event.id),
+      actions: [
+        enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
+        emit(({ event }) => ({ type: "book.selected", id: event.id })),
+      ],
+    },
+    // The keyboard left the shelf, or the shelf went out of sight (the view tells): see handOff.
+    _left: { actions: enqueueActions(({ context, enqueue }) => handOff(context, enqueue)) },
+    // Undo in the corner notice: the tile comes back where it was.
+    "removal.undone": {
+      guard: ({ context, event }) => event.kind === "book" && context.handed.has(event.id),
+      actions: assign({ handed: ({ context, event }) => without(context.handed, event.id) }),
     },
     // The user edited a title in place (D11, 7.2 internal gesture): announce the
     // trimmed text as book.renamed, which books turns into a user title (last write
@@ -236,7 +273,9 @@ export const machine = setup({
     // elapse makes the delete a fact.
     _discard: {
       guard: ({ context, event }) =>
-        context.books.some((b) => b.id === event.id && !b.written) && !context.discarding.has(event.id),
+        context.books.some((b) => b.id === event.id && !b.written) &&
+        !context.discarding.has(event.id) &&
+        !context.handed.has(event.id),
       actions: enqueueActions(({ event, enqueue }) => {
         enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
         enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });

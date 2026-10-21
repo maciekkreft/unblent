@@ -29,6 +29,7 @@ const REMOVED = {
   "choice-point": ["Choice point", "deleted"],
   note: ["Note", "deleted"],
   conversation: ["Chat", "deleted"],
+  book: ["Book", "deleted"],
   guest: ["Account", "deleted"],
   question: ["Question", "removed"],
   option: ["Option", "removed"],

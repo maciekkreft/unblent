@@ -94,3 +94,34 @@ test("delete offers undo, then commits when its window ends and stays gone", asy
     again.unwire();
   }
 });
+
+// A delete handed to the corner notice when the keyboard leaves the shelf is deleted by
+// `books` when the notice's window ends (12, Vim keys), not by the tile's own timer.
+test("a handed-off delete is settled by the corner notice and deleted by books", async () => {
+  const store = booksStore([BOOK]);
+  const api = fakeApi();
+  const wired = await wire(["books", "book-shelf", "notice-stack"], {
+    books: {
+      store,
+      api,
+      now: (() => { let n = 100; return () => ++n; })(),
+      revoke: () => {},
+      ask: async (target) => (target === "session" ? { userId: "u1", registrationOpen: false } : { error: "no-answerer" }),
+    },
+    "book-shelf": { undoMs: 20 },
+    "notice-stack": { fadeMs: 30 },
+  });
+  const shelf = wired.actors["book-shelf"];
+  try {
+    await until(() => shelf.getSnapshot().context.books.some((b) => b.id === ID));
+    shelf.send({ type: "_discard", id: ID });
+    shelf.send({ type: "_left" });
+    await until(() => store.books.get(ID).deleted === true, 4000);
+    assert.ok(!wired.records.some((r) => r.kind === "event" && r.name === "book.discarded"), "the tile's timer was cancelled");
+    assert.ok(wired.records.some((r) => r.name === "removal.settled"));
+    await until(() => api.removes.includes(ID));
+    await until(() => shelf.getSnapshot().context.handed.size === 0);
+  } finally {
+    wired.unwire();
+  }
+});
