@@ -381,11 +381,13 @@ const inserting = (t, on) => {
   t.state.field(insertRun).view = t;
   t.state.field(insertRun).started = false;
 };
-// A typed character, a pause of two seconds after the one before.
+// A typed character, a pause of two seconds after the one before. Counted from the real
+// clock too, because press() stamps the real time and the check runs every node test file
+// in one process, so this file can start long after it was loaded.
 let clock = Date.now();
 const type = (t, text) => {
   const at = t.state.selection.main.head;
-  clock += 2000;
+  clock = Math.max(clock, Date.now()) + 2000;
   t.dispatch(
     t.state.update({
       changes: { from: at, insert: text },
