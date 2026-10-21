@@ -117,7 +117,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         // The copy is uploaded as the guest's own, with an id of its own, in the Journal.
         let mine = [];
         await until(async () => {
-          mine = (await (await context.request.get(`${BASE_URL}/api/evaluators?since=0`)).json()).evaluators.filter((e) => e.name === NAME);
+          // Until the guest's cookie lands the server refuses the list, so a reply with no
+          // evaluators is a wait, not a failure.
+          mine = ((await (await context.request.get(`${BASE_URL}/api/evaluators?since=0`)).json()).evaluators ?? []).filter((e) => e.name === NAME);
           return mine.length === 1;
         });
         assert.equal(mine[0].book, JOURNAL);
