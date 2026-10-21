@@ -141,3 +141,43 @@ for (const engine of ENGINES) {
     }
   });
 }
+
+for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
+  // Browser: rendering and layout.
+  test(`signing out hides the stage and its tabs, and signing in brings them back without a reload in ${engine.name}`, async () => {
+    const cookie = forgeCookie("book-stage");
+    const put = async (path, type, body) => {
+      const res = await fetch(`${BASE_URL}${path}`, { method: "PUT", headers: { "content-type": type, Cookie: `unblent_session=${cookie}` }, body });
+      assert.equal(res.status, 200, `PUT ${path}`);
+    };
+    await put(`/api/books/${SAMPLE_ID}`, "application/epub+zip", SAMPLE);
+    await put(`/api/books/${SAMPLE_ID}/opened`, "application/json", "{}");
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    context.setDefaultTimeout(4000);
+    const stageText = (page) => page.evaluate(() => document.querySelector("book-stage").shadowRoot.textContent.trim());
+    try {
+      await signedIn(context, cookie);
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.querySelector("book-reader")?.shadowRoot?.querySelector(".footer .chap")?.textContent.trim());
+      assert.deepEqual(await stageTabs(page), ["Sample Book*"]);
+
+      await page.locator('session-switch button[aria-label="Sign out"]').click();
+      await page.waitForFunction(() => document.querySelector("book-stage").shadowRoot.textContent.trim() === "Sign in to read.");
+      assert.equal(await shown(page), null, "no child is shown");
+      assert.deepEqual(await stageTabs(page), [], "no book's tab is drawn");
+
+      await signedIn(context, cookie);
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await page.waitForFunction(() => document.querySelector("book-stage").shadowRoot.querySelector("slot")?.assignedElements()[0]?.localName === "book-reader");
+      assert.notEqual(await stageText(page), "Sign in to read.");
+      assert.deepEqual(await stageTabs(page), ["Sample Book*"], "the same tab is back in front");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+}

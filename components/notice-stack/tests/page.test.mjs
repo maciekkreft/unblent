@@ -236,10 +236,10 @@ for (const engine of ENGINES) {
     }
   });
 
-  // A refused book is a book.refused the stack shows in its own words. The two
-  // provokable reasons are driven end to end on the books stem page: signed out (the
-  // fact mints nothing anonymously) and a broken file (not an epub). The unavailable
-  // wording is the same one the session unavailable path exercises above.
+  // A refused book is a book.refused the stack shows in its own words, driven end to end
+  // on the books stem page with a broken file (not an epub). Signed out the shelf offers
+  // no Add a book, so that reason is only checked in Node (machine.test.mjs); the
+  // unavailable wording is the same one the session unavailable path exercises above.
   // Browser: rendering and layout.
   test(`a refused book shows the stack's message in ${engine.name}`, async () => {
     const browser = await engine.launch();
@@ -256,16 +256,6 @@ for (const engine of ENGINES) {
       });
       const setFile = (path) => page.locator("book-shelf input[type=file]").setInputFiles(path);
 
-      // Signed out: a picked file is refused, and the stack invites a sign-in.
-      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
-      await until(async () =>
-        (await page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelector(".empty p")?.textContent.trim())) ===
-        "Sign in to add books",
-      );
-      await setFile(resolve(FIXTURES, "sample.epub"));
-      await until(async () => (await notices(page)).some((n) => n.text === "Sign in to continue."));
-
       // Signed in: a broken file is refused as not an epub.
       const SECRET = process.env.SESSION_SECRET;
       assert.ok(SECRET, "SESSION_SECRET must be set (checks/check.py reads it from .env)");
@@ -273,8 +263,8 @@ for (const engine of ENGINES) {
       const userId = `notice-book-${Date.now()}`;
       const cookie = `${userId}.${crypto.createHmac("sha256", SECRET).update(userId).digest("hex")}`;
       await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
+      await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
+      await page.locator("book-shelf input[type=file]").waitFor({ state: "attached" });
       await setFile(resolve(FIXTURES, "broken.epub"));
       await until(async () => (await notices(page)).some((n) => n.text === "This file is not an epub."));
 

@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, markedChapter, chapterCounts, choiceLabel } from "./machine.js";
+import { machine, markedChapter, chapterCounts, choiceLabel, showing } from "./machine.js";
 import selected from "./events/chapter.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -12,7 +12,11 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        // A try page (8) shows the contents signed out.
+        tryPage: location.pathname.startsWith("/try/"),
+      },
       events: { "chapter.selected": selected },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -200,6 +204,10 @@ class BookToc extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<div class="empty"><p>Sign in to see your books.</p></div>`;
     const book = snapshot.context.book;
     const rows = this.#rows();
     if (!book || !rows.length) return html`<div class="empty"><p>Choose a book</p></div>`;

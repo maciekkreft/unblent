@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask, send } from "bus";
-import { machine, shownOf } from "./machine.js";
+import { machine, shownOf, showing } from "./machine.js";
 import tabsShown from "./events/tabs.shown.json" with { type: "json" };
 import switched from "./events/book.switched.json" with { type: "json" };
 
@@ -29,6 +29,8 @@ class ActorController {
         send: (target, name, payload) => send(machine, target, name, payload, instance),
         address: instance ? `book-stage#${instance}` : "book-stage",
         storage: deviceStorage(),
+        // A try page (8) shows the stage signed out.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: { "tabs.shown": tabsShown, "book.switched": switched },
       instance,
@@ -70,11 +72,24 @@ class BookStage extends LitElement {
       display: flex;
       flex-direction: column;
     }
+    .empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0;
+      padding: var(--space-2xl) var(--space-md);
+      text-align: center;
+      color: var(--color-body-mid);
+    }
   `;
 
   #actor = new ActorController(this);
   #shownWas;
   #hadFocus = false;
+  // A focus asked for while nothing is drawn (session not answered yet, or a session that
+  // starts signed out and is then confirmed), given to the shown child once it is drawn.
+  #focusLater = null;
 
   // The first child reads an ordinary book, the second shows the written one, the third
   // the note whose tab is in front.
@@ -89,11 +104,20 @@ class BookStage extends LitElement {
 
   // dock-desk's Ctrl+h/j/k/l lands the keyboard in what the stage shows (12).
   focus(options) {
-    this.#child(this.#shown())?.focus(options);
+    const snapshot = this.#actor.snapshot;
+    const account = snapshot ? showing(snapshot.context) : "wait";
+    this.#focusLater = account === "show" ? null : (options ?? {});
+    if (account === "show") this.#child(this.#shown())?.focus(options);
   }
 
   render() {
-    if (!this.#actor.snapshot) return nothing;
+    const snapshot = this.#actor.snapshot;
+    if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing): with no slot drawn,
+    // no child is shown, so the reader, the journal's page and the note editor hide at once.
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="empty">Sign in to read.</p>`;
     return html`<main><slot></slot></main>`;
   }
 
@@ -107,10 +131,18 @@ class BookStage extends LitElement {
     const child = this.#child(shown);
     const follow = this.#shownWas !== undefined && shown !== this.#shownWas && this.#hadFocus;
     this.#shownWas = shown;
-    this.renderRoot.querySelector("slot")?.assign(...(child ? [child] : []));
+    const slot = this.renderRoot.querySelector("slot");
+    slot?.assign(...(child ? [child] : []));
     // The keyboard follows a change made from the stage; one made elsewhere (a tile
-    // clicked in Books) never takes the focus.
-    if (follow) child?.focus();
+    // clicked in Books) never takes the focus, and a child not shown never takes it.
+    if (follow && slot) child?.focus();
+    // A focus asked for while hidden is given once the child is drawn, unless the user has
+    // put the keyboard somewhere since; the desk holds it on its own tabs meanwhile.
+    if (slot && this.#focusLater) {
+      const active = document.activeElement;
+      if (!active || active.localName === "body" || active.localName === "dock-desk") child?.focus(this.#focusLater);
+      this.#focusLater = null;
+    }
   }
 }
 

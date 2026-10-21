@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine } from "../machine.js";
+import { machine, showing } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
 // blur into a _rename gesture carrying the field's text, and the machine announces it
@@ -104,11 +104,11 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
   }
 });
 
-// The journal (written: true) is owned by `journal`: the shelf puts it first, never
-// renames or discards it, and keeps it when the user signs out.
+// The journal (written: true) is owned by `journal`: the shelf puts it first and never
+// renames or discards it.
 const JRN = "00000000000000000000000JRN";
 
-test("the journal sits first, cannot be renamed or discarded, and survives a sign-out", async () => {
+test("the journal sits first and cannot be renamed or discarded", async () => {
   const { actor, renamed } = start();
   await flush();
   actor.send(changed(ID, "Imported"));
@@ -118,6 +118,48 @@ test("the journal sits first, cannot be renamed or discarded, and survives a sig
   actor.send({ type: "_discard", id: JRN });
   assert.deepEqual(renamed, []);
   assert.equal(actor.getSnapshot().context.discarding.size, 0);
-  actor.send({ type: "session.changed", userId: null });
-  assert.deepEqual(actor.getSnapshot().context.books.map((b) => b.id), [JRN]);
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The shelf with the journal and one book; session as given, or missing.
+const shelf = async (session, tryPage = false) => {
+  const books = [{ ...changed(JRN, "Journal"), chapterCount: 1, addedAt: 0, written: true }, { ...changed(ID, "Dune"), chapterCount: 1 }];
+  const ask = (target, name) =>
+    Promise.resolve(target === "session" ? (session ?? { error: "no-answerer" }) : name === "list" ? { books } : name === "open" ? { id: ID } : {});
+  const actor = createActor(machine, { input: { ask, undoMs: 3000, tryPage } });
+  const discarded = [];
+  actor.on("book.discarded", (e) => discarded.push(e));
+  actor.start();
+  await flush();
+  await flush();
+  return { actor, discarded, ctx: () => actor.getSnapshot().context };
+};
+
+test("signed out the shelf asks to sign in; signed in, or with no session to ask, it shows", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(showing((await shelf(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(showing((await shelf(SIGNED_IN)).ctx()), "show");
+  assert.equal(showing((await shelf()).ctx()), "show", "a page without session counts as signed in");
+  assert.equal(showing((await shelf(SIGNED_OUT, true)).ctx()), "show", "a try page shows its visitor the shelf");
+});
+
+test("signing out hides the tiles without dropping them, and takes back a delete still in its undo window", async () => {
+  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
+  actor.send({ type: "_discard", id: ID });
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
+  assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID], "the tiles are kept");
+  assert.equal(ctx().selected, ID, "the open book stays highlighted");
+  assert.equal(ctx().discarding.size, 0, "the delete is taken back");
+  actor.send({ type: "_elapsed", id: ID });
+  assert.deepEqual(discarded, []);
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  await flush();
+  await flush();
+  assert.equal(showing(ctx()), "show");
+  assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID]);
 });

@@ -54,10 +54,18 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
+        // The book is opened signed in, since signed out the shelf shows no tiles; the
+        // session then ends across a reload, and the open book is kept.
+        await signedIn(context, forgeCookie("evaluator-list"));
         const page = await context.newPage();
-        const problems = watch(page);
+        // After the reload the server refusing the gone cookie (401) is how the page learns
+        // the session ended.
+        const problems = watch(page, [], { ignore: [/\b401\b/] });
         await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
         await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await until(async () => (await names(page)).includes("New evaluator"));
+        await context.clearCookies();
+        await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await inList(page, (root) => root.textContent.trim())) === "Sign in to run evaluators.");
         assert.equal(await inList(page, (root) => root.querySelectorAll(".run, .row, button").length), 0, "no box, no rows, no buttons");
         assert.deepEqual(problems, [], problems.join("; "));

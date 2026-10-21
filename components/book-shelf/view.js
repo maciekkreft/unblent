@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine } from "./machine.js";
+import { machine, showing } from "./machine.js";
 import picked from "./events/book.picked.json" with { type: "json" };
 import selected from "./events/book.selected.json" with { type: "json" };
 import discarded from "./events/book.discarded.json" with { type: "json" };
@@ -33,6 +33,8 @@ class ActorController {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         undoMs,
+        // A try page (8) shows the shelf signed out.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed },
     });
@@ -568,7 +570,11 @@ class BookShelf extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { importing, selected, discarding, signedIn } = snapshot.context;
+    // Signed out nothing of the account shows (machine.js: showing), not even the journal.
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<div class="empty"><p>Sign in to see your books.</p></div>`;
+    const { importing, selected, discarding } = snapshot.context;
     const tiles = this.#tiles(snapshot);
     const focusId = this.#focusTile(tiles, selected);
     // The invite stands while the library holds no imported book, beside the journal
@@ -599,11 +605,7 @@ class BookShelf extends LitElement {
           : nothing}
         ${empty
           ? html`<div class="empty">
-              <p>
-                ${signedIn === false
-                  ? "Sign in to add books"
-                  : "Drop an epub here or Add a book"}
-              </p>
+              <p>Drop an epub here or Add a book</p>
             </div>`
           : nothing}
       </div>

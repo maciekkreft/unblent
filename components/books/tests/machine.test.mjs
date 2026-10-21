@@ -353,36 +353,88 @@ test("signed in: a pull adopts a newer row and ignores an older one", async () =
   assert.equal(actor.getSnapshot().context.cursor, 9);
 });
 
-test("signing out empties the library and announces every book gone", async () => {
+test("signing out keeps the library, the open book and the outbox, and announces nothing gone", async () => {
+  // Signed out is hidden, not emptied (14): the views stop showing the account, and
+  // signing in again shows the same books at the same place.
   const store = fakeStore([book(ID), book(ID2)]);
+  store.meta.set("open", { id: ID, at: 5 });
   const api = fakeApi();
-  const { actor, deleted } = start(store, { api, ask: askUser("u1") });
+  const { actor, deleted, opened, clock } = start(store, { api, ask: askUser("u1") });
   await ready(actor);
-
   actor.send({ type: "session.changed", userId: null });
+  actor.send({ type: "book.progressed", id: ID, chapter: 1, block: 3 });
   await flush();
-  assert.deepEqual(deleted.map((d) => d.id).sort(), [ID, ID2].sort());
-  assert.deepEqual(await askQuery(actor, "list"), { books: [] }, "the cache is cleared");
-  assert.equal(store.books.size, 0);
+  assert.deepEqual(deleted, [], "no book is announced gone");
+  assert.equal((await askQuery(actor, "list")).books.length, 2, "the library is kept");
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID }, "the open book stays open");
+  assert.equal(store.books.size, 2, "the cache is kept");
+  assert.ok(store.outbox.has(ID), "the page turn waits for the next sign-in");
+  assert.equal(store.meta.get("userId"), "u1", "the account the copy belongs to is kept");
+  await drain(clock);
+  assert.equal(api.positions.length, 0, "nothing syncs signed out");
+  assert.deepEqual(opened, [], "the open book is not announced again");
 });
 
-test("a session that ended while away empties the library on load (cookie gone)", async () => {
-  // The store still holds a signed-in user's books, but the session now reads null: no
-  // live session.changed fires, so the load must reconcile and clear, the same as a
-  // deliberate sign-out (Decision 5), rather than show a stale, half-usable library.
+test("the same account signing in again drains what waited and pulls, keeping the place", async () => {
+  const store = fakeStore([book(ID, { position: { chapter: 1, block: 2 } })]);
+  store.meta.set("open", { id: ID, at: 5 });
+  const api = fakeApi();
+  const { actor, deleted, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "session.changed", userId: null });
+  actor.send({ type: "book.progressed", id: ID, chapter: 1, block: 4 });
+  await flush();
+  const pulls = api.pulls.length;
+
+  actor.send({ type: "session.changed", userId: "u1" });
+  await flush();
+  await drain(clock);
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(api.positions, [[ID, 1, 4]], "the turn made signed out reaches the server");
+  assert.ok(api.pulls.length > pulls, "a pull follows the sign-in");
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID });
+  assert.deepEqual((await askQuery(actor, "read", { id: ID })).book.position, { chapter: 1, block: 4 });
+});
+
+test("a different account signing in empties the copy first, a waiting row included, and sends nothing of it", async () => {
+  const store = fakeStore([book(ID), book(ID2)]);
+  store.meta.set("open", { id: ID, at: 5 });
+  const api = fakeApi();
+  const { actor, deleted, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "session.changed", userId: null });
+  actor.send({ type: "book.progressed", id: ID, chapter: 1, block: 2 });
+  await flush();
+  assert.ok(store.outbox.has(ID), "a page turn waits signed out");
+
+  actor.send({ type: "session.changed", userId: "u2" });
+  await flush();
+  await drain(clock);
+  assert.deepEqual(api.positions, [], "the other account's page turn is not sent");
+  assert.equal(store.outbox.size, 0, "the outbox is emptied");
+  assert.deepEqual(deleted.map((d) => d.id).sort(), [ID, ID2].sort(), "the other account's books are announced gone");
+  assert.deepEqual(await askQuery(actor, "list"), { books: [] });
+  assert.deepEqual(await askQuery(actor, "open"), { id: null }, "its open book is not ours");
+  assert.equal(store.books.size, 0);
+  assert.equal(store.meta.get("userId"), "u2");
+});
+
+test("signed out at load keeps the library and the open book (cookie gone)", async () => {
   const store = fakeStore([book(ID), book(ID2)]);
   store.meta.set("userId", "u1");
-  const revoked = [];
-  const { actor, deleted, refused, rejected } = start(store, { api: fakeApi(), ask: askUser(null), revoke: (u) => revoked.push(u) });
+  store.meta.set("open", { id: ID2, at: 5 });
+  const api = fakeApi();
+  const { actor, deleted, refused, rejected } = start(store, { api, ask: askUser(null), revoke: () => {} });
   await ready(actor);
 
-  assert.deepEqual(deleted.map((d) => d.id).sort(), [ID, ID2].sort(), "every book is announced gone");
-  assert.deepEqual(await askQuery(actor, "list"), { books: [] }, "the library is empty");
-  assert.equal(store.books.size, 0, "the cache is cleared");
-  assert.equal(refused.length, 0, "a cold-load reconcile clears silently");
+  assert.deepEqual(deleted, [], "nothing is announced gone");
+  assert.equal((await askQuery(actor, "list")).books.length, 2, "the library is kept");
+  assert.deepEqual(await askQuery(actor, "open"), { id: ID2 });
+  assert.equal(store.meta.get("userId"), "u1", "the account is kept, so another account still empties it");
+  assert.equal(api.pulls.length, 0, "nothing syncs signed out");
   assert.equal(rejected.length, 0, "session already knows null, so it is not told to re-check");
 
-  // Truly signed out: a pick is refused, not minted.
+  // Signed out: a pick is refused, not minted.
   actor.send({ type: "book.picked", id: ID, name: "b.epub", size: 9, url: "blob:x" });
   await flush();
   assert.deepEqual(refused, [{ type: "book.refused", id: ID, reason: "signed-out" }], "signed out, so a pick is refused");
@@ -417,10 +469,10 @@ test("chapter replies unavailable when the fetch fails", async () => {
   assert.deepEqual(await askQuery(actor, "chapter", { id: ID, chapter: 0 }), { error: "unavailable" });
 });
 
-test("a 401 on a chapter fetch ends the session, not a retryable 'unavailable'", async () => {
-  // A 401 is the session being gone, not the server being down: the fact ends the
-  // session (so the library empties and the reader lands on its empty page via the held
-  // book.deleted) and says so through the notice, rather than a futile offline retry.
+test("a 401 on a chapter fetch signs out and keeps the library", async () => {
+  // A 401 is the session being gone, not the server being down: the fact stops syncing,
+  // says so through the notice and has session re-check, so the views hide (14). The
+  // reader is answered unavailable, so it can try again once the user is signed in.
   const store = fakeStore([book(ID), book(ID2)]);
   const api = fakeApi({ chapter: () => ({ error: "unauthorized" }) });
   const { actor, deleted, refused, rejected } = start(store, { api, ask: askUser("u1") });
@@ -428,11 +480,25 @@ test("a 401 on a chapter fetch ends the session, not a retryable 'unavailable'",
 
   const reply = await askQuery(actor, "chapter", { id: ID, chapter: 1 });
   await flush();
-  assert.deepEqual(reply, { error: "not-found" }, "the reader is answered not-found, not unavailable");
-  assert.deepEqual(deleted.map((d) => d.id).sort(), [ID, ID2].sort(), "the library empties");
+  assert.deepEqual(reply, { error: "unavailable" });
+  assert.deepEqual(deleted, [], "nothing is announced gone");
   assert.deepEqual(refused, [{ type: "book.refused", id: ID, reason: "signed-out" }], "one 'signed out' notice for the book read");
   assert.deepEqual(rejected, [{ type: "session.rejected" }], "session is told to re-check so the auth control flips");
-  assert.deepEqual(await askQuery(actor, "list"), { books: [] }, "nothing is left signed out");
+  assert.equal((await askQuery(actor, "list")).books.length, 2, "the library is kept");
+  assert.equal(actor.getSnapshot().context.userId, null, "signed out until session says otherwise");
+});
+
+test("a 401 during a sync signs out and keeps the library and the outbox", async () => {
+  const store = fakeStore([book(ID)]);
+  const api = fakeApi({ position: () => ({ error: "unauthorized" }) });
+  const { actor, deleted, rejected, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "book.progressed", id: ID, chapter: 1, block: 0 });
+  await drain(clock);
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(rejected, [{ type: "session.rejected" }]);
+  assert.ok(store.outbox.has(ID), "the page turn waits for the next sign-in");
+  assert.equal(store.books.size, 1);
 });
 
 test("a store that rejects fails the fact, and queries still get honest replies", async () => {

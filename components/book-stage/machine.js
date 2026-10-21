@@ -7,8 +7,10 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // books: list for the starting picture and follows book.opened, book.changed and
 // book.deleted after (4.3, fourth rule). It also keeps a tab per note the user opened on
 // the stage (note.staged), labelled from notes: list and note.changed, and tells the
-// stage's note editor which note to show by the load command (4.4). The asks, the send
-// and the storage arrive through `input`, so the machine is importable in Node.
+// stage's note editor which note to show by the load command (4.4). It asks session: read
+// and follows session.changed only for whether anyone is signed in. The asks, the send,
+// the storage and whether the page is a try page arrive through `input`, so the machine
+// is importable in Node.
 
 // Which child the view shows: "note" while a note's tab is in front, else "written" while
 // the open book is the one the user writes, "reader" otherwise, also when no book is open
@@ -67,6 +69,16 @@ const neighbourOf = (context, id) => {
 // How many tabs the desk draws: a tab with no label yet is left out (tabsOf).
 const drawnCount = (context) => context.tabs.filter((id) => labelFor(context, id) !== undefined).length;
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the stage.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the stage shows of the account (14, signed out): "wait" until session answers, so
+// neither the tabs nor the sign-in line flashes; "sign-in" signed out, since the books and
+// notes behind the tabs are the account's; "show" otherwise. A try page (8) shows the stage
+// to a visitor who is not yet a guest.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 // What tabs.shown announces. A tab with no label yet (a book books has not listed) is
 // left out until its label is known, so no tab is ever blank.
 export const tabsOf = (context) => {
@@ -81,9 +93,12 @@ export const tabsOf = (context) => {
 // Announces the tabs once the labels are known (the list replied), and only when what
 // the desk would draw changed, so a reading position saved on book.changed is silent.
 // Returns the context as it now stands, so several changes in one step can follow each other.
+// Signed out the desk draws none of the account's tabs, only the stage's own; the tabs stay
+// stored and are drawn again when the user signs in.
 const announce = (context, enqueue) => {
-  if (!context.listed) return context;
-  const shown = tabsOf(context);
+  const account = showing(context);
+  if (!context.listed || account === "wait") return context;
+  const shown = account === "show" ? tabsOf(context) : { view: context.address, tabs: [], active: null };
   const said = JSON.stringify(shown);
   if (said === context.said) return context;
   enqueue.assign({ said });
@@ -149,6 +164,13 @@ const move = ({ context, event, enqueue }) => {
   settle(context, enqueue, { tabs });
 };
 
+// Who is signed in changed: the desk draws the account's tabs again, or none of them.
+const signIn = (context, enqueue, now) => {
+  if (now === context.signedIn) return;
+  enqueue.assign({ signedIn: now });
+  announce({ ...context, signedIn: now }, enqueue);
+};
+
 const mine = ({ context, event }) => event.view === context.address;
 
 const readInput = ({ context }) => ({ ask: context.ask, id: context.openId });
@@ -163,6 +185,8 @@ export const machine = setup({
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
     list: fromPromise(({ input }) => input.ask("books", "list", {})),
     noteList: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
   guards: {
     hasBook: ({ context }) => context.openId != null,
@@ -194,10 +218,13 @@ export const machine = setup({
       "note itself is unchanged; a deleted note, or one the account does not have, loses its " +
       "tab. Note tabs are kept in the browser beside the book tabs, and after a reload the open " +
       "book is in front. It announces its tabs so the desk can draw them in place of the " +
-      "stage's own tab.",
+      "stage's own tab. Signed out it shows only \"Sign in to read.\": no tabs, no book, no " +
+      "journal page and no note. The tabs stay kept in the browser, and signing in, with or " +
+      "without a reload, brings back the same tabs with the same one in front. On a try page " +
+      "a visitor not yet signed in still sees the stage.",
     kind: "view",
     emits: ["tabs.shown", "book.switched"],
-    asks: ["books: open", "books: read", "books: list", "notes: list"],
+    asks: ["books: open", "books: read", "books: list", "notes: list", "session: read"],
     sends: ["note-editor: load"],
     attributes: ["height"],
   },
@@ -221,10 +248,28 @@ export const machine = setup({
       front: null,
       listed: false,
       said: null,
+      // Whether someone is signed in (3.4): null until session answers.
+      signedIn: null,
+      // Whether the page is a try page (8), from the view, so this stays importable in Node.
+      tryPage: Boolean(input.tryPage),
     };
   },
   type: "parallel",
   states: {
+    account: {
+      initial: "asking",
+      states: {
+        asking: {
+          invoke: {
+            src: "session",
+            input: ({ context }) => ({ ask: context.ask }),
+            onDone: { target: "known", actions: enqueueActions(({ context, event, enqueue }) => signIn(context, enqueue, signedIn(event.output))) },
+            onError: { target: "known", actions: enqueueActions(({ context, enqueue }) => signIn(context, enqueue, true)) },
+          },
+        },
+        known: {},
+      },
+    },
     show: {
       initial: "opening",
       on: {
@@ -333,6 +378,7 @@ export const machine = setup({
     },
   },
   on: {
+    "session.changed": { actions: enqueueActions(({ context, event, enqueue }) => signIn(context, enqueue, event.userId != null)) },
     // The Notes panel's Open on stage (4.3, fifth rule): a tab for the note at the end, or
     // its tab to the front.
     "note.staged": {

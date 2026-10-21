@@ -189,15 +189,15 @@ for (const engine of ENGINES) {
       await until(async () => (await stored())[0] === "# Monday\n\nRan\nRested");
     });
 
+    // On the stem page, since on the product the stage itself hides while signed out.
     // Browser: rendering and layout.
-    test("signed out, the product's journal shows only the line asking to sign in", async () => {
+    test("signed out, the journal shows only the line asking to sign in", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
         const page = await context.newPage();
         const problems = watch(page);
-        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-        await page.locator("book-shelf .tile:not(.adding)").filter({ hasText: "Journal" }).click();
+        await page.goto(STEM, { waitUntil: "domcontentloaded" });
         await until(async () => (await entry(page).evaluate((el) => el.shadowRoot.textContent.trim())) === "Sign in to write in your journal.");
         // The entry's own shadow root: the choice points stay in the page, only not shown.
         assert.equal(await entry(page).evaluate((el) => el.shadowRoot.querySelectorAll(".cm-content, button, slot").length), 0, "no text box, no level buttons");

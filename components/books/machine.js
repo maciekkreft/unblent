@@ -3,7 +3,7 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // The fact component that owns the books (3.1), replicated (5): local-first, the
 // single place a book's metadata and reading position live in the browser. Unlike
 // notes, a book is only ever created signed in — the source epub lives nowhere but
-// the server, so an import is an upload, not a local mint (Decisions 5). The row
+// the server, so an import is an upload, not a local mint. The row
 // carries what rides the bus; the chapters and images are files the reader fetches
 // by URL (Decision 2), so this fact never holds a blob. A reading position is last
 // write wins: it queues in the outbox and drains like a note, but the server never
@@ -20,7 +20,7 @@ const visible = (record) => record && !record.deleted;
 // through journal.changed, the way `subject` derives what it shows (3.1). Its chapters
 // are the days oldest first, so a chapter's number never shifts as days are added, and
 // one more empty chapter at the end is today's page while no day is open. It is the
-// same whether signed in or out, so a sign-out never takes it away. Each chapter names
+// same whether signed in or out; the views decide what to show signed out (14). Each chapter names
 // its day, so a view can join what other facts keep by day to the contents.
 export const JOURNAL = "00000000000000000000000JRN";
 
@@ -217,13 +217,12 @@ function answerChapter(context, event, self) {
   }
   Promise.resolve(context.api.chapter(id, record.contentVersion, chapter))
     .then((res) => {
-      // A 401 is not the server being down, it is the session being gone: end it so the
-      // library empties and the notice says so (12), and answer not-found so the reader
-      // lands on its empty page rather than the offline retry — the book.deleted the
-      // ended session emits (held for this ask until the reply, 4.2) then clears it.
+      // A 401 is not the server being down, it is the session being gone: sign out so
+      // the views hide and the notice says so (14), and answer unavailable so the reader
+      // offers to try again once the user has signed in.
       if (res && res.error === "unauthorized") {
         self?.send({ type: "_sessionEnded", id });
-        event.reply({ error: "not-found" });
+        event.reply({ error: "unavailable" });
         return;
       }
       res && res.error
@@ -239,7 +238,8 @@ const answerUnloaded = (context, event) =>
   event.payload.id === JOURNAL ? answerChapter(context, event) : event.reply({ error: "unavailable" });
 
 // The user picked a file (book-shelf emits book.picked, 4.3 fifth rule). Signed out
-// it is refused and the object URL revoked (Decision 5); nothing is minted anonymously.
+// it is refused and the object URL revoked, since the file lives only on the server;
+// nothing is minted anonymously.
 // Signed in the upload runs fire-and-forget so a long upload never blocks a position
 // drain, and its result returns as _uploaded, which the machine turns into news.
 function applyPick(context, event, enqueue, self) {
@@ -263,7 +263,7 @@ function applyPick(context, event, enqueue, self) {
 function applyUploaded(context, event, enqueue) {
   const { id, res } = event;
   if (res.error === "unauthorized") {
-    endSession(context, enqueue, { notifyId: id, sawReject: true });
+    signOut(context, enqueue, { notifyId: id, sawReject: true });
     return;
   }
   if (res.error) {
@@ -373,32 +373,48 @@ function forgetOpen(context, enqueue) {
 }
 
 // The session ended, however it ended (a deliberate sign-out, a cookie gone across a
-// restart, or a 401 from any call): the one routine every such path funnels through,
-// so signed out always means the same thing — an empty library (Decision 5). A book
-// is only ever created signed in, so there is nothing anonymous to keep: every visible
-// book is announced gone, the cache and outbox are cleared, and no book is open. The
-// maps are mutated in place, as applySync does, so a flush in the same block sees the
-// emptied library at once. notifyId names the book a user gesture was refused on, so a
-// 401 the user provoked (a chapter fetch, an upload) says "signed out" through the
-// notice; a background sync or a cold-load reconcile passes none and clears silently.
-// sawReject is set when the server rejected our cookie (a 401): session.rejected tells
-// `session` to re-check and flip the auth control at once (3.4), rather than at the next
-// focus. A deliberate sign-out or a cold-load reconcile does not set it — session
-// already knows who is signed in in those cases. The journal is there signed out too,
-// so it stays, and stays open if it was.
-function endSession(context, enqueue, { notifyId, sawReject } = {}) {
-  for (const record of context.books.values())
-    if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
-  context.books.clear();
-  context.outbox.clear();
-  context.open = context.open.id === JOURNAL ? context.open : { id: null, at: 0 };
+// restart, or a 401 from any call): the one routine every such path funnels through, so
+// signed out always means the same thing. Signed out hides the account's work, it does
+// not remove it (14): the views stop showing it, while the cache, the outbox and the
+// open book stay, nothing is announced gone, and syncing stops until someone signs in.
+// The account the copy belongs to stays in the meta, so a sign-in by another account
+// still empties it first (switchAccount). notifyId names the book a user gesture was
+// refused on, so a 401 the user provoked (a chapter fetch, an upload) says "signed out"
+// through the notice; a background sync or a cold-load reconcile passes none. sawReject
+// is set when the server rejected our cookie (a 401): session.rejected tells `session`
+// to re-check and flip the auth control at once (3.4), rather than at the next focus. A
+// deliberate sign-out or a cold-load reconcile does not set it — session already knows
+// who is signed in in those cases.
+function signOut(context, enqueue, { notifyId, sawReject } = {}) {
   context.userId = null;
   enqueue.assign({ userId: null });
-  enqueue(() => context.store.clear().catch(() => {}));
-  enqueue(() => context.store.metaPut("userId", null).catch(() => {}));
-  enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
   if (notifyId) enqueue.emit({ type: "book.refused", id: notifyId, reason: "signed-out" });
   if (sawReject) enqueue.emit({ type: "session.rejected" });
+}
+
+// Someone signed in without a reload. A copy kept for another account is emptied before
+// it is shown or synced, outbox included, the same rule `claim` keeps at load, so one
+// account's books are never shown to or sent under another; a change still waiting to be
+// sent is lost, at most the last reading place. Every visible book is announced gone and
+// its open book is forgotten;
+// the journal is the new account's too, so it stays, and stays open if it was. The maps
+// are mutated in place, as applySync does, so what follows in the same block sees the
+// emptied library.
+function switchAccount(context, enqueue, userId) {
+  if (context.account && context.account !== userId) {
+    for (const record of context.books.values())
+      if (visible(record)) enqueue.emit({ type: "book.deleted", id: record.id });
+    context.books.clear();
+    context.outbox.clear();
+    if (context.open.id !== JOURNAL) context.open = { id: null, at: 0 };
+    enqueue(() => context.store.clear().catch(() => {}));
+    enqueue(() => context.store.metaPut("open", context.open).catch(() => {}));
+  }
+  context.userId = userId;
+  context.account = userId;
+  enqueue.assign({ userId, account: userId, cursor: 0 });
+  enqueue(() => context.store.metaPut("userId", userId).catch(() => {}));
+  enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
@@ -425,14 +441,14 @@ const SYNC_IDLE_MS = 2000;
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 // The browser changed account while this fact was not on the page (12): a copy kept for
-// another account, with nothing of it left to upload, is emptied before it is read, so
-// none of it is shown to the account now signed in or uploaded as its own.
+// another account is emptied before it is read, outbox included, so none of it is shown
+// to the account now signed in or uploaded as its own.
 async function claim(store, ask) {
   const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
   const userId = typeof session?.userId === "string" ? session.userId : null;
   if (!userId) return;
-  const [kept, outbox] = await Promise.all([store.metaGet("userId"), store.outboxAll()]);
-  if (kept && kept !== userId && outbox.length === 0) await store.empty();
+  const kept = await store.metaGet("userId");
+  if (kept && kept !== userId) await store.empty();
 }
 
 export const machine = setup({
@@ -454,7 +470,7 @@ export const machine = setup({
         store.metaGet("userId"),
         store.metaGet("open"),
       ]);
-      return { books, outbox, cursor: cursor ?? 0, userId: userId ?? null, open: open ?? { id: null, at: 0 } };
+      return { books, outbox, cursor: cursor ?? 0, account: userId ?? null, open: open ?? { id: null, at: 0 } };
     }),
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
     journal: fromPromise(({ input }) => (input.ask ? input.ask("journal", "read", {}) : Promise.resolve(null))),
@@ -515,7 +531,13 @@ export const machine = setup({
       "opened but never renamed or deleted here. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
-      "book's tab to the front on the stage.",
+      "book's tab to the front on the stage. Signing out keeps the library, the reading places " +
+      "and the open book in this browser and stops syncing, so the views can hide them and " +
+      "signing in again as the same account, with or without a reload, shows them as they " +
+      "were; what was changed but not yet sent is sent then. A refused session is treated the " +
+      "same way. A sign-in by a different account empties this browser's copy first, including " +
+      "what was waiting to be sent, so one account's books are never shown to or sent under " +
+      "another.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
@@ -530,7 +552,10 @@ export const machine = setup({
     api: input.api,
     ask: input.ask,
     revoke: input.revoke,
+    // Who is signed in now, null signed out; syncing runs only while it is set.
     userId: null,
+    // The account this browser's copy belongs to, kept in the meta across a sign-out.
+    account: null,
     cursor: 0,
     // The book being read and when it was last set (server time once acknowledged),
     // beside the rows because it is one more last-write-wins value (5). id null when
@@ -569,7 +594,10 @@ export const machine = setup({
             books: ({ event }) => new Map(event.output.books.map((row) => [row.id, row])),
             outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.id, row])),
             cursor: ({ event }) => event.output.cursor,
-            userId: ({ event }) => event.output.userId,
+            // Until session answers, the account last signed in counts as signed in, so a
+            // page with no session answer still syncs as before.
+            userId: ({ event }) => event.output.account,
+            account: ({ event }) => event.output.account,
             open: ({ event }) => event.output.open,
           }),
         },
@@ -610,24 +638,13 @@ export const machine = setup({
         onDone: {
           target: "ready.idle",
           actions: enqueueActions(({ context, event, enqueue, self }) => {
-            // Reconcile the stored user against who the session says is signed in, so a
+            // Reconcile the stored account against who the session says is signed in. A
             // session that ended while the tab was away (a cookie gone across a restart)
-            // empties the library on load exactly as a live sign-out does — the same
-            // invariant, whether the news arrives now or later (Decision 5). No live
-            // session.changed fires when the cache already knows null at load.
-            const stored = context.userId;
+            // signs out exactly as a live sign-out does, keeping the library hidden (14).
             const userId = event.output?.userId ?? null;
-            if (userId !== stored) {
-              if (userId === null) endSession(context, enqueue);
-              else {
-                context.userId = userId;
-                enqueue.assign({ userId, cursor: 0 });
-                enqueue(() => context.store.metaPut("userId", userId).catch(() => {}));
-                enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
-              }
-            } else {
-              enqueue.assign({ userId });
-            }
+            if (userId === null) signOut(context, enqueue);
+            else if (userId !== context.account) switchAccount(context, enqueue, userId);
+            else enqueue.assign({ userId });
             for (const message of context.queued) flush(context, message, enqueue, self);
             enqueue.assign({ queued: [] });
             if (userId) enqueue.raise({ type: "_sync", pull: true });
@@ -664,9 +681,9 @@ export const machine = setup({
         "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
         "chapter?": { actions: ({ context, event, self }) => answerChapter(context, event, self) },
         // A chapter fetch came back 401 (answerChapter, run fire-and-forget, cannot
-        // enqueue): the session is gone, so end it here where actions can run.
+        // enqueue): the session is gone, so sign out here where actions can run.
         "_sessionEnded": {
-          actions: enqueueActions(({ context, event, enqueue }) => endSession(context, enqueue, { notifyId: event.id, sawReject: true })),
+          actions: enqueueActions(({ context, event, enqueue }) => signOut(context, enqueue, { notifyId: event.id, sawReject: true })),
         },
         "book.picked": { actions: enqueueActions(({ context, event, enqueue, self }) => applyPick(context, event, enqueue, self)) },
         "book.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
@@ -681,9 +698,8 @@ export const machine = setup({
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         // The fact's own news of who is signed in (4.3, fourth rule). A book is only
         // ever created signed in, so there is nothing anonymous to adopt: signing in
-        // resets the pull cursor and pulls; signing out clears the cache and outbox
-        // and announces every visible book gone, so the shelf empties (the library is
-        // empty signed out, Decision 5).
+        // resets the pull cursor and pulls, after emptying another account's copy;
+        // signing out only stops syncing (signOut).
         "session.changed": {
           actions: enqueueActions(({ context, event, enqueue }) => {
             // The browser is changing account (12): upload what is left, then empty the local
@@ -696,15 +712,12 @@ export const machine = setup({
             if (context.leaving) enqueue.assign({ leaving: false });
             const userId = event.userId;
             if (userId === context.userId) return;
-            enqueue.assign({ userId });
-            enqueue(() => context.store.metaPut("userId", userId).catch(() => {}));
             if (userId) {
-              enqueue.assign({ cursor: 0 });
-              enqueue(() => context.store.metaPut("cursor", 0).catch(() => {}));
+              switchAccount(context, enqueue, userId);
               enqueue.raise({ type: "_sync", pull: true });
             } else {
-              // A deliberate sign-out: clear silently, the auth control is the feedback.
-              endSession(context, enqueue);
+              // A deliberate sign-out: silent, the auth control is the feedback.
+              signOut(context, enqueue);
             }
           }),
         },
@@ -900,8 +913,8 @@ function applySync(context, output, enqueue) {
     enqueue(() => context.store.metaPut("cursor", newCursor).catch(() => {}));
   }
   if (authFailed) {
-    // A 401 during a background sync: the session is gone. Clear silently, but tell
+    // A 401 during a background sync: the session is gone. Sign out silently, but tell
     // `session` to re-check so the auth control flips too (session.rejected).
-    endSession(context, enqueue, { sawReject: true });
+    signOut(context, enqueue, { sawReject: true });
   }
 }

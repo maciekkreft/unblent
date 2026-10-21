@@ -36,7 +36,7 @@ const store = location.pathname.startsWith("/try/")
 // an upload is large and keeps an ordinary fetch.
 const api = {
   // Fetch the tab-local object URL for the picked bytes, PUT them, and always revoke
-  // the URL (Decision 5). 200 carries the row; 422 is not-an-epub; 401 the session;
+  // the URL, since the file lives only on the server. 200 carries the row; 422 is not-an-epub; 401 the session;
   // anything else, or a thrown fetch, is the server being unavailable.
   async upload(id, url) {
     try {

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, markedChapter, chapterCounts, counts, choiceLabel } from "../machine.js";
+import { machine, markedChapter, chapterCounts, counts, choiceLabel, showing } from "../machine.js";
 
 // The actor is where the contents' decisions live (3.2): which book it shows, and the
 // chapter it marks. The mark is the chapter the user just chose (a jump the fact has
@@ -279,4 +279,37 @@ test("in any other book a move of the position still ends a click on the current
   actor.send({ type: "_select", id: ID, chapter: 0 });
   actor.send(changed({ position: { chapter: 1, block: 0 } }));
   assert.equal(mark(actor), 1);
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The contents of an open book; session as given, or missing.
+const contents = async (session, tryPage = false) => {
+  const ask = (target, name) =>
+    Promise.resolve(target === "session" ? (session ?? { error: "no-answerer" }) : name === "open" ? { id: ID } : name === "read" ? { book: book() } : { error: "no-answerer" });
+  const actor = createActor(machine, { input: { ask, tryPage } });
+  actor.start();
+  await flush();
+  return { actor, ctx: () => actor.getSnapshot().context };
+};
+
+test("signed out the contents ask to sign in; signed in, or with no session to ask, they show", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(showing((await contents(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(showing((await contents(SIGNED_IN)).ctx()), "show");
+  assert.equal(showing((await contents()).ctx()), "show", "a page without session counts as signed in");
+  assert.equal(showing((await contents(SIGNED_OUT, true)).ctx()), "show", "a try page shows its visitor the contents");
+});
+
+test("signing in shows the same book's contents again without a reload, and signing out hides them", async () => {
+  const { actor, ctx } = await contents(SIGNED_OUT);
+  assert.equal(ctx().book?.id, ID, "still kept while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  assert.equal(ctx().book.id, ID);
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
 });

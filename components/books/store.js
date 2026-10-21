@@ -18,8 +18,8 @@ export function openBooks() {
     metaPut: (key, value) => db.put("meta", { key, value }),
     // The browser is changing account (12): everything goes, outbox and cache together.
     empty: () => db.empty(),
-    // Signing out empties the library (Decision 5): the cache and the outbox go, the
-    // meta (who was last signed in) stays, so the next load starts clean and honest.
+    // Another account signed in without a reload: the cache and the outbox go, and the
+    // meta is rewritten for the new account.
     clear: async () => {
       const [books, outbox] = await Promise.all([db.all("books"), db.all("outbox")]);
       await Promise.all([...books.map((b) => db.delete("books", b.id)), ...outbox.map((r) => db.delete("outbox", r.id))]);

@@ -5,7 +5,8 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 // still in flight, which tile is open, and the ids counting down to a discard — and
 // points at `books`, which owns the fact. It asks books: list for the starting
 // picture and follows book.changed / book.deleted after (4.3, fourth rule); it never
-// decides what a book is, it learns that from the fact's events.
+// decides what a book is, it learns that from the fact's events. It asks session: read
+// and follows session.changed for whether anyone is signed in.
 //
 // The file the user picked is turned into an object URL in the view (a machine may
 // not touch File or URL, so it stays importable in Node); the machine only carries
@@ -30,7 +31,7 @@ const tile = ({ id, title, author, cover, position, chapters, pending, addedAt, 
   pending,
   addedAt,
   // The journal: owned by `journal`, not the library, so it cannot be renamed or
-  // removed here, and it stays on the shelf while no one is signed in.
+  // removed here.
   written: written === true,
 });
 
@@ -45,6 +46,16 @@ const without = (set, id) => {
   next.delete(id);
   return next;
 };
+
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the shelf.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the shelf shows of the account (14, signed out): "wait" until session answers, so
+// neither the tiles nor the sign-in line flashes; "sign-in" signed out, since the books
+// kept in this browser are the account's; "show" otherwise. A try page (8) shows the
+// shelf to a visitor who is not yet a guest.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
   actors: {
@@ -74,7 +85,12 @@ export const machine = setup({
       "one step. The journal, the book the user writes, reads \"Written by you\" under its title, " +
       "shows no chapter count, and has no rename or delete, so it is always on the shelf. " +
       "The arrow keys move through the tiles as a grid: left and right to the next tile, up " +
-      "and down to the tile above or below, and with Vim keys on h, j, k and l do the same.",
+      "and down to the tile above or below, and with Vim keys on h, j, k and l do the same. " +
+      "Signed out it shows only \"Sign in to see your books.\": no tiles, not even the " +
+      "journal's, and no Add a book. The books stay kept in this browser and come back, with " +
+      "the open one highlighted, when the user signs in, without a reload. A removal still " +
+      "in its undo window when the user signs out is taken back. On a try page a visitor not " +
+      "yet signed in still sees the shelf.",
     kind: "view",
     emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
     attributes: ["renames"],
@@ -99,9 +115,10 @@ export const machine = setup({
     selected: null,
     // The ids counting down to a discard, each with its own cancelable timer.
     discarding: new Set(),
-    // Whether a user is signed in, learned from session.changed; null until the first
-    // one arrives. Books can only be added while signed in (5).
+    // Whether a user is signed in (3.4): null until session answers.
     signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   // Beside the states, so the preference arrives whatever the view is doing.
   invoke: {
@@ -120,17 +137,14 @@ export const machine = setup({
           target: "ready",
           actions: assign({
             books: ({ event }) => (Array.isArray(event.output.books?.books) ? sorted(event.output.books.books) : []),
-            signedIn: ({ context, event }) =>
-              event.output.session && "userId" in event.output.session
-                ? event.output.session.userId != null
-                : context.signedIn,
+            signedIn: ({ event }) => signedIn(event.output.session),
             selected: ({ context, event }) =>
               event.output.open && "id" in event.output.open ? event.output.open.id : context.selected,
           }),
         },
         // books or session could not answer (offline, no answerer): an honest empty
-        // shelf; the signed-in picture stays whatever session.changed later says.
-        onError: { target: "ready", actions: assign({ books: [] }) },
+        // shelf, and no answer counts as signed in.
+        onError: { target: "ready", actions: assign({ books: [], signedIn: ({ context }) => context.signedIn ?? true }) },
       },
     },
     ready: {},
@@ -138,7 +152,8 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Who is signed in now (4.3): signing in re-asks books: list, because the fact
-    // only pulls the library then; signing out empties the shelf.
+    // pulls the library then. Signing out hides the tiles and keeps them; a removal
+    // the user can no longer see is taken back, so nothing goes without its Undo.
     "session.changed": [
       {
         guard: ({ event }) => event.userId != null,
@@ -146,10 +161,9 @@ export const machine = setup({
         actions: assign({ signedIn: true }),
       },
       {
-        actions: assign({
-          signedIn: false,
-          books: ({ context }) => context.books.filter((b) => b.written),
-          importing: [],
+        actions: enqueueActions(({ context, enqueue }) => {
+          for (const id of context.discarding) enqueue.cancel(`undo:${id}`);
+          enqueue.assign({ signedIn: false, importing: [], discarding: new Set() });
         }),
       },
     ],

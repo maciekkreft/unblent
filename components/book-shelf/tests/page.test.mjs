@@ -37,7 +37,6 @@ const importBook = async (cookie, id, file) => {
   assert.equal(res.status, 200, `importing ${file}`);
 };
 
-const REFUSED = /event book\.refused books → .*\bnotice-stack\b.* delivered/;
 const CHANGED = /event book\.changed books → .*\bbook-shelf\b.* delivered/;
 const DISCARDED = /event book\.discarded book-shelf → books delivered/;
 
@@ -121,29 +120,27 @@ const ENGINES = [
 ];
 
 for (const engine of ENGINES) {
-  // Signed out: the shelf invites a sign-in, and a picked file is refused (the fact
-  // mints nothing anonymously, 5), which notice-stack shows.
+  // Signed out the shelf shows none of the account's books, not even the journal, and
+  // offers no Add a book, since an import needs the account (14).
   // Browser: rendering and layout.
-  test(`the shelf refuses an import when signed out in ${engine.name}`, async () => {
+  test(`signing out hides every tile and the Add button in ${engine.name}`, async () => {
     const browser = await engine.launch();
     const context = await browser.newContext();
     context.setDefaultTimeout(4000);
     try {
       const problems = [];
-      const debug = [];
+      const cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
       const page = await context.newPage();
       watch(page, problems);
-      page.on("console", (msg) => msg.type() === "debug" && debug.push(msg.text()));
       await page.goto(`${BASE_URL}/workshop/design/books`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
+      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
 
-      // session: read (asked by session-switch) settles the signed-out picture.
-      await until(async () => (await emptyText(page)) === "Sign in to add books");
-
-      await setFile(page, SAMPLE);
-      await until(() => debug.some((l) => REFUSED.test(l)));
-      await until(async () => (await noticeTexts(page)).includes("Sign in to continue."));
-      assert.deepEqual(await tiles(page), [], "no tile is added when signed out");
+      await page.locator('session-switch button[aria-label="Sign out"]').click();
+      await until(async () => (await emptyText(page)) === "Sign in to see your books.");
+      assert.deepEqual(await tiles(page), [], "no tile, not even the journal's");
+      assert.equal(await page.evaluate(() => document.querySelector("book-shelf").shadowRoot.querySelectorAll("button, input").length), 0, "no Add a book");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

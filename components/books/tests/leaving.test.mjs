@@ -92,15 +92,18 @@ test("offline, leaving keeps the outbox and the copy; news without leaving ends 
 // A copy left behind by a change of account made while this fact was not on the page
 // (12) is emptied when the fact starts; its own account's copy, or one with rows still
 // to upload, is kept.
-test("a copy kept for another account is emptied when the fact starts", async () => {
-  const { actor, log } = start([], undefined, "u0");
-  await flush();
-  assert.deepEqual(log, ["empty"]);
-  actor.stop();
+test("a copy kept for another account is emptied when the fact starts, even with a row waiting, and nothing is sent", async () => {
+  for (const rows of [[], [ROW]]) {
+    const { actor, log, calls } = start(rows, undefined, "u0");
+    await flush();
+    assert.deepEqual(log, ["empty"]);
+    assert.ok(!calls.includes("position"), "the other account's row is not sent");
+    actor.stop();
+  }
 });
 
-test("the account's own copy, or one still to upload, is kept when the fact starts", async () => {
-  for (const [rows, kept] of [[[], "u1"], [[], undefined], [[ROW], "u0"]]) {
+test("the account's own copy is kept when the fact starts", async () => {
+  for (const [rows, kept] of [[[], "u1"], [[], undefined], [[ROW], "u1"]]) {
     const { actor, log } = start(rows, { offline: true }, kept);
     await flush();
     assert.deepEqual(log, [], `kept ${kept} with ${rows.length} rows`);

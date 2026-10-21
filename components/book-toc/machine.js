@@ -11,7 +11,8 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // which rides book.changed's position, 4.3, fourth rule) and book.deleted after. It
 // never decides what a chapter is; it learns the tree from the fact and announces the
 // user's jump as chapter.selected (4.3, fifth rule). For the journal it also asks
-// choice-points: list and follows its two events, to count each day's choice points.
+// choice-points: list and follows its two events, to count each day's choice points. It
+// asks session: read and follows session.changed only for whether anyone is signed in.
 
 // Only the fields the contents needs are kept from a read reply or a book.changed (both
 // carry the whole book, 4.3, third rule): the id to address a jump at, the tree to
@@ -80,6 +81,16 @@ export const markedChapter = (toc, chapter) => {
 // book.deleted for any other book is the bus's to record as ignored.
 const isOurs = ({ context, event }) => Boolean(context.book) && event.id === context.book.id;
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the contents.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the contents show of the account (14, signed out): "wait" until session answers,
+// so neither the rows nor the sign-in line flashes; "sign-in" signed out, since the
+// chapters and the journal's days are the account's; "show" otherwise. A try page (8)
+// shows them to a visitor who is not yet a guest.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 export const machine = setup({
   actors: {
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
@@ -94,6 +105,8 @@ export const machine = setup({
     // Every choice point, for the journal's counts. The two choice-point events are held
     // until the reply lands (supersededBy).
     choicePoints: fromPromise(({ input }) => input.ask("choice-points", "list", {})),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
   guards: {
     found: ({ event }) => "book" in event.output,
@@ -112,11 +125,13 @@ export const machine = setup({
       "points says how many under its date, \"· 1 choice point\" or \"· 3 choice points\"; one " +
       "being deleted is not counted while its Undo is offered, and counts again after an undo. " +
       "Any other book shows no counts, and when the choice points cannot be read the journal's " +
-      "contents show none and work as before.",
+      "contents show none and work as before. Signed out they show only \"Sign in to see " +
+      "your books.\", and the same book's contents come back when the user signs in, without " +
+      "a reload. On a try page a visitor not yet signed in still sees them.",
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],
-    asks: ["books: open", "books: read", "settings: read", "choice-points: list"],
+    asks: ["books: open", "books: read", "settings: read", "choice-points: list", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -132,6 +147,10 @@ export const machine = setup({
     jump: null,
     // Every choice point by id, as held(): only the journal's counts are drawn from them.
     choicePoints: {},
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   // Beside the states, so the preference arrives whatever the view is doing.
   invoke: [
@@ -151,10 +170,17 @@ export const machine = setup({
       },
       onError: {},
     },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
+    },
   ],
   initial: "starting",
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     // An equal version is taken: the removing flag changes without a new version.
     "choice-point.changed": {
       guard: ({ context, event }) => !(context.choicePoints[event.choicePoint.id]?.version > event.choicePoint.version),

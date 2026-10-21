@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, shownOf, tabsOf } from "../machine.js";
+import { machine, shownOf, tabsOf, showing } from "../machine.js";
 
 // The decision (3.2, 9): which child the stage shows, driven with a fake bus `ask` that
 // answers books: open and books: read from a small state object.
@@ -393,4 +393,54 @@ test("stored note tabs come back with the book tabs, and one the account does no
 test("a list stored before note tabs reads as books", async () => {
   const { last } = await staging({ stored: [OTHER, BOOK] });
   assert.deepEqual(ids(last()), [OTHER, BOOK]);
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The stage with a book open and the journal's tab beside it; session as given, or missing.
+const hidden = async (session, tryPage = false) => {
+  const books = fakeAsk({ openId: OTHER, books: LIBRARY });
+  const ask = (target, name, payload) => (target === "session" ? Promise.resolve(session ?? { error: "no-answerer" }) : books(target, name, payload));
+  const storage = fakeStorage({ [KEY]: JSON.stringify([JOURNAL, OTHER]) });
+  const actor = createActor(machine, { input: { ask, address: "book-stage", storage, tryPage } });
+  const shownEvents = [];
+  actor.on("tabs.shown", (e) => shownEvents.push(e));
+  actor.start();
+  await flush();
+  return { actor, storage, shownEvents, ctx: () => actor.getSnapshot().context, last: () => shownEvents.at(-1) };
+};
+
+test("signed out the stage asks to sign in and draws no tabs; signed in, or with no session to ask, it shows", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  const out = await hidden(SIGNED_OUT);
+  assert.equal(showing(out.ctx()), "sign-in");
+  assert.deepEqual(out.last(), { type: "tabs.shown", view: "book-stage", tabs: [], active: null }, "no tab of the account is drawn");
+  assert.deepEqual(JSON.parse(out.storage.data[KEY]), [JOURNAL, OTHER], "the tabs stay stored");
+  const signedIn = await hidden(SIGNED_IN);
+  assert.equal(showing(signedIn.ctx()), "show");
+  assert.deepEqual(ids(signedIn.last()), [JOURNAL, OTHER]);
+  assert.equal(showing((await hidden()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in sees the stage", async () => {
+  const { ctx, last } = await hidden(SIGNED_OUT, true);
+  assert.equal(showing(ctx()), "show");
+  assert.deepEqual(ids(last()), [JOURNAL, OTHER]);
+});
+
+test("signing in brings back the same tabs and the same book in front without a reload, and signing out hides them", async () => {
+  const { actor, ctx, last, shownEvents } = await hidden(SIGNED_OUT);
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  assert.deepEqual(ids(last()), [JOURNAL, OTHER]);
+  assert.equal(last().active, OTHER);
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
+  assert.deepEqual(last().tabs, []);
+  const count = shownEvents.length;
+  actor.send({ type: "session.changed", ...SIGNED_OUT, registrationOpen: false });
+  assert.equal(shownEvents.length, count, "news that changes nothing draws nothing again");
 });
