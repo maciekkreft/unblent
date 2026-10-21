@@ -27,6 +27,7 @@ import {
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 import moved from "./events/evaluator.moved.json" with { type: "json" };
+import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 import removalStarted from "./events/removal.started.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
@@ -65,6 +66,7 @@ class ActorController {
         "evaluator.selected": selected,
         "evaluator.switched": switched,
         "evaluator.moved": moved,
+        "evaluator.discarded": discarded,
         "removal.started": removalStarted,
       },
     });

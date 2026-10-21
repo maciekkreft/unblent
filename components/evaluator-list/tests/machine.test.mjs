@@ -9,7 +9,7 @@ import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sa
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "removal.started"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started"].map((n) => [n, schema(n)]));
 
 const A = "01K7TEST000000000000000BA1";
 const B = "01K7TEST000000000000000BB1";
@@ -814,7 +814,7 @@ test("dd cuts a row and p puts it between neighbours; u puts a cut row back; New
   valid(emitted);
 });
 
-test("Escape on a cut row counts down on the row; u takes it back; its end hands the delete to the corner notice", async () => {
+test("Escape on a cut row counts down on the row; u takes it back; its end deletes it, with no corner notice", async () => {
   const clock = new SimulatedClock();
   const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED }, clock, undoMs: 3000 });
   actor.send({ type: "_cut", id: id(2) });
@@ -827,8 +827,16 @@ test("Escape on a cut row counts down on the row; u takes it back; its end hands
   actor.send({ type: "_cut", id: id(2) });
   actor.send({ type: "_escape" });
   clock.increment(3000);
-  assert.deepEqual(emitted.at(-1), { type: "removal.started", kind: "evaluator", id: id(2), name: "Evaluator 2" });
+  assert.deepEqual(emitted.at(-1), { type: "evaluator.discarded", id: id(2) });
+  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 0, "one Undo: no corner notice");
   assert.equal(ctx().discarding.size, 0);
+  // A row already cut, cut again over, counts down too and ends the same way.
+  actor.send({ type: "_cut", id: id(1) });
+  actor.send({ type: "_cut", id: id(3) });
+  assert.deepEqual([...ctx().discarding.keys()], [id(1)]);
+  clock.increment(3000);
+  assert.deepEqual(emitted.at(-1), { type: "evaluator.discarded", id: id(1) });
+  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 0);
   valid(emitted);
 });
 
@@ -843,6 +851,7 @@ test("the keyboard leaving the list, or a row opened, hands a cut or a countdown
   assert.deepEqual([ctx().cut, ctx().discarding.size], [null, 0]);
   clock.increment(5000);
   assert.equal(emitted.filter((e) => e.type === "removal.started").length, 2, "its own timer is gone");
+  assert.equal(emitted.filter((e) => e.type === "evaluator.discarded").length, 0, "the notice decides now");
   actor.send({ type: "_cut", id: id(3) });
   actor.send({ type: "_pick", id: D1 });
   assert.deepEqual(emitted.slice(-2).map((e) => e.type), ["removal.started", "evaluator.selected"]);

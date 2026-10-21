@@ -288,6 +288,21 @@ test("an evaluator's removal marks it, Undo unmarks it, and settling makes it a 
   assert.deepEqual(await list(actor), [], "a deleted id stays deleted");
 });
 
+test("an evaluator discarded from the list becomes a tombstone at once, unmarked; an unknown id passes by", async () => {
+  const store = fakeStore();
+  const { actor, deleted } = start(store);
+  await ready(actor);
+  actor.send(saved());
+  actor.send({ type: "evaluator.discarded", id: ID2 });
+  assert.deepEqual(deleted, []);
+  actor.send({ type: "evaluator.discarded", id: ID });
+  assert.deepEqual(deleted, [{ type: "evaluator.deleted", id: ID, book: BOOK }]);
+  assert.deepEqual(await list(actor), []);
+  assert.deepEqual([store.rows.get(ID).deleted, store.rows.get(ID).version], [true, 2], "kept as a tombstone");
+  actor.send({ type: "evaluator.discarded", id: ID });
+  assert.equal(deleted.length, 1, "deleted once");
+});
+
 test("a question or an option is marked, kept through a save that leaves it out, and dropped on settle", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);

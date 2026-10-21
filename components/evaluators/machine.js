@@ -6,7 +6,8 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // conflicts: the last write wins, as the journal's detectors did, and a delete is a
 // tombstone that always wins (5). The view where the user acted emits evaluator.saved,
 // evaluator.switched, evaluator.moved and removal.started; notice-stack emits removal.undone or
-// removal.settled when the undo window ends (4.3, fifth rule). Everything with a side
+// removal.settled when the undo window ends (4.3, fifth rule), and evaluator-list emits
+// evaluator.discarded when the undo window on its row ends. Everything with a side
 // effect (the store, the network, the ask) arrives through input, so this stays a pure
 // definition importable in Node.
 
@@ -372,6 +373,13 @@ function startOver(context, enqueue) {
   enqueue.raise({ type: "_restart" });
 }
 
+// The undo window on a list row ran out (evaluator-list, 4.3 fifth rule): the evaluator
+// becomes a tombstone at once; it was never marked, since the list kept the window itself.
+function applyDiscard(context, { id }, enqueue) {
+  const r = live(context, id);
+  if (r) commit(context, enqueue, { ...r, removing: false, deleted: true });
+}
+
 const settled = (context, message, enqueue) =>
   message.kind === "trial" ? startOver(context, enqueue) : applySettle(context, message, enqueue);
 
@@ -398,11 +406,12 @@ function flush(context, message, enqueue) {
   else if (message.type === "removal.started") applyMark(context, message, true, enqueue);
   else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
   else if (message.type === "removal.settled") settled(context, message, enqueue);
+  else if (message.type === "evaluator.discarded") applyDiscard(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.started", "removal.undone", "removal.settled"].map((t) => [t, { actions: queue }]),
+  ["list?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.started", "removal.undone", "removal.settled", "evaluator.discarded"].map((t) => [t, { actions: queue }]),
 );
 
 // A visitor on a try page (8) with nothing in this browser yet gets the page's
@@ -523,7 +532,9 @@ export const machine = setup({
       "evaluator with its history. The last write wins, so two devices never conflict, and a " +
       "deleted evaluator is kept as a tombstone, which always wins. A removed evaluator, question " +
       "or option is marked while its undo window runs and goes only when the window ends; a mark " +
-      "left by a closed tab ends at the next load. An evaluator reads what it is given: the " +
+      "left by a closed tab ends at the next load. An evaluator deleted from the list " +
+      "(`evaluator.discarded`) is not marked, since the list counts its undo window down on the " +
+      "row, and goes at once when that window ends. An evaluator reads what it is given: the " +
       "book's Run box asks the switched-on evaluators about a typed text, and " +
       "choice-point-checks asks the one chosen for a choice point box about each of its " +
       "lines, whether it is switched on or not. The admin ticks evaluators as starters for a try " +
@@ -662,6 +673,7 @@ export const machine = setup({
         "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, true, enqueue)) },
         "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
         "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => settled(context, event, enqueue)) },
+        "evaluator.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         _restart: { target: "#evaluators.seeding", actions: assign({ seeds: null }) },
         // Signing in enqueues the whole cache, tombstones included, so what was made
         // signed out becomes the account's (5); a different user resets the cursor.
