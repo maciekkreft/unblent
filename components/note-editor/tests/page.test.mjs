@@ -257,10 +257,10 @@ for (const engine of ENGINES) {
       assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dot stands left of the text");
       assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
 
-      // The text keeps the markdown marker, one line per item.
+      // The text keeps the markdown marker, Enter putting a gap between the items.
       await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
       const body = await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
-      assert.match(body, /^- one item .*\n- two$/);
+      assert.match(body, /^- one item .*\n\n- two$/);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
@@ -564,6 +564,58 @@ for (const engine of ENGINES) {
       // The editor reopens the newest note: the stored blank line is a gap again.
       await page.reload();
       await until(async () => (await lines(page))[2]?.text === "One");
+      assert.deepEqual(await shown(), want);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: focus and keys.
+    test("with Vim keys o and O open a paragraph a gap apart, and on an item the next item", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.press("i");
+      await page.keyboard.type("Plan");
+      await page.keyboard.press("Escape");
+      await page.keyboard.type("\\2");
+      await until(async () => (await lines(page))[0]?.className.includes("cm-level-heading"));
+      // o under a heading opens a body paragraph a gap below it.
+      await page.keyboard.press("o");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Escape");
+      // O opens one a gap above, between the heading and the line.
+      await page.keyboard.press("O");
+      await page.keyboard.type("Zero");
+      await page.keyboard.press("Escape");
+      // On an item, o opens the next item a gap below it.
+      await page.keyboard.press("j");
+      await page.keyboard.press("o");
+      await page.keyboard.type("- a");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("o");
+      await page.keyboard.type("b");
+      await page.keyboard.press("Escape");
+      const shown = async () =>
+        (await lines(page)).map((l) => [l.text, l.className.includes("cm-level-"), l.className.includes("cm-gap"), l.className.includes("cm-item")]);
+      const want = [
+        ["Plan", true, false, false],
+        ["", false, true, false],
+        ["Zero", false, false, false],
+        ["", false, true, false],
+        ["One", false, false, false],
+        ["", false, true, false],
+        ["•a", false, false, true],
+        ["", false, true, false],
+        ["•b", false, false, true],
+      ];
+      await until(async () => (await shown()).length === want.length);
       assert.deepEqual(await shown(), want);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();

@@ -54,9 +54,23 @@ export function pastGap(blank, count, n, dir) {
   return m;
 }
 
+// Vim's o and O: a new paragraph below or above the line holding pos, the same gap as
+// Enter makes, so o at a line's end and Enter there leave the same text. On an item
+// (`item`, what itemAt found there, or null) the new line is the next or the previous
+// item, at its indent and with its marker, a gap apart from it.
+export function openAt(text, pos, below, item = null) {
+  const from = pos === 0 ? 0 : text.lastIndexOf("\n", pos - 1) + 1;
+  let to = text.indexOf("\n", pos);
+  if (to < 0) to = text.length;
+  const lead = item ? " ".repeat(item.indent) + item.marker + " " : "";
+  if (below) return { from: to, to, insert: "\n\n" + lead, cursor: to + 2 + lead.length };
+  return { from, to: from, insert: lead + "\n\n", cursor: from + lead.length };
+}
+
 // --- Lists ------------------------------------------------------------------------
-// A line that begins with "- " or "* ", after any spaces, is a list item (10). Items of
-// one list are one "\n" apart, and the marker stays in the text, so it stays markdown.
+// A line that begins with "- " or "* ", after any spaces, is a list item (10). The
+// marker stays in the text, so it stays markdown. Items of one list are a gap apart
+// ("\n\n") when made with Enter and one "\n" apart when made with Shift+Enter.
 
 const ITEM = /^( *)([-*]) /;
 
@@ -71,15 +85,16 @@ export function itemAt(text, pos) {
   return { from, to, indent: m[1].length, marker: m[2], textFrom: from + m[0].length };
 }
 
-// Enter (or the line-break key) on an item: the next item, at the same indent. On an
-// empty item it steps out one level, or, at the top level, ends the list: the item
-// becomes the blank line of a new paragraph, a gap apart from the text around it.
-export function nextItemAt(text, from, to = from) {
+// Enter (gap) or the line-break key on an item: the next item, at the same indent, a
+// gap below or one line below. On an empty item it steps out one level, or, at the top
+// level, ends the list: the item becomes the blank line of a new paragraph, a gap apart
+// from the text around it.
+export function nextItemAt(text, from, to = from, gap = false) {
   const item = itemAt(text, from);
   if (!item || from < item.textFrom || to > item.to) return null;
   const empty = from === to && text.slice(item.textFrom, item.to).trim() === "";
   if (!empty) {
-    const insert = "\n" + " ".repeat(item.indent) + item.marker + " ";
+    const insert = (gap ? "\n\n" : "\n") + " ".repeat(item.indent) + item.marker + " ";
     return { from, to, insert, cursor: from + insert.length };
   }
   if (item.indent > 0) {
@@ -141,13 +156,22 @@ function reindent(text, from, to, per) {
   return { from: start, to: end, insert, anchor: map(from), cursor: map(to) };
 }
 
-// Tab: every item the selection touches moves one level in, when the line above is an
-// item at least as deep as the first of them, so a list never skips a level. Null when
-// it cannot, so Tab is left to the browser.
+// The end of the nearest line that is not blank above the line starting at lineFrom
+// (> 0), so a gap between two items keeps them one list; the first line when every line
+// above is blank.
+function aboveText(text, lineFrom) {
+  let end = lineFrom - 1;
+  while (end > 0 && text[end - 1] === "\n") end--;
+  return end;
+}
+
+// Tab: every item the selection touches moves one level in, when the item above, past
+// any gap, is at least as deep as the first of them, so a list never skips a level.
+// Null when it cannot, so Tab is left to the browser.
 export function indentAt(text, from, to = from) {
   const first = itemAt(text, from);
   if (!first || first.from === 0) return null;
-  const above = itemAt(text, first.from - 1);
+  const above = itemAt(text, aboveText(text, first.from));
   if (!above || above.indent < first.indent) return null;
   return reindent(text, from, to, () => 2);
 }
@@ -164,14 +188,14 @@ export function outdentAt(text, from, to = from) {
 // (a click), "key" (CodeMirror's own moves), "back" (Vim's b or ge, a word back) or
 // "other" (Vim's other motions). From another line, by a click, or from inside the text,
 // it rests at the start of the text. From the start of the text, a step back by an arrow
-// key goes on to the end of the line above, and Vim's word back on to the last word above,
-// past any gap; Vim's h, 0, ^ and I stay, as they never leave a line.
+// key goes on to the end of the line above and Vim's word back on to the last word above,
+// both past any gap; Vim's h, 0, ^ and I stay, as they never leave a line.
 export function markerStop(text, head, before, by) {
   const item = itemAt(text, head);
   if (!item || head >= item.textFrom) return null;
   const sameLine = before >= item.textFrom && before <= item.to;
   if (by === "pointer" || !sameLine || item.from === 0 || before !== item.textFrom) return item.textFrom;
-  if (by === "key") return head === before - 1 ? item.from - 1 : item.textFrom;
+  if (by === "key") return head === before - 1 ? aboveText(text, item.from) : item.textFrom;
   if (by !== "back") return item.textFrom;
   let word = item.from - 1;
   while (word > 0 && /\s/.test(text[word - 1])) word--;
@@ -252,6 +276,28 @@ const quitEditor = (cm) => {
 Vim.defineEx("quit", "q", quitEditor);
 // A stage keeps a tab per thing it shows, so closing the tab is quitting the editor in it.
 Vim.defineEx("tabclose", "tabc", quitEditor);
+
+// Vim's o and O open a paragraph (openAt) in an editor using paragraphs(), which says
+// how through this facet; anywhere else they are Vim's own. Vim's maps are one per page,
+// so the action is mapped once here and asks the focused editor. An action is called as
+// a method of Vim's action table, so `this` reaches Vim's own o and its insert mode.
+export const paragraphsOpener = Facet.define();
+Vim.defineAction("openParagraph", function (cm, args, vimState) {
+  const view = cm.cm6;
+  const open = view?.state.facet(paragraphsOpener)[0];
+  if (!open || view.state.readOnly) return this.newLineAndEnterInsertMode(cm, args, vimState);
+  const edit = open(view.state, args.after);
+  view.dispatch({
+    changes: { from: edit.from, to: edit.to, insert: edit.insert },
+    selection: EditorSelection.cursor(edit.cursor),
+    scrollIntoView: true,
+    userEvent: "input",
+  });
+  this.enterInsertMode(cm, { repeat: args.repeat }, vimState);
+});
+for (const [key, after] of [["o", true], ["O", false]]) {
+  Vim.mapCommand(key, "action", "openParagraph", { after }, { isEdit: true, interlaceInsertRepeat: true, context: "normal" });
+}
 
 // The shared setup. Put first in an editor's extensions: the Vim plugin must see a key
 // before any keymap does. The standard and history keys are low precedence, so an
@@ -341,7 +387,7 @@ const itemTheme = EditorView.theme({
 // `enter: false` leaves Enter to the editor (a box that sends on it); Shift+Enter, the
 // gaps, the stepping and the joins stay. `keepBlank(state, line)` names a blank line
 // that must stay a place to type: never drawn as a gap, never stepped over, never
-// removed by a join.
+// removed by a join. With Vim on, o and O open a paragraph with the same gap as Enter.
 //
 // Lines that begin with "- " or "* " are list items (see Lists above). `notList(state,
 // line)` names a line that is never one (a heading, a fixed quote); `lists: false`
@@ -434,12 +480,20 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     { key: "Delete", run: apply(collapsed(deleteAt), "delete.forward", true) },
   ];
 
-  if (!lists) return [gaps, overGaps, gapTheme, keymap.of(keys)];
-
   const itemLineAt = (state, pos) => {
     const line = state.doc.lineAt(pos);
-    return !notList(state, line) && ITEM.test(line.text) ? line : null;
+    return lists && !notList(state, line) && ITEM.test(line.text) ? line : null;
   };
+
+  // What Vim's o and O do here (see paragraphsOpener): the edit openAt makes, on an item
+  // only where this editor has items.
+  const opener = paragraphsOpener.of((state, below) => {
+    const head = state.selection.main.head;
+    const text = state.doc.toString();
+    return openAt(text, head, below, itemLineAt(state, head) ? itemAt(text, head) : null);
+  });
+
+  if (!lists) return [gaps, overGaps, gapTheme, opener, keymap.of(keys)];
 
   const buildItems = (state) => {
     const found = [];
@@ -477,12 +531,12 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     return (target) => itemLineAt(target.state, target.state.selection.main.from) !== null && run(target);
   };
   const listKeys = [
-    { key: "Enter", run: enter ? onItem(nextItemAt, "input") : never },
+    { key: "Enter", run: enter ? onItem((text, from, to) => nextItemAt(text, from, to, true), "input") : never },
     { key: "Shift-Enter", run: onItem(nextItemAt, "input") },
     { key: "Backspace", run: onItem(collapsed(unbulletAt), "delete.backward", true) },
     { key: "Tab", run: onItem(indentAt, "input.indent") },
     { key: "Shift-Tab", run: onItem(outdentAt, "delete.dedent") },
   ];
 
-  return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, keymap.of([...listKeys, ...keys])];
+  return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, keymap.of([...listKeys, ...keys])];
 }

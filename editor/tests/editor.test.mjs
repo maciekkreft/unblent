@@ -20,6 +20,8 @@ import {
   indentAt,
   outdentAt,
   markerStop,
+  openAt,
+  paragraphsOpener,
 } from "../editor.js";
 
 // The kit can break every editor (architecture.md 10), so its rule is tested here
@@ -102,6 +104,38 @@ test("Enter on an item makes the next one; on an empty one it steps out or ends 
   assert.equal(nextItemAt("one", 3), null);
 });
 
+test("Enter on an item makes the next one a gap below; the line-break key one line below", () => {
+  assert.equal(run("- one", nextItemAt("- one", 5, 5, true)), "- one\n\n- ");
+  assert.equal(nextItemAt("- one", 5, 5, true).cursor, 9);
+  assert.equal(run("  * onetwo", nextItemAt("  * onetwo", 7, 7, true)), "  * one\n\n  * two");
+  // An empty item after a gap ends the list the same way, leaving the gap above.
+  assert.equal(run("- a\n\n- ", nextItemAt("- a\n\n- ", 7, 7, true)), "- a\n\n");
+  assert.equal(run("- a\n\n  - ", nextItemAt("- a\n\n  - ", 9, 9, true)), "- a\n\n- ");
+  assert.equal(run("- a\n\n- \n\n- b", nextItemAt("- a\n\n- \n\n- b", 7, 7, true)), "- a\n\n\n\n- b");
+});
+
+test("o and O open a paragraph a gap below or above the line, or the next or previous item", () => {
+  // Below: what Enter at the line's end makes.
+  assert.equal(run("Head\nBody", openAt("Head\nBody", 1, true)), "Head\n\n\nBody");
+  assert.equal(openAt("Head\nBody", 1, true).cursor, 6);
+  assert.equal(run("One", openAt("One", 0, true)), "One\n\n");
+  // Between two paragraphs the new one is a gap apart from both.
+  assert.equal(run("A\n\nB", openAt("A\n\nB", 0, true)), "A\n\n\n\nB");
+  // Above: what Enter at the line's start makes, the cursor on the new line.
+  assert.equal(run("A\n\nB", openAt("A\n\nB", 3, false)), "A\n\n\n\nB");
+  assert.equal(openAt("A\n\nB", 3, false).cursor, 3);
+  assert.equal(run("One", openAt("One", 2, false)), "\n\nOne");
+  assert.equal(openAt("One", 2, false).cursor, 0);
+  // On an item, the next or previous item at its indent and with its marker.
+  const t = "- a\n  * b";
+  assert.equal(run(t, openAt(t, 8, true, itemAt(t, 8))), "- a\n  * b\n\n  * ");
+  assert.equal(openAt(t, 8, true, itemAt(t, 8)).cursor, 15);
+  assert.equal(run(t, openAt(t, 8, false, itemAt(t, 8))), "- a\n  * \n\n  * b");
+  assert.equal(openAt(t, 8, false, itemAt(t, 8)).cursor, 8);
+  // An empty item opens another; o never ends a list.
+  assert.equal(run("- ", openAt("- ", 2, true, itemAt("- ", 2))), "- \n\n- ");
+});
+
 test("Backspace at the start of an item's text removes the bullet, keeping the text", () => {
   assert.equal(run("a\n  - b", unbulletAt("a\n  - b", 6)), "a\nb");
   assert.equal(unbulletAt("a\n  - b", 6).cursor, 2);
@@ -127,6 +161,11 @@ test("Tab indents an item under the one above; Shift+Tab outdents", () => {
   assert.equal(outdentAt("- a\n  - b", 8).cursor, 6);
   assert.equal(outdentAt("- a", 2), null);
   assert.equal(outdentAt("a", 0), null);
+  // A gap between items keeps them one list; a paragraph between them does not.
+  assert.equal(run("- a\n\n- b", indentAt("- a\n\n- b", 7)), "- a\n\n  - b");
+  assert.equal(run("- a\n\n- b\n\n- c", indentAt("- a\n\n- b\n\n- c", 7, 12)), "- a\n\n  - b\n\n  - c");
+  assert.equal(indentAt("- a\n\nx\n\n- b", 10), null);
+  assert.equal(indentAt("\n\n- b", 4), null);
 });
 
 test("a cursor never rests inside a marker", () => {
@@ -148,6 +187,8 @@ test("a cursor never rests inside a marker", () => {
   assert.equal(markerStop(text, 4, 8, "back"), 6);
   assert.equal(markerStop("a bc  \n- d", 7, 9, "back"), 2);
   assert.equal(markerStop("a\n\n- d", 3, 5, "back"), 0);
+  // Past a gap, the arrow step goes on to the end of the text above.
+  assert.equal(markerStop("One\n\n- two", 6, 7, "key"), 3);
   // The first line has nothing above.
   assert.equal(markerStop("- a", 1, 2, "key"), 2);
   // Outside a marker, nothing to do.
@@ -283,12 +324,15 @@ test("item lines are drawn as items, except the ones an editor names, and none w
 test("Enter and Shift+Enter on an item make the next one, undone in one step", () => {
   const t = target("- one", 5, [...baseExtensions(), paragraphs()]);
   assert.ok(press(t, "Enter"));
-  assert.equal(t.state.doc.toString(), "- one\n- ");
+  assert.equal(t.state.doc.toString(), "- one\n\n- ");
   assert.ok(press(t, "Enter"));
   assert.equal(t.state.doc.toString(), "- one\n\n");
   assert.ok(undo(t));
   assert.ok(undo(t));
   assert.equal(t.state.doc.toString(), "- one");
+  const tight = target("- one", 5, [paragraphs()]);
+  assert.ok(press(tight, "Shift-Enter"));
+  assert.equal(tight.state.doc.toString(), "- one\n- ");
   const s = target("- one", 5, [paragraphs({ enter: false })]);
   assert.equal(press(s, "Enter"), false);
   assert.ok(press(s, "Shift-Enter"));
@@ -297,6 +341,32 @@ test("Enter and Shift+Enter on an item make the next one, undone in one step", (
   const p = target("one", 3, [paragraphs()]);
   assert.ok(press(p, "Enter"));
   assert.equal(p.state.doc.toString(), "one\n\n");
+});
+
+// Vim's o and O as the kit's action runs them: the focused editor's opener, dispatched.
+// Vim itself needs a DOM, so the browser test of the keys is in an editor's own tests.
+const openLine = (t, below) => {
+  const edit = t.state.facet(paragraphsOpener)[0](t.state, below);
+  t.dispatch(t.state.update({ changes: { from: edit.from, to: edit.to, insert: edit.insert }, selection: EditorSelection.cursor(edit.cursor) }));
+};
+
+test("o and O open a paragraph, an item on an item, but never on a named line or with lists off", () => {
+  const t = target("Head\nBody", 2, [...baseExtensions(), paragraphs()]);
+  openLine(t, true);
+  assert.equal(t.state.doc.toString(), "Head\n\n\nBody");
+  assert.equal(t.state.doc.lineAt(t.state.selection.main.head).number, 3);
+  const item = target("- a", 3, [paragraphs()]);
+  openLine(item, false);
+  assert.equal(item.state.doc.toString(), "- \n\n- a");
+  assert.equal(item.state.selection.main.head, 2);
+  const named = target("- a", 3, [paragraphs({ notList: () => true })]);
+  openLine(named, true);
+  assert.equal(named.state.doc.toString(), "- a\n\n");
+  const off = target("- a", 3, [paragraphs({ lists: false })]);
+  openLine(off, true);
+  assert.equal(off.state.doc.toString(), "- a\n\n");
+  // An editor without paragraphs() has no opener, so Vim's own o runs there.
+  assert.deepEqual(target("a", 0, baseExtensions()).state.facet(paragraphsOpener), []);
 });
 
 test("a named line or lists off keep the paragraph keys", () => {
