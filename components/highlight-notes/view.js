@@ -5,7 +5,7 @@ import { EditorState, StateField, StateEffect, Annotation, Transaction } from "@
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { invertedEffects } from "@codemirror/commands";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, ordered, compose, split } from "./machine.js";
+import { machine, ordered, compose, split, showing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 
@@ -276,6 +276,8 @@ class ActorController {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         undoMs,
+        // A try page (8) shows the highlights signed out.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: { "note.saved": saved, "note.discarded": discarded },
     });
@@ -452,6 +454,12 @@ class HighlightNotes extends LitElement {
       margin: 0;
       max-width: calc(var(--space-2xl) * 8);
     }
+    .signin {
+      margin: 0;
+      padding: var(--space-md);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+    }
   `;
 
   #actor = new ActorController(this);
@@ -610,7 +618,15 @@ class HighlightNotes extends LitElement {
 
   firstUpdated() {
     this.#flashMs = toMs(getComputedStyle(this).getPropertyValue("--duration-slide"), 300);
-    const parent = this.renderRoot.querySelector(".region");
+  }
+
+  // The CodeMirror document lives only while the region is drawn: signed out the region
+  // is not drawn (render), so no highlight stays in the page, and signing in builds it
+  // again from the fragments the actor still holds.
+  #build(parent) {
+    this.#shown = "";
+    this.#order = [];
+    this.#discShown = new Set();
     this.#view = new EditorView({
       parent,
       // Shadow DOM: CodeMirror reads the selection through the root and style-mod mounts
@@ -619,7 +635,6 @@ class HighlightNotes extends LitElement {
       state: EditorState.create({ doc: "", extensions: this.#extensions() }),
     });
     this.#resize.observe(this.#view.scrollDOM);
-    this.#sync();
   }
 
   // Bring the document in line with the facts, touching only what changed so the caret
@@ -700,6 +715,14 @@ class HighlightNotes extends LitElement {
   }
 
   updated() {
+    const region = this.renderRoot.querySelector(".region");
+    if (!region) {
+      if (this.#view) this.#resize.unobserve(this.#view.scrollDOM);
+      this.#view?.destroy();
+      this.#view = null;
+      return;
+    }
+    if (!this.#view) this.#build(region);
     if (this.#view) setVim(this.#view, this.#actor.snapshot?.context.vimKeys === true);
     this.#sync();
   }
@@ -721,6 +744,10 @@ class HighlightNotes extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = snapshot ? showing(snapshot.context) : "wait";
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="signin">Sign in to see your notes.</p>`;
     const blank = !snapshot || ordered(snapshot.context.fragments).length === 0;
     // .region has no bindings, so Lit never touches CodeMirror's subtree on re-render.
     return html`

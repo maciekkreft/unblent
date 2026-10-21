@@ -17,7 +17,8 @@ import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnCh
 // and both are pure, so they and titleOf are tested in Node. Everything with a side
 // effect — the queries, minting an id, focusing the input, the pin store — arrives
 // through input, so this stays a pure definition importable in Node; it imports no
-// CodeMirror (that lives in view.js, the browser-only entry).
+// CodeMirror (that lives in view.js, the browser-only entry). It asks session: read and
+// follows session.changed only for whether anyone is signed in.
 
 const THROTTLE_MS = 200;
 
@@ -186,6 +187,16 @@ const savedEvent = (context) => {
 const dirty = (context) =>
   context.id != null && (context.sent == null ? context.body !== "" : context.body !== context.sent.body);
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the note.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the editor shows of the account (14, signed out): "wait" until session answers, so
+// neither the note nor the sign-in line flashes; "sign-in" signed out, since the panel
+// keeps the editor in front across a reload and the note it holds is the account's;
+// "show" otherwise. A try page (8) shows its visitor the editor.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): every note, and — only while following the stage —
@@ -204,6 +215,8 @@ export const machine = setup({
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
     read: fromPromise(({ input }) => input.ask("notes", "read", { id: input.id })),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // Following a source link asks notes for the highlight beside whatever the editor is
     // doing, so the draft and its state are untouched; the reply comes back as _followed.
     follow: fromCallback(({ input, sendBack }) => {
@@ -309,11 +322,14 @@ export const machine = setup({
       "disabled while the editor holds no note. With `stage` it is the editor the stage shows " +
       "for a note tab: it follows no subject, no selection and no pin, has no header, never " +
       "announces its note, shows the note the stage names by `load`, and `:q`, `:tabc` or " +
-      "`:tabclose` closes the tab without changing the note.",
+      "`:tabclose` closes the tab without changing the note. Signed out it shows only \"Sign " +
+      "in to see your notes.\" and nothing of the note it holds, also when it was in front " +
+      "before a reload; the note stays kept in this browser and comes back when the user signs " +
+      "in, without a reload. On a try page a visitor not yet signed in still sees the editor.",
     kind: "view",
     emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -376,17 +392,30 @@ export const machine = setup({
     // The notes fetched at start, kept so a forgotten pin can choose from the same
     // picture without a second query.
     startNotes: [],
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   initial: "starting",
   // Beside the states, so the preference arrives whatever the editor is doing and a
   // keystroke never waits for it. settings.changed that races it is held for us until
   // the reply lands (settings: read supersededBy).
-  invoke: {
-    src: "settings",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
-  },
+  invoke: [
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
+    },
+  ],
   on: {
+    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     "dock.changed": { actions: assign({ layouts: ({ context }) => context.layouts + 1 }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A command addressing this instance (4.4).

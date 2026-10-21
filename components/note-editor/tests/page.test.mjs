@@ -11,6 +11,10 @@ const { webkit, chromium } = await import(PLAYWRIGHT_MODULE);
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
+// The kit (10): a forged sign-in, for the product, which hides the notes signed out.
+assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
+const { signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCREENSHOTS = resolve(HERE, "..", "..", "..", ".screenshots");
 
@@ -265,6 +269,8 @@ for (const engine of ENGINES) {
     test("a choice the composer cannot load leaves the page's default", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
+      // Signed out the product hides the notes and offers no New note.
+      await signedIn(context, forgeCookie("note-composer"));
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);
@@ -286,6 +292,40 @@ for (const engine of ENGINES) {
       const others = problems.filter((p) => !p.includes(missing) && !/^console error: Failed to load resource: .*404/.test(p));
       assert.ok(problems.some((p) => p.includes(missing)), "the composer did try the choice");
       assert.deepEqual(others, [], `${engine.name} reported: ${others.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: rendering and layout.
+    test("on the product, the editor in front after a reload hides its note signed out and shows it again on sign-in", async () => {
+      const cookie = forgeCookie("note-editor");
+      const res = await fetch(`${BASE_URL}/api/notes/01K0000000000000000000N0TE`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+        body: JSON.stringify({ title: "Kept", body: "Kept\nprivate words", baseVersion: null, about: [] }),
+      });
+      assert.equal(res.status, 200);
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, cookie);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      const content = () => page.evaluate(() => document.querySelector("#notes-editor").shadowRoot.querySelector(".cm-content")?.textContent ?? null);
+      await page.goto(`${BASE_URL}/`);
+      await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row:not(.draft)"));
+      await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row:not(.draft)").click());
+      await until(async () => (await content())?.includes("private words"));
+      await page.reload();
+      await until(async () => (await content())?.includes("private words"));
+
+      await page.locator('session-switch button[aria-label="Sign out"]').click();
+      await until(async () => (await page.evaluate(() => document.querySelector("#notes-editor").shadowRoot.textContent.trim())) === "Sign in to see your notes.");
+      assert.equal(await content(), null, "nothing of the note stays in the page");
+
+      await signedIn(context, cookie);
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await until(async () => (await content())?.includes("private words"));
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
 

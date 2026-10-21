@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, isStaged } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, isStaged, showing } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -50,6 +50,9 @@ function editor({
   // only answers notes and subject.
   pinned = null,
   pushRegister,
+  // What session: read answers, answered here like pins; missing, no session is mounted.
+  session,
+  tryPage = false,
 } = {}) {
   const clock = new SimulatedClock();
   const saved = [];
@@ -58,9 +61,13 @@ function editor({
   const stagedIds = [];
   const closed = [];
   const asked = (target, name, payload) =>
-    target === "pins" ? Promise.resolve({ note: pinned, chat: null, evaluators: null }) : ask(target, name, payload);
+    target === "pins"
+      ? Promise.resolve({ note: pinned, chat: null, evaluators: null })
+      : target === "session"
+        ? Promise.resolve(session ?? { error: "no-answerer" })
+        : ask(target, name, payload);
   const actor = createActor(machine, {
-    input: { ask: asked, mint, focus, follows, subjecting, staged, recall, forget, recallTitles, rememberTitles, pushRegister },
+    input: { ask: asked, mint, focus, follows, subjecting, staged, recall, forget, recallTitles, rememberTitles, pushRegister, tryPage },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
@@ -1099,6 +1106,40 @@ test(":q or :tabc in the stage's editor closes its tab; elsewhere it does nothin
   await settle();
   panel.actor.send({ type: "_quit" });
   assert.deepEqual(panel.closed, []);
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The editor reopening the newest note after a reload; session as given, or missing.
+const reopened = async (session, tryPage = false) => {
+  const made = editor({ ask: asking({ list: { notes: [NOTE] }, note: { note: NOTE } }), session, tryPage });
+  await settle();
+  return { ...made, ctx: () => made.actor.getSnapshot().context };
+};
+
+test("signed out the note open before a reload is not shown; signed in, or with no session to ask, it is", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(showing((await reopened(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(showing((await reopened(SIGNED_IN)).ctx()), "show");
+  assert.equal(showing((await reopened()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in sees the editor", async () => {
+  assert.equal(showing((await reopened(SIGNED_OUT, true)).ctx()), "show");
+});
+
+test("signing in shows the same note again without a reload, and signing out hides it", async () => {
+  const { actor, ctx } = await reopened(SIGNED_OUT);
+  assert.equal(ctx().id, ID, "still held while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  assert.equal(ctx().body, NOTE.body);
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
+  assert.equal(ctx().id, ID);
 });
 
 test("every payload matches its schema", () => {

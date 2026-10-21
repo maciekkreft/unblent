@@ -13,7 +13,8 @@ import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 // Picking it opens a blank editor under that id; when the user types, note.changed
 // brings the real row and a fresh draft is minted above it. The list never creates a
 // note — a fact learns of creation from a gesture (4.3, fifth rule) — it only holds
-// the name a note will take.
+// the name a note will take. It asks session: read and follows session.changed only for
+// whether anyone is signed in.
 
 // Newest first: updatedAt descending, id as the tiebreak, the same order notes uses
 // in its list reply (notes.replyList), so a row keeps its place across a re-sort.
@@ -93,6 +94,19 @@ const without = (set, id) => {
   return next;
 };
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the notes.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the list shows of the account (14, signed out): "wait" until session answers, so
+// neither the rows nor the sign-in line flashes; "sign-in" signed out, since the notes
+// kept in this browser are the account's; "show" otherwise. A try page (8) shows its
+// visitor the list.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
+// A gesture on a row counts only while the rows are shown.
+const shows = ({ context }) => showing(context) === "show";
+
 export const machine = setup({
   actors: {
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
@@ -110,6 +124,8 @@ export const machine = setup({
     // supersededBy), so it is applied after the starting picture, in order.
     readSubject: fromPromise(({ input }) =>
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
 }).createMachine({
   id: "note-list",
@@ -125,7 +141,11 @@ export const machine = setup({
       "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
       "the Highlights are the open row is kept in this browser across a reload, as the panel " +
       "keeps showing them, so the row stays marked and the keyboard comes back to it. " +
-      "Highlights are never listed as separate notes.",
+      "Highlights are never listed as separate notes. Signed out it shows only \"Sign in to " +
+      "see your notes.\": no New note, no Highlights row and no notes. The notes stay kept in " +
+      "this browser and come back when the user signs in, without a reload; a delete still " +
+      "in its undo window when the user signs out is taken back. On a try page a visitor not " +
+      "yet signed in still sees the list.",
     kind: "view",
     emits: ["note.selected", "note.discarded", "highlights.selected"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
@@ -133,7 +153,7 @@ export const machine = setup({
     // subject on the stage, with the Highlights row above them while the subject has
     // a highlight; there is no switch to all notes.
     attributes: ["subject"],
-    asks: ["notes: list", "subject: read", "settings: read"],
+    asks: ["notes: list", "subject: read", "settings: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -168,6 +188,10 @@ export const machine = setup({
     // The next note's id, always present: the first row, blank until the user types
     // and note.changed brings its real row, whereupon a fresh one is minted.
     draft: input.mint(),
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   // The subject read runs for the machine's whole life (3.5), so the notes-load
   // transition (loading → ready) never cancels it: its reply lands on its own and sets
@@ -185,6 +209,12 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
       onError: { actions: [] },
+    },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
     },
   ],
   initial: "loading",
@@ -210,6 +240,17 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    // Who is signed in now (4.3). Signing out hides the rows and keeps them; a delete the
+    // user can no longer see is taken back, so nothing goes without its Undo.
+    "session.changed": [
+      { guard: ({ event }) => event.userId != null, actions: assign({ signedIn: true }) },
+      {
+        actions: enqueueActions(({ context, enqueue }) => {
+          for (const id of context.discarding) enqueue.cancel(`undo:${id}`);
+          enqueue.assign({ signedIn: false, discarding: new Set() });
+        }),
+      },
+    ],
     // The fact's news (4.3, fourth rule), followed in any state so a change that
     // races the starting query is not lost. A change for the draft's id means the
     // draft became a real note, so a fresh next-note id is minted above it.
@@ -242,7 +283,8 @@ export const machine = setup({
     // The trash on a row, or a swipe past its threshold (5): begin the undo window.
     // Nothing is emitted yet; only its elapse makes the delete a fact.
     _discard: {
-      guard: ({ context, event }) => context.notes.some((n) => n.id === event.id) && !context.discarding.has(event.id),
+      guard: ({ context, event }) =>
+        shows({ context }) && context.notes.some((n) => n.id === event.id) && !context.discarding.has(event.id),
       actions: enqueueActions(({ event, enqueue }) => {
         enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
         enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });
@@ -279,6 +321,7 @@ export const machine = setup({
     // Picking a note clears the Highlights row's picked mark (Decision 7).
     _pick: {
       guard: ({ context, event }) =>
+        shows({ context }) &&
         !context.discarding.has(event.id) &&
         (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
       actions: [
@@ -290,7 +333,7 @@ export const machine = setup({
     // the gesture the container consumes to show the highlights document, and mark the row
     // as the picked one. Guarded on the row actually being shown, so a stale pick is inert.
     _pickHighlights: {
-      guard: ({ context }) => highlights(context) != null,
+      guard: ({ context }) => shows({ context }) && highlights(context) != null,
       actions: [
         assign({ highlightsOpen: true }),
         emit(({ context }) => ({

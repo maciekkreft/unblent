@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // The kit (10): the helpers every browser suite shares, reached by the path the check sets.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -100,5 +100,41 @@ for (const engine of ENGINES) {
         await context.close();
       }
     });
+  });
+}
+
+for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
+  // Browser: rendering and layout.
+  test(`on the product, signing out hides every note and signing in brings them back without a reload in ${engine.name}`, async () => {
+    const cookie = forgeCookie("note-list");
+    const id = "01K0000000000000000000N0TE";
+    const res = await fetch(`${BASE_URL}/api/notes/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+      body: JSON.stringify({ title: "Kept", body: "Kept\nbody", baseVersion: null, about: [] }),
+    });
+    assert.equal(res.status, 200);
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    context.setDefaultTimeout(4000);
+    try {
+      await signedIn(context, cookie);
+      const page = await context.newPage();
+      const problems = watch(page);
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await until(async () => (await rowTitles(page)).join() === "New note,Kept");
+
+      await page.locator('session-switch button[aria-label="Sign out"]').click();
+      await until(async () => (await inList(page, (root) => root.textContent.trim())) === "Sign in to see your notes.");
+      assert.deepEqual(await rowTitles(page), [], "no rows, not even New note");
+
+      await signedIn(context, cookie);
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await until(async () => (await rowTitles(page)).join() === "New note,Kept");
+      assert.deepEqual(problems, [], problems.join("; "));
+    } finally {
+      await context.close();
+      await browser.close();
+    }
   });
 }

@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, highlights } from "./machine.js";
+import { machine, shown, apart, highlights, showing } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
@@ -51,6 +51,8 @@ class ActorController {
         // today's behaviour.
         following: this.host.subject,
         highlightsOpen,
+        // A try page (8) shows the list signed out.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: {
         "note.selected": selected,
@@ -542,6 +544,10 @@ class NoteList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
     const { open, discarding, highlightsOpen } = snapshot.context;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, snapshot.context);

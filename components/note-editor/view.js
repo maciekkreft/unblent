@@ -7,7 +7,7 @@ import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn, isStaged } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn, isStaged, showing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -388,6 +388,8 @@ class ActorController {
         rememberTitles: titleStore.remember,
         // Vim's registers are one per page, so the link lands where any editor's p reads.
         pushRegister: (text) => Vim.getRegisterController().pushText(null, "yank", text, false, false),
+        // A try page (8) shows the editor signed out.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: { "note.saved": saved, "note.opened": opened, "pin.toggled": pinToggled, "passage.selected": passageSelected, "note.staged": staged, "note.closed": closed },
     });
@@ -431,6 +433,12 @@ class NoteEditor extends LitElement {
     }
     :host([height="fill"]) {
       flex: 1;
+    }
+    .empty {
+      margin: 0;
+      padding: var(--space-md);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
     }
     .editor {
       display: flex;
@@ -697,8 +705,10 @@ class NoteEditor extends LitElement {
     globalThis.addEventListener("resize", this.#place);
   }
 
-  firstUpdated() {
-    const parent = this.renderRoot.querySelector(".region");
+  // The CodeMirror document lives only while the region is drawn: signed out the region
+  // is not drawn (render), so nothing of the note stays in the page, and signing in
+  // builds it again from the note the actor still holds.
+  #build(parent) {
     const body = this.#actor.snapshot?.context.body ?? "";
     const { doc, levels } = parseBody(body);
     this.#view = new EditorView({
@@ -718,6 +728,13 @@ class NoteEditor extends LitElement {
     // measured again once the desk has laid out the move.
     this.#place();
     requestAnimationFrame(this.#place);
+    const region = this.renderRoot.querySelector(".region");
+    if (!region) {
+      this.#view?.destroy();
+      this.#view = null;
+      return;
+    }
+    if (!this.#view) this.#build(region);
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
     const { body, vimKeys, removed } = snapshot.context;
@@ -857,6 +874,10 @@ class NoteEditor extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
     const { subjecting, pinned, id, vimKeys } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, apart, highlights, plain } from "../machine.js";
+import { machine, shown, apart, highlights, plain, showing } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -24,12 +24,12 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, highlightsOpen = false } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, highlightsOpen = false, tryPage = false } = {}) {
   const selected = [];
   const discarded = [];
   const highlighted = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following, highlightsOpen }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following, highlightsOpen, tryPage }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.on("highlights.selected", (e) => highlighted.push(e.about));
@@ -57,7 +57,8 @@ test("the starting picture is notes: list, sorted newest first", async () => {
   const asked = [];
   const { actor } = list({
     ask: (...args) => {
-      if (args[0] !== "settings") asked.push(args); // the Vim keys read is its own concern (12)
+      // The Vim keys read (12) and who is signed in are their own concerns.
+      if (args[0] !== "settings" && args[0] !== "session") asked.push(args);
       return Promise.resolve({ notes: [{ id: A, title: "A", updatedAt: 10 }, { id: B, title: "B", updatedAt: 20 }] });
     },
   });
@@ -255,7 +256,7 @@ test("with the attribute off, the subject is not asked and every note shows", as
   const { actor } = list({
     following: false,
     ask: (...args) => {
-      if (args[0] !== "settings") asked.push(args);
+      if (args[0] !== "settings" && args[0] !== "session") asked.push(args);
       return answeringList([{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }])(...args);
     },
   });
@@ -596,4 +597,60 @@ test("the rows from notes: list and note.changed show link labels", async () => 
   assert.equal(actor.getSnapshot().context.notes[0].subtitle, "q]r more");
   actor.send({ type: "note.changed", id: C, title: "x", subtitle: `[z](note:${A})`, updatedAt: 2, about: [] });
   assert.equal(actor.getSnapshot().context.notes.find((n) => n.id === C).subtitle, "z");
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// A list of two notes about bk1 and a highlight of it; session as given, or missing.
+const withSession = (session) => (target, name) => {
+  if (target === "session") return Promise.resolve(session ?? { error: "no-answerer" });
+  return withHighlight()(target, name);
+};
+
+test("signed out the list asks to sign in; signed in, or with no session to ask, it shows", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  const out = list({ following: true, ask: withSession(SIGNED_OUT) });
+  await tick();
+  assert.equal(showing(out.actor.getSnapshot().context), "sign-in");
+  const inside = list({ following: true, ask: withSession(SIGNED_IN) });
+  await tick();
+  assert.equal(showing(inside.actor.getSnapshot().context), "show");
+  const none = list({ following: true, ask: withSession() });
+  await tick();
+  assert.equal(showing(none.actor.getSnapshot().context), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in sees the list", async () => {
+  const { actor } = list({ following: true, tryPage: true, ask: withSession(SIGNED_OUT) });
+  await tick();
+  assert.equal(showing(actor.getSnapshot().context), "show");
+});
+
+test("signed out no row can be opened, deleted or the Highlights picked", async () => {
+  const { actor, selected, highlighted, discarded, clock } = list({ following: true, ask: withSession(SIGNED_OUT) });
+  await tick();
+  actor.send({ type: "_pick", id: A });
+  actor.send({ type: "_pickHighlights" });
+  actor.send({ type: "_discard", id: A });
+  clock.increment(UNDO_MS * 2);
+  assert.deepEqual([selected, highlighted, discarded], [[], [], []]);
+});
+
+test("signing in brings the notes back without a reload; signing out hides them and takes back a delete", async () => {
+  const { actor, discarded, clock } = list({ following: true, ask: withSession(SIGNED_OUT) });
+  await tick();
+  assert.deepEqual(shownIds(actor), [A], "still kept while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(actor.getSnapshot().context), "show");
+  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 });
+  actor.send({ type: "_discard", id: A });
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(actor.getSnapshot().context), "sign-in");
+  clock.increment(UNDO_MS * 2);
+  assert.deepEqual(discarded, [], "the delete the user can no longer see is taken back");
+  assert.equal(discardingHas(actor, A), false);
+  assert.deepEqual(ids(actor).includes(A), true);
 });

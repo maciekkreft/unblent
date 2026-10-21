@@ -15,7 +15,8 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // `notes: list`/`notes: read` replies, so a slow notes pull on reload cannot re-apply a
 // stale null over a `subject.changed` that arrived first. Everything with a side effect
 // — the queries — arrives through `input`, so this stays a pure definition importable
-// in Node; the CodeMirror document it drives lives in view.js.
+// in Node; the CodeMirror document it drives lives in view.js. It asks session: read and
+// follows session.changed only for whether anyone is signed in.
 
 // One save waits this long after the last keystroke, the whole page's edits at once (a
 // throttle, not a debounce: a keystroke within the window joins the pending save rather
@@ -139,6 +140,16 @@ const without = (set, id) => {
 const applyBodies = (fragments, bodies) =>
   fragments.map((f) => (bodies[f.id] !== undefined ? { ...f, body: bodies[f.id] } : f));
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the highlights.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the document shows of the account (14, signed out): "wait" until session answers,
+// so neither the highlights nor the sign-in line flashes; "sign-in" signed out, since the
+// panel keeps the Highlights in front across a reload and they are the account's; "show"
+// otherwise. A try page (8) shows its visitor the document.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 export const machine = setup({
   actors: {
     // The subject starting picture, asked as its own concern (3.5) so its reply — the
@@ -153,6 +164,8 @@ export const machine = setup({
     // The bodies and versions of the wanted highlights. note.changed / note.deleted are
     // held for each read until its reply lands.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
     readNotes: fromPromise(async ({ input }) => {
       const replies = await Promise.all(input.ids.map((id) => input.ask("notes", "read", { id })));
       return replies.filter((r) => r && "note" in r).map((r) => r.note);
@@ -192,11 +205,15 @@ export const machine = setup({
       "changes on the page are saved together a short time after typing stops. Deleting a quote " +
       "line whole, or `dd` on it with Vim keys on, removes that highlight after the undo " +
       "window. Each highlight is stored as its own note whose link to the book carries a place, " +
-      "but the user sees and edits them only here, as one note.",
+      "but the user sees and edits them only here, as one note. Signed out it shows only " +
+      "\"Sign in to see your notes.\" and no highlight, also when it was in front before a " +
+      "reload; the highlights stay kept in this browser and come back when the user signs in, " +
+      "without a reload, and a removal still in its undo window when the user signs out is " +
+      "taken back. On a try page a visitor not yet signed in still sees them.",
     kind: "view",
     emits: ["note.saved", "note.discarded"],
     attributes: ["height"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -217,6 +234,10 @@ export const machine = setup({
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
     // otherwise, and off on a page without it (the ask replies no-answerer).
     vimKeys: false,
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   // The subject read runs for the machine's whole life (3.5) so a rebuild never cancels
   // it: its reply lands on its own and sets the subject, and no notes reply ever writes
@@ -236,10 +257,27 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
     },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
+    },
   ],
   initial: "idle",
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    // Who is signed in now (4.3). Signing out hides the highlights and keeps them; a
+    // removal the user can no longer see is taken back, so nothing goes without its Undo.
+    "session.changed": [
+      { guard: ({ event }) => event.userId != null, actions: assign({ signedIn: true }) },
+      {
+        actions: enqueueActions(({ context, enqueue }) => {
+          for (const id of context.discarding) enqueue.cancel(`undo:${id}`);
+          enqueue.assign({ signedIn: false, discarding: new Set() });
+        }),
+      },
+    ],
     // The stage moved (4.3): a different subject, so a different set of highlights.
     // Held for us until the starting subject: read reply lands, so it is never lost and
     // never applied before the picture it supersedes. Start the set over against it.
@@ -266,7 +304,8 @@ export const machine = setup({
     // The bin on a quote line (session 5): begin the undo window. Nothing is emitted yet;
     // only its elapse makes the delete a fact.
     _discard: {
-      guard: ({ context, event }) => context.fragments.some((f) => f.id === event.id) && !context.discarding.has(event.id),
+      guard: ({ context, event }) =>
+        showing(context) === "show" && context.fragments.some((f) => f.id === event.id) && !context.discarding.has(event.id),
       actions: enqueueActions(({ event, enqueue }) => {
         enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
         enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });

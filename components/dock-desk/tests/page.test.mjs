@@ -11,6 +11,10 @@ const { webkit, chromium } = await import(PLAYWRIGHT_MODULE);
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
+// The kit (10): a forged sign-in, for the product, which hides the notes signed out.
+assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
+const { signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const SCREENSHOTS = resolve(REPO, ".screenshots");
@@ -183,6 +187,8 @@ for (const engine of ENGINES) {
     try {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       context.setDefaultTimeout(4000);
+      // Signed out the product hides the notes and offers no New note.
+      await signedIn(context, forgeCookie("dock-notes"));
       const page = await context.newPage();
       const problems = [];
       page.on("console", (msg) => msg.type() === "error" && problems.push(`console error: ${msg.text()}`));

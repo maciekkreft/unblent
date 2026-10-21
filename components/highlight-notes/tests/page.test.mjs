@@ -231,7 +231,7 @@ for (const engine of ENGINES) {
       await page.addInitScript((v) => localStorage.setItem("settings", v), settings);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await ready(page);
-      return { page, problems };
+      return { page, problems, cookie };
     };
 
     // A highlight made in the book appears in the document, and Vim normal-mode editing
@@ -466,6 +466,25 @@ for (const engine of ENGINES) {
           return Boolean(comment && quote.getBoundingClientRect().top >= box.top && comment.bottom <= box.bottom);
         });
       await until(shown);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // Browser: rendering and layout.
+    test(`signing out hides the Highlights in front, and signing in brings them back without a reload in ${engine.name}`, async () => {
+      const { page, problems, cookie } = await open({ settings: PLAIN });
+      await showHighlights(page);
+      await until(async () => (await hnQuotes(page)).length > 0);
+      const text = () => page.evaluate(() => document.querySelector("highlight-notes").shadowRoot.textContent.trim());
+
+      await page.locator('session-switch button[aria-label="Sign out"]').click();
+      await until(async () => (await text()) === "Sign in to see your notes.");
+      assert.equal(await hnHas(page, ".cm-content"), false, "no highlight stays in the page");
+
+      await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await until(async () => (await hnQuotes(page)).join() === "short opening");
+      assert.deepEqual(await assignedNotes(page), ["highlight-notes"], "the Highlights are still in front");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();
     });

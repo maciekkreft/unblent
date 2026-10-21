@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, ordered, compose, split, titleOf } from "../machine.js";
+import { machine, ordered, compose, split, titleOf, showing } from "../machine.js";
 
 // highlight-notes composes the highlights of the book on the stage into one document
 // (Decision 2). The pure functions that shape that document — ordered, compose, split,
@@ -51,9 +51,10 @@ const rowOf = (note) => ({ id: note.id, title: note.title, subtitle: "", updated
 // A target-aware ask: subject: read and notes: read share the name "read", so the reply
 // depends on the target. `notes` maps id → whole note; a missing id is not-found.
 const asking =
-  ({ subject = null, notes = {}, settings = {} } = {}) =>
+  ({ subject = null, notes = {}, settings = {}, session } = {}) =>
   (target, name, payload) => {
     if (target === "settings" && name === "read") return Promise.resolve(settings);
+    if (target === "session") return Promise.resolve(session ?? { error: "no-answerer" });
     if (target === "subject" && name === "read") return Promise.resolve({ subject });
     if (target === "notes" && name === "list") return Promise.resolve({ notes: Object.values(notes).map(rowOf) });
     if (target === "notes" && name === "read") {
@@ -63,11 +64,11 @@ const asking =
     return Promise.resolve({});
   };
 
-function view({ ask = asking(), undoMs = 3000 } = {}) {
+function view({ ask = asking(), undoMs = 3000, tryPage = false } = {}) {
   const clock = new SimulatedClock();
   const saved = [];
   const discarded = [];
-  const actor = createActor(machine, { input: { ask, undoMs }, clock });
+  const actor = createActor(machine, { input: { ask, undoMs, tryPage }, clock });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.discarded", (e) => discarded.push(e));
   for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
@@ -256,6 +257,51 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
     await settle();
     assert.equal(actor.getSnapshot().context.vimKeys, false, JSON.stringify(settings));
   }
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The Highlights in front after a reload, with one highlight; session as given, or missing.
+const reopened = async (session, tryPage = false) => {
+  const notes = { [H1]: noteObj(H1, { body: "c" }) };
+  const made = view({ ask: asking({ subject: { kind: "book", id: BOOK, title: "B" }, notes, session }), tryPage });
+  await settle();
+  return { ...made, ctx: () => made.actor.getSnapshot().context };
+};
+
+test("signed out the highlights are not shown; signed in, or with no session to ask, they are", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(showing((await reopened(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(showing((await reopened(SIGNED_IN)).ctx()), "show");
+  assert.equal(showing((await reopened()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in sees the highlights", async () => {
+  assert.equal(showing((await reopened(SIGNED_OUT, true)).ctx()), "show");
+});
+
+test("signed out a highlight cannot be removed", async () => {
+  const { actor, clock, discarded, ctx } = await reopened(SIGNED_OUT);
+  actor.send({ type: "_discard", id: H1 });
+  clock.increment(3000);
+  assert.deepEqual(discarded, []);
+  assert.equal(ctx().discarding.size, 0);
+});
+
+test("signing in shows the highlights again without a reload; signing out hides them and takes back a removal", async () => {
+  const { actor, clock, discarded, ctx } = await reopened(SIGNED_OUT);
+  assert.deepEqual(ids(actor), [H1], "still kept while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  actor.send({ type: "_discard", id: H1 });
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
+  clock.increment(3000);
+  assert.deepEqual(discarded, [], "the removal the user can no longer see is taken back");
+  assert.deepEqual(ids(actor), [H1]);
 });
 
 test("every payload matches its schema", () => {
