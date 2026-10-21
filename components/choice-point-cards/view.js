@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } from "@codemirror/state";
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs } from "editor";
+import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 
@@ -230,7 +230,8 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now(), unfolded },
+      // Vim's registers are one per page, so text put there is what any editor's p pastes.
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now(), unfolded, pushRegister: toRegister },
       events: { "choice-point.saved": saved },
     });
     this.subscription = this.actor.subscribe((snapshot) => {

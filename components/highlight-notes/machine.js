@@ -204,7 +204,7 @@ export const machine = setup({
       "line. All " +
       "changes on the page are saved together a short time after typing stops. Deleting a quote " +
       "line whole, or `dd` on it with Vim keys on, removes that highlight after the undo " +
-      "window. Each highlight is stored as its own note whose link to the book carries a place, " +
+      "window. With Vim keys on, p pastes text or a link copied in the reader with Vim keys, paragraphs kept. Each highlight is stored as its own note whose link to the book carries a place, " +
       "but the user sees and edits them only here, as one note. Signed out it shows only " +
       "\"Sign in to see your notes.\" and no highlight, also when it was in front before a " +
       "reload; the highlights stay kept in this browser and come back when the user signs in, " +
@@ -217,6 +217,8 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
+    pushRegister: input.pushRegister,
     // How long a discarded highlight can be brought back (the --duration-undo token,
     // read in the view and passed in so the machine stays importable in Node). The
     // delete is not a fact until this window ends (delayed delete, as in note-list).
@@ -266,6 +268,10 @@ export const machine = setup({
   ],
   initial: "idle",
   on: {
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, blocks a blank line apart as paragraphs are.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Who is signed in now (4.3). Signing out hides the highlights and keeps them; a
     // removal the user can no longer see is taken back, so nothing goes without its Undo.

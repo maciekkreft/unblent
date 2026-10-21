@@ -4,7 +4,7 @@ import { icon } from "icons";
 import { EditorState, StateField, StateEffect, Annotation, Transaction } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { invertedEffects } from "@codemirror/commands";
-import { baseExtensions, setVim, paragraphs } from "editor";
+import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, ordered, compose, split, showing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -275,6 +275,8 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        // Vim's registers are one per page, so text put there is what any editor's p pastes.
+        pushRegister: toRegister,
         undoMs,
         // A try page (8) shows the highlights signed out.
         tryPage: location.pathname.startsWith("/try/"),

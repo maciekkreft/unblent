@@ -94,16 +94,18 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    const open = async (vimKeys, { highlight = false, split = false, touch = false } = {}) => {
+    // `product` opens the product page, `/`, whose preferences settings keeps under the
+    // product profile's name.
+    const open = async (vimKeys, { highlight = false, split = false, touch = false, product = false } = {}) => {
       const problems = [];
       context = await browser.newContext({ hasTouch: touch });
       context.setDefaultTimeout(4000);
       await signedIn(context, await seedUser({ highlight, split }));
       const page = await context.newPage();
       watch(page, problems);
-      await page.addInitScript((v) => localStorage.setItem("settings", v), seed(vimKeys));
+      await page.addInitScript(([k, v]) => localStorage.setItem(k, v), [product ? "settings:product" : "settings", seed(vimKeys)]);
       await page.addInitScript(recordClipboard);
-      await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await page.goto(product ? `${BASE_URL}/` : PAGE, { waitUntil: "domcontentloaded" });
       await page.waitForFunction((chap) => {
         const r = document.querySelector("book-reader")?.shadowRoot;
         return r?.querySelector(".footer .chap")?.textContent.trim() === chap && r.querySelector(".strip")?.textContent.includes(chap);
@@ -281,6 +283,29 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Enter");
       await new Promise((r) => setTimeout(r, 200));
       assert.deepEqual(await marks(page), []);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // Text copied in the reader is in Vim's register of every editor: on the product page,
+    // after v … y over two blocks, p in the journal pastes it, the blocks a paragraph gap
+    // apart.
+    // Browser: focus and keys.
+    test(`v … y in the reader, then p in the journal pastes the passage in ${engine.name}`, async () => {
+      const { page, problems } = await open(true, { product: true });
+      await until(async () => {
+        await page.keyboard.press("v");
+        if ((await pending(page)) === "C") return true;
+        await page.keyboard.press("Escape");
+        return false;
+      });
+      for (const key of ["w", "w", "w", "w", "y"]) await page.keyboard.press(key);
+      await until(async () => (await copied(page)) === "Chapter One\n\nA LINKED");
+      await page.locator("book-shelf .tile").filter({ hasText: "Journal" }).first().click();
+      const journal = page.locator("journal-entry .cm-content").first();
+      await journal.click();
+      await until(async () => (await page.locator("journal-entry .cm-fat-cursor").count()) === 1);
+      await page.keyboard.press("p");
+      await until(async () => (await page.locator("journal-entry .cm-line").allTextContents()).join("|") === "Chapter One||A LINKED");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

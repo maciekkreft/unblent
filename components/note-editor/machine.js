@@ -319,7 +319,7 @@ export const machine = setup({
       "follows the subject. The pin is kept by `pins` and the titles of subjects seen on this device, so " +
       "both survive a reload. It announces the note it shows, or none for the " +
       "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
-      "here. A source link to a highlight, pasted from the reader's Copy link (or with p after " +
+      "here. With Vim keys on, p pastes text or a link copied in the reader with Vim keys, paragraphs kept. A source link to a highlight, pasted from the reader's Copy link (or with p after " +
       "the reader's y while Vim keys is on), is drawn as one tag, the link icon and the start of " +
       "the quote, that the cursor steps over and Backspace or x removes whole; a click on it, " +
       "or Enter on it in Vim's normal mode, opens the book at the passage, and a tag whose " +
@@ -391,7 +391,7 @@ export const machine = setup({
     vimKeys: false,
     // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
     pinned: false,
-    // Puts a copied source link in Vim's unnamed register, so p pastes it (link.copied).
+    // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     // Source links whose highlight is gone (UI state): their tags are drawn removed.
     removed: [],
@@ -447,8 +447,9 @@ export const machine = setup({
       guard: ({ context }) => context.staged && context.id != null,
       actions: emit(({ context }) => ({ type: "note.closed", id: context.id })),
     },
-    // The reader copied a link to a highlight: Vim's p reads Vim's own register, not the
-    // system clipboard, so the link goes there too.
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, blocks a blank line apart as paragraphs are.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     // A click on a source link, or Enter on it in Vim's normal mode: ask notes for the
     // highlight. A second follow replaces one still waiting.

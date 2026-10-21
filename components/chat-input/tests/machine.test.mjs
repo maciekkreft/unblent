@@ -382,3 +382,16 @@ test("every payload matches its schema", () => {
     assert.ok(result.valid, `${JSON.stringify(value).slice(0, 160)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
   }
 });
+
+// Text or a link copied in the reader goes into Vim's register (one per page), so p
+// pastes it here, in any state.
+test("a copied text or link goes into Vim's register", () => {
+  const pushed = [];
+  const actor = createActor(machine, {
+    input: { ask: () => Promise.resolve({ error: "no-answerer" }), mint: () => "01K7TEST0000000000000T0001", pushRegister: (text) => pushed.push(text) },
+  }).start();
+  actor.send({ type: "text.copied", text: "One.\n\nTwo." });
+  actor.send({ type: "link.copied", id: "01K7TEST0000000000000H0001", text: "[q](note:01K7TEST0000000000000H0001)" });
+  assert.deepEqual(pushed, ["One.\n\nTwo.", "[q](note:01K7TEST0000000000000H0001)"]);
+  actor.stop();
+});

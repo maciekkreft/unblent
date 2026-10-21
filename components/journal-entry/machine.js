@@ -266,7 +266,7 @@ export const machine = setup({
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day. With Vim keys on, typing :q or :quit in the " +
-      "editor, on any day, closes the journal's book. A source link to a highlight, pasted " +
+      "editor, on any day, closes the journal's book. With Vim keys on, p pastes text or a link copied in the reader with Vim keys, paragraphs kept. A source link to a highlight, pasted " +
       "from the reader's Copy link (or with p after the reader's y while Vim keys is on), is " +
       "drawn as one tag, the link icon and the start of the quote, that the cursor steps over " +
       "and Backspace or x removes whole, while the day's saved text keeps the link as it was " +
@@ -316,7 +316,7 @@ export const machine = setup({
     notes: null,
     // Source links a follow found gone (UI state): their tags are drawn grey.
     removed: [],
-    // Puts a copied source link in Vim's unnamed register, so p pastes it (link.copied).
+    // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
   }),
   // Each fact's starting picture is asked on its own, so an event that follows one
@@ -423,8 +423,9 @@ export const machine = setup({
         if (event.written && context.want?.id === event.id) enqueue.raise({ type: "_show", chapter: context.want.chapter });
       }),
     },
-    // The reader copied a link to a highlight: Vim's p reads Vim's own register, not the
-    // system clipboard, so the link goes there too.
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, blocks a blank line apart as paragraphs are.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     // A click on a source link, or Enter on it in Vim's normal mode, on any day: ask notes
     // for the highlight. A second follow replaces one still waiting.

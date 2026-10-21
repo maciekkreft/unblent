@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, Compartment, Prec } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs } from "editor";
+import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, canSend, sendLabel, unsentComments } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
@@ -92,6 +92,8 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        // Vim's registers are one per page, so text put there is what any editor's p pastes.
+        pushRegister: toRegister,
         // Monotonic ids, so two turns minted in the same millisecond keep the order they
         // were made in.
         mint: monotonicFactory(),

@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, Compartment, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs } from "editor";
+import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, duplicateNames, OPTION_ICONS, showing } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
@@ -71,6 +71,8 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        // Vim's registers are one per page, so text put there is what any editor's p pastes.
+        pushRegister: toRegister,
         mint: ulid,
         open: recall(),
         remember,

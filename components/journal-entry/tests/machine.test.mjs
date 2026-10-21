@@ -501,10 +501,11 @@ test("a tag is grey while notes does not list its highlight, following note.chan
   assert.equal(lone.missing()(GONE), true);
 });
 
-test("a copied link goes into Vim's register, so p pastes it", async () => {
+test("a copied link or text goes into Vim's register, so p pastes it", async () => {
   const { actor, pushed } = await linked([]);
   actor.send({ type: "link.copied", id: HL, text: "[q](note:x)" });
-  assert.deepEqual(pushed, ["[q](note:x)"]);
+  actor.send({ type: "text.copied", text: "One.\n\nTwo." });
+  assert.deepEqual(pushed, ["[q](note:x)", "One.\n\nTwo."]);
 });
 
 test("a source link's text is kept raw through the levels", () => {

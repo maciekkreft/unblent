@@ -306,7 +306,7 @@ export const machine = setup({
       "day's choice points, muted with a plus like the New note row, adds one and opens it in " +
       "place with the keyboard in Situation: the V drawing and four boxes, Away · hooked, " +
       "Towards · unhooked, Situation, and Thoughts & feelings. The boxes grow with what is " +
-      "written and take Vim's keys when Vim keys is on; Tab moves on to the next box or " +
+      "written and take Vim's keys when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; Tab moves on to the next box or " +
       "button. What is written is saved a short time into typing and at once when a box loses " +
       "focus; the sheet does not say so. Jev checks a line once the user has finished it and " +
       "moved on: Enter to a new line, which stands after a short gap, or Shift+Enter to one " +
@@ -348,6 +348,8 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
+    pushRegister: input.pushRegister,
     mint: input.mint,
     now: input.now,
     throttleMs: input.throttleMs ?? 400,
@@ -395,6 +397,10 @@ export const machine = setup({
   entry: spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
   initial: "loading",
   on: {
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, blocks a blank line apart as paragraphs are.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // On a page without the checks fact the reply is no-answerer and no line is marked.
     "xstate.done.actor.checks": {

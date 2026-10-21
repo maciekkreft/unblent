@@ -213,7 +213,7 @@ export const machine = setup({
       "holds and the chat is an honest record of what the model was told. When the user picks a " +
       "chat with no messages yet, such as the New chat row or a new chat made with o or O in " +
       "the chat list, the box takes focus, in Vim's " +
-      "insert mode when Vim keys is on; it follows the user's pick and not which chat is open, " +
+      "insert mode when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; it follows the user's pick and not which chat is open, " +
       "so a change of subject or a reload never moves the cursor. Unsent text is kept in this " +
       "browser for each chat, and for a new chat about each open item, so it is still there " +
       "after a reload or on coming back, and never shows up in another chat; sending clears " +
@@ -227,6 +227,8 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
+    pushRegister: input.pushRegister,
     mint: input.mint,
     openId: null,
     conversation: null,
@@ -258,6 +260,10 @@ export const machine = setup({
   // The fact's news, applied in every state so nothing that arrives while the machine is
   // still starting is lost (4.3).
   on: {
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, blocks a blank line apart as paragraphs are.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // The open chat changed on this device (12): read the new one for the starting
     // picture; conversation.changed keeps it current after (4.3), held until the read

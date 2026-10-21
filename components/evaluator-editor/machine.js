@@ -376,7 +376,7 @@ export const machine = setup({
       "pin names the book the evaluator is kept with, " +
       "and the pin is kept by `pins`, so it survives a reload. The question, what yes " +
       "and no mean and each option's description are text boxes that grow with what is written " +
-      "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
+      "and take Vim's keys when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; the name and the option names are one-line fields. " +
       "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
       "back to the field last used, never jumping to the name, except that an evaluator just " +
       "picked in the list (with Enter, a click, or cc with Vim keys on) starts with the keyboard " +
@@ -391,6 +391,8 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
+    pushRegister: input.pushRegister,
     mint: input.mint,
     throttleMs: input.throttleMs ?? 200,
     // How many times the user picked an evaluator in the list (evaluator.selected), so the
@@ -459,6 +461,10 @@ export const machine = setup({
     },
   ],
   on: {
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, blocks a blank line apart as paragraphs are.
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     "subject.changed": followSubject(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),

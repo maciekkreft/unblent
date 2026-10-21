@@ -4,7 +4,7 @@ import { ulid } from "ulid";
 import { icon } from "icons";
 import { EditorState, Annotation, StateField, StateEffect } from "@codemirror/state";
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
-import { baseExtensions, setVim, paragraphs } from "editor";
+import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import {
   machine,
   rows,
@@ -49,6 +49,8 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        // Vim's registers are one per page, so text put there is what any editor's p pastes.
+        pushRegister: toRegister,
         mint: ulid,
         following: this.host.subject,
         drafts,

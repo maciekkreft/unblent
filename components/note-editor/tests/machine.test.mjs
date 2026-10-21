@@ -1027,11 +1027,12 @@ test("following a link to a removed highlight marks it removed and announces not
   assert.deepEqual(actor.getSnapshot().context.removed, [HL]);
 });
 
-test("a copied link goes into Vim's register", async () => {
+test("a copied link or text goes into Vim's register", async () => {
   const pushed = [];
   const { actor } = await started({ pushRegister: (text) => pushed.push(text) });
   actor.send({ type: "link.copied", id: HL, text: `[q](note:${HL})` });
-  assert.deepEqual(pushed, [`[q](note:${HL})`]);
+  actor.send({ type: "text.copied", text: "One.\n\nTwo." });
+  assert.deepEqual(pushed, [`[q](note:${HL})`, "One.\n\nTwo."]);
 });
 
 // Open on stage: the panel editor asks the stage to show its note, and the stage's own

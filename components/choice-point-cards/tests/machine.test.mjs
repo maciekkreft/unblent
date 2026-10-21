@@ -460,3 +460,16 @@ test("the sheets left unfolded open again after a reload; one gone or of another
   const { ctx } = await start({ [TODAY]: [cp(A, TODAY, { situation: "One" }), cp(B, TODAY, { situation: "Two" })] }, undefined, { unfolded });
   assert.deepEqual(ctx().drafts.map((d) => d.id), [B, A], "in the order they were opened");
 });
+
+// Text or a link copied in the reader goes into Vim's register (one per page), so p
+// pastes it here, in any state.
+test("a copied text or link goes into Vim's register", () => {
+  const pushed = [];
+  const actor = createActor(machine, {
+    input: { ask: () => Promise.resolve({ error: "no-answerer" }), mint: () => "01K7TEST0000000000000C0001", now: () => 0, pushRegister: (text) => pushed.push(text) },
+  }).start();
+  actor.send({ type: "text.copied", text: "One.\n\nTwo." });
+  actor.send({ type: "link.copied", id: "01K7TEST0000000000000H0001", text: "[q](note:01K7TEST0000000000000H0001)" });
+  assert.deepEqual(pushed, ["One.\n\nTwo.", "[q](note:01K7TEST0000000000000H0001)"]);
+  actor.stop();
+});
