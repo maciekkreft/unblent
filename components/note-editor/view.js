@@ -7,7 +7,7 @@ import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, toRegister } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, isStaged, showing, startsTyping } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, isStaged, showing, startsTyping, linkMissing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -484,8 +484,10 @@ class NoteEditor extends LitElement {
   // outside empties the history, or "u" would walk back into the notes shown before
   // it and save each of them over this one.
   #history = new Compartment();
-  // The source links whose highlight is gone, as last handed to the editor's tags.
-  #removed = [];
+  // Which source links' highlights are gone, as last handed to the editor's tags, and the
+  // actor's facts it was made from.
+  #missing = () => false;
+  #missingFrom = null;
 
   #extensions() {
     return [
@@ -501,7 +503,7 @@ class NoteEditor extends LitElement {
       sourceLinks({
         follow: (id) => this.#actor.send({ type: "_follow", id }),
         icon: (into) => render(icon("link"), into),
-        missing: (id) => this.#removed.includes(id),
+        missing: (id) => this.#missing(id),
       }),
       this.#history.of(history()),
       EditorView.updateListener.of(this.#onUpdate),
@@ -602,11 +604,12 @@ class NoteEditor extends LitElement {
     if (!this.#view) this.#build(region);
     const snapshot = this.#actor.snapshot;
     if (!snapshot || !this.#view) return;
-    const { body, vimKeys, removed } = snapshot.context;
+    const { body, vimKeys, notes, removed } = snapshot.context;
     setVim(this.#view, vimKeys);
-    if (removed !== this.#removed) {
-      this.#removed = removed;
-      missingLinks(this.#view, (id) => removed.includes(id));
+    if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {
+      this.#missingFrom = { notes, removed };
+      this.#missing = linkMissing(snapshot.context);
+      missingLinks(this.#view, this.#missing);
     }
     // The new note can arrive after the keyboard did (the list focuses the editor while
     // its read is in flight): start typing once per note picked.

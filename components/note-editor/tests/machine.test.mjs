@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, isStaged, showing, startsTyping } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, linkMissing, isStaged, showing, startsTyping } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -152,7 +152,9 @@ test("a newer change is adopted; an older one and another id are ignored", async
   assert.equal(actor.getSnapshot().context.body, "theirs\nnewer", "an older version is ignored");
 
   const other = { type: "note.changed", id: ID2, title: "x", body: "x", version: 9, pending: false, updatedAt: 4 };
-  assert.equal(actor.getSnapshot().can(other), false, "a change for another id is not handled");
+  actor.send(other);
+  assert.equal(actor.getSnapshot().context.body, "theirs\nnewer", "a change for another id leaves the note alone");
+  assert.equal(actor.getSnapshot().context.baseVersion, 5);
 });
 
 test("on start it reopens the newest note notes lists", async () => {
@@ -1025,6 +1027,33 @@ test("following a link to a removed highlight marks it removed and announces not
   await settle();
   assert.deepEqual(selected, []);
   assert.deepEqual(actor.getSnapshot().context.removed, [HL]);
+});
+
+const GONE = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+const listing = (ids) => (target, name) =>
+  Promise.resolve(name === "list" ? (ids ? { notes: ids.map((id) => ({ ...HIGHLIGHT.note, id })) } : { error: "no-answerer" }) : {});
+const missingNow = (actor) => linkMissing(actor.getSnapshot().context);
+
+test("a tag is grey while notes does not list its highlight, following note.deleted and note.changed", async () => {
+  const { actor } = await started({ ask: listing([HL]), subjecting: true });
+  assert.deepEqual([missingNow(actor)(HL), missingNow(actor)(GONE)], [false, true], "a highlight already gone is grey at open");
+  actor.send({ type: "_typed", body: `see [q](note:${HL})` });
+  actor.send({ type: "note.deleted", id: HL });
+  assert.equal(missingNow(actor)(HL), true, "grey as soon as the highlight is removed");
+  assert.deepEqual(actor.getSnapshot().value, { editing: "dirty" }, "the open note is untouched");
+  actor.send({ type: "note.changed", ...HIGHLIGHT.note, version: 2 });
+  assert.equal(missingNow(actor)(HL), false, "an undone removal brings the tag back");
+});
+
+test("on the empty page notes' news still reaches the tags, and without notes only a deletion tells", async () => {
+  const { actor } = await started({ ask: listing([]), subjecting: true });
+  actor.send({ type: "note.changed", ...HIGHLIGHT.note, version: 2 });
+  assert.equal(missingNow(actor)(HL), false);
+  // Without notes to ask (no-answerer), only a follow or a deletion can tell.
+  const lone = await started({ ask: listing(null), subjecting: true });
+  assert.equal(missingNow(lone.actor)(GONE), false);
+  lone.actor.send({ type: "note.deleted", id: GONE });
+  assert.equal(missingNow(lone.actor)(GONE), true);
 });
 
 test("a copied link or text goes into Vim's register", async () => {

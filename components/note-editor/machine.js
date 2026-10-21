@@ -5,7 +5,9 @@ import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnCh
 // owns the fact, and at `subject`, which owns what is on the stage. On start it asks
 // notes: list and reopens a note, or takes a note by the load command or, when it
 // carries `follows`, by note.selected from the list (both ask notes: read); it follows
-// note.changed after (4.3), and emits note.saved at a short throttle while the user
+// note.changed after (4.3); the same notes: list, with note.changed and note.deleted,
+// also tells which highlights the source links point at still exist. It emits
+// note.saved at a short throttle while the user
 // types, and on blur. With the `subject` attribute it follows the stage (12): it opens
 // the newest note about the subject, re-follows when the subject changes, and a pin
 // stops the re-following, so a change on the stage never moves the note on screen; a
@@ -139,6 +141,33 @@ export function passageOf(reply, id) {
   return link ? { book: link.id, id, place: link.place } : null;
 }
 
+// Whether the highlight a source link names is gone, so its tag is drawn grey: a note
+// notes no longer lists, once it has answered, or one a follow found gone. While notes has
+// not answered (a page without it), only a follow can tell. The same rule as the journal's
+// (journal-entry/machine.js), copied because components never import each other (11.2).
+export const linkMissing = ({ notes, removed }) => (id) => removed.includes(id) || (notes !== null && !notes.includes(id));
+
+const without = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) : list);
+
+// notes' news (4.3, fourth rule) for the source links: a note made, changed or brought
+// back (Undo) exists; a deleted one does not. Run on every note.changed and note.deleted,
+// whatever else the editor does with it.
+const trackChanged = assign(({ context, event }) => ({
+  notes: context.notes === null || context.notes.includes(event.id) ? context.notes : [...context.notes, event.id],
+  removed: without(context.removed, event.id),
+}));
+const trackDeleted = assign(({ context, event }) => ({
+  notes: context.notes === null ? null : without(context.notes, event.id),
+  removed: context.notes === null ? [...without(context.removed, event.id), event.id] : context.removed,
+}));
+
+// Which notes exist, from a list reply (the start's or a re-follow's), so a tag whose
+// highlight was already gone is grey from the start; note.changed and note.deleted are
+// held for the list until its reply lands (notes: list supersededBy).
+const knownOf = (output) =>
+  output && "known" in output ? output.known : Array.isArray(output?.notes) ? output.notes.map((n) => n.id) : null;
+const takeKnown = assign({ notes: ({ context, event }) => knownOf(event.output) ?? context.notes });
+
 const assignTyped = assign({ body: ({ event }) => event.body });
 
 // The note shown is announced (6.4) by every editor but the stage's: `pins` takes the
@@ -216,7 +245,12 @@ export const machine = setup({
         input.subjecting ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }),
         input.subjecting ? input.ask("pins", "read", {}) : Promise.resolve({}),
       ]);
-      return { notes: list?.notes ?? [], subject: subject?.subject ?? null, pin: typeof pins?.note === "string" ? pins.note : null };
+      return {
+        notes: list?.notes ?? [],
+        known: Array.isArray(list?.notes) ? list.notes.map((n) => n.id) : null,
+        subject: subject?.subject ?? null,
+        pin: typeof pins?.note === "string" ? pins.note : null,
+      };
     }),
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
     read: fromPromise(({ input }) => input.ask("notes", "read", { id: input.id })),
@@ -322,8 +356,10 @@ export const machine = setup({
       "here. With Vim keys on, p pastes text or a link copied in the reader with Vim keys, paragraphs kept. A source link to a highlight, pasted from the reader's Copy link (or with p after " +
       "the reader's y while Vim keys is on), is drawn as one tag, the link icon and the start of " +
       "the quote, that the cursor steps over and Backspace or x removes whole; a click on it, " +
-      "or Enter on it in Vim's normal mode, opens the book at the passage, and a tag whose " +
-      "highlight is gone turns grey and struck through and opens nothing. With `subject` the " +
+      "or Enter on it in Vim's normal mode, opens the book at the passage. A tag turns grey " +
+      "and struck through, and opens nothing, as soon as its highlight is removed, or at once " +
+      "when the highlight was already gone as the note opens, and turns back when the removal " +
+      "is undone. With `subject` the " +
       "header also has Open on stage, before the pin (and `:tab split` or `:tab sp` while Vim " +
       "keys is on), which shows the note on the stage as a tab of its own; the button is " +
       "accent while the note has a tab there, its arrow points towards the stage, also after the " +
@@ -393,8 +429,10 @@ export const machine = setup({
     pinned: false,
     // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
-    // Source links whose highlight is gone (UI state): their tags are drawn removed.
+    // Source links a follow found gone (UI state): their tags are drawn removed.
     removed: [],
+    // The ids of every note notes lists, for the source links' tags; null until it answers.
+    notes: null,
     // Whether a pin restore is in flight, so a successful load starts pinned and a
     // not-found one forgets the pin (D10).
     restoring: false,
@@ -465,14 +503,14 @@ export const machine = setup({
       {
         guard: ({ event }) => passageOf(event.reply, event.id) != null,
         actions: [
-          assign({ removed: ({ context, event }) => context.removed.filter((id) => id !== event.id) }),
+          assign({ removed: ({ context, event }) => without(context.removed, event.id) }),
           emit(({ event }) => ({ type: "passage.selected", ...passageOf(event.reply, event.id) })),
         ],
       },
       {
         guard: ({ event }) => event.reply?.error === "not-found",
         actions: assign({
-          removed: ({ context, event }) => (context.removed.includes(event.id) ? context.removed : [...context.removed, event.id]),
+          removed: ({ context, event }) => [...without(context.removed, event.id), event.id],
         }),
       },
     ],
@@ -523,21 +561,24 @@ export const machine = setup({
     // The fact's news that the open note is gone (4.3, fourth rule): fall back to the
     // empty page, where a keystroke starts a fresh note. `pins` lets go of the note when
     // the empty page is announced; pin.toggled is the user's press alone, so it is not
-    // sent here. A deletion of another note is left to the bus to record as ignored.
-    "note.deleted": {
-      guard: ({ context, event }) => event.id === context.id,
-      target: ".empty",
-      actions: assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false }),
-    },
-    // The fact's news (4.3, fourth rule). Guarded so a change for another id is left
-    // to the bus to record as ignored.
+    // sent here. A deletion of another note only greys the tags that link to it.
+    "note.deleted": [
+      {
+        guard: ({ context, event }) => event.id === context.id,
+        target: ".empty",
+        actions: [trackDeleted, assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false })],
+      },
+      { actions: trackDeleted },
+    ],
+    // The fact's news (4.3, fourth rule). A change for another note only brings back the
+    // tags that link to it.
     "note.changed": [
       {
         // The echo of this editor's own save: bump baseVersion, take the links notes
         // now holds, and stay in the current state so a keystroke made since is not lost.
         guard: ({ context, event }) =>
           event.id === context.id && context.sent != null && event.body === context.sent.body,
-        actions: assign({ baseVersion: ({ event }) => event.version, about: ({ event }) => links(event.about) }),
+        actions: [trackChanged, assign({ baseVersion: ({ event }) => event.version, about: ({ event }) => links(event.about) })],
       },
       {
         // A newer change from elsewhere: adopt it (the user's decision, 12), even
@@ -545,13 +586,17 @@ export const machine = setup({
         guard: ({ context, event }) =>
           event.id === context.id && (context.baseVersion === null || event.version > context.baseVersion),
         target: ".editing.clean",
-        actions: assign({
-          body: ({ event }) => event.body,
-          baseVersion: ({ event }) => event.version,
-          sent: ({ event }) => ({ body: event.body }),
-          about: ({ event }) => links(event.about),
-        }),
+        actions: [
+          trackChanged,
+          assign({
+            body: ({ event }) => event.body,
+            baseVersion: ({ event }) => event.version,
+            sent: ({ event }) => ({ body: event.body }),
+            about: ({ event }) => links(event.about),
+          }),
+        ],
       },
+      { actions: trackChanged },
     ],
   },
   states: {
@@ -565,10 +610,10 @@ export const machine = setup({
         onDone: [
           // The user typed while following the stage: the subject is known now, so the
           // note starts its throttle here and its first save carries the link (12).
-          { guard: "typedAhead", target: "editing.dirty", actions: "takeStartSubject" },
+          { guard: "typedAhead", target: "editing.dirty", actions: [takeKnown, "takeStartSubject"] },
           {
             target: "choosing",
-            actions: ["takeStartSubject", "takeStartPin", assign({ startNotes: ({ event }) => event.output.notes })],
+            actions: [takeKnown, "takeStartSubject", "takeStartPin", assign({ startNotes: ({ event }) => event.output.notes })],
           },
         ],
         onError: [
@@ -638,6 +683,7 @@ export const machine = setup({
           guard: ({ context, event }) =>
             context.subjecting && isAbout(event, context.subject) && !isHighlight(event, context.subject),
           target: "refollowing",
+          actions: trackChanged,
         },
       },
     },
@@ -687,9 +733,9 @@ export const machine = setup({
           {
             guard: ({ context, event }) => pickId(event.output.notes, context.subject, context.subjecting) != null,
             target: "loading",
-            actions: assign({ id: ({ context, event }) => pickId(event.output.notes, context.subject, context.subjecting) }),
+            actions: [takeKnown, assign({ id: ({ context, event }) => pickId(event.output.notes, context.subject, context.subjecting) })],
           },
-          { target: "empty" },
+          { target: "empty", actions: takeKnown },
         ],
         onError: "empty",
       },

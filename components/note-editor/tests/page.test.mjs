@@ -123,7 +123,7 @@ const drawn = (page) =>
   });
 
 // A source link as book-reader's Copy link writes it, to a highlight this browser does not
-// hold, so following it finds the highlight gone.
+// hold, so its tag is grey from the start and following it finds the highlight gone.
 const GONE = "01ARZ3NDEKTSV4RRFFQ69G5FC0";
 const LINK = `[The quote](note:${GONE})`;
 
@@ -131,8 +131,25 @@ const LINK = `[The quote](note:${GONE})`;
 const docText = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
 
-// An editor on the notes stem page, holding `see <link> end`, typed without Vim.
-async function withLink(browser, vimKeys) {
+// The id of the one note this browser holds, once notes has stored it.
+const storedId = (page) =>
+  page.evaluate(async () => {
+    const db = await new Promise((ok, no) => {
+      const r = indexedDB.open("notes");
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+    });
+    const all = await new Promise((ok) => {
+      const q = db.transaction("notes").objectStore("notes").getAll();
+      q.onsuccess = () => ok(q.result);
+    });
+    db.close();
+    return all[0]?.id ?? null;
+  });
+
+// An editor on the notes stem page, holding `see <link> end`, typed without Vim. With
+// `existing`, the link names the note itself, a note notes lists, so its tag is not grey.
+async function withLink(browser, vimKeys, existing = false) {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   const problems = [];
@@ -144,10 +161,17 @@ async function withLink(browser, vimKeys) {
   if (vimKeys) await vimReady(page);
   await page.locator("note-editor .cm-content").click();
   if (vimKeys) await page.keyboard.press("i");
-  await page.keyboard.insertText(`see ${LINK} end`);
+  let link = LINK;
+  if (existing) {
+    await page.keyboard.insertText("x");
+    await until(async () => (await storedId(page)) != null);
+    link = `[The quote](note:${await storedId(page)})`;
+    await page.keyboard.press("Backspace");
+  }
+  await page.keyboard.insertText(`see ${link} end`);
   if (vimKeys) await page.keyboard.press("Escape");
   await page.waitForFunction(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-source-link"));
-  return { context, page, problems };
+  return { context, page, problems, link };
 }
 
 const ENGINES = [
@@ -660,7 +684,7 @@ for (const engine of ENGINES) {
 
     // Browser: rendering and layout.
     test("a source link is drawn as one tag, the link icon and its label, its text kept as stored", async () => {
-      const { context, page, problems } = await withLink(browser, false);
+      const { context, page, problems, link } = await withLink(browser, false, true);
       const tag = await page.evaluate(() => {
         const root = document.querySelector("note-editor").shadowRoot;
         const el = root.querySelector(".cm-source-link");
@@ -675,7 +699,7 @@ for (const engine of ENGINES) {
         };
       });
       assert.deepEqual(tag, { count: 1, label: "The quote", icon: true, line: "see The quote end", tinted: true, struck: false });
-      assert.equal(await docText(page), `see ${LINK} end`);
+      assert.equal(await docText(page), `see ${link} end`);
       await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
@@ -717,26 +741,24 @@ for (const engine of ENGINES) {
       await context.close();
     });
 
-    // Browser: a gesture.
-    test("following a source link to a removed highlight greys and strikes its tag", async () => {
+    // Browser: rendering and layout.
+    test("a tag whose highlight is gone is grey and struck from the start, also after a reload, and following it changes nothing", async () => {
       const { context, page, problems } = await withLink(browser, true);
       const struck = () =>
         page.evaluate(() => {
           const el = document.querySelector("note-editor").shadowRoot.querySelector(".cm-source-link");
           return getComputedStyle(el).textDecorationLine.includes("line-through");
         });
-      assert.equal(await struck(), false);
-      // Enter on the tag in normal mode follows it.
+      await until(struck);
+      // Enter on the tag in normal mode follows it, and nothing opens.
       await page.keyboard.type("0llll");
       await page.keyboard.press("Enter");
-      await until(struck);
       await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
       await page.reload();
-      // A click follows it too, on a fresh page.
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-source-link"));
-      assert.equal(await struck(), false);
-      await page.locator("note-editor .cm-source-link").click();
       await until(struck);
+      await page.locator("note-editor .cm-source-link").click();
+      assert.equal(await struck(), true);
       assert.equal(await docText(page), `see ${LINK} end`, "following changes nothing in the text");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
