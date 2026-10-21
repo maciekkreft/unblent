@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, conflictOn, shown, longDate, parseBody, serialize, selectedOf, showing as accountShown } from "../machine.js";
+import { machine, conflictOn, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
 // is saved when. Times are built with the local Date constructor, so the midnight cases
@@ -439,4 +439,76 @@ test("signing in shows the day again without a reload, and signing out hides it"
   assert.equal(accountShown(ctx()), "show");
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(accountShown(ctx()), "sign-in");
+});
+
+// --- Source links --------------------------------------------------------------------
+
+const BOOK = id("B", 1);
+const HL = id("H", 1);
+const GONE = id("H", 2);
+const PASSAGE = { chapter: 2, start: { block: 3, offset: 0 }, end: { block: 3, offset: 9 } };
+const HIGHLIGHT = { note: { id: HL, body: "quote", about: [{ kind: "book", id: BOOK, place: PASSAGE }] } };
+const passageSchema = schema("passage.selected");
+
+// An entry whose notes list `listed` and read the highlight HL (anything else is gone).
+async function linked(listed) {
+  const pushed = [];
+  const actor = createActor(machine, {
+    input: {
+      ask: (target, name, payload) => {
+        if (target === "notes" && name === "list") return Promise.resolve(listed ? { notes: listed.map((n) => ({ id: n })) } : { error: "no-answerer" });
+        if (target === "notes" && name === "read") return Promise.resolve(payload.id === HL ? HIGHLIGHT : { error: "not-found" });
+        return Promise.resolve(target === "journal" ? picture() : {});
+      },
+      mint: () => FRESH,
+      now: () => at(12, 21),
+      pushRegister: (text) => pushed.push(text),
+    },
+    // The midnight timer runs on a clock nobody moves, so the test ends.
+    clock: new SimulatedClock(),
+  });
+  const emitted = [];
+  actor.on("passage.selected", (e) => emitted.push(e));
+  actor.start();
+  await flush();
+  return { actor, emitted, pushed, missing: () => linkMissing(actor.getSnapshot().context) };
+}
+
+test("following a source link opens the passage; one to a gone highlight greys its tag", async () => {
+  const { actor, emitted, missing } = await linked([HL, GONE]);
+  actor.send({ type: "_follow", id: HL });
+  await flush();
+  assert.deepEqual(emitted, [{ type: "passage.selected", book: BOOK, id: HL, place: PASSAGE }]);
+  const { type, ...payload } = emitted[0];
+  assert.ok(new Validator(passageSchema, "2020-12").validate(payload).valid);
+  actor.send({ type: "_follow", id: GONE });
+  await flush();
+  assert.equal(emitted.length, 1, "a gone highlight opens nothing");
+  assert.equal(missing()(GONE), true);
+});
+
+test("a tag is grey while notes does not list its highlight, following note.changed and note.deleted", async () => {
+  const { actor, missing } = await linked([HL]);
+  assert.deepEqual([missing()(HL), missing()(GONE)], [false, true]);
+  actor.send({ type: "note.deleted", id: HL });
+  assert.equal(missing()(HL), true);
+  actor.send({ type: "note.changed", id: HL, title: "", body: "quote", version: 2, updatedAt: 1 });
+  assert.equal(missing()(HL), false, "an undone delete brings the tag back");
+  // Without notes to ask (no-answerer), only a follow or a deletion can tell.
+  const lone = await linked(null);
+  assert.equal(lone.missing()(GONE), false);
+  lone.actor.send({ type: "note.deleted", id: GONE });
+  assert.equal(lone.missing()(GONE), true);
+});
+
+test("a copied link goes into Vim's register, so p pastes it", async () => {
+  const { actor, pushed } = await linked([]);
+  actor.send({ type: "link.copied", id: HL, text: "[q](note:x)" });
+  assert.deepEqual(pushed, ["[q](note:x)"]);
+});
+
+test("a source link's text is kept raw through the levels", () => {
+  const md = "# [q](note:01K7TEST0000000000000H0001) title\nsee [a \\[b\\]](note:01K7TEST0000000000000H0001)";
+  const { doc, levels } = parseBody(md);
+  assert.equal(serialize(doc, levels), md);
 });

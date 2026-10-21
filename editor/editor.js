@@ -1,7 +1,7 @@
-import { EditorState, EditorSelection, RangeSetBuilder, StateField, Prec, Compartment, Facet } from "@codemirror/state";
+import { EditorState, EditorSelection, RangeSetBuilder, StateField, StateEffect, Transaction, Prec, Compartment, Facet } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType, keymap, drawSelection } from "@codemirror/view";
 import { history, historyKeymap, standardKeymap, isolateHistory } from "@codemirror/commands";
-import { vim, Vim } from "@replit/codemirror-vim";
+import { vim, Vim, getCM } from "@replit/codemirror-vim";
 
 // The editor kit (architecture.md 10): what every CodeMirror editor needs and nothing
 // one editor alone needs. It imports only vendored CodeMirror packages, never the bus,
@@ -539,4 +539,176 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
   ];
 
   return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, keymap.of([...listKeys, ...keys])];
+}
+
+// --- Source links -------------------------------------------------------------------
+// A source link, `[label](note:<id>)`, is a link in an editor's text to a highlight (13).
+// It stays raw in the document, so what an editor stores is untouched; it is drawn as one
+// tag and kept atomic the way a list item's marker is (overMarkers): the cursor never
+// rests inside it, and a deletion that reaches into it takes it whole (10).
+
+// Every source link in `text`, by its range in the text and its label with the escapes
+// off. A label never spans lines.
+const SOURCE_LINK = /\[((?:[^\[\]\\\n]|\\[^\n])*)\]\(note:([0-9A-HJKMNP-TV-Z]{26})\)/g;
+export function sourceLinksIn(text) {
+  const found = [];
+  for (const m of String(text).matchAll(SOURCE_LINK)) {
+    found.push({ from: m.index, to: m.index + m[0].length, id: m[2], label: m[1].replace(/\\(.)/g, "$1") });
+  }
+  return found;
+}
+
+// Which links' highlights are gone, as a test on the highlight's id: the editor learns it
+// from its own actor and hands it over with missingLinks.
+const setMissing = StateEffect.define();
+
+// One editor's tags: `follow(id)` runs on a click on a tag, or Enter on it in Vim's
+// normal mode, also in a read-only editor; `icon(element)` draws the link glyph into the
+// tag, because the kit knows no icons (11.2); `missing(id)` says which tags start grey.
+export function sourceLinks({ follow, icon = () => {}, missing = () => false }) {
+  class LinkTag extends WidgetType {
+    constructor(label, id, gone) {
+      super();
+      this.label = label;
+      this.id = id;
+      this.gone = gone;
+    }
+    eq(other) {
+      return other.label === this.label && other.id === this.id && other.gone === this.gone;
+    }
+    toDOM() {
+      const tag = document.createElement("span");
+      tag.className = this.gone ? "cm-source-link removed" : "cm-source-link";
+      tag.title = this.gone ? "This highlight was removed" : "Open the passage";
+      const glyph = document.createElement("span");
+      glyph.className = "cm-source-icon";
+      icon(glyph);
+      const label = document.createElement("span");
+      label.className = "cm-source-label";
+      label.textContent = this.label;
+      tag.append(glyph, label);
+      tag.addEventListener("click", () => follow(this.id));
+      return tag;
+    }
+  }
+
+  const decos = (state, gone) =>
+    Decoration.set(
+      sourceLinksIn(state.doc.toString()).map((l) =>
+        Decoration.replace({ widget: new LinkTag(l.label, l.id, Boolean(gone(l.id))) }).range(l.from, l.to),
+      ),
+    );
+
+  const field = StateField.define({
+    create: (state) => ({ missing, deco: decos(state, missing) }),
+    update(value, tr) {
+      let gone = value.missing;
+      for (const e of tr.effects) if (e.is(setMissing)) gone = e.value;
+      if (!tr.docChanged && gone === value.missing) return value;
+      return { missing: gone, deco: decos(tr.state, gone) };
+    },
+    provide: (f) => [EditorView.decorations.from(f, (v) => v.deco), EditorView.atomicRanges.of((view) => view.state.field(f).deco)],
+  });
+
+  const linksIn = (state) => sourceLinksIn(state.doc.toString());
+
+  // Vim moves the cursor by its own reckoning, past CodeMirror's atomic ranges, so a bare
+  // cursor that lands inside a tag is put at the edge it was heading for.
+  const overLinks = EditorState.transactionFilter.of((tr) => {
+    if (tr.docChanged || !tr.selection || tr.selection.ranges.length !== 1 || !tr.selection.main.empty) return tr;
+    const head = tr.selection.main.head;
+    const link = linksIn(tr.startState).find((l) => l.from < head && head < l.to);
+    if (!link) return tr;
+    const to = head > tr.startState.selection.main.head ? link.to : link.from;
+    return [tr, { selection: EditorSelection.cursor(to), sequential: true }];
+  });
+
+  // A deletion that reaches into a tag, Backspace after it or x on it, takes the whole
+  // tag, and text put inside one, as Vim's p does on the tag (it pastes after the
+  // character under the cursor), goes after it.
+  const wholeLinks = EditorState.transactionFilter.of((tr) => {
+    if (!tr.docChanged) return tr;
+    const found = linksIn(tr.startState);
+    if (found.length === 0) return tr;
+    const changes = [];
+    let grown = false;
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      let from = fromA;
+      let to = toA;
+      const inside = to === from && found.find((l) => l.from < from && from < l.to);
+      if (inside) {
+        from = to = inside.to;
+        grown = true;
+      }
+      if (to > from) {
+        for (const l of found) {
+          if (l.from < to && l.to > from && (l.from < from || l.to > to)) {
+            from = Math.min(from, l.from);
+            to = Math.max(to, l.to);
+            grown = true;
+          }
+        }
+      }
+      changes.push({ from, to, insert: inserted });
+    });
+    if (!grown) return tr;
+    const last = changes[changes.length - 1];
+    return {
+      changes,
+      selection: EditorSelection.cursor(last.from + last.insert.length),
+      effects: tr.effects,
+      userEvent: tr.annotation(Transaction.userEvent),
+      scrollIntoView: tr.scrollIntoView,
+    };
+  });
+
+  // Enter on a tag in Vim's normal mode follows it, before Vim moves the cursor down.
+  const enterFollows = Prec.highest(
+    EditorView.domEventHandlers({
+      keydown: (event, view) => {
+        if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
+        const state = getCM(view)?.state.vim;
+        if (!state || state.insertMode || state.visualMode) return false;
+        const head = view.state.selection.main.head;
+        const link = linksIn(view.state).find((l) => l.from <= head && head < l.to);
+        if (!link) return false;
+        event.preventDefault();
+        follow(link.id);
+        return true;
+      },
+    }),
+  );
+
+  return [field, wholeLinks, overLinks, enterFollows, linkTheme];
+}
+
+// A new test of which highlights are gone, redrawing the tags at once. The editor calls it
+// only when its actor's answer changed, since each call redraws.
+export function missingLinks(view, missing) {
+  view.dispatch({ effects: setMissing.of(missing) });
+}
+
+const linkTheme = EditorView.theme({
+  ".cm-source-link": {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "var(--space-2xs)",
+    padding: "0 var(--space-2xs)",
+    borderRadius: "var(--radius-sm)",
+    background: "var(--color-accent-subtle)",
+    color: "var(--color-accent)",
+    cursor: "pointer",
+  },
+  ".cm-source-icon": { display: "inline-flex" },
+  ".cm-source-link.removed": {
+    background: "none",
+    color: "var(--color-mute)",
+    textDecoration: "line-through",
+  },
+});
+
+// Vim's p reads Vim's own unnamed register, not the system clipboard, and the registers
+// are one per page, so a text put here is what p pastes in any editor.
+export function toRegister(text) {
+  Vim.getRegisterController().pushText(null, "yank", text, false, false);
 }

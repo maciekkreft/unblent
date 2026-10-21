@@ -2,12 +2,12 @@ import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { EditorState, EditorSelection, Transaction, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode, Prec } from "@codemirror/state";
-import { EditorView, Decoration, WidgetType } from "@codemirror/view";
+import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode } from "@codemirror/state";
+import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, sourceLinksIn, isStaged, showing, startsTyping } from "./machine.js";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, toRegister } from "editor";
+import { machine, parseBody, serialize, aboutTitleOf, isStaged, showing, startsTyping } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -193,142 +193,6 @@ Vim.defineEx("tab", "tab", (cm, params) => {
   if (["split", "sp"].includes(params.args?.[0])) cm.cm6?.contentDOM.dispatchEvent(new CustomEvent("tabsplit"));
 });
 
-// --- Source links ------------------------------------------------------------------
-// A source link, `[label](note:<id>)`, stays raw in the document, so serialize and the
-// stored form are untouched; it is drawn as one tag and kept atomic the way the editor
-// kit keeps a list item's marker (overMarkers): the cursor never rests inside it, and a
-// deletion that reaches into it takes it whole (architecture.md 10).
-
-// The links whose highlight is gone, from the machine (its UI state), drawn struck through.
-const setRemoved = StateEffect.define();
-
-class LinkTag extends WidgetType {
-  constructor(label, id, removed) {
-    super();
-    this.label = label;
-    this.id = id;
-    this.removed = removed;
-  }
-  eq(other) {
-    return other.label === this.label && other.id === this.id && other.removed === this.removed;
-  }
-  toDOM(view) {
-    const tag = document.createElement("span");
-    tag.className = this.removed ? "cm-source-link removed" : "cm-source-link";
-    tag.title = this.removed ? "This highlight was removed" : "Open the passage";
-    render(html`${icon("link")}<span class="cm-source-label">${this.label}</span>`, tag);
-    // The click reaches the editor's element, where the element knows its actor.
-    tag.addEventListener("click", () => view.contentDOM.dispatchEvent(new CustomEvent("follow", { detail: this.id })));
-    return tag;
-  }
-}
-
-const linkDecos = (state, removed) =>
-  Decoration.set(
-    sourceLinksIn(state.doc.toString()).map((l) =>
-      Decoration.replace({ widget: new LinkTag(l.label, l.id, removed.includes(l.id)) }).range(l.from, l.to),
-    ),
-  );
-
-const linkField = StateField.define({
-  create: (state) => ({ removed: [], deco: linkDecos(state, []) }),
-  update(value, tr) {
-    let { removed } = value;
-    for (const e of tr.effects) if (e.is(setRemoved)) removed = e.value;
-    if (!tr.docChanged && removed === value.removed) return value;
-    return { removed, deco: linkDecos(tr.state, removed) };
-  },
-  provide: (f) => [EditorView.decorations.from(f, (v) => v.deco), EditorView.atomicRanges.of((view) => view.state.field(f).deco)],
-});
-
-const linksIn = (state) => sourceLinksIn(state.doc.toString());
-
-// Vim moves the cursor by its own reckoning, past CodeMirror's atomic ranges, so a bare
-// cursor that lands inside a tag is put at the edge it was heading for.
-const overLinks = EditorState.transactionFilter.of((tr) => {
-  if (tr.docChanged || !tr.selection || tr.selection.ranges.length !== 1 || !tr.selection.main.empty) return tr;
-  const head = tr.selection.main.head;
-  const link = linksIn(tr.startState).find((l) => l.from < head && head < l.to);
-  if (!link) return tr;
-  const to = head > tr.startState.selection.main.head ? link.to : link.from;
-  return [tr, { selection: EditorSelection.cursor(to), sequential: true }];
-});
-
-// A deletion that reaches into a tag, Backspace after it or x on it, takes the whole tag,
-// and text put inside one goes after it.
-const wholeLinks = EditorState.transactionFilter.of((tr) => {
-  if (!tr.docChanged) return tr;
-  const found = linksIn(tr.startState);
-  if (found.length === 0) return tr;
-  const changes = [];
-  let grown = false;
-  tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
-    let from = fromA;
-    let to = toA;
-    // Text put inside a tag, as Vim's p does on the tag (it pastes after the character
-    // under the cursor), goes after the whole tag.
-    const inside = to === from && found.find((l) => l.from < from && from < l.to);
-    if (inside) {
-      from = to = inside.to;
-      grown = true;
-    }
-    if (to > from) {
-      for (const l of found) {
-        if (l.from < to && l.to > from && (l.from < from || l.to > to)) {
-          from = Math.min(from, l.from);
-          to = Math.max(to, l.to);
-          grown = true;
-        }
-      }
-    }
-    changes.push({ from, to, insert: inserted });
-  });
-  if (!grown) return tr;
-  const last = changes[changes.length - 1];
-  return {
-    changes,
-    selection: EditorSelection.cursor(last.from + last.insert.length),
-    effects: tr.effects,
-    userEvent: tr.annotation(Transaction.userEvent),
-    scrollIntoView: tr.scrollIntoView,
-  };
-});
-
-// Enter on a tag in Vim's normal mode follows it, before Vim moves the cursor down.
-const enterFollows = Prec.highest(
-  EditorView.domEventHandlers({
-    keydown: (event, view) => {
-      if (event.key !== "Enter" || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return false;
-      const vim = getCM(view)?.state.vim;
-      if (!vim || vim.insertMode || vim.visualMode) return false;
-      const head = view.state.selection.main.head;
-      const link = linksIn(view.state).find((l) => l.from <= head && head < l.to);
-      if (!link) return false;
-      event.preventDefault();
-      view.contentDOM.dispatchEvent(new CustomEvent("follow", { detail: link.id }));
-      return true;
-    },
-  }),
-);
-
-const linkTheme = EditorView.theme({
-  ".cm-source-link": {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "var(--space-2xs)",
-    padding: "0 var(--space-2xs)",
-    borderRadius: "var(--radius-sm)",
-    background: "var(--color-accent-subtle)",
-    color: "var(--color-accent)",
-    cursor: "pointer",
-  },
-  ".cm-source-link.removed": {
-    background: "none",
-    color: "var(--color-mute)",
-    textDecoration: "line-through",
-  },
-});
-
 // The kit's theme is the base; the note fills its region and scrolls inside it.
 const levelTheme = EditorView.theme({
   "&": { height: "100%" },
@@ -387,7 +251,7 @@ class ActorController {
         recallTitles: titleStore.recall,
         rememberTitles: titleStore.remember,
         // Vim's registers are one per page, so the link lands where any editor's p reads.
-        pushRegister: (text) => Vim.getRegisterController().pushText(null, "yank", text, false, false),
+        pushRegister: toRegister,
         // A try page (8) shows the editor signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
@@ -620,6 +484,8 @@ class NoteEditor extends LitElement {
   // outside empties the history, or "u" would walk back into the notes shown before
   // it and save each of them over this one.
   #history = new Compartment();
+  // The source links whose highlight is gone, as last handed to the editor's tags.
+  #removed = [];
 
   #extensions() {
     return [
@@ -631,11 +497,12 @@ class NoteEditor extends LitElement {
       paragraphs({ notList: leveled }),
       levelField,
       levelTheme,
-      linkField,
-      wholeLinks,
-      overLinks,
-      enterFollows,
-      linkTheme,
+      // A source link is drawn as a tag (the editor kit, 10); following one asks the actor.
+      sourceLinks({
+        follow: (id) => this.#actor.send({ type: "_follow", id }),
+        icon: (into) => render(icon("link"), into),
+        missing: (id) => this.#removed.includes(id),
+      }),
       this.#history.of(history()),
       EditorView.updateListener.of(this.#onUpdate),
       EditorView.domEventHandlers({
@@ -653,11 +520,6 @@ class NoteEditor extends LitElement {
         // `:tab split` typed in this editor (the "tab" Ex command above).
         tabsplit: () => {
           this.#actor.send({ type: "_stage" });
-          return true;
-        },
-        // A click on a source link's tag, or Enter on it (enterFollows).
-        follow: (e) => {
-          this.#actor.send({ type: "_follow", id: e.detail });
           return true;
         },
       }),
@@ -742,7 +604,10 @@ class NoteEditor extends LitElement {
     if (!snapshot || !this.#view) return;
     const { body, vimKeys, removed } = snapshot.context;
     setVim(this.#view, vimKeys);
-    if (this.#view.state.field(linkField).removed !== removed) this.#view.dispatch({ effects: setRemoved.of(removed) });
+    if (removed !== this.#removed) {
+      this.#removed = removed;
+      missingLinks(this.#view, (id) => removed.includes(id));
+    }
     // The new note can arrive after the keyboard did (the list focuses the editor while
     // its read is in flight): start typing once per note picked.
     const typingFor = startsTyping(snapshot) ? snapshot.context.id : null;

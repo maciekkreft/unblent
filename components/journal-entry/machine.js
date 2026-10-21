@@ -1,4 +1,4 @@
-import { setup, assign, enqueueActions, fromPromise } from "xstate";
+import { setup, assign, emit, enqueueActions, fromPromise, fromCallback, spawnChild, stopChild } from "xstate";
 
 // The view component where the user writes the journal (6.4). It owns only UI state —
 // which day is shown, the text being typed as a draft, whether typing is waiting to be
@@ -7,7 +7,8 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 // starting picture and follows journal.changed, settings.changed and session.changed after
 // (4.3, fourth rule); settings only for the "Vim keys" preference (12), session only for
 // whether anyone is signed in, and books: read only to learn whether an opened book is the
-// journal (written). Writing leaves as day.saved, at a throttle while
+// journal (written); notes: list and notes: read, following note.changed and note.deleted,
+// only for which highlights the day's source links point at still exist and where they are. Writing leaves as day.saved, at a throttle while
 // typing and at once on blur with `left` (4.3, third rule); whether a save lands is the
 // journal's to decide, because the "today only" rule lives there. The ask, the id
 // minting, the clock and the throttle arrive through input, so the machine is
@@ -206,6 +207,23 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // neither the day nor the sign-in line flashes; "sign-in" signed out, since the days kept
 // in this browser are the account's; "show" otherwise. A try page (8) shows the journal to
 // a visitor who is not yet a guest.
+// Where following a source link goes (note-editor/machine.js, copied because components
+// never import each other, 11.2): the book and the passage the highlight's link to its
+// book carries, from a notes: read reply. Null when the highlight is gone (a tombstone
+// reads not-found) or the note marks no passage, so nothing opens.
+export function passageOf(reply, id) {
+  const about = Array.isArray(reply?.note?.about) ? reply.note.about : [];
+  const link = about.find((l) => l.kind === "book" && l.place);
+  return link ? { book: link.id, id, place: link.place } : null;
+}
+
+// Whether the highlight a source link names is gone, so its tag is drawn grey: a note
+// notes no longer lists, once it has answered, or one a follow found gone. While notes has
+// not answered (a page without it), only a follow can tell.
+export const linkMissing = ({ notes, removed }) => (id) => removed.includes(id) || (notes !== null && !notes.includes(id));
+
+const without = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) : list);
+
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
@@ -214,6 +232,17 @@ export const machine = setup({
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
+    // Which notes exist, for the day's source links; note.changed and note.deleted are held
+    // for this ask until its reply lands.
+    notes: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // Following a source link asks notes for the highlight beside whatever the entry is
+    // doing, so the draft is untouched; the reply comes back as _followed.
+    follow: fromCallback(({ input, sendBack }) => {
+      Promise.resolve(input.ask("notes", "read", { id: input.id })).then(
+        (reply) => sendBack({ type: "_followed", id: input.id, reply }),
+        () => sendBack({ type: "_followed", id: input.id, reply: null }),
+      );
+    }),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -237,14 +266,20 @@ export const machine = setup({
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day. With Vim keys on, typing :q or :quit in the " +
-      "editor, on any day, closes the journal's book. Signed out it shows no day, no level " +
+      "editor, on any day, closes the journal's book. A source link to a highlight, pasted " +
+      "from the reader's Copy link (or with p after the reader's y while Vim keys is on), is " +
+      "drawn as one tag, the link icon and the start of the quote, that the cursor steps over " +
+      "and Backspace or x removes whole, while the day's saved text keeps the link as it was " +
+      "pasted; a click on it, or Enter on it in Vim's normal mode, opens the book at the " +
+      "passage, also on an earlier day, and a tag whose highlight is gone turns grey and " +
+      "struck through and opens nothing. Signed out it shows no day, no level " +
       "buttons and nothing nested under the text, only \"Sign in to write in your journal.\"; " +
       "the days stay kept in this browser and come back when the user signs in, without a " +
       "reload. On a try page a visitor not yet signed in still writes.",
     kind: "view",
-    emits: ["day.saved", "day.shown", "book.closed"],
+    emits: ["day.saved", "day.shown", "book.closed", "passage.selected"],
     attributes: ["height"],
-    asks: ["journal: read", "settings: read", "books: read", "session: read"],
+    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -277,6 +312,12 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
+    // The ids of every note notes lists, for the source links' tags; null until it answers.
+    notes: null,
+    // Source links a follow found gone (UI state): their tags are drawn grey.
+    removed: [],
+    // Puts a copied source link in Vim's unnamed register, so p pastes it (link.copied).
+    pushRegister: input.pushRegister,
   }),
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
@@ -291,6 +332,14 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
       onError: { actions: assign({ signedIn: true }) },
+    },
+    {
+      src: "notes",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        guard: ({ event }) => Array.isArray(event.output?.notes),
+        actions: assign({ notes: ({ event }) => event.output.notes.map((n) => n.id) }),
+      },
     },
   ],
   initial: "loading",
@@ -373,6 +422,46 @@ export const machine = setup({
         if (event.known) enqueue.assign({ written: { ...context.written, [event.id]: event.written } });
         if (event.written && context.want?.id === event.id) enqueue.raise({ type: "_show", chapter: context.want.chapter });
       }),
+    },
+    // The reader copied a link to a highlight: Vim's p reads Vim's own register, not the
+    // system clipboard, so the link goes there too.
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    // A click on a source link, or Enter on it in Vim's normal mode, on any day: ask notes
+    // for the highlight. A second follow replaces one still waiting.
+    _follow: {
+      actions: [
+        stopChild("follow"),
+        spawnChild("follow", { id: "follow", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) }),
+      ],
+    },
+    // The highlight's reply: the book opens at the passage (passage.selected), or the
+    // highlight is gone and its tag turns grey.
+    _followed: [
+      {
+        guard: ({ event }) => passageOf(event.reply, event.id) != null,
+        actions: [
+          assign({ removed: ({ context, event }) => without(context.removed, event.id) }),
+          emit(({ event }) => ({ type: "passage.selected", ...passageOf(event.reply, event.id) })),
+        ],
+      },
+      {
+        guard: ({ event }) => event.reply?.error === "not-found",
+        actions: assign({ removed: ({ context, event }) => [...without(context.removed, event.id), event.id] }),
+      },
+    ],
+    // notes' news (4.3, fourth rule): a note made, changed or brought back exists; a
+    // deleted one does not.
+    "note.changed": {
+      actions: assign(({ context, event }) => ({
+        notes: context.notes === null || context.notes.includes(event.id) ? context.notes : [...context.notes, event.id],
+        removed: without(context.removed, event.id),
+      })),
+    },
+    "note.deleted": {
+      actions: assign(({ context, event }) => ({
+        notes: context.notes === null ? null : without(context.notes, event.id),
+        removed: context.notes === null ? [...without(context.removed, event.id), event.id] : context.removed,
+      })),
     },
     "book.changed": { actions: assign(({ context, event }) => ({ written: { ...context.written, [event.id]: event.written === true } })) },
     "book.deleted": {

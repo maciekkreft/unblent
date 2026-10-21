@@ -208,6 +208,39 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: rendering and layout.
+    run("a source link in the day is drawn as one tag, grey when its highlight is gone, and saved as typed", async (page) => {
+      // The product page, where notes answers which highlights exist.
+      const link = "[A quote](note:01K7TEST0000000000000000H1)";
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.locator("book-shelf .tile:not(.adding)").filter({ hasText: "Journal" }).click();
+      await editor(page).click();
+      await page.keyboard.type(`see ${link} end`);
+      const tag = entry(page).locator(".cm-source-link");
+      await tag.waitFor();
+      assert.equal(await tag.count(), 1);
+      assert.equal(await tag.locator(".cm-source-label").textContent(), "A quote");
+      assert.equal(await tag.locator("svg").count(), 1, "the link icon");
+      await until(async () => (await tag.getAttribute("class")).includes("removed"));
+      assert.equal(await tag.evaluate((el) => getComputedStyle(el).textDecorationLine), "line-through");
+      await editor(page).blur();
+      const stored = () =>
+        page.evaluate(async () => {
+          const db = await new Promise((ok, no) => {
+            const r = indexedDB.open("journal");
+            r.onsuccess = () => ok(r.result);
+            r.onerror = () => no(r.error);
+          });
+          const all = await new Promise((ok) => {
+            const q = db.transaction("days").objectStore("days").getAll();
+            q.onsuccess = () => ok(q.result);
+          });
+          db.close();
+          return all.map((d) => d.text);
+        });
+      await until(async () => (await stored())[0] === `see ${link} end`);
+    });
+
     // Browser: focus and keys.
     run("with Vim keys on, :q in the product's journal closes the journal's book", async (page) => {
       // The product page, because there books names the journal; its preferences are the product profile's.

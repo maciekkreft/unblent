@@ -1,14 +1,16 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
+import { icon } from "icons";
 import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode } from "@codemirror/state";
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing } from "./machine.js";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, toRegister } from "editor";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
+import passageSelected from "./events/passage.selected.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // The theme, Vim and the paragraphs come from the editor kit (architecture.md 10). The
@@ -177,8 +179,9 @@ class ActorController {
         now: () => Date.now(),
         // A try page (8) shows the journal signed out.
         tryPage: location.pathname.startsWith("/try/"),
+        pushRegister: toRegister,
       },
-      events: { "day.saved": saved, "day.shown": dayShown, "book.closed": closed },
+      events: { "day.saved": saved, "day.shown": dayShown, "book.closed": closed, "passage.selected": passageSelected },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -438,6 +441,10 @@ class JournalEntry extends LitElement {
   // transaction just set, whose button flashes until animationend.
   #level = "body";
   #flashed = null;
+  // Which source links' highlights are gone, as last handed to the editor's tags, and the
+  // actor's facts it was made from.
+  #missing = () => false;
+  #missingFrom = null;
 
   #send(event) {
     this.#actor.send(event);
@@ -463,6 +470,13 @@ class JournalEntry extends LitElement {
       this.#editable.of(editability(editable)),
       levelField,
       levelTheme,
+      // A source link is drawn as a tag (the editor kit, 10), followed also on an earlier
+      // day, which takes no typing; the link stays raw in the text, so serialize keeps it.
+      sourceLinks({
+        follow: (id) => this.#send({ type: "_follow", id }),
+        icon: (into) => render(icon("link"), into),
+        missing: this.#missing,
+      }),
       EditorView.updateListener.of((update) => {
         const leveled = update.transactions.some((t) => t.effects.some((e) => e.is(setLevel) || e.is(setAllLevels)));
         for (const t of update.transactions) {
@@ -523,6 +537,12 @@ class JournalEntry extends LitElement {
       this.#syncLevel(this.#view.state);
     }
     setVim(this.#view, vimKeys);
+    const { notes, removed } = snapshot.context;
+    if (notes !== this.#missingFrom?.notes || removed !== this.#missingFrom?.removed) {
+      this.#missingFrom = { notes, removed };
+      this.#missing = linkMissing(snapshot.context);
+      missingLinks(this.#view, this.#missing);
+    }
     const effects = [];
     if (editable !== this.#editableOn) {
       this.#editableOn = editable;

@@ -22,6 +22,10 @@ import {
   markerStop,
   openAt,
   paragraphsOpener,
+  sourceLinksIn,
+  sourceLinks,
+  missingLinks,
+  toRegister,
 } from "../editor.js";
 
 // The kit can break every editor (architecture.md 10), so its rule is tested here
@@ -440,3 +444,63 @@ test(":tabc and :tabclose run the same quit handler as :q", () => {
   Vim.handleEx(exLine(one), "tabclose");
   assert.deepEqual(quits, [one, one]);
 });
+
+// --- Source links -------------------------------------------------------------------
+
+const HL = "01K7TEST0000000000000H0001";
+const LINK = `[A \\[b\\] c…](note:${HL})`;
+const TEXT = `see ${LINK} end`;
+const END = 4 + LINK.length;
+
+test("source links are found with their ranges and their labels unescaped, never across lines", () => {
+  assert.deepEqual(sourceLinksIn(TEXT), [{ from: 4, to: END, id: HL, label: "A [b] c…" }]);
+  assert.deepEqual(sourceLinksIn(`[a](note:${HL})[b](note:${HL})`).map((l) => l.label), ["a", "b"]);
+  assert.deepEqual(sourceLinksIn(`[a\nb](note:${HL})`), []);
+});
+
+// The tags drawn in a state, by range and whether each is grey.
+const tags = (state) => {
+  const found = [];
+  for (const source of state.facet(EditorView.decorations)) {
+    if (typeof source === "function") continue;
+    source.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.widget?.id) found.push({ from, to, gone: deco.spec.widget.gone });
+    });
+  }
+  return found;
+};
+
+test("a source link is one tag; a deletion into it takes it whole and text put inside goes after it", () => {
+  const t = target(TEXT, 0, [sourceLinks({ follow: () => {} })]);
+  assert.deepEqual(tags(t.state), [{ from: 4, to: END, gone: false }]);
+  // Backspace just after the tag.
+  t.dispatch(t.state.update({ changes: { from: END - 1, to: END }, userEvent: "delete.backward" }));
+  assert.equal(t.state.doc.toString(), "see  end");
+  assert.equal(t.state.selection.main.head, 4);
+  // Text put inside a tag, as Vim's p on it, lands after it.
+  const u = target(TEXT, 0, [sourceLinks({ follow: () => {} })]);
+  u.dispatch(u.state.update({ changes: { from: 6, insert: "X" }, userEvent: "input.paste" }));
+  assert.equal(u.state.doc.toString(), `see ${LINK}X end`);
+});
+
+test("a cursor never rests inside a tag: it goes to the edge it was heading for", () => {
+  const t = target(TEXT, 4, [sourceLinks({ follow: () => {} })]);
+  move(t, 5);
+  assert.equal(t.state.selection.main.head, END);
+  move(t, END - 1);
+  assert.equal(t.state.selection.main.head, 4);
+});
+
+test("a tag is grey while its highlight is missing, and missingLinks redraws it", () => {
+  const t = target(TEXT, 0, [sourceLinks({ follow: () => {}, missing: (id) => id === HL })]);
+  assert.deepEqual(tags(t.state).map((x) => x.gone), [true]);
+  missingLinks(t, () => false);
+  assert.deepEqual(tags(t.state).map((x) => x.gone), [false]);
+  assert.equal(t.state.doc.toString(), TEXT, "drawing never changes the text");
+});
+
+test("toRegister puts a text in Vim's unnamed register, which p pastes", () => {
+  toRegister(LINK);
+  assert.equal(Vim.getRegisterController().getRegister('"').toString(), LINK);
+});
+
