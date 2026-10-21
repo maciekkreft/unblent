@@ -200,10 +200,10 @@ for (const engine of ENGINES) {
     }
   });
 
-  // The stack is fixed above the switch and stays within the window in a phone
-  // preview (7.5): a bounded toast column, not a full-width bar.
+  // In the phone preview a notice sits inside the phone frame, not in the window's
+  // corner (7.5), on the product page.
   // Browser: rendering and layout.
-  test(`a notice stays within the window in a phone preview in ${engine.name}`, async () => {
+  test(`a notice sits inside the phone frame in a phone preview in ${engine.name}`, async () => {
     const browser = await engine.launch();
     // A bare context with no authenticator: navigator.credentials rejects promptly,
     // which the fact maps to a refusal (12). That path legitimately returns a 4xx and
@@ -215,20 +215,26 @@ for (const engine of ENGINES) {
       const problems = [];
       const page = await context.newPage();
       page.on("pageerror", (err) => problems.push(`page error: ${err.message}`));
-      // A short window so a passing notice does not linger; seed the notice from a
-      // real refusal by clicking sign-in with no authenticator.
+      // Seed the notice from a real refusal by clicking sign-in with no authenticator.
       await page.addInitScript(() => localStorage.setItem("viewport", "phone"));
-      await page.goto(`${BASE_URL}/workshop/design/session`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
-      await page.evaluate(() => document.querySelector("notice-stack").style.setProperty("--duration-undo", "4s"));
-      await page.evaluate(() => document.querySelector("session-switch").shadowRoot.querySelector("button")?.click());
+      await until(() => page.evaluate(() => Boolean(document.querySelector("session-switch")?.shadowRoot?.querySelector("button"))));
+      await page.evaluate(() => document.querySelector("session-switch").shadowRoot.querySelector("button").click());
       await until(async () => (await notices(page)).length >= 1);
-      const fits = await page.evaluate(() => {
-        const el = document.querySelector("notice-stack");
-        const r = el.getBoundingClientRect();
-        return r.left >= 0 && r.right <= window.innerWidth && document.documentElement.scrollWidth <= window.innerWidth + 1;
+      // The body is the phone's screen (tokens/base.css).
+      const boxes = await page.evaluate(() => {
+        const box = (el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        };
+        return { notice: box(document.querySelector("notice-stack").shadowRoot.querySelector(".notice")), frame: box(document.body) };
       });
-      assert.ok(fits, "the stack is within the window, no horizontal overflow");
+      const { notice, frame } = boxes;
+      assert.ok(
+        notice.left >= frame.left && notice.right <= frame.right && notice.top >= frame.top && notice.bottom <= frame.bottom,
+        `the notice lies inside the phone frame: ${JSON.stringify(boxes)}`,
+      );
       await page.screenshot({ path: resolve(SCREENSHOTS, `notice-phone-${engine.name}.png`) });
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {

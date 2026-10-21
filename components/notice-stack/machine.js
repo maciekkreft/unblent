@@ -123,7 +123,8 @@ export const machine = setup({}).createMachine({
       "Unblock on a guest in Administration take effect at once and show the same dark notice, " +
       "whose Undo does the opposite. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
-      "because `notes` does not keep conflicts.",
+      "because `notes` does not keep conflicts. Notices sit in the bottom corner of the " +
+      "window, and in the phone preview in the bottom of the phone's screen.",
     kind: "view",
     emits: ["note.saved", "removal.undone", "removal.settled", "use.reset", "guest.blocked"],
     attributes: [],

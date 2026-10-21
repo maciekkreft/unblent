@@ -128,8 +128,7 @@ class NoticeStack extends LitElement {
   static styles = css`
     /* Fixed above the viewport switch (7.5's document check flags only document.*
        writes; this writes the stack's own host). A bounded column that hugs the
-       corner like every fixed control, so in a phone preview it sits beside the
-       frame as the switch does, and on a real phone spans the gutters. The gaps
+       corner like every fixed control, and on a real phone spans the gutters. The gaps
        between toasts pass clicks through; each toast takes them back. */
     :host {
       position: fixed;
@@ -140,6 +139,19 @@ class NoticeStack extends LitElement {
       gap: var(--space-xs);
       pointer-events: none;
       z-index: 3;
+    }
+    /* In the phone preview (7.5) the notices belong to the phone, so the stack sits
+       in the frame's bottom corner, as on a real phone. tokens/base.css centres the
+       frame, one --viewport-phone wide and --viewport-phone-tall high capped at the
+       window less --space-xl, and draws it only for a fine pointer; the insets below
+       derive the same box, a percentage being of the window's width (left, right)
+       or height (bottom). --space-lg clears the screen's rounded corner. */
+    @media (pointer: fine) {
+      :host([framed]) {
+        left: calc(50% - var(--viewport-phone) / 2 + var(--space-md));
+        right: calc(50% - var(--viewport-phone) / 2 + var(--space-md));
+        bottom: calc((100% - min(var(--viewport-phone-tall), 100% - var(--space-xl))) / 2 + var(--space-lg));
+      }
     }
     .notice {
       pointer-events: auto;
@@ -274,6 +286,25 @@ class NoticeStack extends LitElement {
   `;
 
   #actor = new ActorController(this);
+
+  // Views only read the document (7.5): the stack follows data-viewport and marks
+  // its own host, which the styles above place inside the phone frame.
+  #viewport = new MutationObserver(() => this.#frame());
+
+  #frame() {
+    this.toggleAttribute("framed", document.documentElement.getAttribute("data-viewport") === "phone");
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.#frame();
+    this.#viewport.observe(document.documentElement, { attributes: true, attributeFilter: ["data-viewport"] });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#viewport.disconnect();
+  }
 
   #onKeydown(event) {
     if (event.key !== "Escape") return;
