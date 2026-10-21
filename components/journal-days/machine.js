@@ -68,6 +68,16 @@ export const kept = (signedIn) => (signedIn ? KEPT_SIGNED_IN : KEPT_SIGNED_OUT);
 
 const isPicture = (r) => Array.isArray(r?.days);
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the days.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the list shows of the account (14, signed out): "wait" until session answers, so
+// neither the days nor the sign-in line flash; "sign-in" signed out, since the days kept
+// in this browser are the account's; "show" otherwise. A try page (8) shows the days to a
+// visitor who is not yet a guest.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
@@ -81,11 +91,14 @@ export const machine = setup({
       "The Days dock of the journal: one row per day, newest first, with the short date, the " +
       "first line and how many paragraphs it has; the day that can still be edited shows a " +
       "\"today\" or \"open till HH:MM\" pill instead of the count. Picking a row shows that day " +
-      "in the entry. A line says where the journal is kept: in this browser when signed out, on " +
-      "your account when signed in. A day with choice points says how many after its count or " +
+      "in the entry. A line says where the journal is kept: on your account when signed in, in " +
+      "this browser when signed out on a try page. A day with choice points says how many after its count or " +
       "pill, \"· 1 choice point\" or \"· 3 choice points\"; one being deleted is not counted " +
       "while its Undo is offered, and counts again after an undo. When the choice points cannot " +
-      "be read, the rows show no counts and work as before.",
+      "be read, the rows show no counts and work as before. Signed out it shows no rows, only " +
+      "\"Sign in to write in your journal.\", as the journal page does; the days stay kept in " +
+      "this browser and come back when the user signs in, without a reload. On a try page a " +
+      "visitor not yet signed in still sees the days.",
     kind: "view",
     emits: ["day.selected"],
     attributes: [],
@@ -95,7 +108,10 @@ export const machine = setup({
     ask: input.ask,
     days: [],
     open: null,
-    signedIn: false,
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
     // Every choice point by id, as held(): only the counts are shown.
     choicePoints: {},
     // The row last picked, as day.selected carried it; null is the open day or new page.
@@ -107,7 +123,8 @@ export const machine = setup({
     {
       src: "session",
       input: ({ context }) => ({ ask: context.ask }),
-      onDone: { actions: assign(({ event }) => ({ signedIn: typeof event.output?.userId === "string" })) },
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
     },
     // An error reply (no choice-points on the page) leaves the rows without counts.
     {
@@ -168,6 +185,6 @@ export const machine = setup({
         return { choicePoints: rest };
       }),
     },
-    "session.changed": { actions: assign(({ event }) => ({ signedIn: typeof event.userId === "string" })) },
+    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
   },
 });

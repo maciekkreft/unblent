@@ -3,10 +3,11 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 // The view component where the user writes the journal (6.4). It owns only UI state —
 // which day is shown, the text being typed as a draft, whether typing is waiting to be
 // saved, whether the box has the keyboard, and a conflict the user has not settled — and
-// points at two facts: it asks journal: read and settings: read for the starting picture
-// and follows journal.changed and settings.changed after (4.3, fourth rule); settings
-// only for the "Vim keys" preference (12), and books: read only to learn whether an
-// opened book is the journal (written). Writing leaves as day.saved, at a throttle while
+// points at three facts: it asks journal: read, settings: read and session: read for the
+// starting picture and follows journal.changed, settings.changed and session.changed after
+// (4.3, fourth rule); settings only for the "Vim keys" preference (12), session only for
+// whether anyone is signed in, and books: read only to learn whether an opened book is the
+// journal (written). Writing leaves as day.saved, at a throttle while
 // typing and at once on blur with `left` (4.3, third rule); whether a save lands is the
 // journal's to decide, because the "today only" rule lives there. The ask, the id
 // minting, the clock and the throttle arrive through input, so the machine is
@@ -197,10 +198,22 @@ const quit = enqueueActions(({ context, enqueue }) => {
   if (id) enqueue.emit({ type: "book.closed", id });
 });
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the journal.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the page shows of the account (14, signed out): "wait" until session answers, so
+// neither the day nor the sign-in line flashes; "sign-in" signed out, since the days kept
+// in this browser are the account's; "show" otherwise. A try page (8) shows the journal to
+// a visitor who is not yet a guest.
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -224,11 +237,14 @@ export const machine = setup({
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day. With Vim keys on, typing :q or :quit in the " +
-      "editor, on any day, closes the journal's book.",
+      "editor, on any day, closes the journal's book. Signed out it shows no day, no level " +
+      "buttons and nothing nested under the text, only \"Sign in to write in your journal.\"; " +
+      "the days stay kept in this browser and come back when the user signs in, without a " +
+      "reload. On a try page a visitor not yet signed in still writes.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed"],
     attributes: ["height"],
-    asks: ["journal: read", "settings: read", "books: read"],
+    asks: ["journal: read", "settings: read", "books: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -257,14 +273,26 @@ export const machine = setup({
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
     // otherwise, and off on a page without it (the ask replies no-answerer).
     vimKeys: false,
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
-  invoke: {
-    src: "settings",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
-  },
+  invoke: [
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
+    },
+  ],
   initial: "loading",
   states: {
     loading: {
@@ -333,6 +361,7 @@ export const machine = setup({
     "journal.changed": { actions: assign(({ event }) => ({ picture: picture(event) })) },
     "journal.conflicted": { actions: assign(({ event }) => ({ conflict: { id: event.id, mine: event.mine, theirs: event.theirs } })) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null })) },
     _show: { actions: assign(({ event }) => ({ selected: null, chapter: event.chapter })) },
     _quit: { actions: quit },

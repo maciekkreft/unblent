@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, rows, kept, counts, choiceLabel } from "./machine.js";
+import { machine, rows, kept, counts, choiceLabel, showing } from "./machine.js";
 import selected from "./events/day.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -12,7 +12,11 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        // A try page (8) shows the days signed out.
+        tryPage: location.pathname.startsWith("/try/"),
+      },
       events: { "day.selected": selected },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -164,7 +168,12 @@ class JournalDays extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loading")) return nothing;
+    if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="empty">Sign in to write in your journal.</p>`;
+    if (snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="empty">The journal is unavailable.</p>`;
     const { days, open, signedIn, current, choicePoints } = snapshot.context;
     const now = Date.now();

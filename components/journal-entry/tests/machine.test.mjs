@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, conflictOn, shown, longDate, parseBody, serialize, selectedOf } from "../machine.js";
+import { machine, conflictOn, shown, longDate, parseBody, serialize, selectedOf, showing as accountShown } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
 // is saved when. Times are built with the local Date constructor, so the midnight cases
@@ -394,4 +394,49 @@ test("yesterday kept open past midnight is announced writable, and announced aga
   // Following the open day instead moves on to today's empty page.
   actor.send({ type: "day.selected", id: null });
   assert.deepEqual(said, [["2026-10-12", false], ["2026-10-13", true]]);
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The entry with a day kept in this browser; session as given, or missing.
+const opened = async (session, tryPage = false) => {
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) =>
+        Promise.resolve(
+          target === "session" ? (session ?? { error: "no-answerer" }) : target === "journal" ? picture({ days: [day(TODAY, "2026-10-12", "Now.")], open: TODAY }) : {},
+        ),
+      mint: () => FRESH,
+      now: () => at(12, 21),
+      tryPage,
+    },
+    // The midnight timer runs on this clock, so it never keeps the test alive.
+    clock: new SimulatedClock(),
+  });
+  actor.start();
+  await flush();
+  return { actor, ctx: () => actor.getSnapshot().context };
+};
+
+test("signed out the journal asks to sign in; signed in, or with no session to ask, it shows", async () => {
+  assert.equal(accountShown({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(accountShown((await opened(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(accountShown((await opened(SIGNED_IN)).ctx()), "show");
+  assert.equal(accountShown((await opened()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in writes in the journal", async () => {
+  assert.equal(accountShown((await opened(SIGNED_OUT, true)).ctx()), "show");
+});
+
+test("signing in shows the day again without a reload, and signing out hides it", async () => {
+  const { actor, ctx } = await opened(SIGNED_OUT);
+  assert.equal(ctx().picture.days[0]?.text, "Now.", "still kept while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(accountShown(ctx()), "show");
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(accountShown(ctx()), "sign-in");
 });

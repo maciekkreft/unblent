@@ -5,7 +5,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize } from "./machine.js";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
@@ -171,7 +171,13 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, now: () => Date.now() },
+      input: {
+        ask: (target, name, payload) => ask(machine, target, name, payload),
+        mint: ulid,
+        now: () => Date.now(),
+        // A try page (8) shows the journal signed out.
+        tryPage: location.pathname.startsWith("/try/"),
+      },
       events: { "day.saved": saved, "day.shown": dayShown, "book.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -492,6 +498,12 @@ class JournalEntry extends LitElement {
   updated() {
     const snapshot = this.#actor.snapshot;
     const region = this.renderRoot.querySelector(".region");
+    // Signed out the region is gone; an editor kept detached would still be what focus()
+    // lands in.
+    if (!region) {
+      this.#view?.destroy();
+      this.#view = null;
+    }
     if (!snapshot || !region) return;
     const { text, editable } = this.#content;
     const { vimKeys } = snapshot.context;
@@ -537,7 +549,13 @@ class JournalEntry extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loading")) return nothing;
+    if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing), and with no slot drawn
+    // the view nested under the text is not shown either.
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="empty page">Sign in to write in your journal.</p>`;
+    if (snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="empty page">The journal is unavailable.</p>`;
     const { context } = snapshot;
     const { picture, fresh, vimKeys } = context;

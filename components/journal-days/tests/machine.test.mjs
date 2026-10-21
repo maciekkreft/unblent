@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, kept, shortDate, counts, choiceLabel, KEPT_SIGNED_IN, KEPT_SIGNED_OUT } from "../machine.js";
+import { machine, rows, kept, shortDate, counts, choiceLabel, KEPT_SIGNED_IN, KEPT_SIGNED_OUT, showing } from "../machine.js";
 
 // The Days list's decisions (3.2): the rows, newest first, with the open day's pill, the
 // line saying where the journal is kept, and what a pick emits. Times are built with the
@@ -149,4 +149,45 @@ test("with no choice points to ask, the list still works and shows no counts", a
 test("the new page for today counts today's choice points", () => {
   const today = rows(DAYS, null, at(13, 9), { "2026-10-13": 2 })[0];
   assert.deepEqual([today.date, today.choices], ["Tue 13 Oct", 2]);
+});
+
+// --- Signed out (14) -------------------------------------------------------------------
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+// The list with days kept in this browser; session as given, or missing.
+async function listed(session, tryPage = false) {
+  const picture = { days: DAYS, projects: [], detectors: [], answers: [], open: MON, reason: null };
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => Promise.resolve(target === "journal" ? picture : target === "session" ? (session ?? { error: "no-answerer" }) : { error: "no-answerer" }),
+      tryPage,
+    },
+  });
+  actor.start();
+  await flush();
+  return { actor, ctx: () => actor.getSnapshot().context };
+}
+
+test("signed out the days are not shown; signed in, or with no session to ask, they are", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(showing((await listed(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(showing((await listed(SIGNED_IN)).ctx()), "show");
+  assert.equal(showing((await listed()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in sees the days, kept in this browser", async () => {
+  const { ctx } = await listed(SIGNED_OUT, true);
+  assert.equal(showing(ctx()), "show");
+  assert.equal(kept(ctx().signedIn), KEPT_SIGNED_OUT);
+});
+
+test("signing in brings the days back without a reload, and signing out hides them again", async () => {
+  const { actor, ctx } = await listed(SIGNED_OUT);
+  assert.equal(ctx().days.length, DAYS.length, "still kept while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
 });

@@ -35,6 +35,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test("the New choice point row opens a sheet in Situation, Escape folds it to a card, and a reload keeps it", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
+      // Signed out the journal page asks to sign in and draws no choice points.
+      await signedIn(context, forgeCookie("choice-points"));
       try {
         const page = await context.newPage();
         const problems = watch(page);
@@ -67,6 +69,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test("with Vim keys on, the first Escape in a box leaves insert mode and the second folds the sheet", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
+      // Signed out the journal page asks to sign in and draws no choice points.
+      await signedIn(context, forgeCookie("choice-points"));
       try {
         await context.addInitScript((v) => localStorage.setItem("settings", v), VIM_ON);
         const page = await context.newPage();
@@ -95,6 +99,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test("two choice points stay open, and Done folds only its own", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 1200 } });
       context.setDefaultTimeout(4000);
+      // Signed out the journal page asks to sign in and draws no choice points.
+      await signedIn(context, forgeCookie("choice-points"));
       try {
         const page = await context.newPage();
         const problems = watch(page);
@@ -216,6 +222,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test("Enter makes a paragraph and Shift+Enter a line break, and the card lists each line", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
       context.setDefaultTimeout(4000);
+      // Signed out the journal page asks to sign in and draws no choice points.
+      await signedIn(context, forgeCookie("choice-points"));
       try {
         const page = await context.newPage();
         const problems = watch(page);
@@ -247,6 +255,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const layout = async (width) => {
         const context = await browser.newContext({ viewport: { width, height: 800 } });
         context.setDefaultTimeout(4000);
+        // Signed out the journal page asks to sign in and draws no choice points.
+        await signedIn(context, forgeCookie("choice-points"));
         try {
           const page = await context.newPage();
           const problems = watch(page);

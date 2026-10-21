@@ -1,9 +1,10 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The journal's entry, walked as a user would on its stem page, signed out.
+// The journal's entry, walked as a user would on its stem page, signed in, since signed
+// out it only asks to sign in.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -55,6 +56,7 @@ for (const engine of ENGINES) {
       test(name, async () => {
         const context = await browser.newContext();
         context.setDefaultTimeout(4000);
+        await signedIn(context, forgeCookie("journal-entry"));
         try {
           const page = await context.newPage();
           const problems = watch(page);
@@ -75,7 +77,7 @@ for (const engine of ENGINES) {
       const days = page.locator("journal-days");
       await until(async () => (await days.locator(".row .first").first().textContent()) === "I always ruin my mornings.");
       assert.equal(await days.locator(".row .pill").first().textContent(), "today");
-      assert.equal(await days.locator(".kept").textContent(), "Kept in this browser. Signing in keeps it on your account.");
+      assert.equal(await days.locator(".kept").textContent(), "Kept on your account, on every device.");
     });
 
     run("an earlier day is read only, without level buttons", async (page) => {
@@ -185,6 +187,25 @@ for (const engine of ENGINES) {
           return all.map((d) => d.text);
         });
       await until(async () => (await stored())[0] === "# Monday\n\nRan\nRested");
+    });
+
+    // Browser: rendering and layout.
+    test("signed out, the product's journal shows only the line asking to sign in", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+        await page.locator("book-shelf .tile:not(.adding)").filter({ hasText: "Journal" }).click();
+        await until(async () => (await entry(page).evaluate((el) => el.shadowRoot.textContent.trim())) === "Sign in to write in your journal.");
+        // The entry's own shadow root: the choice points stay in the page, only not shown.
+        assert.equal(await entry(page).evaluate((el) => el.shadowRoot.querySelectorAll(".cm-content, button, slot").length), 0, "no text box, no level buttons");
+        assert.equal(await page.locator("choice-point-cards").isVisible(), false, "no choice points");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
     });
 
     // Browser: focus and keys.
