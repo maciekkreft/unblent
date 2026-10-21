@@ -4,7 +4,8 @@ import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 // state — the rows it is showing, which chat is open, a next-chat draft with no row yet,
 // and the rows counting down to a delete — and points at `conversations`, which owns the
 // fact. It asks conversations: list for the starting picture, conversations: open for the
-// open chat, and subject: read for what to scope by, following conversation.changed /
+// open chat, subject: read for what to scope by, and session: read for whether anyone is
+// signed in, following conversation.changed /
 // conversation.deleted / conversation.opened / subject.changed after (4.3, fourth rule),
 // and asks again after session.changed, when the chats become another account's.
 // It never decides which chat is open; it learns that from conversations. The ask and
@@ -56,6 +57,10 @@ export const apart = ({ chats, following, subject, open }) => {
   return chat && !isAbout(chat, subject) ? chat : null;
 };
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the chats.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
 // context immutable; the view re-renders on every snapshot regardless).
 const without = (set, id) => {
@@ -92,6 +97,9 @@ export const machine = setup({
       ]);
       return { list, open };
     }),
+    // Who is signed in (3.4), so the list can ask to sign in instead of offering chats it
+    // cannot keep. session.changed is held for this ask until its reply lands.
+    readSession: fromPromise(({ input }) => input.ask("session", "read", {})),
     readSubject: fromPromise(({ input }) =>
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
   },
@@ -105,19 +113,25 @@ export const machine = setup({
       "about the subject, such as a pinned chat, is listed apart at the top so the open row is " +
       "never missing. Deleting waits out the undo " +
       "window, so it can be taken back in one step. It learns which chat is open from " +
-      "`conversations` and never decides it.",
+      "`conversations` and never decides it. Signed out it shows no rows, not even New chat, " +
+      "only \"Sign in to chat.\", and signing in brings the account's chats back without a " +
+      "reload; \"Chats need a connection.\" is only for a signed-in account whose chats cannot " +
+      "be reached.",
     kind: "view",
     emits: ["conversation.selected", "conversation.discarded"],
     // The subject attribute (12): off is every chat shown, no subject ask; on, only the
     // chats about the subject on the stage.
     attributes: ["subject"],
-    asks: ["conversations: list", "conversations: open", "subject: read", "settings: read"],
+    asks: ["conversations: list", "conversations: open", "subject: read", "settings: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     // The "Vim keys" device preference (12): off until settings says otherwise, and off
     // on a page without it (the ask replies no-answerer).
     vimKeys: false,
+    // Whether someone is signed in (3.4): null until session answers, so the view shows
+    // neither the chats nor the sign-in line before it knows which is true.
+    signedIn: null,
     mint: input.mint,
     // Whether the page set the `subject` attribute (12); through input so the machine
     // stays importable in Node.
@@ -157,6 +171,12 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ open: ({ event }) => event.output.id ?? null }) },
       onError: { actions: [] },
+    },
+    {
+      src: "readSession",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
     },
     {
       src: "settings",
@@ -213,7 +233,10 @@ export const machine = setup({
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Someone signed in or out (4.3): a first visit loads signed out and learns who it is
     // a moment later, so the chats the list started with were not this account's.
-    "session.changed": { target: ".resyncing" },
+    "session.changed": {
+      target: ".resyncing",
+      actions: assign({ signedIn: ({ event }) => event.userId != null }),
+    },
     // The fact's news (4.3, fourth rule), followed in any state so a change that races the
     // starting query is not lost. A change for the draft's id means the draft became a
     // real chat, so a fresh next-chat id is minted above it.

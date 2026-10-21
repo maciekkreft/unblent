@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, stopLabel, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected } from "../machine.js";
+import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, evaluateLabel, stopLabel, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected, showing } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -24,15 +24,17 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts, freeUse } = {}) => {
+const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts, freeUse, session, tryPage } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
     input: {
       following,
+      tryPage,
       ask: (target, name, payload) => {
         asked.push([target, name, payload]);
         if (target === "subject") return Promise.resolve({ subject });
+        if (target === "session") return Promise.resolve(session ?? { error: "no-answerer" });
         if (target === "pins") return Promise.resolve({ note: null, chat: null, evaluators: pinned });
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
         if (target === "llm" && name === "read") return Promise.resolve(freeUse ? { signedIn: true, freeUse } : { signedIn: false });
@@ -754,4 +756,33 @@ test("Stop lets the line in flight be answered and asks no more; a point picks t
   assert.deepEqual(ctx().picked, { at: 1, line: "One" });
   actor.send({ type: "_run" });
   assert.equal(ctx().picked, null, "a new run starts the panel from its first answer");
+});
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+
+test("signed out the list asks to sign in, and a run is refused; signed in, or with no session to ask, it shows", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  const out = await start({ session: SIGNED_OUT, decide: () => assert.fail("a run is not asked signed out") });
+  assert.equal(showing(out.ctx()), "sign-in");
+  out.actor.send({ type: "_type", text: "One line" });
+  out.actor.send({ type: "_run" });
+  assert.equal(out.ctx().running, false);
+  assert.equal(showing((await start({ session: SIGNED_IN })).ctx()), "show");
+  assert.equal(showing((await start()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in sees the starters", async () => {
+  const { ctx } = await start({ session: SIGNED_OUT, tryPage: true });
+  assert.equal(showing(ctx()), "show");
+  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(1), id(4)]);
+});
+
+test("signing in brings the evaluators back without a reload, and signing out hides them again", async () => {
+  const { actor, ctx } = await start({ session: SIGNED_OUT });
+  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(1), id(4)], "still kept while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
 });

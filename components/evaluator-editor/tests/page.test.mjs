@@ -53,6 +53,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     test("a press beside Add an option leaves the scroll and the name alone, and the button adds one option", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
       context.setDefaultTimeout(4000);
+      // Signed out the list asks to sign in and offers no New evaluator.
+      await signedIn(context, forgeCookie("evaluator-scroll"));
       try {
         const page = await context.newPage();
         const problems = watch(page);
@@ -107,10 +109,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         return `${q}:${field}`;
       });
 
-    const twoQuestions = async (vimKeys, cookie) => {
+    // Signed in, since signed out the list asks to sign in and offers no New evaluator.
+    const twoQuestions = async (vimKeys, cookie = forgeCookie("evaluator-questions")) => {
       const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
       context.setDefaultTimeout(4000);
-      if (cookie) await signedIn(context, cookie);
+      await signedIn(context, cookie);
       await context.addInitScript((v) => localStorage.setItem("settings", v), settings(vimKeys));
       const page = await context.newPage();
       const problems = watch(page);

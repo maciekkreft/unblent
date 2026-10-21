@@ -486,10 +486,14 @@ class ConversationList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { open, discarding } = snapshot.context;
+    const { open, discarding, signedIn } = snapshot.context;
+    // Signed out nothing of the account shows, not even New chat, since a chat needs an
+    // account (3.4); until session answers, neither the rows nor the sign-in line.
+    if (signedIn === null) return nothing;
+    if (signedIn === false) return html`<p class="empty">Sign in to chat.</p>`;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, open);
-    // The failed state is the one time no rows show: conversations could not answer, and a
+    // In the failed state no rows show either: conversations could not answer, and a
     // chat cannot be made offline (5), so the "New chat" row would promise what we cannot
     // keep. Otherwise the list is always at least the "New chat" row.
     return html`

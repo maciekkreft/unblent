@@ -309,6 +309,16 @@ const stray = (context) => context.draft != null && context.want == null && cont
 
 const pinned = (context) => context.pin != null && context.pin === shownBook(context);
 
+// A session reply without a userId (no-answerer on a page or in a test without `session`)
+// counts as signed in, so a page that cannot tell never hides the evaluator.
+export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
+
+// What the editor shows of the account: "wait" until session answers, "sign-in" signed
+// out, since list-then-item keeps its item shown across a reload and the evaluator open
+// then is the account's (3.4), "show" otherwise. On a try page a visitor not yet a guest
+// edits the starters, which are their own copies (8).
+export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
+
 // A book's title from books' list or its news, for the About line.
 const titled = (books) => Object.fromEntries((Array.isArray(books) ? books : []).map((b) => [b.id, b.title]));
 
@@ -320,6 +330,8 @@ export const machine = setup({
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the boxes stay plain.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // The starting picture: the pin, then the subject. pins.changed and subject.changed are
     // each held for this ask until their reply lands (supersededBy), so they are applied
     // after, in order.
@@ -367,11 +379,13 @@ export const machine = setup({
       "and take Vim's keys when Vim keys is on; the name and the option names are one-line fields. " +
       "A press on a button or a choice keeps the keyboard there, and the editor's focus comes " +
       "back to the field last used, never jumping to the name. Whichever evaluator it opens, " +
-      "picked or opened by itself, the list beside it marks.",
+      "picked or opened by itself, the list beside it marks. Signed out it shows no evaluator, " +
+      "only \"Sign in to run evaluators.\", as the list beside it does, and signing in shows " +
+      "it again without a reload; on a try page a visitor not yet signed in edits the starters.",
     kind: "view",
     emits: ["evaluator.saved", "removal.started", "pin.toggled", "evaluator.opened"],
     attributes: ["subject"],
-    asks: ["evaluators: list", "settings: read", "subject: read", "books: list", "pins: read"],
+    asks: ["evaluators: list", "settings: read", "subject: read", "books: list", "pins: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -399,6 +413,10 @@ export const machine = setup({
     want: isPick(input.open ?? {}) ? { id: input.open.id, book: input.open.book, restore: true } : null,
     remember: input.remember ?? (() => {}),
     vimKeys: false,
+    // Whether someone is signed in (3.4): null until session answers.
+    signedIn: null,
+    // Whether the page is a try page (8), from the view, so this stays importable in Node.
+    tryPage: Boolean(input.tryPage),
   }),
   // Beside the states, so the preference and the subject arrive whatever the editor is
   // doing; a settings.changed or subject.changed that races its ask is held until the
@@ -409,6 +427,12 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
       onError: { actions: [] },
+    },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onError: { actions: assign({ signedIn: true }) },
     },
     {
       src: "books",
@@ -431,6 +455,7 @@ export const machine = setup({
   ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     "subject.changed": followSubject(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),
     "pins.changed": followSubject(({ context, event }) => ({ subject: context.subject, pin: event.evaluators ?? null, pinsObserved: true })),
     // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the

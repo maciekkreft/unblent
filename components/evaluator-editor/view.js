@@ -6,7 +6,7 @@ import { EditorState, Compartment, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, duplicateNames, OPTION_ICONS } from "./machine.js";
+import { machine, duplicateNames, OPTION_ICONS, showing } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -75,6 +75,8 @@ class ActorController {
         open: recall(),
         remember,
         following: this.host.subject,
+        // A try page (8) shows the starters signed out.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: { "evaluator.saved": saved, "removal.started": started, "pin.toggled": pinToggled, "evaluator.opened": opened },
     });
@@ -680,7 +682,12 @@ class EvaluatorEditor extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("starting") || snapshot.matches("fetching")) return nothing;
+    if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="note">Sign in to run evaluators.</p>`;
+    if (snapshot.matches("starting") || snapshot.matches("fetching")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="note">Evaluators unavailable.</p>`;
     if (snapshot.matches({ ready: "choosing" })) return html`<p class="note">Pick an evaluator, or New evaluator.</p>`;
     const { draft, evaluators } = snapshot.context;

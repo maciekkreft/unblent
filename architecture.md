@@ -707,5 +707,3 @@ Where the product is heading. Nothing here is designed or built; each line is on
 ## 15. To do
 
 Work that is decided but not done yet. Remove a line when its work is done.
-
-- On the product page, signed out, Chats and Evaluators disagree. Chats hides the chats, which is the right behaviour, but says "Chats need a connection.", which blames the network instead of asking the user to sign in. Evaluators says the right thing, "Sign in to run evaluators.", but shows the evaluators and says it only when the user tries to run one. Both should behave like Chats and speak like Evaluators: signed out, the panel shows no chats or evaluators and asks the user to sign in.

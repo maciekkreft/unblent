@@ -99,7 +99,8 @@ function start(options = {}) {
   const input = {
     session: () => {
       see({}, SESSION_READ.payload);
-      return Promise.resolve(userId ? { userId, registrationOpen: true } : { userId: null, registrationOpen: true });
+      const who = typeof userId === "function" ? userId() : userId;
+      return Promise.resolve(who ? { userId: who, registrationOpen: true } : { userId: null, registrationOpen: true });
     },
     subject: () => {
       see({}, SUBJECT_READ.payload);
@@ -503,6 +504,24 @@ test("signed out reads nothing from the server", async () => {
   assert.deepEqual((await query(h.actor, "list", {}, QUERIES.list.reply)).conversations, []);
   assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, null);
   assert.equal(h.calls.list, 0, "no server call while signed out");
+});
+
+test("signing out lets go of the open chat, and signing in again opens it (12)", async () => {
+  let who = "u1";
+  const h = start({ userId: () => who, conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5 }], stored: CHAT });
+  await ready(h);
+  const opened = () => h.emitted.filter((e) => e.type === "conversation.opened").map((e) => e.id);
+  assert.deepEqual(opened(), [], "the first boot is the starting picture, asked with open");
+  who = null;
+  h.actor.send({ type: "session.changed", userId: null });
+  await ready(h);
+  await until(() => opened().length === 1, "signed-out announcement");
+  assert.deepEqual(opened(), [null]);
+  assert.equal(h.store(), CHAT, "the device keeps which chat was open for the next sign-in");
+  who = "u1";
+  h.actor.send({ type: "session.changed", userId: "u1" });
+  await until(() => opened().length === 2, "signed-in announcement");
+  assert.deepEqual(opened(), [null, CHAT]);
 });
 
 test("discarding a chat deletes it and announces it gone", async () => {

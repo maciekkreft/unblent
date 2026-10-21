@@ -50,6 +50,22 @@ for (const engine of ENGINES) {
       return { context, page, problems };
     };
 
+    // Browser: rendering and layout.
+    test("signed out, the list asks to sign in and shows no chats", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
+        await until(async () => (await inList(page, (root) => root.textContent.trim())) === "Sign in to chat.");
+        assert.deepEqual(await rowTitles(page), [], "no rows, not even New chat");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: focus and keys.
     test("with Vim keys on, j/k, G and gg move along the chats and Enter opens", async () => {
       const { context, page, problems } = await open(true);

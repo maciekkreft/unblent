@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, shown, apart } from "../machine.js";
+import { machine, shown, apart, signedIn } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -22,6 +22,7 @@ const other = (component, name) =>
 const CONV_LIST = other("conversations", "list");
 const CONV_OPEN = other("conversations", "open");
 const SUBJECT_READ = other("subject", "read");
+const SESSION_READ = other("session", "read");
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without waiting
 // real time (the view reads the value from --duration-undo).
@@ -66,7 +67,7 @@ function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false } = {}
 }
 
 // Answers list, open and subject: read, recording each payload against its schema.
-const answering = ({ conversations = [], open = null, subject = null } = {}) => (target, name, payload) => {
+const answering = ({ conversations = [], open = null, subject = null, session } = {}) => (target, name, payload) => {
   if (target === "conversations" && name === "list") {
     see(payload, CONV_LIST.payload);
     return Promise.resolve({ conversations });
@@ -74,6 +75,11 @@ const answering = ({ conversations = [], open = null, subject = null } = {}) => 
   if (target === "conversations" && name === "open") {
     see(payload, CONV_OPEN.payload);
     return Promise.resolve({ id: open });
+  }
+  if (target === "session" && name === "read" && session !== undefined) {
+    see(payload, SESSION_READ.payload);
+    if (!("error" in session)) see(session, SESSION_READ.reply);
+    return Promise.resolve(session);
   }
   if (target === "subject" && name === "read") {
     see(payload, SUBJECT_READ.payload);
@@ -320,6 +326,38 @@ test("reload race: a slow list reply does not clobber a subject.changed with the
   assert.deepEqual(shownIds(actor), [A], "so the list scopes to the book on the stage");
 });
 
+// Signed out, the view shows only "Sign in to chat." (3.4); the decision is signedIn.
+test("signed in, signed out, or with no session on the page", async () => {
+  const chats = [{ id: A, title: "A", about: [], updatedAt: 10 }];
+  const cases = [
+    [{ userId: "u1", registrationOpen: false }, true, "signed in"],
+    [{ userId: null, registrationOpen: true }, false, "signed out"],
+    [{ error: "no-answerer" }, true, "no session mounted counts as signed in"],
+  ];
+  for (const [session, want, why] of cases) {
+    const { actor } = list({ ask: answering({ conversations: chats, session }) });
+    assert.equal(actor.getSnapshot().context.signedIn, null, "unknown until session answers");
+    await tick();
+    assert.equal(actor.getSnapshot().context.signedIn, want, why);
+  }
+  assert.equal(signedIn(undefined), true, "an empty reply hides nothing");
+});
+
+test("signing in after load, and out again, switches without a reload", async () => {
+  let reply = { conversations: [], session: { userId: null, registrationOpen: true } };
+  const { actor, clock } = list({ ask: (...args) => answering(reply)(...args) });
+  await tick();
+  assert.equal(actor.getSnapshot().context.signedIn, false);
+  reply = { conversations: [{ id: A, title: "A", about: [], updatedAt: 10 }], session: { userId: "u1", registrationOpen: false } };
+  actor.send({ type: "session.changed", userId: "u1" });
+  assert.equal(actor.getSnapshot().context.signedIn, true, "at once on the event");
+  clock.increment(1);
+  await tick();
+  assert.deepEqual(ids(actor), [A], "with the account's chats");
+  actor.send({ type: "session.changed", userId: null });
+  assert.equal(actor.getSnapshot().context.signedIn, false);
+});
+
 test("every payload matches its schema", () => {
   assert.ok(recorded.length > 0, "the tests above recorded traffic");
   for (const { value, schema } of recorded) {
@@ -375,3 +413,4 @@ test("the open chat not about the subject is set apart; one about it, or with no
   assert.equal(apart({ chats, following: true, subject: null, open: "b" }), null, "every chat shown");
   assert.equal(apart({ chats, following: true, subject, open: "draft" }), null, "no row yet");
 });
+

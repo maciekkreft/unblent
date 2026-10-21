@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isEmpty, duplicateNames, newest, shownExpect } from "../machine.js";
+import { machine, isEmpty, duplicateNames, newest, shownExpect, showing } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -444,4 +444,42 @@ test("a book's newest evaluator: its own only, none-timed oldest, equal times to
   assert.equal(newest([e(R, P, "2026-01-02T00:00:00.000Z"), e(R2, P, "2026-01-01T00:00:00.000Z")], P).id, R);
   assert.equal(newest([e(R, P, "2026-01-01T00:00:00.000Z"), e(R2, P, "2026-01-02T00:00:00.000Z", true)], P).id, R);
   assert.equal(newest([e(R, OTHER_BOOK, "2026-01-02T00:00:00.000Z")], P), null);
+});
+
+const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };
+const SIGNED_OUT = { userId: null, registrationOpen: true, guest: false, name: null };
+// The evaluator open before a reload, reopened; session as given, or missing.
+const reopened = async (session, tryPage = false) => {
+  const actor = createActor(machine, {
+    input: {
+      ask: (target) => Promise.resolve(target === "session" ? (session ?? { error: "no-answerer" }) : { evaluators: [EVALUATOR, OTHER] }),
+      mint: () => NEW,
+      open: { id: R, book: P },
+      tryPage,
+    },
+  });
+  actor.start();
+  await flush();
+  await flush();
+  return { actor, ctx: () => actor.getSnapshot().context };
+};
+
+test("signed out the evaluator open before a reload is not shown; signed in, or with no session to ask, it is", async () => {
+  assert.equal(showing({ tryPage: false, signedIn: null }), "wait", "nothing until session answers");
+  assert.equal(showing((await reopened(SIGNED_OUT)).ctx()), "sign-in");
+  assert.equal(showing((await reopened(SIGNED_IN)).ctx()), "show");
+  assert.equal(showing((await reopened()).ctx()), "show", "a page without session counts as signed in");
+});
+
+test("on a try page a visitor not yet signed in edits the starters", async () => {
+  assert.equal(showing((await reopened(SIGNED_OUT, true)).ctx()), "show");
+});
+
+test("signing in shows the evaluator again without a reload, and signing out hides it", async () => {
+  const { actor, ctx } = await reopened(SIGNED_OUT);
+  assert.equal(ctx().draft?.id, R, "still open while hidden");
+  actor.send({ type: "session.changed", ...SIGNED_IN });
+  assert.equal(showing(ctx()), "show");
+  actor.send({ type: "session.changed", ...SIGNED_OUT });
+  assert.equal(showing(ctx()), "sign-in");
 });

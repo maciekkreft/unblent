@@ -23,6 +23,7 @@ import {
   focusOf,
   tally,
   sayExpect,
+  showing,
 } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
@@ -41,6 +42,8 @@ class ActorController {
         mint: ulid,
         following: this.host.subject,
         drafts,
+        // A try page (8) shows the starters signed out, as evaluators/fact.js reads it.
+        tryPage: location.pathname.startsWith("/try/"),
       },
       events: { "evaluator.selected": selected, "evaluator.switched": switched },
     });
@@ -868,7 +871,12 @@ class EvaluatorList extends LitElement {
 
   render() {
     const snapshot = this.#actor.snapshot;
-    if (!snapshot || snapshot.matches("loading")) return nothing;
+    if (!snapshot) return nothing;
+    // Signed out nothing of the account shows (machine.js: showing).
+    const account = showing(snapshot.context);
+    if (account === "wait") return nothing;
+    if (account === "sign-in") return html`<p class="empty">${ERRORS["signed-out"]}</p>`;
+    if (snapshot.matches("loading")) return nothing;
     if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
     const { draft, open, evaluators } = snapshot.context;

@@ -887,7 +887,11 @@ const onOnline = (context, enqueue, self) => {
 // signed in, the chats and the tool preferences are loaded and the subject read for
 // the starting open chat (12). A failed list is reported so `list`/`read` answer
 // unavailable. Missing session or subject askers (a Node test) are treated as absent.
-const applyBoot = (context, out, self) => {
+// A re-boot that changes which chat is open announces it, as setOpen does, so the views
+// let go of the last account's chat (12); the first boot is the starting picture the
+// views ask for (4.3), so it announces nothing.
+const applyBoot = (context, out, enqueue, self) => {
+  const before = context.openId;
   const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
@@ -901,6 +905,8 @@ const applyBoot = (context, out, self) => {
     const openId = stored != null ? stored : mostRecentAbout(headings, sub);
     Object.assign(context, base, { userId: out.userId, signedIn: true, unavailable: false, headings, openId, lastSubject: sub, tools: toolsValue.tools || {}, approval: toolsValue.approval || "auto" });
   }
+  if (context.booted && context.openId !== before) enqueue.emit({ type: "conversation.opened", id: context.openId });
+  context.booted = true;
   if (!context.pinsObserved) context.pin = out.pin ?? null;
   const queued = context.queued;
   context.queued = [];
@@ -996,6 +1002,7 @@ export const machine = setup({
     reading: new Map(), // id -> [reply]; read replies held while a chat loads
     loading: new Set(),
     openId: null,
+    booted: false,
     lastSubject: null,
     // The chat `pins` holds pinned, and whether pins.changed came before the boot reply,
     // which is then the older picture.
@@ -1021,8 +1028,8 @@ export const machine = setup({
       invoke: {
         src: "boot",
         input: ({ context }) => ({ session: context.session, list: context.list, subject: context.subject, pins: context.pins }),
-        onDone: { target: "ready", actions: enqueueActions(({ context, event, self }) => applyBoot(context, event.output, self)) },
-        onError: { target: "ready", actions: enqueueActions(({ context, self }) => applyBoot(context, { userId: null }, self)) },
+        onDone: { target: "ready", actions: enqueueActions(({ context, event, enqueue, self }) => applyBoot(context, event.output, enqueue, self)) },
+        onError: { target: "ready", actions: enqueueActions(({ context, enqueue, self }) => applyBoot(context, { userId: null }, enqueue, self)) },
       },
       on: {
         "list?": { actions: queue },

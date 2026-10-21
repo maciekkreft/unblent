@@ -49,6 +49,23 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       return { context, page, problems };
     };
 
+    // Browser: rendering and layout.
+    test("signed out, with a book open, the panel shows only the line asking to sign in", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
+        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await until(async () => (await inList(page, (root) => root.textContent.trim())) === "Sign in to run evaluators.");
+        assert.equal(await inList(page, (root) => root.querySelectorAll(".run, .row, button").length), 0, "no box, no rows, no buttons");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: focus and keys.
     test("with Vim keys on, j, k, G and gg move along the rows and Enter opens", async () => {
       const { context, page, problems } = await open(true);
