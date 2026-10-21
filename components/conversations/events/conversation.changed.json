@@ -92,6 +92,7 @@
     "pending": { "type": "boolean" },
     "updatedAt": { "type": "integer" },
     "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none. A list shows it under the title." },
+    "position": { "type": "string", "description": "The chat's place in the list: a key that sorts by plain comparison, the list in ascending order (5)." },
     "marks": { "$ref": "#/$defs/unsent" }
   },
   "required": ["id", "title", "about", "start", "turns", "pending", "updatedAt"],

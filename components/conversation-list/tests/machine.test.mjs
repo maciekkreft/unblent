@@ -414,3 +414,105 @@ test("the open chat not about the subject is set apart; one about it, or with no
   assert.equal(apart({ chats, following: true, subject, open: "draft" }), null, "no row yet");
 });
 
+
+// --- Order and the Vim list keys (12) ---------------------------------------------
+
+function keyed(conversations) {
+  const out = list({ ask: answering({ conversations }) });
+  out.moved = [];
+  out.started = [];
+  out.actor.on("conversation.moved", (e) => out.moved.push({ id: e.id, after: e.after, before: e.before }));
+  out.actor.on("removal.started", (e) => out.started.push({ kind: e.kind, id: e.id, name: e.name }));
+  return out;
+}
+const placed = [
+  { id: A, title: "A", about: [], updatedAt: 10, pending: false, position: "a" },
+  { id: B, title: "B", about: [], updatedAt: 30, pending: false, position: "b" },
+  { id: C, title: "C", about: [], updatedAt: 20, pending: false, position: "c" },
+];
+const change = (id, over = {}) => ({ type: "conversation.changed", id, title: id, about: [], start: "", turns: [], pending: false, updatedAt: 1, ...over });
+
+test("rows follow the place conversations gives each chat, and a new message does not move one", async () => {
+  const { actor } = keyed(placed);
+  await tick();
+  assert.deepEqual(ids(actor), [A, B, C]);
+  actor.send(change(C, { updatedAt: 99, position: "c" }));
+  assert.deepEqual(ids(actor), [A, B, C]);
+});
+
+test("dd cuts a row with no countdown; p places it at once and emits conversation.moved", async () => {
+  const { actor, moved, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: A });
+  assert.equal(actor.getSnapshot().context.cut, A);
+  clock.increment(UNDO_MS * 5);
+  assert.deepEqual(discarded, [], "a cut has no clock");
+  actor.send({ type: "_paste", after: B, before: C });
+  assert.deepEqual(moved, [{ id: A, after: B, before: C }]);
+  assert.deepEqual(ids(actor), [B, A, C], "shown in its new place before conversations answers");
+  assert.equal(actor.getSnapshot().context.cut, null);
+  actor.send({ type: "_paste", after: null, before: B });
+  assert.equal(moved.length, 1, "nothing cut: p does nothing");
+});
+
+test("u on the cut row puts it back; Escape turns a cut into the ordinary delete, which u takes back", async () => {
+  const { actor, moved, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: A });
+  actor.send({ type: "_uncut" });
+  assert.equal(actor.getSnapshot().context.cut, null);
+  actor.send({ type: "_cut", id: B });
+  actor.send({ type: "_escape" });
+  assert.ok(discardingHas(actor, B));
+  actor.send({ type: "_undo", id: B });
+  clock.increment(UNDO_MS);
+  assert.deepEqual(discarded, []);
+  assert.deepEqual(moved, []);
+});
+
+test("leaving the list hands a cut or counting-down row to the corner notice, hidden until it ends", async () => {
+  const { actor, started, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_discard", id: A });
+  actor.send({ type: "_cut", id: B });
+  actor.send({ type: "_left" });
+  assert.deepEqual(started, [
+    { kind: "conversation", id: A, name: "A" },
+    { kind: "conversation", id: B, name: "B" },
+  ]);
+  clock.increment(UNDO_MS * 2);
+  assert.deepEqual(discarded, [], "the notice settles it now, not the row's timer");
+  assert.deepEqual(shownIds(actor), [C]);
+  actor.send({ type: "removal.undone", kind: "conversation", id: A });
+  assert.deepEqual(shownIds(actor), [A, C]);
+  actor.send({ type: "conversation.deleted", id: B });
+  assert.deepEqual(ids(actor), [A, C]);
+  assert.equal(actor.getSnapshot().context.handed.size, 0);
+});
+
+test("opening a row while one is cut hands the cut to the corner notice", async () => {
+  const { actor, started, selected } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: A });
+  actor.send({ type: "_pick", id: C });
+  assert.deepEqual(started.map((s) => s.id), [A]);
+  assert.deepEqual(selected, [C]);
+});
+
+test("o starts a new chat and moves it to its place once its first message is sent", async () => {
+  const { actor, moved, selected } = keyed(placed);
+  await tick();
+  actor.send({ type: "_place", after: A, before: B });
+  assert.deepEqual(selected, [MINTED]);
+  actor.send(change(MINTED, { position: "0V" }));
+  assert.deepEqual(moved, [{ id: MINTED, after: A, before: B }]);
+  actor.send(change(MINTED, { position: "0V", updatedAt: 2 }));
+  assert.equal(moved.length, 1, "only once");
+});
+
+test("dd does nothing on the New chat row", async () => {
+  const { actor } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: MINTED });
+  assert.equal(actor.getSnapshot().context.cut, null);
+});

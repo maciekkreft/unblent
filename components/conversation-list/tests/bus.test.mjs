@@ -47,3 +47,55 @@ test("a first visit lists the account's chats once the session is known", async 
     unwire();
   }
 });
+
+// A cut row placed with p reaches `conversations` as conversation.moved, which saves the
+// place alone; a delete handed to the corner notice is deleted by `conversations` when
+// the notice's window ends (12, Vim keys; 5, an item's place is last write wins).
+test("a move goes through conversations, and a handed-off delete is settled by the corner notice", async () => {
+  const saved = [];
+  const deleted = [];
+  const { actors, records, unwire } = await wire(["conversations", "conversation-list", "notice-stack"], {
+    conversations: {
+      session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
+      subject: () => Promise.resolve({ subject: null }),
+      pins: () => Promise.resolve({ note: null, chat: null, evaluators: null }),
+      complete: (request) => Promise.resolve({ id: request.id }),
+      contracts: () => Promise.resolve({ queries: [] }),
+      askTool: () => Promise.resolve({}),
+      list: () => Promise.resolve({ conversations: [heading("3"), heading("2"), heading("1")], tools: { tools: {}, approval: "auto" } }),
+      read: () => Promise.reject(new Error("404")),
+      saveChat: (id, body) => {
+        saved.push({ id, body });
+        return Promise.resolve({ updatedAt: 900 });
+      },
+      deleteChat: (id) => {
+        deleted.push(id);
+        return Promise.resolve();
+      },
+      saveTools: () => Promise.resolve(),
+      store: { read: () => null, write: () => {} },
+      ulid: () => U("ZZ"),
+      now: () => 1000,
+    },
+    "conversation-list": { mint: () => U("D0"), undoMs: 20, following: false },
+    "notice-stack": { fadeMs: 30 },
+  });
+  const list = actors["conversation-list"];
+  const order = () => list.getSnapshot().context.chats.map((r) => r.title).join();
+  try {
+    await until(() => order() === "chat 3,chat 2,chat 1");
+    list.send({ type: "_cut", id: U("C3") });
+    list.send({ type: "_paste", after: U("C2"), before: U("C1") });
+    await until(() => order() === "chat 2,chat 3,chat 1");
+    await until(() => saved.length === 1);
+    assert.deepEqual(saved[0], { id: U("C3"), body: { position: saved[0].body.position } });
+    list.send({ type: "_cut", id: U("C1") });
+    list.send({ type: "_left" });
+    await until(() => deleted.length === 1, 2000);
+    assert.deepEqual(deleted, [U("C1")]);
+    await until(() => order() === "chat 2,chat 3");
+    assert.ok(records.some((r) => r.name === "removal.settled"));
+  } finally {
+    unwire();
+  }
+});

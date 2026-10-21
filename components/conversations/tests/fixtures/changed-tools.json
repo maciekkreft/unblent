@@ -22,7 +22,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -47,7 +48,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -103,7 +105,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -159,7 +162,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -227,7 +231,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -295,7 +300,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -375,7 +381,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": "The chapter is titled One."
+    "subtitle": "The chapter is titled One.",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -455,6 +462,7 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "The chapter is titled One."
+    "subtitle": "The chapter is titled One.",
+    "position": "V"
   }
 ]

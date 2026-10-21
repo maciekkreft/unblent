@@ -155,15 +155,37 @@ class JournalDays extends LitElement {
     clearTimeout(this.#timer);
   }
 
-  // Up and Down move between the rows, as in the other lists.
+  // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
+  // held (those belong to the browser and the desk), and never inside a field, where a
+  // letter is typed text. gg is two presses, so a first g waits a moment for the second.
+  #gAt = 0;
+  #vim(event) {
+    if (this.#actor.snapshot?.context.vimKeys !== true) return null;
+    if (event.ctrlKey || event.metaKey || event.altKey) return null;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return null;
+    const second = event.key === "g" && Date.now() - this.#gAt < 1000;
+    this.#gAt = event.key === "g" && !second ? Date.now() : 0;
+    if (second) return "first";
+    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
+  }
+
+  // Up and Down move between the rows, as in the other lists; with Vim keys on, j, k,
+  // gg and G too.
   #keydown(event) {
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-    if (!step) return;
+    const vim = this.#vim(event);
+    // Every Vim letter the list owns is spent here, even with nowhere to move: an
+    // uncancelled letter is typed wherever the browser still keeps a selection (WebKit).
+    if (vim) event.preventDefault();
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
+    if (!step && vim !== "first" && vim !== "last") return;
     const buttons = [...this.renderRoot.querySelectorAll(".row")];
-    const next = buttons[buttons.indexOf(this.renderRoot.activeElement) + step];
+    const at = buttons.indexOf(this.renderRoot.activeElement);
+    const next = vim === "first" ? buttons[0] : vim === "last" ? buttons.at(-1) : buttons[at + step];
     if (!next) return;
     event.preventDefault();
     next.focus();
+    next.scrollIntoView({ block: "nearest", behavior: "instant" });
   }
 
   render() {

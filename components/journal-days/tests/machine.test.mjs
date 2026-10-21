@@ -191,3 +191,14 @@ test("signing in brings the days back without a reload, and signing out hides th
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(ctx()), "sign-in");
 });
+
+test("Vim keys follow settings: read, then settings.changed", async () => {
+  const actor = createActor(machine, {
+    input: { ask: (target) => Promise.resolve(target === "settings" ? { vimKeys: true } : target === "journal" ? { days: [], open: null } : { userId: "u1", registrationOpen: true }) },
+  });
+  actor.start();
+  await flush();
+  assert.equal(actor.getSnapshot().context.vimKeys, true);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
+});

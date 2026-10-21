@@ -377,8 +377,11 @@ class BookShelf extends LitElement {
 
   // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
   // held (those belong to the browser and the desk), and never inside a field, where a
-  // letter is typed text. gg is two presses, so a first g waits a moment for the second.
+  // letter is typed text. gg is two presses, so a first g waits a moment for the second;
+  // dd (delete) and cc (rename) are the same idiom.
   #gAt = 0;
+  #dAt = 0;
+  #cAt = 0;
   #vim(event) {
     if (this.#actor.snapshot?.context.vimKeys !== true) return null;
     if (event.ctrlKey || event.metaKey || event.altKey) return null;
@@ -387,7 +390,17 @@ class BookShelf extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    return { h: "left", j: "down", k: "up", l: "right", G: "last", g: "prefix" }[event.key] ?? null;
+    const dd = event.key === "d" && Date.now() - this.#dAt < 1000;
+    this.#dAt = event.key === "d" && !dd ? Date.now() : 0;
+    if (dd) return "delete";
+    const cc = event.key === "c" && Date.now() - this.#cAt < 1000;
+    this.#cAt = event.key === "c" && !cc ? Date.now() : 0;
+    if (cc) return "rename";
+    return (
+      { h: "left", j: "down", k: "up", l: "right", G: "last", g: "prefix", d: "prefix", c: "prefix", u: "undo", o: "add", O: "add" }[
+        event.key
+      ] ?? null
+    );
   }
 
   // The grid wraps to the panel's width (auto-fill), so the columns are read from the
@@ -424,7 +437,19 @@ class BookShelf extends LitElement {
     if (vim) event.preventDefault();
     const move = { ArrowRight: "right", ArrowDown: "down", ArrowLeft: "left", ArrowUp: "up" }[event.key] ?? vim;
     const current = this.#focusTile(tiles, this.#actor.snapshot.context.selected);
-    if (move && move !== "prefix") {
+    // The list keys (12): dd deletes the tile with its Undo (the journal ignores it, as
+    // the machine refuses it), u on a tile counting down takes it back, o and O open the
+    // add-book picker, and cc renames where the page lets titles change.
+    if (vim === "delete") {
+      this.#actor.send({ type: "_discard", id: current });
+    } else if (vim === "undo") {
+      if (this.#actor.snapshot.context.discarding.has(current)) this.#actor.send({ type: "_undo", id: current });
+    } else if (vim === "add") {
+      this.#openPicker();
+    } else if (vim === "rename") {
+      const tile = tiles.find((t) => t.id === current);
+      if (this.renames && tile && !tile.written && !this.#actor.snapshot.context.discarding.has(current)) this.#startEdit(event, current);
+    } else if (move && move !== "prefix") {
       const at = tiles.findIndex((t) => t.id === current);
       const to = this.#target(at, move, tiles);
       const next = tiles[Math.min(tiles.length - 1, Math.max(0, to))];
@@ -509,7 +534,9 @@ class BookShelf extends LitElement {
     } else if (event.key === "Escape") {
       event.preventDefault();
       this.#cancelEdit();
-    }
+    } else return;
+    // The keyboard goes back to the tile it renamed, so the grid keys work on at once.
+    this.updateComplete.then(() => this.renderRoot.querySelector(`.tile[data-id="${id}"]`)?.focus({ preventScroll: true }));
   }
 
   // The file picker and drops both arrive here: build the object URLs and hand the

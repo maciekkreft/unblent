@@ -5,6 +5,8 @@ import { icon } from "icons";
 import { machine, shown, apart } from "./machine.js";
 import selected from "./events/conversation.selected.json" with { type: "json" };
 import discarded from "./events/conversation.discarded.json" with { type: "json" };
+import moved from "./events/conversation.moved.json" with { type: "json" };
+import removalStarted from "./events/removal.started.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
 // the token is the one clock, shared with the bar's animation.
@@ -35,7 +37,12 @@ class ActorController {
         // chats about it. Parsed by the time hostConnected runs. Off shows every chat.
         following: this.host.subject,
       },
-      events: { "conversation.selected": selected, "conversation.discarded": discarded },
+      events: {
+        "conversation.selected": selected,
+        "conversation.discarded": discarded,
+        "conversation.moved": moved,
+        "removal.started": removalStarted,
+      },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -286,6 +293,16 @@ class ConversationList extends LitElement {
       text-decoration: line-through;
       color: var(--color-mute);
     }
+    /* A cut row (Vim's dd) waits greyed in place for p or P, with no countdown. */
+    .row.cut .name,
+    .row.cut .subtitle,
+    .row.cut .cut-mark {
+      color: var(--color-mute);
+    }
+    .row.cut:hover .time,
+    .row.cut:focus-within .time {
+      visibility: visible;
+    }
     .undo {
       display: inline-flex;
       appearance: none;
@@ -327,6 +344,20 @@ class ConversationList extends LitElement {
   `;
 
   #actor = new ActorController(this);
+
+  // The keyboard leaving the list while a row is cut or counting down hands the delete
+  // to the corner notice (12). Checked once the focus has landed; a window losing focus
+  // (another app) is not leaving the list.
+  constructor() {
+    super();
+    this.addEventListener("focusout", () =>
+      setTimeout(() => {
+        if (!document.hasFocus() || this.matches(":focus-within")) return;
+        const context = this.#actor.snapshot?.context;
+        if (context && (context.cut || context.discarding.size)) this.#actor.send({ type: "_left" });
+      }),
+    );
+  }
   // Which row holds the roving tabindex and focus. Ephemeral UI focus, not a fact: null
   // falls back to the open row, then the first.
   #focusId = null;
@@ -355,7 +386,9 @@ class ConversationList extends LitElement {
   // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
   // held (those belong to the browser and the desk), and never inside a field, where a
   // letter is typed text. gg is two presses, so a first g waits a moment for the second.
+  // dd is the same idiom.
   #gAt = 0;
+  #dAt = 0;
   #vim(event) {
     if (this.#actor.snapshot?.context.vimKeys !== true) return null;
     if (event.ctrlKey || event.metaKey || event.altKey) return null;
@@ -364,18 +397,59 @@ class ConversationList extends LitElement {
     const second = event.key === "g" && Date.now() - this.#gAt < 1000;
     this.#gAt = event.key === "g" && !second ? Date.now() : 0;
     if (second) return "first";
-    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
+    const cut = event.key === "d" && Date.now() - this.#dAt < 1000;
+    this.#dAt = event.key === "d" && !cut ? Date.now() : 0;
+    if (cut) return "cut";
+    return (
+      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", p: "below", P: "above", u: "undo", o: "openBelow", O: "openAbove" }[
+        event.key
+      ] ?? null
+    );
+  }
+
+  // The chat rows a move is placed among (12): the chats as shown, without the one cut.
+  // From a fixed row (New chat, a chat open from elsewhere) a move goes to the top of the
+  // chats. below: between the cursor row and the next; otherwise above it.
+  #neighbours(rows, current, below) {
+    const { cut } = this.#actor.snapshot.context;
+    const chats = rows.filter((r) => !r.draft && !r.apart && r.id !== cut);
+    const at = chats.findIndex((r) => r.id === current);
+    if (at < 0) return { after: null, before: chats[0]?.id ?? null };
+    return below
+      ? { after: chats[at].id, before: chats[at + 1]?.id ?? null }
+      : { after: chats[at - 1]?.id ?? null, before: chats[at].id };
   }
 
   #keydown(event, rows) {
+    const context = this.#actor.snapshot.context;
+    // While a row is cut, Escape stays in the list (12): it deletes the row with its
+    // countdown, and the container never sees it as Back.
+    if (event.key === "Escape" && context.cut) {
+      event.preventDefault();
+      this.#actor.send({ type: "_escape" });
+      return;
+    }
     const vim = this.#vim(event);
     // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
     // last row): an uncancelled letter is typed wherever the browser still keeps a
     // selection, and that may be a hidden editor (WebKit).
     if (vim) event.preventDefault();
     const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
-    const current = this.#focusRow(rows, this.#actor.snapshot.context.open);
-    if (step || vim === "first" || vim === "last") {
+    const current = this.#focusRow(rows, context.open);
+    if (vim === "cut") {
+      this.#actor.send({ type: "_cut", id: current });
+    } else if (vim === "below" || vim === "above") {
+      if (!context.cut) return;
+      const id = context.cut;
+      if (current === id) this.#actor.send({ type: "_uncut" });
+      else this.#actor.send({ type: "_paste", ...this.#neighbours(rows, current, vim === "below") });
+      this.#follow(id);
+    } else if (vim === "undo") {
+      if (current === context.cut) this.#actor.send({ type: "_uncut" });
+      else if (context.discarding.has(current)) this.#actor.send({ type: "_undo", id: current });
+    } else if (vim === "openBelow" || vim === "openAbove") {
+      this.#actor.send({ type: "_place", ...this.#neighbours(rows, current, vim === "openBelow") });
+    } else if (step || vim === "first" || vim === "last") {
       const at = rows.findIndex((r) => r.id === current);
       const to = vim === "first" ? 0 : vim === "last" ? rows.length - 1 : at + step;
       const next = rows[Math.min(rows.length - 1, Math.max(0, to))];
@@ -397,11 +471,24 @@ class ConversationList extends LitElement {
     }
   }
 
-  // A click or Enter on a row picks it — or, if it is counting down, is the one-step undo,
-  // the whole row being the target so there is nothing small to hit.
+  // The keyboard stays on a row the list moved, wherever it lands.
+  #follow(id) {
+    this.#focusId = id;
+    this.requestUpdate();
+    this.updateComplete.then(() => {
+      const el = this.renderRoot.querySelector(`.row[data-id="${id}"]`);
+      el?.focus({ preventScroll: true });
+      el?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    });
+  }
+
+  // A click or Enter on a row picks it — or, if it is counting down or cut, is the
+  // one-step undo, the whole row being the target so there is nothing small to hit.
   #activate(id) {
     if (!id) return;
-    if (this.#actor.snapshot.context.discarding.has(id)) this.#actor.send({ type: "_undo", id });
+    const { discarding, cut } = this.#actor.snapshot.context;
+    if (discarding.has(id)) this.#actor.send({ type: "_undo", id });
+    else if (cut === id) this.#actor.send({ type: "_uncut" });
     else this.#pick(id);
   }
 
@@ -486,7 +573,7 @@ class ConversationList extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { open, discarding, signedIn } = snapshot.context;
+    const { open, discarding, signedIn, cut } = snapshot.context;
     // Signed out nothing of the account shows, not even New chat, since a chat needs an
     // account (3.4); until session answers, neither the rows nor the sign-in line.
     if (signedIn === null) return nothing;
@@ -501,14 +588,15 @@ class ConversationList extends LitElement {
         ? html`<p class="empty">Chats need a connection.</p>`
         : html`
             <ul class="list" role="listbox" aria-label="Chats" @keydown=${(e) => this.#keydown(e, rows)}>
-              ${rows.map((r) => this.#row(r, open, focusId, discarding))}
+              ${rows.map((r) => this.#row(r, open, focusId, discarding, cut))}
             </ul>
           `}
     `;
   }
 
-  #row(r, open, focusId, discarding) {
+  #row(r, open, focusId, discarding, cut) {
     const isDiscarding = discarding.has(r.id);
+    const isCut = cut === r.id;
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
     const dx = d ? d.dx : 0;
     const classes = [
@@ -516,6 +604,7 @@ class ConversationList extends LitElement {
       r.draft ? "draft" : "",
       r.apart ? "apart" : "",
       isDiscarding ? "discarding" : "",
+      isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
       d && d.armed ? "armed" : "",
     ]
@@ -546,6 +635,8 @@ class ConversationList extends LitElement {
     const untitled = !r.title;
     const trailing = isDiscarding
       ? html`<button class="undo" type="button" aria-label="Undo delete">Undo</button>`
+      : isCut
+      ? html`<span class="time cut-mark">Cut</span>`
       : html`<span class="time">${when(r.updatedAt)}</span
           ><button class="bin" type="button" tabindex="-1" aria-label="Delete chat" @click=${(e) => this.#discard(e, r.id)}>
             ${icon("trash-simple")}

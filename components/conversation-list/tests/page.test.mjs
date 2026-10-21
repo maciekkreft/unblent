@@ -91,6 +91,38 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("with Vim keys on, dd cuts a row and p places it; Escape on a cut deletes it on the row, keeping the keyboard", async () => {
+      const { context, page, problems } = await open(true);
+      try {
+        const rowClass = (title) => inList(page, (root, t) => [...root.querySelectorAll(".row")].find((r) => r.querySelector(".name").textContent.trim() === t)?.className, title);
+        await focusList(page);
+        await page.keyboard.press("j");
+        await until(async () => (await focusedTitle(page)) === "chat 2");
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await until(async () => (await rowClass("chat 2")).includes("cut"));
+        await page.keyboard.press("j");
+        await until(async () => (await focusedTitle(page)) === "chat 1");
+        await page.keyboard.press("p");
+        await until(async () => (await rowTitles(page)).join() === "New chat,chat 1,chat 2");
+        await until(async () => (await focusedTitle(page)) === "chat 2");
+        assert.ok(!(await rowClass("chat 2")).includes("cut"));
+        // Cut again, then Escape: the delete counts down on the row and the list keeps the keyboard.
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await until(async () => (await rowClass("chat 2")).includes("cut"));
+        await page.keyboard.press("Escape");
+        await until(async () => (await rowClass("chat 2")).includes("discarding"));
+        assert.equal(await focusedTitle(page), "chat 2");
+        await page.keyboard.press("u");
+        await until(async () => !(await rowClass("chat 2")).includes("discarding"));
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing", async () => {
       const { context, page, problems } = await open(false);
       try {

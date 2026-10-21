@@ -189,6 +189,10 @@ class TraceList extends LitElement {
     .row {
       cursor: pointer;
     }
+    .row:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
     /* The disclosure chevron is the signifier that a row opens to its payload,
        so no prose has to say it. It rotates when the row is open. */
     .caret {
@@ -346,6 +350,53 @@ class TraceList extends LitElement {
   `;
 
   #actor = new ActorController(this);
+  // Which row holds the roving tabindex and focus, by its id. Ephemeral UI focus, not a
+  // fact: null falls back to the first row.
+  #focusId = null;
+
+  // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
+  // held, and never inside a field. gg is two presses, so a first g waits for the second.
+  #gAt = 0;
+  #vim(event) {
+    if (this.#actor.snapshot?.context.vimKeys !== true) return null;
+    if (event.ctrlKey || event.metaKey || event.altKey) return null;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return null;
+    const second = event.key === "g" && Date.now() - this.#gAt < 1000;
+    this.#gAt = event.key === "g" && !second ? Date.now() : 0;
+    if (second) return "first";
+    return { j: "down", k: "up", G: "last", g: "prefix" }[event.key] ?? null;
+  }
+
+  // The rows are read from the rendered table, open runs' members included, so the keys
+  // move through exactly what is shown.
+  #keydown(event) {
+    const vim = this.#vim(event);
+    if (vim) event.preventDefault();
+    const rows = [...this.renderRoot.querySelectorAll("tr.row")];
+    const at = rows.indexOf(this.renderRoot.activeElement);
+    if (event.key === "Enter" || event.key === " ") {
+      if (at < 0) return;
+      event.preventDefault();
+      this.#actor.send({ type: "_toggle", id: rows[at].dataset.id });
+      return;
+    }
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
+    if (!step && vim !== "first" && vim !== "last") return;
+    const next = vim === "first" ? rows[0] : vim === "last" ? rows.at(-1) : rows[Math.max(0, at + step)];
+    if (!next) return;
+    event.preventDefault();
+    this.#focusId = next.dataset.id;
+    this.requestUpdate();
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: "nearest", behavior: "instant" });
+  }
+
+  // The row that takes Tab: the one the keyboard moved to, else the first.
+  #tabindex(id, lead) {
+    if (this.#focusId == null) return lead ? 0 : -1;
+    return id === this.#focusId ? 0 : -1;
+  }
 
   render() {
     const snapshot = this.#actor.snapshot;
@@ -384,9 +435,9 @@ class TraceList extends LitElement {
               <th>payload</th>
             </tr>
           </thead>
-          <tbody>
-            ${runs(records).map((run) =>
-              run.length === 1 ? this.#row(run[0], expanded, showTab) : this.#runRow(run, expanded, showTab),
+          <tbody @keydown=${(e) => this.#keydown(e)}>
+            ${runs(records).map((run, i) =>
+              run.length === 1 ? this.#row(run[0], expanded, showTab, false, i === 0) : this.#runRow(run, expanded, showTab, i === 0),
             )}
           </tbody>
         </table>
@@ -397,7 +448,7 @@ class TraceList extends LitElement {
   // A run of same-signature records within RUN_GAP_MS collapses to one row so a
   // burst is one line, not noise; the count above still reports every record,
   // because the fact (`trace`) holds them all. Opening it shows its members.
-  #runRow(run, expanded, showTab) {
+  #runRow(run, expanded, showTab, lead = false) {
     const first = run[0];
     const last = run.at(-1);
     const id = `run:${first.tab}:${first.seq}`;
@@ -405,6 +456,8 @@ class TraceList extends LitElement {
     return html`
       <tr
         class="row run ${open ? "open" : ""}"
+        data-id=${id}
+        tabindex=${this.#tabindex(id, lead)}
         aria-expanded=${open}
         @click=${() => this.#actor.send({ type: "_toggle", id })}
       >
@@ -424,7 +477,7 @@ class TraceList extends LitElement {
     `;
   }
 
-  #row(r, expanded, showTab, member = false) {
+  #row(r, expanded, showTab, member = false, lead = false) {
     const id = `${r.tab}:${r.seq}`;
     const open = expanded.has(id);
     // The desk table (thead present) spans #, time, [tab], kind, name, route,
@@ -434,6 +487,8 @@ class TraceList extends LitElement {
     return html`
       <tr
         class="row ${member ? "member" : ""} ${open ? "open" : ""}"
+        data-id=${id}
+        tabindex=${this.#tabindex(id, lead)}
         aria-expanded=${open}
         @click=${() => this.#actor.send({ type: "_toggle", id })}
       >

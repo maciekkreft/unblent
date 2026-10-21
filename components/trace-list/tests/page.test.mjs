@@ -217,3 +217,44 @@ for (const engine of ENGINES) {
     }
   });
 }
+
+// The rows move with the arrows, and with Vim keys on with j, k, gg and G (12); Enter
+// opens a row. WebKit only: the keys are the browser's, the same in either engine.
+// Browser: focus and keys.
+test("with Vim keys on, j, G, k and gg move between the rows and Enter opens one", async () => {
+  const browser = await webkit.launch();
+  const context = await browser.newContext();
+  try {
+    await context.addInitScript(() =>
+      localStorage.setItem("settings", JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: true })),
+    );
+    const page = await context.newPage();
+    page.setDefaultTimeout(4000);
+    await page.goto(BASE_URL + "/workshop/design/trace", { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row").length >= 3);
+    const focused = () =>
+      page.evaluate(() => {
+        const root = document.querySelector("trace-list").shadowRoot;
+        return [...root.querySelectorAll("tbody tr.row")].indexOf(root.activeElement);
+      });
+    const count = await page.evaluate(() => document.querySelector("trace-list").shadowRoot.querySelectorAll("tbody tr.row").length);
+    await page.evaluate(() => document.querySelector("trace-list").shadowRoot.querySelector('tbody tr.row[tabindex="0"]').focus());
+    assert.equal(await focused(), 0);
+    await page.keyboard.press("j");
+    await page.waitForFunction(() => {
+      const root = document.querySelector("trace-list").shadowRoot;
+      return [...root.querySelectorAll("tbody tr.row")].indexOf(root.activeElement) === 1;
+    });
+    await page.keyboard.press("G");
+    assert.ok((await focused()) >= count - 1);
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("g");
+    await page.keyboard.press("g");
+    assert.equal(await focused(), 0);
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.querySelector("trace-list").shadowRoot.querySelector('tbody tr.row[aria-expanded="true"]'));
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+});

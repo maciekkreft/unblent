@@ -83,6 +83,9 @@ export const machine = setup({
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
     choicePoints: fromPromise(({ input }) => input.ask("choice-points", "list", {})),
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
 }).createMachine({
   id: "journal-days",
@@ -98,11 +101,12 @@ export const machine = setup({
       "be read, the rows show no counts and work as before. Signed out it shows no rows, only " +
       "\"Sign in to write in your journal.\", as the journal page does; the days stay kept in " +
       "this browser and come back when the user signs in, without a reload. On a try page a " +
-      "visitor not yet signed in still sees the days.",
+      "visitor not yet signed in still sees the days. Up and Down move between the rows, and " +
+      "with Vim keys on j, k, gg and G do too, never while typing in a field.",
     kind: "view",
     emits: ["day.selected"],
     attributes: [],
-    asks: ["journal: read", "session: read", "choice-points: list"],
+    asks: ["journal: read", "session: read", "choice-points: list", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -116,6 +120,9 @@ export const machine = setup({
     choicePoints: {},
     // The row last picked, as day.selected carried it; null is the open day or new page.
     current: null,
+    // The "Vim keys" device preference (12): off until settings says otherwise, and off
+    // on a page without it (the ask replies no-answerer).
+    vimKeys: false,
   }),
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
@@ -135,6 +142,12 @@ export const machine = setup({
         actions: assign(({ event }) => ({ choicePoints: Object.fromEntries(event.output.choicePoints.map((c) => [c.id, held(c)])) })),
       },
       onError: {},
+    },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
     },
   ],
   initial: "loading",
@@ -166,6 +179,7 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A picked day that is gone, or that has become the open one, is the open day again.
     "journal.changed": {
       actions: assign(({ context, event }) => ({

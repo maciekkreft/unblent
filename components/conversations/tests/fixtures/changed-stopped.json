@@ -22,7 +22,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -47,7 +48,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -72,7 +74,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "/slow this a"
+    "subtitle": "/slow this a",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -97,7 +100,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "/slow this answer arrive"
+    "subtitle": "/slow this answer arrive",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -122,7 +126,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "/slow this answer arrives slowly so"
+    "subtitle": "/slow this answer arrives slowly so",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -147,7 +152,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": "/slow this answer arrives slowly so"
+    "subtitle": "/slow this answer arrives slowly so",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -172,6 +178,7 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "/slow this answer arrives slowly so"
+    "subtitle": "/slow this answer arrives slowly so",
+    "position": "V"
   }
 ]

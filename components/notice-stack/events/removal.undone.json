@@ -14,7 +14,8 @@
         "choice-point",
         "guest",
         "trial",
-        "note"
+        "note",
+        "conversation"
       ]
     },
     "id": {

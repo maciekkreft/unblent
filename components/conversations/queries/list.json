@@ -1,7 +1,7 @@
 {
   "payload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "list takes nothing; it returns every chat's heading, newest first.",
+    "description": "list takes nothing; it returns every chat's heading, in the order the user set (5).",
     "type": "object",
     "properties": {},
     "additionalProperties": false
@@ -32,7 +32,8 @@
             },
             "updatedAt": { "type": "integer" },
             "pending": { "type": "boolean" },
-            "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none." }
+            "subtitle": { "type": "string", "description": "The first line of the latest answer that has text, as plain text, at most 120 characters; \"\" when there is none." },
+            "position": { "type": "string", "description": "The chat's place in the list: a key that sorts by plain comparison, the list in ascending order (5)." }
           },
           "required": ["id", "title", "about", "updatedAt", "pending"],
           "additionalProperties": false

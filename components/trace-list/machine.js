@@ -48,6 +48,9 @@ export function runs(records) {
 export const machine = setup({
   actors: {
     list: fromPromise(({ input }) => input.ask("trace", "list", {})),
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
 }).createMachine({
   id: "trace-list",
@@ -55,10 +58,18 @@ export const machine = setup({
     description:
       "Shows the bus traffic `trace` keeps, as it arrives, with each row able to open to the " +
       "whole record. Records with the same sender and name that arrive close together, such as " +
-      "a run of typing, are folded into one row.",
-    kind: "view", emits: [], asks: ["trace: list"], attributes: [],
+      "a run of typing, are folded into one row. Up and Down move between the rows, and with " +
+      "Vim keys on j, k, gg and G do too; Enter or Space opens or closes the row.",
+    kind: "view", emits: [], asks: ["trace: list", "settings: read"], attributes: [],
   },
-  context: ({ input }) => ({ ask: input.ask, records: [], expanded: new Set() }),
+  // vimKeys: the "Vim keys" device preference (12), off until settings says otherwise.
+  context: ({ input }) => ({ ask: input.ask, records: [], expanded: new Set(), vimKeys: false }),
+  invoke: {
+    src: "settings",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+    onError: { actions: [] },
+  },
   initial: "loading",
   states: {
     loading: {
@@ -79,6 +90,7 @@ export const machine = setup({
     ready: {},
   },
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "trace.recorded": {
       actions: assign({ records: ({ context, event }) => merge(context.records, fromEvent(event)) }),
     },

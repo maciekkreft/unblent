@@ -28,6 +28,7 @@ const REMOVED = {
   evaluator: ["Evaluator", "deleted"],
   "choice-point": ["Choice point", "deleted"],
   note: ["Note", "deleted"],
+  conversation: ["Chat", "deleted"],
   guest: ["Account", "deleted"],
   question: ["Question", "removed"],
   option: ["Option", "removed"],

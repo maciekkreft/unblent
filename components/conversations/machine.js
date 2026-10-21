@@ -45,6 +45,80 @@ const latestAnswer = (turns) => {
 // (server/router.py); the subtitle is derived here, in one place.
 const fromServer = ({ answer, ...h }) => ({ ...h, subtitle: subtitleOf(answer ?? "") });
 
+// A chat's place in the list is a fractional index (5, an item's place is last write
+// wins), the same design as a note's (notes/machine.js): a string that sorts by plain
+// code-unit comparison, so a chat moved between two others takes a key between theirs
+// and no other chat changes. The digits are in ASCII order, and a key never ends in the
+// smallest digit, so there is always room before it.
+const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const KEY = /^[0-9A-Za-z]*[1-9A-Za-z]$/;
+export const isPosition = (value) => typeof value === "string" && value.length <= 200 && KEY.test(value);
+
+// The key between a and b (a < b); "" stands for before everything, null for after.
+function midpoint(a, b) {
+  if (b !== null) {
+    let n = 0;
+    while ((a[n] ?? "0") === b[n]) n += 1;
+    if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
+  }
+  const da = a ? DIGITS.indexOf(a[0]) : 0;
+  const db = b !== null ? DIGITS.indexOf(b[0]) : DIGITS.length;
+  if (db - da > 1) return DIGITS[Math.round((da + db) / 2)];
+  if (b !== null && b.length > 1) return b.slice(0, 1);
+  return DIGITS[da] + midpoint(a.slice(1), null);
+}
+
+// A key strictly between `after` and `before`, either null for the list's end. Out of
+// order neighbours (a move computed against a list that changed meanwhile) place the
+// chat just after `after`.
+export function between(after, before) {
+  const a = isPosition(after) ? after : "";
+  const b = isPosition(before) && before > a ? before : null;
+  return midpoint(a, b);
+}
+
+// A chat from before places has no key and keeps today's order, newest first: its key
+// is read from when it last changed, "z" and eight digits counting down from the largest
+// time, then its id, so it sorts after every key `between` makes for a new chat and among
+// its kind by time, newest first. The time and id come from the server, so it is the same
+// on every device. The key is written down before the chat next changes (settle), so a
+// new message never moves it.
+const LATEST = 62 ** 8 - 1;
+function countdown(at) {
+  let n = Math.max(0, LATEST - Math.floor(at));
+  let text = "";
+  for (let i = 0; i < 8; i += 1) {
+    text = DIGITS[n % 62] + text;
+    n = Math.floor(n / 62);
+  }
+  return text;
+}
+export const positionOf = (chat) => (isPosition(chat.position) ? chat.position : `z${countdown(chat.updatedAt ?? 0)}${chat.id}V`);
+
+// List order: by key, then by id where two keys are equal.
+export const byPosition = (a, b) =>
+  a.position < b.position ? -1 : a.position > b.position ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
+// A new chat sorts first (5): a key before every chat's.
+const firstPosition = (context) => {
+  let min = null;
+  for (const h of context.headings) {
+    const p = positionOf(h);
+    if (min === null || p < min) min = p;
+  }
+  return between(null, min);
+};
+
+// A chat about to change writes down the place it shows in now, so the change does not
+// move it (5); the place then rides the chat's next save.
+const settle = (context, chat) => {
+  if (isPosition(chat.position)) return;
+  chat.position = positionOf(chat);
+  context.unsentPosition.add(chat.id);
+  const index = context.headings.findIndex((h) => h.id === chat.id);
+  if (index >= 0) context.headings = context.headings.map((h) => (h.id === chat.id ? { ...h, position: chat.position } : h));
+};
+
 // A chat is about a subject when one of its links names that subject (12).
 const aboutMatch = (about, sub) => Boolean(sub) && about.some((a) => a.kind === sub.kind && a.id === sub.id);
 
@@ -97,6 +171,7 @@ const changedPayload = (context, chat) => {
     pending: hasUnsent(context, chat.id),
     updatedAt: chat.updatedAt,
     subtitle: subtitleOf(latestAnswer(chat.turns)),
+    position: positionOf(chat),
   };
   if (chat.marks) payload.marks = chat.marks;
   return payload;
@@ -104,11 +179,15 @@ const changedPayload = (context, chat) => {
 
 // The read reply's conversation, shaped like the event minus the `type`.
 const readShape = (context, chat) => {
-  const { type, subtitle, ...rest } = changedPayload(context, chat);
+  const { type, subtitle, position, ...rest } = changedPayload(context, chat);
   return rest;
 };
 
-const heading = (chat) => ({ id: chat.id, title: chat.title, about: chat.about, updatedAt: chat.updatedAt, subtitle: subtitleOf(latestAnswer(chat.turns)) });
+const heading = (chat) => {
+  const h = { id: chat.id, title: chat.title, about: chat.about, updatedAt: chat.updatedAt, subtitle: subtitleOf(latestAnswer(chat.turns)) };
+  if (isPosition(chat.position)) h.position = chat.position;
+  return h;
+};
 
 const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0, marks: null });
 
@@ -437,6 +516,7 @@ const findTurn = (context, turnId) => {
 const chatsWithUnsent = (context) => {
   const ids = new Set();
   for (const chat of context.chats.values()) if (chat.turns.some((t) => context.unsent.has(t.id)) || hasUnsentMarks(context, chat.id)) ids.add(chat.id);
+  for (const id of context.unsentPosition) ids.add(id);
   return [...ids];
 };
 
@@ -455,23 +535,39 @@ const upsertHeading = (context, chat) => {
 // The comments are last write wins on the server, so only one save carrying them is in
 // flight per chat: two could land out of order and leave the older list stored. A change
 // made meanwhile is sent when that save comes back (onSaved).
+// A place is last write wins too, so it follows the same rule: one save carrying it in
+// flight per chat. A chat not in memory (moved from the list) is sent its place alone.
 const fireSave = (context, self, chatId) => {
   const chat = context.chats.get(chatId);
-  if (!chat) return;
-  const turns = chat.turns.filter((t) => context.unsent.has(t.id));
-  const sendMarks = hasUnsentMarks(context, chatId) && !context.marksInFlight.has(chatId);
-  if (!turns.length && !sendMarks) return;
-  const body = { title: chat.title, about: chat.about, start: chat.start, turns };
+  const turns = chat ? chat.turns.filter((t) => context.unsent.has(t.id)) : [];
+  const sendMarks = Boolean(chat) && hasUnsentMarks(context, chatId) && !context.marksInFlight.has(chatId);
+  // A save that changes the chat bumps its time on the server, so its place is written
+  // down first (settle).
+  if (chat && (turns.length || sendMarks)) settle(context, chat);
+  const sendPosition = context.unsentPosition.has(chatId) && !context.positionInFlight.has(chatId);
+  if (!turns.length && !sendMarks && !sendPosition) return;
+  const body = chat && (turns.length || sendMarks) ? { title: chat.title, about: chat.about, start: chat.start, turns } : {};
   const marks = sendMarks ? chat.marks ?? null : undefined;
   if (sendMarks) {
     body.marks = chat.marks ?? null;
     context.marksInFlight.add(chatId);
   }
+  const position = sendPosition ? context.headings.find((h) => h.id === chatId)?.position ?? chat?.position : undefined;
+  if (sendPosition && isPosition(position)) {
+    body.position = position;
+    context.positionInFlight.add(chatId);
+  } else if (!turns.length && !sendMarks) {
+    context.unsentPosition.delete(chatId);
+    return;
+  }
+  const sentPosition = body.position !== undefined;
   const turnIds = turns.map((t) => t.id);
   context
     .saveChat(chatId, body)
-    .then((r) => self.send({ type: "_saved", chatId, turnIds, sendMarks, marks, updatedAt: r ? r.updatedAt : undefined }))
-    .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks }));
+    .then((r) =>
+      self.send({ type: "_saved", chatId, turnIds, sendMarks, marks, sendPosition: sentPosition, position, missing: Boolean(r && r.missing), updatedAt: r ? r.updatedAt : undefined }),
+    )
+    .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks, sendPosition: sentPosition }));
 };
 
 // The comments go away when a new answer starts: sent with the message, or dropped by
@@ -553,7 +649,11 @@ const onSubmit = (context, event, enqueue, self) => {
   const { conversationId, turn, about, start } = event;
   let chat = context.chats.get(conversationId);
   if (!chat) {
-    chat = { id: conversationId, title: firstLine(turn.text), about: about ?? [], start: start ?? "", turns: [], updatedAt: context.now(), marks: null };
+    // A new chat goes first (5); a listed chat not yet read keeps its place. The place
+    // rides the first save.
+    const listed = context.headings.find((h) => h.id === conversationId);
+    chat = { id: conversationId, title: firstLine(turn.text), about: about ?? [], start: start ?? "", turns: [], updatedAt: context.now(), marks: null, position: listed ? positionOf(listed) : firstPosition(context) };
+    if (!listed || !isPosition(listed.position)) context.unsentPosition.add(conversationId);
     context.chats.set(conversationId, chat);
   }
   const userTurn = { id: turn.id, role: "user", text: turn.text, at: context.now() };
@@ -630,6 +730,7 @@ const onProgress = (context, event, enqueue, self) => {
   const finished = finalize(chat.turns[index], event, running ? running.meta : {});
   chat.turns[index] = finished;
   context.unsent.add(finished.id);
+  settle(context, chat);
   chat.updatedAt = context.now();
   upsertHeading(context, chat);
 
@@ -679,6 +780,7 @@ const onLookups = (context, event, enqueue, self) => {
   const userTurn = { id: context.ulid(), role: "user", text: "", results: event.results, at: context.now() };
   chat.turns.splice(pendingIndex, 0, userTurn);
   context.unsent.add(userTurn.id);
+  settle(context, chat);
   chat.updatedAt = context.now();
   upsertHeading(context, chat);
   running.phase = "model";
@@ -717,6 +819,7 @@ const onCompleteReply = (context, event, enqueue, self) => {
   chat.turns[index] = { ...chat.turns[index], status: "failed", error: (event.reply && event.reply.error) || "unavailable" };
   if (context.running && context.running.turnId === event.turnId) context.running = null;
   context.unsent.add(chat.turns[index].id);
+  settle(context, chat);
   chat.updatedAt = context.now();
   upsertHeading(context, chat);
   enqueue(() => fireSave(context, self, chat.id));
@@ -745,12 +848,35 @@ const onDiscard = (context, event, enqueue) => {
   const { id } = event;
   const chat = context.chats.get(id);
   context.unsentMarks.delete(id);
+  context.unsentPosition.delete(id);
   if (chat) for (const turn of chat.turns) context.unsent.delete(turn.id);
   context.chats.delete(id);
   context.headings = context.headings.filter((h) => h.id !== id);
   if (context.openId === id) setOpen(context, enqueue, null);
   enqueue(() => context.deleteChat(id).catch(() => {}));
   enqueue.emit({ type: "conversation.deleted", id });
+};
+
+// The user moved a chat in the list (conversation-list emits conversation.moved, 4.3
+// fifth rule): it takes a key between its new neighbours'. A place is last write wins (5):
+// it is saved alone, changes no time, and never conflicts. A chat in memory is announced
+// with its new place; one that is not is only listed in it, since its turns are not here
+// to announce.
+const onMoved = (context, event, enqueue, self) => {
+  const current = context.headings.find((h) => h.id === event.id);
+  if (!current) return;
+  const neighbour = (id) => {
+    const h = id && id !== event.id ? context.headings.find((x) => x.id === id) : null;
+    return h ? positionOf(h) : null;
+  };
+  const position = between(neighbour(event.after), neighbour(event.before));
+  if (position === current.position) return;
+  context.headings = context.headings.map((h) => (h.id === event.id ? { ...h, position } : h));
+  const chat = context.chats.get(event.id);
+  if (chat) chat.position = position;
+  context.unsentPosition.add(event.id);
+  enqueue(() => fireSave(context, self, event.id));
+  if (chat) enqueue.emit(changedPayload(context, chat));
 };
 
 const onToolsEdited = (context, event, enqueue) => {
@@ -794,8 +920,8 @@ const onSubjectChanged = (context, event, enqueue, self) => {
 const answerList = (context, reply) => {
   if (context.unavailable) return reply({ error: "unavailable" });
   const conversations = context.headings
-    .map((h) => ({ id: h.id, title: h.title, about: h.about, updatedAt: h.updatedAt, pending: hasUnsent(context, h.id), subtitle: h.subtitle ?? "" }))
-    .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1));
+    .map((h) => ({ id: h.id, title: h.title, about: h.about, updatedAt: h.updatedAt, pending: hasUnsent(context, h.id), subtitle: h.subtitle ?? "", position: positionOf(h) }))
+    .sort(byPosition);
   reply({ conversations });
 };
 
@@ -818,11 +944,15 @@ const onLoaded = (context, event, enqueue) => {
   context.loading.delete(event.id);
   const c = event.conversation;
   const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0, marks: c.marks ?? null };
+  // The place this device holds wins over the server's while a move is unsent (5).
+  const held = context.headings.find((h) => h.id === event.id)?.position;
+  const position = context.unsentPosition.has(event.id) || !isPosition(c.position) ? held : c.position;
+  if (isPosition(position)) chat.position = position;
   context.chats.set(event.id, chat);
   upsertHeading(context, chat);
-  const held = context.reading.get(event.id);
-  if (held) {
-    for (const reply of held) reply({ conversation: readShape(context, chat) });
+  const waiting = context.reading.get(event.id);
+  if (waiting) {
+    for (const reply of waiting) reply({ conversation: readShape(context, chat) });
     context.reading.delete(event.id);
   }
   enqueue.emit(changedPayload(context, chat));
@@ -840,6 +970,14 @@ const onLoadFailed = (context, event) => {
 const onSaved = (context, event, enqueue, self) => {
   for (const turnId of event.turnIds) context.unsent.delete(turnId);
   const chat = context.chats.get(event.chatId);
+  if (event.sendPosition) {
+    context.positionInFlight.delete(event.chatId);
+    // Only the place that was sent is now on the server; one moved meanwhile goes next.
+    // A chat the server never had has nothing to place.
+    const now = context.headings.find((h) => h.id === event.chatId)?.position ?? chat?.position;
+    if (event.missing || !context.unsentPosition.has(event.chatId) || now === event.position) context.unsentPosition.delete(event.chatId);
+    else enqueue(() => fireSave(context, self, event.chatId));
+  }
   if (event.sendMarks) {
     context.marksInFlight.delete(event.chatId);
     // Only the list that was sent is now on the server; one changed meanwhile goes next.
@@ -859,7 +997,13 @@ const onListed = (context, event) => {
   // still unsent), so a focus reload does not drop it from the list.
   const serverIds = new Set(result.conversations.map((h) => h.id));
   const keptLocal = context.headings.filter((h) => !serverIds.has(h.id) && hasUnsent(context, h.id));
-  context.headings = [...result.conversations.map(fromServer), ...keptLocal];
+  // A place this device moved and has not sent yet is the latest write (5).
+  const local = new Map(context.headings.map((h) => [h.id, h]));
+  const placed = (h) => {
+    const mine = local.get(h.id);
+    return mine && context.unsentPosition.has(h.id) && isPosition(mine.position) ? { ...h, position: mine.position } : h;
+  };
+  context.headings = [...result.conversations.map(fromServer).map(placed), ...keptLocal];
   if (result.tools) {
     context.tools = result.tools.tools || {};
     context.approval = result.tools.approval || "auto";
@@ -892,7 +1036,7 @@ const onOnline = (context, enqueue, self) => {
 // views ask for (4.3), so it announces nothing.
 const applyBoot = (context, out, enqueue, self) => {
   const before = context.openId;
-  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), reading: new Map(), loading: new Set(), running: null };
+  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
   } else if (out.failed) {
@@ -967,7 +1111,12 @@ export const machine = setup({
       "its first message; a new chat with none follows the subject like an unpinned one. " +
       "The user's comments on the last finished answer are kept with the chat until the next " +
       "message, which carries them; the model gets them as quotes before the message, and the " +
-      "answer itself is never changed, so the provider's cache holds.",
+      "answer itself is never changed, so the provider's cache holds. Each chat has a place " +
+      "in the list, kept on the account and the same on every device: a new chat goes first, " +
+      "a new message never moves a chat, and a move from the list puts it between its new " +
+      "neighbours. A place is last write wins and changes nothing else. A chat from before " +
+      "places keeps the order it had, newest first, until it changes or is moved. A delete " +
+      "handed to the corner notice happens when that notice's undo window ends.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",
@@ -999,6 +1148,8 @@ export const machine = setup({
     unsent: new Set(), // finished turn ids not yet confirmed by the server; pending is derived from this
     unsentMarks: new Set(), // chat ids whose comments the server does not have yet
     marksInFlight: new Set(), // chat ids with a save carrying comments on its way
+    unsentPosition: new Set(), // chat ids whose place the server does not have yet (5)
+    positionInFlight: new Set(), // chat ids with a save carrying a place on its way
     reading: new Map(), // id -> [reply]; read replies held while a chat loads
     loading: new Set(),
     openId: null,
@@ -1040,6 +1191,8 @@ export const machine = setup({
         "turn.steered": { actions: queue },
         "conversation.selected": { actions: queue },
         "conversation.discarded": { actions: queue },
+        "conversation.moved": { actions: queue },
+        "removal.settled": { guard: ({ event }) => event.kind === "conversation", actions: queue },
         "tools.edited": { actions: queue },
         "marks.edited": { actions: queue },
       },
@@ -1061,6 +1214,13 @@ export const machine = setup({
         "completion.progressed": { actions: enqueueActions(({ context, event, enqueue, self }) => onProgress(context, event, enqueue, self)) },
         "conversation.selected": { actions: enqueueActions(({ context, event, enqueue, self }) => onSelect(context, event, enqueue, self)) },
         "conversation.discarded": { actions: enqueueActions(({ context, event, enqueue }) => onDiscard(context, event, enqueue)) },
+        "conversation.moved": { actions: enqueueActions(({ context, event, enqueue, self }) => onMoved(context, event, enqueue, self)) },
+        // A delete the list handed to the corner notice when the keyboard left it: the
+        // notice's undo window ran out, so the chat goes, as on conversation.discarded.
+        "removal.settled": {
+          guard: ({ event }) => event.kind === "conversation",
+          actions: enqueueActions(({ context, event, enqueue }) => onDiscard(context, event, enqueue)),
+        },
         "tools.edited": { actions: enqueueActions(({ context, event, enqueue }) => onToolsEdited(context, event, enqueue)) },
         "marks.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onMarksEdited(context, event, enqueue, self)) },
         "subject.changed": { actions: enqueueActions(({ context, event, enqueue, self }) => onSubjectChanged(context, event, enqueue, self)) },
@@ -1077,6 +1237,7 @@ export const machine = setup({
         _saveFailed: {
           actions: ({ context, event }) => {
             if (event.sendMarks) context.marksInFlight.delete(event.chatId);
+            if (event.sendPosition) context.positionInFlight.delete(event.chatId);
           },
         },
         _loaded: { actions: enqueueActions(({ context, event, enqueue }) => onLoaded(context, event, enqueue)) },

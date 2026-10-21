@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, toMarkdown, commentsBlock, forModel } from "../machine.js";
+import { machine, toMarkdown, commentsBlock, forModel, between, positionOf, byPosition } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -943,6 +943,70 @@ test("forModel sends the comments before the message, the same bytes every time,
   assert.deepEqual(first[1].raw, answer.raw);
   const empty = forModel([...turns.slice(0, 2), { id: U("Y3"), role: "user", text: "", marks }]);
   assert.equal(empty[2].text, commentsBlock(ANSWER_TEXT, marks), "an empty message is the block alone");
+});
+
+// --- A chat's place in the list (5: last write wins) -------------------------------
+
+const CHAT3 = U("W7");
+const heading = (id, updatedAt, over = {}) => ({ id, title: id.slice(-2), about: [], updatedAt, answer: "", ...over });
+const listOrder = async (h) => (await query(h.actor, "list", {}, QUERIES.list.reply)).conversations.map((c) => c.id);
+
+test("between makes a key strictly between its neighbours, and chats from before places keep newest first", () => {
+  const keys = [between(null, null)];
+  for (let i = 0; i < 30; i += 1) keys.unshift(between(null, keys[0]));
+  for (let i = 0; i < 30; i += 1) keys.splice(31, 0, between(keys[30], keys[31] ?? null));
+  for (let i = 1; i < keys.length; i += 1) assert.ok(keys[i - 1] < keys[i], `${keys[i - 1]} < ${keys[i]}`);
+  const old = [heading(CHAT, 500), heading(CHAT2, 600)].map((c) => ({ id: c.id, position: positionOf(c) }));
+  assert.deepEqual([...old].sort(byPosition).map((c) => c.id), [CHAT2, CHAT]);
+  assert.ok(between(null, old[1].position) < old[1].position);
+});
+
+test("a new chat goes first, a message never moves a chat, and a move is saved alone", async () => {
+  const h = start({
+    conversations: [heading(CHAT, 500), heading(CHAT2, 600)],
+    chatsById: { [CHAT]: { id: CHAT, title: "W4", about: [], start: "", turns: [], updatedAt: 500 } },
+  });
+  await ready(h);
+  assert.deepEqual(await listOrder(h), [CHAT2, CHAT]);
+  // A message in the older chat: it is written down where it shows, and stays there.
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => h.calls.reads.includes(CHAT) && changes(h).length > 0, "loaded");
+  submit(h);
+  await flush();
+  await feed(h, loadFixture("progressed-plain"));
+  await until(() => h.calls.saved.some((s) => s.body.turns?.some((t) => t.id === ANSWER)), "answer saved");
+  await flush();
+  assert.deepEqual(await listOrder(h), [CHAT2, CHAT]);
+  assert.ok(h.calls.saved[0].body.position.startsWith("z"), "the place it had rides the first save");
+  // A new chat goes first.
+  submit(h, { conversationId: CHAT3, turn: { id: U("Y7"), text: "new" } });
+  await flush();
+  assert.deepEqual(await listOrder(h), [CHAT3, CHAT2, CHAT]);
+  assert.ok(lastChange(h).position < positionOf(heading(CHAT2, 600)));
+  // A move to the end: announced for the chat in memory, saved as its place alone.
+  const saves = h.calls.saved.length;
+  h.actor.send({ type: "conversation.moved", id: CHAT3, after: CHAT, before: null });
+  await until(() => h.calls.saved.length > saves, "move saved");
+  assert.deepEqual(await listOrder(h), [CHAT2, CHAT, CHAT3]);
+  assert.deepEqual(Object.keys(h.calls.saved.at(-1).body), ["position"]);
+  assert.equal(lastChange(h).id, CHAT3);
+  // A chat not in memory is moved too, and only listed in its new place.
+  h.actor.send({ type: "conversation.moved", id: CHAT2, after: CHAT3, before: null });
+  await flush();
+  assert.deepEqual(await listOrder(h), [CHAT, CHAT3, CHAT2]);
+  assert.equal(h.calls.saved.at(-1).id, CHAT2);
+});
+
+test("a delete the corner notice settles removes the chat", async () => {
+  const h = start({ conversations: [heading(CHAT, 500)] });
+  await ready(h);
+  h.actor.send({ type: "removal.settled", kind: "note", id: CHAT });
+  await flush();
+  assert.deepEqual(h.calls.deleted, [], "another kind is not a chat");
+  h.actor.send({ type: "removal.settled", kind: "conversation", id: CHAT });
+  await flush();
+  assert.deepEqual(h.calls.deleted, [CHAT]);
+  assert.equal(h.emitted.at(-1).type, "conversation.deleted");
 });
 
 test("every payload matches its schema", () => {

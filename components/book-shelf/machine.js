@@ -85,7 +85,10 @@ export const machine = setup({
       "one step. The journal, the book the user writes, reads \"Written by you\" under its title, " +
       "shows no chapter count, and has no rename or delete, so it is always on the shelf. " +
       "The arrow keys move through the tiles as a grid: left and right to the next tile, up " +
-      "and down to the tile above or below, and with Vim keys on h, j, k and l do the same. " +
+      "and down to the tile above or below, and with Vim keys on h, j, k and l do the same, " +
+      "gg and G go to the first and last tile, dd removes the tile with its Undo (the journal " +
+      "ignores it), u on a tile in its undo window takes it back, o or O opens the file " +
+      "picker to add a book, and cc renames the tile where titles can be changed. " +
       "Signed out it shows only \"Sign in to see your books.\": no tiles, not even the " +
       "journal's, and no Add a book. The books stay kept in this browser and come back, with " +
       "the open one highlighted, when the user signs in, without a reload. A removal still " +

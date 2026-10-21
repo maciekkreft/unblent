@@ -7,6 +7,7 @@ write wins.
 """
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -14,12 +15,17 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from server.user import require_user, user_dir
 
 router = APIRouter()
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
+
+# A chat's place in the list (5): a fractional-index key the browser computes
+# (conversations/machine.js between), digits and letters, never ending in "0".
+_POSITION = re.compile(r"[0-9A-Za-z]{0,199}[1-9A-Za-z]")
 
 
 # `with connection:` alone leaves the handle open until the cycle collector runs; on
@@ -35,6 +41,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(conversations)")}
     if "marks" not in columns:
         connection.executescript("ALTER TABLE conversations ADD COLUMN marks TEXT")
+    if "position" not in columns:
+        connection.executescript("ALTER TABLE conversations ADD COLUMN position TEXT")
     try:
         with connection:
             yield connection
@@ -49,14 +57,15 @@ def _tools(connection: sqlite3.Connection) -> dict:
 
 @router.get("")
 def list_conversations(user_id: str = Depends(require_user)):
-    # Headings only, newest first (12); the turns are read one chat at a time. pending
+    # Headings only, newest first (12), each with its place when it has one (the browser
+    # orders by place, 5); the turns are read one chat at a time. pending
     # is browser-only (it depends on the outbox), so it is not returned here. answer is
     # the start of the latest answer that has text, cut to size: the browser derives the
     # row's second line from it, so that rule lives in one place (machine.js subtitleOf).
     with _connect(user_id) as connection:
         rows = connection.execute(
             """
-            SELECT c.id, c.title, c.about, c.updated_at,
+            SELECT c.id, c.title, c.about, c.updated_at, c.position,
                    (SELECT substr(ltrim(json_extract(t.body, '$.text'), char(9, 10, 13, 32)), 1, 400)
                       FROM turns t
                      WHERE t.conversation_id = c.id
@@ -75,6 +84,7 @@ def list_conversations(user_id: str = Depends(require_user)):
             "about": json.loads(row["about"]),
             "updatedAt": row["updated_at"],
             "answer": row["answer"] or "",
+            **({"position": row["position"]} if row["position"] is not None else {}),
         }
         for row in rows
     ]
@@ -117,6 +127,8 @@ def read_conversation(conversation_id: str, user_id: str = Depends(require_user)
         "turns": [json.loads(turn["body"]) for turn in turns],
         "updatedAt": row["updated_at"],
     }
+    if row["position"] is not None:
+        conversation["position"] = row["position"]
     # Absent rather than null when there are none, so the reply keeps to read.json.
     if row["marks"] is not None:
         conversation["marks"] = json.loads(row["marks"])
@@ -132,6 +144,20 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
     # comments on the last answer, are last write wins like the title; a body without
     # the key leaves them as they are, and null clears them.
     payload = await request.json()
+    # A place is last write wins (5): saved whatever else the body holds, and it does not
+    # bump updated_at, so a move never reads as news. A body without a title only moves
+    # the chat; for a chat the server does not have, there is nothing to move.
+    position = payload.get("position")
+    if position is not None and not (isinstance(position, str) and _POSITION.fullmatch(position)):
+        return JSONResponse({"error": "invalid-position"}, status_code=422)
+    if "title" not in payload:
+        with _connect(user_id) as connection:
+            row = connection.execute("SELECT updated_at FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+            if row is None:
+                return {"missing": True}
+            if position is not None:
+                connection.execute("UPDATE conversations SET position = ? WHERE id = ?", (position, conversation_id))
+        return {"updatedAt": row["updated_at"]}
     title = str(payload.get("title", ""))
     about = payload.get("about") or []
     start = str(payload.get("start", ""))
@@ -145,8 +171,8 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
         changed = False
         if row is None:
             connection.execute(
-                "INSERT INTO conversations (id, title, about, start, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (conversation_id, title, about_json, start, now),
+                "INSERT INTO conversations (id, title, about, start, updated_at, position) VALUES (?, ?, ?, ?, ?, ?)",
+                (conversation_id, title, about_json, start, now, position),
             )
             changed = True
         elif row["title"] != title or json.loads(row["about"]) != about:
@@ -154,6 +180,8 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
                 "UPDATE conversations SET title = ?, about = ? WHERE id = ?", (title, about_json, conversation_id)
             )
             changed = True
+        if row is not None and position is not None and row["position"] != position:
+            connection.execute("UPDATE conversations SET position = ? WHERE id = ?", (position, conversation_id))
         stored_marks = json.loads(row["marks"]) if row is not None and row["marks"] is not None else None
         if has_marks and marks != stored_marks:
             connection.execute(

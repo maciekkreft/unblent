@@ -355,6 +355,35 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("with Vim keys on, dd removes a tile with its Undo, u takes it back, cc renames and o opens the picker", async () => {
+      const cookie = forgeCookie();
+      await importBook(cookie, SAMPLE_ID, SAMPLE);
+      const { page, problems } = await open({ cookie, vimKeys: true });
+      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
+      const discarding = () =>
+        page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.discarding")));
+      await focusShelf(page);
+      await until(async () => (await focusedTile(page)) === "Sample Book");
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(discarding);
+      await page.keyboard.press("u");
+      await until(async () => !(await discarding()));
+      await page.keyboard.press("c");
+      await page.keyboard.press("c");
+      const input = page.locator("book-shelf .title-input");
+      await input.waitFor();
+      assert.ok(await input.evaluate((el) => el.getRootNode().activeElement === el), "the title field has the keyboard");
+      await input.press("Escape");
+      await until(async () => (await focusedTile(page)) === "Sample Book");
+      const chooser = page.waitForEvent("filechooser", { timeout: 2000 });
+      await page.keyboard.press("o");
+      await chooser;
+      assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      await page.close();
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing on the shelf", async () => {
       const { page, problems } = await twoBooks(false);
       const [first] = (await tiles(page)).map((t) => t.title);

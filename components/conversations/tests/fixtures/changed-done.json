@@ -22,7 +22,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -47,7 +48,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -72,7 +74,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "A plain answ"
+    "subtitle": "A plain answ",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -97,7 +100,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "A plain answer."
+    "subtitle": "A plain answer.",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -136,7 +140,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": "A plain answer."
+    "subtitle": "A plain answer.",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -175,6 +180,7 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": "A plain answer."
+    "subtitle": "A plain answer.",
+    "position": "V"
   }
 ]

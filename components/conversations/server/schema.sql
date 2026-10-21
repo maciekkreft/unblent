@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     about      TEXT NOT NULL,   -- JSON: [{ kind, id }], what the chat is linked to (12)
     start      TEXT NOT NULL,   -- the instructions the chat began with, written once (12)
     updated_at INTEGER NOT NULL,
-    marks      TEXT             -- JSON: { answerId, marks }, the comments on the last answer not yet sent; NULL when none
+    marks      TEXT,            -- JSON: { answerId, marks }, the comments on the last answer not yet sent; NULL when none
+    position   TEXT             -- the chat's place in the list (5), a key the browser computes, last write wins; NULL for a chat from before places
 );
 CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at);
 

@@ -35,7 +35,16 @@ test("the starting picture comes from trace: list, sorted", async () => {
   const ask = (...args) => (asked.push(args), Promise.resolve({ records }));
   const s = await settle(createActor(machine, { input: { ask } }));
   assert.deepEqual(s.context.records.map((r) => r.seq), [1, 2]);
-  assert.deepEqual(asked, [["trace", "list", {}]]);
+  assert.deepEqual(asked.filter(([target]) => target === "trace"), [["trace", "list", {}]]);
+});
+
+test("Vim keys follow settings: read, then settings.changed", async () => {
+  const ask = (target) => Promise.resolve(target === "settings" ? { vimKeys: true } : { records: [] });
+  const actor = createActor(machine, { input: { ask } });
+  const s = await settle(actor);
+  assert.equal(s.context.vimKeys, true);
+  actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(actor.getSnapshot().context.vimKeys, false);
 });
 
 test("a later trace.recorded is appended, sorted, and deduped", async () => {

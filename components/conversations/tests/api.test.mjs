@@ -150,3 +150,21 @@ test("the unsent comments are last write wins, kept until cleared with null", as
   await put(CHAT, chat({ turns: [], marks: null }), cookie);
   assert.equal((await (await get(`/${CHAT}`, cookie)).json()).marks, undefined, "null clears them");
 });
+
+test("a place is last write wins: saved alone or with a turn, never moves the chat's time, and listed", async () => {
+  const cookie = cookieFor(freshUser());
+  const first = await (await put(CHAT, chat(), cookie)).json();
+  let listed = (await (await get("", cookie)).json()).conversations;
+  assert.equal(listed[0].position, undefined, "a chat from before places has none");
+  // A move alone: no title, no new time.
+  const moved = await (await put(CHAT, { position: "V" }, cookie)).json();
+  assert.equal(moved.updatedAt, first.updatedAt);
+  // A place riding a save with a turn is kept too.
+  await put(CHAT, chat({ turns: [turn(U("A2"), "user", "again")], position: "k" }), cookie);
+  listed = (await (await get("", cookie)).json()).conversations;
+  assert.equal(listed[0].position, "k");
+  assert.equal((await (await get(`/${CHAT}`, cookie)).json()).position, "k");
+  // A key the browser could not have made is refused; a move of a chat the server never had is dropped.
+  assert.equal((await put(CHAT, { position: "a0" }, cookie)).status, 422);
+  assert.deepEqual(await (await put(U("Z9"), { position: "V" }, cookie)).json(), { missing: true });
+});

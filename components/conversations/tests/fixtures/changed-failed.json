@@ -22,7 +22,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -47,7 +48,8 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -73,7 +75,8 @@
     ],
     "pending": true,
     "updatedAt": 1,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   },
   {
     "type": "conversation.changed",
@@ -99,6 +102,7 @@
     ],
     "pending": false,
     "updatedAt": 900,
-    "subtitle": ""
+    "subtitle": "",
+    "position": "V"
   }
 ]
