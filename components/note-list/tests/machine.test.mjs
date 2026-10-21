@@ -654,3 +654,119 @@ test("signing in brings the notes back without a reload; signing out hides them 
   assert.equal(discardingHas(actor, A), false);
   assert.deepEqual(ids(actor).includes(A), true);
 });
+
+// --- Order and the Vim list keys (12) ---------------------------------------------
+
+function keyed(notes) {
+  const out = list({ ask: answeringList(notes) });
+  out.moved = [];
+  out.started = [];
+  out.actor.on("note.moved", (e) => out.moved.push({ id: e.id, after: e.after, before: e.before }));
+  out.actor.on("removal.started", (e) => out.started.push({ kind: e.kind, id: e.id, name: e.name }));
+  return out;
+}
+const placed = [
+  { id: A, title: "A", updatedAt: 10, position: "a" },
+  { id: B, title: "B", updatedAt: 30, position: "b" },
+  { id: C, title: "C", updatedAt: 20, position: "c" },
+];
+
+test("rows follow the place notes gives each note, and an edit does not move one", async () => {
+  const { actor } = keyed(placed);
+  await tick();
+  assert.deepEqual(ids(actor), [A, B, C]);
+  actor.send({ type: "note.changed", id: C, title: "C2", body: "c", version: 2, pending: false, updatedAt: 99, position: "c" });
+  assert.deepEqual(ids(actor), [A, B, C]);
+});
+
+test("dd cuts a row with no countdown; p or P places it and emits note.moved", async () => {
+  const { actor, moved, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: A });
+  assert.equal(actor.getSnapshot().context.cut, A);
+  clock.increment(UNDO_MS * 5);
+  assert.deepEqual(discarded, [], "a cut has no clock");
+  actor.send({ type: "_paste", after: C, before: null });
+  assert.deepEqual(moved, [{ id: A, after: C, before: null }]);
+  assert.equal(actor.getSnapshot().context.cut, null);
+  // Nothing cut: p does nothing.
+  actor.send({ type: "_paste", after: null, before: B });
+  assert.equal(moved.length, 1);
+});
+
+test("u on the cut row puts it back; a second dd deletes the first cut with its countdown", async () => {
+  const { actor, moved, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: A });
+  actor.send({ type: "_uncut" });
+  assert.equal(actor.getSnapshot().context.cut, null);
+  actor.send({ type: "_cut", id: A });
+  actor.send({ type: "_cut", id: B });
+  assert.equal(actor.getSnapshot().context.cut, B);
+  assert.ok(actor.getSnapshot().context.discarding.has(A));
+  clock.increment(UNDO_MS);
+  assert.deepEqual(discarded, [A]);
+  assert.deepEqual(moved, []);
+});
+
+test("Escape on a cut turns it into the ordinary delete, which u (an undo) takes back", async () => {
+  const { actor, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: B });
+  actor.send({ type: "_escape" });
+  assert.equal(actor.getSnapshot().context.cut, null);
+  assert.ok(actor.getSnapshot().context.discarding.has(B));
+  actor.send({ type: "_undo", id: B });
+  clock.increment(UNDO_MS);
+  assert.deepEqual(discarded, []);
+});
+
+test("leaving the list hands a cut or counting-down row to the corner notice, hidden until it ends", async () => {
+  const { actor, started, discarded, clock } = keyed(placed);
+  await tick();
+  actor.send({ type: "_discard", id: A });
+  actor.send({ type: "_cut", id: B });
+  actor.send({ type: "_left" });
+  assert.deepEqual(started, [
+    { kind: "note", id: A, name: "A" },
+    { kind: "note", id: B, name: "B" },
+  ]);
+  clock.increment(UNDO_MS * 2);
+  assert.deepEqual(discarded, [], "the notice settles it now, not the row's timer");
+  assert.deepEqual(shownIds(actor), [C]);
+  // Undo in the notice brings the row back; the notice's settle deletes the other in notes.
+  actor.send({ type: "removal.undone", kind: "note", id: A });
+  assert.deepEqual(shownIds(actor), [A, C]);
+  actor.send({ type: "note.deleted", id: B });
+  assert.deepEqual(ids(actor), [A, C]);
+  assert.equal(actor.getSnapshot().context.handed.size, 0);
+});
+
+test("opening a row while one is cut hands the cut to the corner notice", async () => {
+  const { actor, started, selected } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: A });
+  actor.send({ type: "_pick", id: C });
+  assert.deepEqual(started.map((s) => s.id), [A]);
+  assert.deepEqual(selected, [C]);
+});
+
+test("o opens a new note and moves it to its place once the user writes in it", async () => {
+  const { actor, moved, selected } = keyed(placed);
+  await tick();
+  actor.send({ type: "_place", after: A, before: B });
+  assert.deepEqual(selected, [MINTED]);
+  // The editor's first save: the new note sorts first, then is moved to where o was.
+  actor.send({ type: "note.changed", id: MINTED, title: "N", body: "N", version: 1, pending: false, updatedAt: 50, position: "0V" });
+  assert.deepEqual(moved, [{ id: MINTED, after: A, before: B }]);
+  actor.send({ type: "note.changed", id: MINTED, title: "N2", body: "N2", version: 1, pending: false, updatedAt: 51, position: "0V" });
+  assert.equal(moved.length, 1, "only once");
+});
+
+test("dd does nothing on a row that is not a note (New note, Highlights)", async () => {
+  const { actor } = keyed(placed);
+  await tick();
+  actor.send({ type: "_cut", id: MINTED });
+  actor.send({ type: "_cut", id: "highlights" });
+  assert.equal(actor.getSnapshot().context.cut, null);
+});

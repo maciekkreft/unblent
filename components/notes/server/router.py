@@ -6,6 +6,7 @@ rather than silently overwritten.
 """
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -20,6 +21,10 @@ from server.user import require_user, user_dir
 router = APIRouter()
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
+
+# A note's place in the list (5): a fractional-index key the browser computes
+# (notes/machine.js between), digits and letters, never ending in "0".
+_POSITION = re.compile(r"[0-9A-Za-z]{0,199}[1-9A-Za-z]")
 
 
 # `with connection:` alone commits or rolls back and leaves the handle open, to be
@@ -38,6 +43,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE notes ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
     if "about" not in columns:
         connection.executescript("ALTER TABLE notes ADD COLUMN about TEXT NOT NULL DEFAULT '[]'")
+    if "position" not in columns:
+        connection.executescript("ALTER TABLE notes ADD COLUMN position TEXT")
     try:
         with connection:
             yield connection
@@ -59,6 +66,7 @@ def _record(row: sqlite3.Row) -> dict:
         "updatedAt": row["updated_at"],
         "deleted": bool(row["deleted"]),
         "about": json.loads(row["about"]),
+        "position": row["position"],
     }
 
 
@@ -77,9 +85,24 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
     deleted = bool(payload.get("deleted", False))
     # about absent leaves the stored links unchanged (D2); present replaces them.
     about = payload.get("about")
+    # A place is last write wins (5): it is saved whatever the base, bumps no version
+    # (so it never conflicts with an edit, nor stales the editor's base), and bumps seq so
+    # a pull brings it to other devices. A write without a title only moves the note.
+    position = payload.get("position")
+    if position is not None and not (isinstance(position, str) and _POSITION.fullmatch(position)):
+        return JSONResponse({"error": "invalid-position"}, status_code=422)
+    moves_only = "title" not in payload and not deleted
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        if row is None and moves_only:
+            # Nothing here to move: the browser drops the row.
+            return {"id": note_id, "missing": True}
+        if row is not None and position is not None and position != row["position"]:
+            connection.execute("UPDATE notes SET position = ?, seq = ? WHERE id = ?", (position, _next_seq(connection), note_id))
+            row = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        if moves_only:
+            return _record(row)
         if row is None:
             # A new id is an idempotent upsert of the browser's own ULID (5), not a
             # conflict: it continues from the base the client held, or 1. A tombstone
@@ -87,8 +110,8 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
             # upload arrives already gone.
             version = (base or 0) + 1
             connection.execute(
-                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted, about) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (note_id, title, body, version, now, _next_seq(connection), int(deleted), json.dumps(about if about is not None else [])),
+                "INSERT INTO notes (id, title, body, version, updated_at, seq, deleted, about, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (note_id, title, body, version, now, _next_seq(connection), int(deleted), json.dumps(about if about is not None else []), position),
             )
             return _reread(connection, note_id)
         # A delete always wins (5): it states no base and is not refused for a stale

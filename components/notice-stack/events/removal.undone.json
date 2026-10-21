@@ -13,7 +13,8 @@
         "evaluator",
         "choice-point",
         "guest",
-        "trial"
+        "trial",
+        "note"
       ]
     },
     "id": {

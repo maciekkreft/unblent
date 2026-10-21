@@ -197,3 +197,29 @@ test("a database file from before links gains the about column, defaulting to []
     process.emitWarning = saved;
   }
 });
+
+test("a place is last write wins: saved on any base, no new version, and pulled", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  const created = await (await put(id, { title: "a", body: "b", baseVersion: null }, cookie)).json();
+  assert.equal(created.position, null, "a note from before places has none");
+  // A move alone: no text, no base, no new version.
+  const moved = await (await put(id, { position: "V" }, cookie)).json();
+  assert.equal(moved.version, 1);
+  assert.equal(moved.position, "V");
+  // An edit on a stale base is refused, but the place it carried is kept.
+  await put(id, { title: "a2", body: "b2", baseVersion: 1 }, cookie);
+  const stale = await put(id, { title: "x", body: "y", baseVersion: 1, position: "k" }, cookie);
+  assert.equal(stale.status, 409);
+  const pulled = await (await list(0, cookie)).json();
+  const row = pulled.notes.find((n) => n.id === id);
+  assert.equal(row.position, "k");
+  assert.equal(row.version, 2);
+  // A move after the last pull is pulled too, though no version changed.
+  await put(id, { position: "m" }, cookie);
+  const later = await (await list(pulled.cursor, cookie)).json();
+  assert.deepEqual(later.notes.map((n) => [n.id, n.position, n.version]), [[id, "m", 2]]);
+  // A key the browser could not have made is refused; a move of a note the server never had is dropped.
+  assert.equal((await put(id, { position: "a0" }, cookie)).status, 422);
+  assert.deepEqual(await (await put(noteId(9), { position: "V" }, cookie)).json(), { id: noteId(9), missing: true });
+});

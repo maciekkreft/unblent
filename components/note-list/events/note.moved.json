@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user moved a note in the list: it now stands between these neighbours, the note above it (after) and the note below it (before), null at the list's end. notes gives it a place between theirs.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+    "after": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] },
+    "before": { "oneOf": [{ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }, { "type": "null" }] }
+  },
+  "required": ["id", "after", "before"],
+  "additionalProperties": false
+}

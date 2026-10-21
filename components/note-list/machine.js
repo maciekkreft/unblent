@@ -16,9 +16,19 @@ import { setup, assign, fromPromise, emit, enqueueActions } from "xstate";
 // the name a note will take. It asks session: read and follows session.changed only for
 // whether anyone is signed in.
 
-// Newest first: updatedAt descending, id as the tiebreak, the same order notes uses
-// in its list reply (notes.replyList), so a row keeps its place across a re-sort.
-const order = (a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
+// The order the user set (5): by the place `notes` gives each note, a key compared as
+// plain text, id as the tiebreak, the same order notes uses in its list reply, so an
+// edit never moves a row. A row without a place (an event from before places) falls
+// back to newest first, after the placed rows.
+const order = (a, b) => {
+  if (a.position != null && b.position != null) {
+    if (a.position !== b.position) return a.position < b.position ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  }
+  if (a.position != null) return -1;
+  if (b.position != null) return 1;
+  return b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
+};
 const sorted = (notes) => [...notes].sort(order);
 
 // A note's links (12), always an array: an old cached note, or an event from before
@@ -33,12 +43,13 @@ export const plain = (text) =>
   typeof text === "string" ? text.replace(SOURCE_LINK, (_, label) => label.replace(/\\(.)/g, "$1")) : text;
 
 // One row keeps only the fields the list shows, plus the links it filters by.
-const row = ({ id, title, subtitle, updatedAt, about }) => ({
+const row = ({ id, title, subtitle, updatedAt, about, position }) => ({
   id,
   title: plain(title),
   subtitle: plain(subtitle),
   updatedAt,
   about: links({ about }),
+  position,
 });
 
 // Fold one changed note into the rows: replace the row with its id if present, else
@@ -70,20 +81,22 @@ export const highlights = ({ notes, following, subject }) => {
 // choice to fall back to. Only when nothing on the stage is a subject (a null subject,
 // or the attribute off) is there nothing to scope by, and every note shows. The draft
 // row is the view's, always on top of whichever set this returns.
-export const shown = ({ notes, following, subject }) =>
-  following && subject != null
+// A note whose delete was handed to the corner notice is not shown while it waits there.
+export const shown = ({ notes, following, subject, handed }) =>
+  (following && subject != null
     ? notes.filter((n) => isAbout(n, subject) && !isHighlight(n, subject))
-    : notes;
+    : notes
+  ).filter((n) => !handed?.has(n.id));
 
 // The note the editor has open, when it is not among the shown notes (12): a pinned
 // note after the stage moved, or one still open after unpinning. Only while following a
 // subject; otherwise the open note is always in the shown set, so there is nothing apart. Its row is the same row as any other; the
 // view sets it apart. Computed from context, so no handler decides it: note.opened,
 // subject.changed, note.changed and note.deleted keep the inputs current.
-export const apart = ({ notes, following, subject, open }) => {
+export const apart = ({ notes, following, subject, open, handed }) => {
   if (!following || subject == null || open == null) return null;
   const note = notes.find((n) => n.id === open);
-  return note && !isAbout(note, subject) && !isHighlight(note, subject) ? note : null;
+  return note && !isAbout(note, subject) && !isHighlight(note, subject) && !handed?.has(note.id) ? note : null;
 };
 
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
@@ -106,6 +119,34 @@ export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn =
 
 // A gesture on a row counts only while the rows are shown.
 const shows = ({ context }) => showing(context) === "show";
+
+// A note row the user can cut or delete: a real note, shown, not already going.
+const live = (context, id) =>
+  context.notes.some((n) => n.id === id) && !context.discarding.has(id) && !context.handed.has(id);
+
+// Start a row's undo window on the row (5): nothing is emitted until it runs out.
+function startDiscard(enqueue, id) {
+  enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(id) });
+  enqueue.raise({ type: "_elapsed", id }, { delay: ({ context }) => context.undoMs, id: `undo:${id}` });
+}
+
+// The keyboard left the list while a row was cut or counting down (12, Vim keys): its
+// delete goes to the corner notice, which keeps its Undo in sight and settles it there
+// (notes deletes on removal.settled). The row stays out of the list meanwhile.
+function handOff(context, enqueue) {
+  const ids = [...context.discarding, ...(context.cut ? [context.cut] : [])];
+  if (!ids.length) return;
+  for (const id of context.discarding) enqueue.cancel(`undo:${id}`);
+  for (const id of ids) {
+    const note = context.notes.find((n) => n.id === id);
+    if (note) enqueue.emit({ type: "removal.started", kind: "note", id, name: note.title ?? "" });
+  }
+  enqueue.assign({
+    handed: ({ context }) => new Set([...context.handed, ...ids]),
+    discarding: new Set(),
+    cut: null,
+  });
+}
 
 export const machine = setup({
   actors: {
@@ -131,8 +172,19 @@ export const machine = setup({
   id: "note-list",
   meta: {
     description:
-      "Lists the notes, newest first, with New note always the first row, and lets the user " +
-      "open or delete one; deleting waits out the undo window. With `subject` it lists only the " +
+      "Lists the notes in the order the user set, kept on the account and the same on every " +
+      "device, with New note always the first row; a new note goes to the top and editing a " +
+      "note does not move it. The user can open or delete a note; deleting waits out the undo " +
+      "window on the row. With Vim keys on, never while typing in a field: dd cuts the row, " +
+      "greyed and marked Cut with no countdown, and the keyboard stays in the list; p places " +
+      "it below the row the cursor is on and P above; u on the cut row puts it back. While a " +
+      "row is cut, Escape does not leave the list but deletes the row with its undo countdown, " +
+      "and u on a row counting down takes the delete back. If the keyboard leaves the list " +
+      "while a row is cut or counting down (a row opened, another panel, a click elsewhere), " +
+      "the delete moves to the dark notice in the corner with its Undo. o makes a new note " +
+      "below the cursor row and O above it, opened in the editor. The New note and Highlights " +
+      "rows stay put: dd does nothing there. With `subject` a move places the note between its " +
+      "neighbours as the filtered list shows them. With `subject` it lists only the " +
       "notes about the subject, and a note open in the editor that is not about it, such as a " +
       "pinned note, is listed apart at the top so the open row is never missing; it learns " +
       "which note is open from the editor. While the subject has at least one highlight, a " +
@@ -147,7 +199,7 @@ export const machine = setup({
       "in its undo window when the user signs out is taken back. On a try page a visitor not " +
       "yet signed in still sees the list.",
     kind: "view",
-    emits: ["note.selected", "note.discarded", "highlights.selected"],
+    emits: ["note.selected", "note.discarded", "highlights.selected", "note.moved", "removal.started"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
     // no filtering, every note shown. On, the list shows only the notes about the
     // subject on the stage, with the Highlights row above them while the subject has
@@ -185,6 +237,14 @@ export const machine = setup({
     // The ids counting down to a discard, each with its own cancelable timer (below).
     // A row here shows struck through with an Undo where its trash was.
     discarding: new Set(),
+    // The row cut with Vim's dd (12), waiting for p or P to place it, u to put it back,
+    // or Escape to delete it; null when none. Greyed in place, no timer.
+    cut: null,
+    // The rows whose delete waits in the corner notice (handOff), hidden until it ends.
+    handed: new Set(),
+    // A new note made with o or O (12): where it goes once the user writes in it, as
+    // { id, after, before }, the draft's id; null when none.
+    placing: null,
     // The next note's id, always present: the first row, blank until the user types
     // and note.changed brings its real row, whereupon a fresh one is minted.
     draft: input.mint(),
@@ -247,17 +307,26 @@ export const machine = setup({
       {
         actions: enqueueActions(({ context, enqueue }) => {
           for (const id of context.discarding) enqueue.cancel(`undo:${id}`);
-          enqueue.assign({ signedIn: false, discarding: new Set() });
+          enqueue.assign({ signedIn: false, discarding: new Set(), cut: null });
         }),
       },
     ],
     // The fact's news (4.3, fourth rule), followed in any state so a change that
     // races the starting query is not lost. A change for the draft's id means the
     // draft became a real note, so a fresh next-note id is minted above it.
+    // A note made with o or O becomes real on its first change, and is moved then to
+    // the place it was opened at (a new note otherwise sorts first).
     "note.changed": {
-      actions: assign({
-        notes: ({ context, event }) => upsert(context.notes, event),
-        draft: ({ context, event }) => (context.draft === event.id ? context.mint() : context.draft),
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        enqueue.assign({
+          notes: ({ context }) => upsert(context.notes, event),
+          draft: ({ context }) => (context.draft === event.id ? context.mint() : context.draft),
+        });
+        const p = context.placing;
+        if (p && p.id === event.id && !context.notes.some((n) => n.id === event.id)) {
+          enqueue.assign({ placing: null });
+          if (p.after != null || p.before != null) enqueue.emit({ type: "note.moved", id: p.id, after: p.after, before: p.before });
+        }
       }),
     },
     // The fact confirms a note is gone (this device's own discard on elapse, or
@@ -269,6 +338,8 @@ export const machine = setup({
           notes: ({ context }) => context.notes.filter((n) => n.id !== event.id),
           open: ({ context }) => (context.open === event.id ? null : context.open),
           discarding: ({ context }) => without(context.discarding, event.id),
+          handed: ({ context }) => without(context.handed, event.id),
+          cut: ({ context }) => (context.cut === event.id ? null : context.cut),
         });
         if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
       }),
@@ -283,11 +354,56 @@ export const machine = setup({
     // The trash on a row, or a swipe past its threshold (5): begin the undo window.
     // Nothing is emitted yet; only its elapse makes the delete a fact.
     _discard: {
-      guard: ({ context, event }) =>
-        shows({ context }) && context.notes.some((n) => n.id === event.id) && !context.discarding.has(event.id),
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
-        enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });
+      guard: ({ context, event }) => shows({ context }) && live(context, event.id) && context.cut !== event.id,
+      actions: enqueueActions(({ event, enqueue }) => startDiscard(enqueue, event.id)),
+    },
+    // Vim's dd on a note row (12): the row is cut, greyed in place with no timer, while
+    // the keyboard stays in the list. A row already cut is deleted with its countdown,
+    // as Vim's register holds only the latest cut.
+    _cut: {
+      guard: ({ context, event }) => shows({ context }) && live(context, event.id) && context.cut !== event.id,
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (context.cut) startDiscard(enqueue, context.cut);
+        enqueue.assign({ cut: event.id });
+      }),
+    },
+    // p or P: the cut note goes between these neighbours, and is no longer cut.
+    _paste: {
+      guard: ({ context }) => context.cut != null,
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        enqueue.assign({ cut: null });
+        if (event.after !== context.cut && event.before !== context.cut)
+          enqueue.emit({ type: "note.moved", id: context.cut, after: event.after ?? null, before: event.before ?? null });
+      }),
+    },
+    // u on the cut row: it stays where it was.
+    _uncut: { guard: ({ context }) => context.cut != null, actions: assign({ cut: null }) },
+    // Escape while a row is cut: the cut becomes the ordinary delete, its countdown on the row.
+    _escape: {
+      guard: ({ context }) => context.cut != null,
+      actions: enqueueActions(({ context, enqueue }) => {
+        startDiscard(enqueue, context.cut);
+        enqueue.assign({ cut: null });
+      }),
+    },
+    // The keyboard left the list (the view tells): see handOff.
+    _left: { actions: enqueueActions(({ context, enqueue }) => handOff(context, enqueue)) },
+    // Undo in the corner notice: the row comes back where it was.
+    "removal.undone": {
+      guard: ({ context, event }) => event.kind === "note" && context.handed.has(event.id),
+      actions: assign({ handed: ({ context, event }) => without(context.handed, event.id) }),
+    },
+    // o or O (12): a new note, opened in the editor like New note, that goes between
+    // these neighbours once the user writes in it.
+    _place: {
+      guard: shows,
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        handOff(context, enqueue);
+        enqueue.assign({
+          highlightsOpen: false,
+          placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null },
+        });
+        enqueue.emit({ type: "note.selected", id: context.draft });
       }),
     },
     // Undo, or a click anywhere on a counting-down row: cancel the window, emit nothing.
@@ -319,13 +435,17 @@ export const machine = setup({
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.
     // Picking a note clears the Highlights row's picked mark (Decision 7).
+    // Opening a row while another is cut or counting down hands that delete to the
+    // corner notice, so it never goes out of sight (12).
     _pick: {
       guard: ({ context, event }) =>
         shows({ context }) &&
         !context.discarding.has(event.id) &&
+        context.cut !== event.id &&
         (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
       actions: [
-        assign({ highlightsOpen: false }),
+        enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
+        assign({ highlightsOpen: false, placing: null }),
         emit(({ event }) => ({ type: "note.selected", id: event.id })),
       ],
     },
@@ -335,6 +455,7 @@ export const machine = setup({
     _pickHighlights: {
       guard: ({ context }) => shows({ context }) && highlights(context) != null,
       actions: [
+        enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
         assign({ highlightsOpen: true }),
         emit(({ context }) => ({
           type: "highlights.selected",

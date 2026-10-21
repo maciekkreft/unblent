@@ -60,6 +60,7 @@ async function start({ notes = [], openId = null, slow = 0, notesInput = {}, nam
     notes: { store, now: (() => { let n = 100; return () => ++n; })(), api: null, revoke: () => {}, ...notesInput },
     subject: { ask: stage(openId) },
     "note-list": { mint, undoMs: 20, following: true, highlightsOpen: false },
+    "notice-stack": { fadeMs: 30 },
     "note-editor": {
       mint,
       focus: () => {},
@@ -195,5 +196,29 @@ test("a delete commits when its window ends and stays gone", async () => {
     assert.equal(again.editor().id, null);
   } finally {
     again.unwire();
+  }
+});
+
+// A cut row placed with p reaches `notes` as note.moved, and the list's order is the
+// one notes keeps; a delete handed to the corner notice is deleted by `notes` when the
+// notice's window ends (12, Vim keys; 5, an item's place is last write wins).
+test("a move goes through notes, and a handed-off delete is settled by the corner notice", async () => {
+  const one = note(NOTE_ONE, "One");
+  const two = { ...note(NOTE_TWO, "Two"), updatedAt: 20 };
+  const none = { ...note(NOTE_NONE, "Three"), updatedAt: 5 };
+  const h = await start({ notes: [one, two, none], names: ["notes", "note-list", "notice-stack"] });
+  try {
+    const order = () => h.list().notes.map((n) => n.title);
+    await until(() => order().join() === "Two,One,Three");
+    h.actors["note-list"].send({ type: "_cut", id: NOTE_TWO });
+    h.actors["note-list"].send({ type: "_paste", after: NOTE_ONE, before: NOTE_NONE });
+    await until(() => order().join() === "One,Two,Three");
+    h.actors["note-list"].send({ type: "_cut", id: NOTE_NONE });
+    h.actors["note-list"].send({ type: "_left" });
+    await until(() => shown(h.list()).length === 2);
+    await until(() => order().join() === "One,Two", 2000);
+    assert.equal(h.emitted("removal.settled").length, 1);
+  } finally {
+    h.unwire();
   }
 });

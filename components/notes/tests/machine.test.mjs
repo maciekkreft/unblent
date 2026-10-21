@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine } from "../machine.js";
+import { machine, between, positionOf, byPosition } from "../machine.js";
 
 // The idle window the network waits for (notes/machine.js); a SimulatedClock drives
 // it without waiting real time, the way note-editor's throttle test does.
@@ -53,7 +53,7 @@ function fakeApi(impl = {}) {
     puts,
     pulls,
     put: async (row) => {
-      const out = impl.put ? impl.put(row) : { id: row.id, title: row.title, body: row.body, version: (row.baseVersion || 0) + 1, updatedAt: 900, deleted: Boolean(row.deleted) };
+      const out = impl.put ? impl.put(row) : { id: row.id, title: row.title, body: row.body, version: (row.baseVersion || 0) + 1, updatedAt: 900, deleted: Boolean(row.deleted), position: row.position ?? null };
       if (out && out.throw) throw new Error("offline");
       puts.push(row);
       return out;
@@ -147,7 +147,9 @@ test("queued queries are answered in order after the store loads (anonymous)", a
   await ready(actor);
   const [listReply, readReply] = await Promise.all([list, read]);
   assert.deepEqual(order, ["list", "read"]);
-  assert.deepEqual(listReply, { notes: [{ id: ID, title: "T", subtitle: "", updatedAt: 5, about: [] }] });
+  const { position, ...listed } = listReply.notes[0];
+  assert.deepEqual(listed, { id: ID, title: "T", subtitle: "", updatedAt: 5, about: [] });
+  assert.ok(position.startsWith("z"), "a note from before places is placed by its time");
   assert.equal(readReply.note.version, 3);
   assert.equal(readReply.note.pending, false);
 });
@@ -171,7 +173,7 @@ test("anonymous: a new note is announced at version 1, pending false, and never 
   await flush();
   // subtitle is derived from the body's second non-empty line, on every note.changed.
   assert.deepEqual(changed, [
-    { type: "note.changed", id: ID, title: "Hi", subtitle: "there", body: "Hi\nthere", version: 1, updatedAt: 101, about: [], pending: false },
+    { type: "note.changed", id: ID, title: "Hi", subtitle: "there", body: "Hi\nthere", version: 1, updatedAt: 101, about: [], position: "V", pending: false },
   ]);
   assert.equal(api.puts.length, 0, "anonymous never writes to the server");
   assert.equal(api.pulls.length, 0, "anonymous never pulls");
@@ -321,7 +323,7 @@ test("signed in: saves within the idle window are one drain of one coalesced row
 test("signed in: the outbox drains in id order once online", async () => {
   const store = fakeStore();
   let offline = true;
-  const api = fakeApi({ put: (row) => (offline ? { throw: true } : { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900 }) });
+  const api = fakeApi({ put: (row) => (offline ? { throw: true } : { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900, position: row.position }) });
   const { actor, clock } = start(store, { api, ask: askUser("u1") });
   await ready(actor);
 
@@ -441,7 +443,7 @@ test("signed in: typing never drains; the outbox waits for a pause", async () =>
 test("a bare _sync drains a queued row at once, without pulling (a hidden tab)", async () => {
   const store = fakeStore();
   let offline = true;
-  const api = fakeApi({ put: (row) => (offline ? { throw: true } : { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900 }) });
+  const api = fakeApi({ put: (row) => (offline ? { throw: true } : { id: row.id, title: row.title, body: row.body, version: 1, updatedAt: 900, position: row.position }) });
   const { actor, clock } = start(store, { api, ask: askUser("u1") });
   await ready(actor);
   api.pulls.length = 0;
@@ -803,4 +805,150 @@ test("open? waits for the store, and a deleted open note is not answered", async
   actor.send({ type: "note.discarded", id: ID });
   await flush();
   assert.deepEqual(await askOpen(actor), { note: null });
+});
+
+// --- A note's place in the list (5: last write wins) ---------------------------
+
+const ID3 = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+
+test("between makes a key strictly between its neighbours, and before or after either end", () => {
+  const keys = [between(null, null)];
+  // Inserting at the front again and again, at the back, and in the middle keeps order.
+  for (let i = 0; i < 40; i += 1) keys.unshift(between(null, keys[0]));
+  for (let i = 0; i < 40; i += 1) keys.push(between(keys.at(-1), null));
+  for (let i = 0; i < 40; i += 1) keys.splice(41, 0, between(keys[40], keys[41]));
+  for (let i = 1; i < keys.length; i += 1) assert.ok(keys[i - 1] < keys[i], `${keys[i - 1]} < ${keys[i]}`);
+  for (const k of keys) assert.match(k, /^[0-9A-Za-z]*[1-9A-Za-z]$/, "never ends in the smallest digit");
+  // Out of order neighbours place the key after the first one.
+  assert.ok(between("b", "a") > "b");
+});
+
+test("notes from before places keep today's order, newest first, then by id", () => {
+  const old = [
+    { id: ID, updatedAt: 5 },
+    { id: ID2, updatedAt: 9 },
+    { id: ID3, updatedAt: 5 },
+  ].map((r) => ({ id: r.id, position: positionOf(r) }));
+  assert.deepEqual([...old].sort(byPosition).map((r) => r.id), [ID2, ID, ID3]);
+  // A new note sorts before them, and a move between two of them lands between.
+  const fresh = between(null, old.map((r) => r.position).sort()[0]);
+  assert.ok(fresh < old[1].position);
+  const mid = between(old[1].position, old[0].position);
+  assert.ok(old[1].position < mid && mid < old[0].position);
+});
+
+test("a new note is listed first; an edit does not move a note, a move does", async () => {
+  const { actor, changed } = start(
+    fakeStore([
+      { id: ID, title: "older", body: "older", version: 1, updatedAt: 5 },
+      { id: ID2, title: "newer", body: "newer", version: 1, updatedAt: 9 },
+    ]),
+  );
+  await ready(actor);
+  const order = async () => (await askQuery(actor, "list")).notes.map((n) => n.id);
+  assert.deepEqual(await order(), [ID2, ID]);
+  actor.send({ type: "note.saved", id: ID3, title: "new", body: "new", baseVersion: null });
+  await flush();
+  assert.deepEqual(await order(), [ID3, ID2, ID]);
+  // Editing the oldest keeps its place: its place is written down from its old time.
+  actor.send({ type: "note.saved", id: ID, title: "edited", body: "edited", baseVersion: 1 });
+  await flush();
+  assert.deepEqual(await order(), [ID3, ID2, ID]);
+  // Moved between the new note and the newer one.
+  changed.length = 0;
+  actor.send({ type: "note.moved", id: ID, after: ID3, before: ID2 });
+  await flush();
+  assert.deepEqual(await order(), [ID3, ID, ID2]);
+  assert.equal(changed.length, 1);
+  assert.equal(changed[0].version, 2, "a move bumps no version");
+  // To the end of the list.
+  actor.send({ type: "note.moved", id: ID3, after: ID2, before: null });
+  await flush();
+  assert.deepEqual(await order(), [ID, ID2, ID3]);
+});
+
+test("signed in: a move is sent alone, without text or base, and drains on the server's ack", async () => {
+  const store = fakeStore([{ id: ID, title: "a", body: "a", version: 4, updatedAt: 5 }, { id: ID2, title: "b", body: "b", version: 1, updatedAt: 9 }]);
+  const api = fakeApi({ put: (row) => ({ id: row.id, title: "server text", body: "server text", version: 6, updatedAt: 5, position: row.position }) });
+  const { actor, changed, conflicted, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "note.moved", id: ID, after: null, before: ID2 });
+  await flush();
+  assert.equal(changed.at(-1).pending, true);
+  await drain(clock);
+  assert.equal(api.puts.length, 1);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["id", "position"]);
+  assert.equal(store.outbox.size, 0, "drained");
+  assert.equal(conflicted.length, 0, "a move never conflicts");
+});
+
+test("signed in: an edit after a move carries the place; an edit alone does not resend it", async () => {
+  const store = fakeStore([{ id: ID, title: "a", body: "a", version: 1, updatedAt: 5, position: "k" }]);
+  const api = fakeApi();
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "note.saved", id: ID, title: "a2", body: "a2", baseVersion: 1 });
+  await flush();
+  await drain(clock);
+  assert.equal(api.puts.at(-1).position, undefined, "a placed note's edit leaves its place to the server");
+  actor.send({ type: "note.moved", id: ID, after: null, before: null });
+  actor.send({ type: "note.saved", id: ID, title: "a3", body: "a3", baseVersion: 2 });
+  await flush();
+  await drain(clock);
+  const sent = api.puts.at(-1);
+  assert.equal(sent.title, "a3");
+  assert.equal(sent.baseVersion, 2);
+  assert.ok(sent.position, "the move rides the edit's write");
+});
+
+test("a pull brings a move made on another device, unless this device moved it since", async () => {
+  const store = fakeStore([
+    { id: ID, title: "a", body: "a", version: 2, updatedAt: 5, position: "V" },
+    { id: ID2, title: "b", body: "b", version: 1, updatedAt: 5, position: "k" },
+  ]);
+  let pulled = [];
+  let release = null;
+  const api = {
+    puts: [],
+    // The put is held, so a second move lands while the first is on its way.
+    put: async (row) => {
+      api.puts.push(row);
+      await new Promise((r) => (release = r));
+      return { id: row.id, title: "b", body: "b", version: 1, updatedAt: 5, deleted: false, about: [], position: row.position };
+    },
+    pull: async () => ({ notes: pulled, cursor: 9 }),
+  };
+  const { actor, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  actor.send({ type: "note.moved", id: ID2, after: ID, before: null });
+  await flush();
+  const first = api.puts.length;
+  actor.send({ type: "_sync", pull: true }); // the tab comes back to the front
+  await flush();
+  assert.equal(api.puts.length, first + 1, "the first move is on its way");
+  const sent = api.puts.at(-1).position;
+  actor.send({ type: "note.moved", id: ID2, after: null, before: ID });
+  await flush();
+  const mine = (await askQuery(actor, "list")).notes.find((n) => n.id === ID2).position;
+  assert.notEqual(mine, sent);
+  pulled = [
+    { id: ID, title: "a", body: "a", version: 2, updatedAt: 5, deleted: false, about: [], position: "z" },
+    { id: ID2, title: "b", body: "b", version: 1, updatedAt: 5, deleted: false, about: [], position: sent },
+  ];
+  release();
+  await flush();
+  const listed = (await askQuery(actor, "list")).notes;
+  assert.equal(listed.find((n) => n.id === ID).position, "z", "same version, new place: taken");
+  assert.equal(listed.find((n) => n.id === ID2).position, mine, "a move not yet sent is the latest write");
+});
+
+test("a delete handed to the corner notice goes when the notice settles it", async () => {
+  const { actor, deleted } = start(fakeStore([{ id: ID, title: "a", body: "a", version: 1, updatedAt: 5 }]));
+  await ready(actor);
+  actor.send({ type: "removal.settled", kind: "evaluator", id: ID });
+  await flush();
+  assert.equal(deleted.length, 0, "another kind is not a note");
+  actor.send({ type: "removal.settled", kind: "note", id: ID });
+  await flush();
+  assert.deepEqual(deleted.map((e) => e.id), [ID]);
 });

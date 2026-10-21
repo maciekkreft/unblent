@@ -20,6 +20,7 @@
             "title": { "type": "string" },
             "subtitle": { "type": "string" },
             "updatedAt": { "type": "integer" },
+            "position": { "type": "string", "description": "The note's place in the list: a key that sorts by plain comparison, the list in ascending order (5)." },
             "about": {
               "type": "array",
               "items": {

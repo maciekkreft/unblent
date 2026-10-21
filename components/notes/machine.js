@@ -22,12 +22,97 @@ const subtitleOf = (body) => {
   return second.replace(/^#{1,3} /, "").trim().slice(0, 120);
 };
 
+// A note's place in the list is a fractional index (5, an item's place is last write
+// wins): a string that sorts by plain code-unit comparison, so a note moved between two
+// others takes a key between theirs and no other note changes. The digits are in ASCII
+// order, and a key never ends in the smallest digit, so there is always room before it.
+const DIGITS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const KEY = /^[0-9A-Za-z]*[1-9A-Za-z]$/;
+export const isPosition = (value) => typeof value === "string" && value.length <= 200 && KEY.test(value);
+
+// The key between a and b (a < b); "" stands for before everything, null for after.
+function midpoint(a, b) {
+  if (b !== null) {
+    let n = 0;
+    while ((a[n] ?? "0") === b[n]) n += 1;
+    if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
+  }
+  const da = a ? DIGITS.indexOf(a[0]) : 0;
+  const db = b !== null ? DIGITS.indexOf(b[0]) : DIGITS.length;
+  if (db - da > 1) return DIGITS[Math.round((da + db) / 2)];
+  if (b !== null && b.length > 1) return b.slice(0, 1);
+  return DIGITS[da] + midpoint(a.slice(1), null);
+}
+
+// A key strictly between `after` and `before`, either null for the list's end. Out of
+// order neighbours (a move computed against a list that changed meanwhile) place the
+// note just after `after`.
+export function between(after, before) {
+  const a = isPosition(after) ? after : "";
+  const b = isPosition(before) && before > a ? before : null;
+  return midpoint(a, b);
+}
+
+// A note from before places existed has no key, and keeps today's order, newest first:
+// its key is read from when it last changed, "z" and eight digits counting down from the
+// largest time, then its id, so it sorts after every key `between` makes for a new note
+// and among its kind by time, newest first, then by id. It is the same on every device,
+// because the time and id come from the server. The key is written down the first time
+// the note is edited or moved, so an edit never moves it.
+const LATEST = 62 ** 8 - 1;
+function countdown(at) {
+  let n = Math.max(0, LATEST - Math.floor(at));
+  let text = "";
+  for (let i = 0; i < 8; i += 1) {
+    text = DIGITS[n % 62] + text;
+    n = Math.floor(n / 62);
+  }
+  return text;
+}
+export const positionOf = (record) =>
+  isPosition(record.position) ? record.position : `z${countdown(record.updatedAt ?? 0)}${record.id}V`;
+
+// List order: by key, then by id where two keys are equal.
+export const byPosition = (a, b) =>
+  a.position < b.position ? -1 : a.position > b.position ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
+// A new note sorts first (5): a key before every note's.
+function firstPosition(context) {
+  let min = null;
+  for (const record of context.notes.values()) {
+    if (!visible(record)) continue;
+    const p = positionOf(record);
+    if (min === null || p < min) min = p;
+  }
+  return between(null, min);
+}
+
+// An outbox row with text (a save or a delete), as against a row that only moves a note.
+const hasText = (row) => row != null && "title" in row;
+
 // about is the note's links (12), [] when none (D2); a note cached before links
 // existed has no about field, so every derivation defaults it.
-const listRow = ({ id, title, body, updatedAt, about }) => ({ id, title, subtitle: subtitleOf(body), updatedAt, about: about ?? [] });
+const listRow = (record) => ({
+  id: record.id,
+  title: record.title,
+  subtitle: subtitleOf(record.body),
+  updatedAt: record.updatedAt,
+  about: record.about ?? [],
+  position: positionOf(record),
+});
 
 // The one place a note.changed is built, so its subtitle is derived once (5 emit sites).
-const changed = (record, pending) => ({ type: "note.changed", ...record, subtitle: subtitleOf(record.body), about: record.about ?? [], pending });
+const changed = (record, pending) => ({
+  type: "note.changed",
+  ...record,
+  subtitle: subtitleOf(record.body),
+  about: record.about ?? [],
+  position: positionOf(record),
+  pending,
+});
+
+// A read or open reply carries the note without its place: their schemas do not name it.
+const withoutPosition = ({ position, ...rest }) => rest;
 
 // A tombstone is a real record kept for the pull (5), but it is not a note anyone
 // reads or lists, and its `deleted` flag must never ride note.changed or a read reply
@@ -39,21 +124,21 @@ function replyList(context, reply) {
   const notes = [...context.notes.values()]
     .filter(visible)
     .map(listRow)
-    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+    .sort(byPosition);
   reply({ notes });
 }
 
 function replyRead(context, id, reply) {
   const stored = context.notes.get(id);
   // pending reports the record has a local change the server has not acknowledged (5).
-  reply(visible(stored) ? { note: { ...stored, about: stored.about ?? [], pending: context.outbox.has(id) } } : { error: "not-found" });
+  reply(visible(stored) ? { note: { ...withoutPosition(stored), about: stored.about ?? [], pending: context.outbox.has(id) } } : { error: "not-found" });
 }
 
 // The link a highlight of `about` carries: the one naming it with a place (12).
 const placeOf = (record, about) =>
   (record.about ?? []).find((l) => l.kind === about.kind && l.id === about.id && l.place)?.place;
 
-const fullNote = (context, record) => ({ ...record, about: record.about ?? [], pending: context.outbox.has(record.id) });
+const fullNote = (context, record) => ({ ...withoutPosition(record), about: record.about ?? [], pending: context.outbox.has(record.id) });
 
 // The open note (12, "Which note is open"): the Highlights of the subject while they are
 // in front of the Notes pair, which the user sees as one note (13), each highlight in
@@ -91,6 +176,10 @@ function applySave(context, event, enqueue) {
   // gets []. So a save that omits about (every save but a new note's) is a no-op when
   // its text is unchanged, and a save that carries about is always a change.
   const about = event.about !== undefined ? event.about : current ? current.about ?? [] : [];
+  // A new note takes a place before every note; a note without one keeps the place it
+  // shows in now, written down, so the edit does not move it (5).
+  const unplaced = !current || !isPosition(current.position);
+  const position = current ? positionOf(current) : firstPosition(context);
 
   if (context.userId == null) {
     if (current && baseVersion !== current.version) {
@@ -104,7 +193,7 @@ function applySave(context, event, enqueue) {
     }
     if (current && title === current.title && body === current.body && event.about === undefined) return;
     const version = current ? current.version + 1 : baseVersion === null ? 1 : baseVersion + 1;
-    const record = { id, title, body, version, updatedAt: context.now(), about };
+    const record = { id, title, body, version, updatedAt: context.now(), about, position };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit(changed(record, false));
@@ -114,11 +203,15 @@ function applySave(context, event, enqueue) {
   // Signed in: nothing pending and the same text is not a change (5, idempotent).
   if (current && title === current.title && body === current.body && !context.outbox.has(id) && event.about === undefined) return;
   const version = current ? current.version : 1;
-  const record = { id, title, body, version, updatedAt: context.now(), about };
+  const record = { id, title, body, version, updatedAt: context.now(), about, position };
   context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const existing = context.outbox.get(id);
-  const row = { id, title, body, about, baseVersion: existing ? existing.baseVersion : current ? current.version : null };
+  // A row that only moved the note keeps no base; the edit is based on the held version.
+  const row = { id, title, body, about, baseVersion: hasText(existing) ? existing.baseVersion : current ? current.version : null };
+  // The place rides the write only when this device set it (5: last write wins), so an
+  // edit never carries a stale place over a move made on another device.
+  if (unplaced || existing?.position !== undefined) row.position = position;
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit(changed(record, true));
@@ -161,6 +254,34 @@ function applyDiscard(context, event, enqueue) {
   enqueue.raise({ type: "_drain" });
 }
 
+// The user moved a note in the list (note-list emits note.moved, 4.3 fifth rule): it
+// takes a key between its new neighbours'. A place is last write wins (5): it bumps no
+// version, so it never conflicts with an edit and the editor's base stays true; signed
+// in it rides the outbox like an edit, alone or on the row of an edit not yet sent.
+function applyMove(context, event, enqueue) {
+  const current = context.notes.get(event.id);
+  if (!visible(current)) return;
+  const neighbour = (id) => {
+    const record = id ? context.notes.get(id) : null;
+    return visible(record) && id !== event.id ? positionOf(record) : null;
+  };
+  const position = between(neighbour(event.after), neighbour(event.before));
+  if (position === current.position) return;
+  const record = { ...current, position };
+  context.notes.set(event.id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  if (context.userId == null) {
+    enqueue.emit(changed(record, false));
+    return;
+  }
+  const existing = context.outbox.get(event.id);
+  const row = existing ? { ...existing, position } : { id: event.id, position };
+  context.outbox.set(event.id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
+}
+
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.reply);
@@ -168,6 +289,8 @@ function flush(context, message, enqueue) {
   else if (message.type === "open?") replyOpen(context, message.reply);
   else if (message.type === "note.saved") applySave(context, message, enqueue);
   else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
+  else if (message.type === "note.moved") applyMove(context, message, enqueue);
+  else if (message.type === "removal.settled") applyDiscard(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -236,6 +359,10 @@ export const machine = setup({
         if (result.conflict) {
           conflicts.push({ id: row.id, mine: row, theirs: result.note });
           await store.outboxDelete(row.id).catch(() => {});
+        } else if (result.missing) {
+          // A move for a note the server never had: nothing to place.
+          acks.push({ id: row.id, missing: true });
+          await store.outboxDelete(row.id).catch(() => {});
         } else {
           acks.push(result);
           await store.outboxDelete(row.id).catch(() => {});
@@ -268,7 +395,12 @@ export const machine = setup({
       "the editor or the subject's Highlights, kept in memory on this device; `notes: open` " +
       "answers with it in full, or with the Highlights in reading order, and is offered to the " +
       "chat as \"Reading the open note\". A deleted note is kept as a tombstone with its title " +
-      "and body, so it can still be shown or restored.",
+      "and body, so it can still be shown or restored. Each note has a place in the list, the " +
+      "same on every device: a new note goes first, an edit never moves a note, and a move " +
+      "from the list puts it between its new neighbours. A place is last write wins: it " +
+      "changes no version, so a move never conflicts with an edit. A note from before places " +
+      "keeps the order it had, newest first, until it is edited or moved. A delete handed to " +
+      "the corner notice happens when that notice's undo window ends.",
     kind: "fact",
     shape: "replicated",
     emits: ["note.changed", "note.deleted", "note.conflicted"],
@@ -348,6 +480,8 @@ export const machine = setup({
         "open?": { actions: queue },
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
+        "note.moved": { actions: queue },
+        "removal.settled": { guard: ({ event }) => event.kind === "note", actions: queue },
       },
     },
     // The store is loaded; confirm who is signed in before flushing, so an early
@@ -381,6 +515,8 @@ export const machine = setup({
         "open?": { actions: queue },
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
+        "note.moved": { actions: queue },
+        "removal.settled": { guard: ({ event }) => event.kind === "note", actions: queue },
       },
     },
     ready: {
@@ -391,6 +527,13 @@ export const machine = setup({
         "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
         "note.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "note.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
+        "note.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
+        // A delete the list handed to the corner notice when the keyboard left it: the
+        // notice's undo window ran out, so the note goes, as on note.discarded.
+        "removal.settled": {
+          guard: ({ event }) => event.kind === "note",
+          actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)),
+        },
         // The fact's own news about who is signed in (4.3, fourth rule). A different
         // user resets the pull cursor (the cache is kept, to be pushed up); signing
         // in enqueues the cache so anonymous work becomes the account's, then syncs.
@@ -417,6 +560,7 @@ export const machine = setup({
                   // the account's too (5).
                   const row = { id: note.id, title: note.title, body: note.body, baseVersion: note.version, about: note.about ?? [] };
                   if (note.deleted) row.deleted = true;
+                  if (isPosition(note.position)) row.position = note.position;
                   context.outbox.set(note.id, row);
                   enqueue(() => context.store.outboxPut(row).catch(() => {}));
                 }
@@ -525,6 +669,10 @@ function applySync(context, output, enqueue) {
   const { acks = [], conflicts = [], pulled = [], newCursor, authFailed } = output;
 
   for (const ack of acks) {
+    if (ack.missing) {
+      context.outbox.delete(ack.id);
+      continue;
+    }
     const row = context.outbox.get(ack.id);
     const isDelete = Boolean((row && row.deleted) || ack.deleted);
     // The row is fully drained when the server holds what it acknowledged; a newer
@@ -532,7 +680,8 @@ function applySync(context, output, enqueue) {
     // advances. A delete has no newer edit (a tombstone refuses further saves), so a
     // matching ack always drains it — its text differs from the server's, so it is the
     // deleted flag, not the body, that decides.
-    const drained = row && (isDelete ? Boolean(ack.deleted) : row.title === ack.title && row.body === ack.body);
+    const placed = row && (row.position === undefined || row.position === ack.position);
+    const drained = row && placed && (isDelete ? Boolean(ack.deleted) : !hasText(row) || (row.title === ack.title && row.body === ack.body));
     if (drained) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
@@ -551,6 +700,8 @@ function applySync(context, output, enqueue) {
       updatedAt: ack.updatedAt,
       about: held ? held.about ?? [] : ack.about ?? [],
     };
+    const position = held && isPosition(held.position) ? held.position : ack.position;
+    if (isPosition(position)) record.position = position;
     // A tombstone stays a tombstone and never rides note.changed; the list already
     // dropped it on the note.deleted that the discard emitted.
     if (isDelete) record.deleted = true;
@@ -566,6 +717,8 @@ function applySync(context, output, enqueue) {
     const wasVisible = visible(context.notes.get(conflict.id));
     const record = { id: conflict.id, title: theirs.title, body: theirs.body, version: theirs.version, updatedAt: theirs.updatedAt, about: theirs.about ?? [] };
     if (theirs.deleted) record.deleted = true;
+    // The place was saved even though the text was refused (5: a place never conflicts).
+    if (isPosition(theirs.position)) record.position = theirs.position;
     context.notes.set(conflict.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     // The edit was rejected either way, so a view is owed the conflict (the lost edit
@@ -588,11 +741,24 @@ function applySync(context, output, enqueue) {
 
   for (const note of pulled) {
     const current = context.notes.get(note.id);
-    if (current && note.version <= current.version) continue;
+    // A place this device moved and has not sent yet is the latest write (5).
+    const moving = context.outbox.get(note.id)?.position !== undefined;
+    if (current && note.version <= current.version) {
+      // A move made elsewhere changes no version, so it is taken on its own.
+      if (visible(current) && !note.deleted && !moving && isPosition(note.position) && note.position !== current.position) {
+        const record = { ...current, position: note.position };
+        context.notes.set(note.id, record);
+        enqueue(() => context.store.put(record).catch(() => {}));
+        enqueue.emit(changed(record, context.outbox.has(note.id)));
+      }
+      continue;
+    }
     // A delete always wins (5): a live copy from the server never resurrects a local
     // tombstone, even at a higher version (the server refuses such a revival anyway).
     if (current && current.deleted && !note.deleted) continue;
     const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt, about: note.about ?? [] };
+    const position = moving ? current?.position : isPosition(note.position) ? note.position : current?.position;
+    if (isPosition(position)) record.position = position;
     if (note.deleted) {
       record.deleted = true;
       context.notes.set(note.id, record);
