@@ -1,0 +1,53 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The dates wanted, both ends included: from alone names one day, from and to a range, to alone every day up to it; neither, every day.",
+    "type": "object",
+    "properties": {
+      "from": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "The first date, YYYY-MM-DD."
+      },
+      "to": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "The last date, YYYY-MM-DD."
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every day written in the range, oldest first; a date with nothing written is not listed.",
+    "type": "object",
+    "properties": {
+      "days": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "day": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The day's date, YYYY-MM-DD."
+            },
+            "text": {
+              "type": "string",
+              "description": "What is written on that day."
+            }
+          },
+          "required": ["day", "text"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["days"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["journal.changed"],
+  "tool": {
+    "description": "Returns the reader's journal days, oldest first, each with its date and everything written on it. Give from alone (YYYY-MM-DD) for one day, from and to for a range (both included), to alone for every day up to it, or nothing for the whole journal. Days with nothing written are left out. The text is markdown: a line starting with # is a title, ## a heading, ### a subheading. Use it to read what the reader wrote on a given day or over a period; to know which day the journal page shows now, read the open journal day instead.",
+    "label": "Reading journal days"
+  }
+}

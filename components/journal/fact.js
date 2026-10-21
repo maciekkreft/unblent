@@ -4,6 +4,8 @@ import { openJournal } from "./store.js";
 import changed from "./events/journal.changed.json" with { type: "json" };
 import conflicted from "./events/journal.conflicted.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
+import open from "./queries/open.json" with { type: "json" };
+import days from "./queries/days.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs, the IndexedDB store, the
 // clock, the bus's ask and the sync `api`, and mounts it, so machine.js stays importable
@@ -42,7 +44,7 @@ const api = {
 const actor = mount(machine, {
   input: { store: openJournal(), now: () => Date.now(), api, ask: (target, name, payload) => ask(machine, target, name, payload) },
   events: { "journal.changed": changed, "journal.conflicted": conflicted },
-  queries: { read },
+  queries: { read, open, days },
 });
 
 // A tab regaining focus drains then pulls, which is how a day written on another device

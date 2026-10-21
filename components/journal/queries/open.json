@@ -1,0 +1,48 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "open takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The day the journal page shows, as day.shown last announced it, with its text and whether it can still be written; null when no journal page has announced a day since this page loaded.",
+    "type": "object",
+    "properties": {
+      "shown": {
+        "oneOf": [
+          { "type": "null" },
+          {
+            "type": "object",
+            "properties": {
+              "day": {
+                "type": "string",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "description": "The shown day's date, YYYY-MM-DD."
+              },
+              "text": {
+                "type": "string",
+                "description": "What is written on that day; empty when nothing is written yet."
+              },
+              "writable": {
+                "type": "boolean",
+                "description": "Whether the day can still be written: today's page, or yesterday's for an hour after its last edit."
+              }
+            },
+            "required": ["day", "text", "writable"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "required": ["shown"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["journal.changed"],
+  "tool": {
+    "description": "Returns the journal day the reader's journal page shows right now: its date, everything written on it, and whether it can still be written (only today's page can, or yesterday's for an hour after its last edit). The journal page keeps its day while another book is in front; checking what's open tells whether the journal is the open book. Returns a null day when there is no journal page. Call this when the reader says \"today's entry\", \"this day\" or \"what I wrote\" while the journal is open. The text is markdown: a line starting with # is a title, ## a heading, ### a subheading. Takes no arguments.",
+    "label": "Reading the open journal day"
+  }
+}

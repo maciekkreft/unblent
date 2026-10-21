@@ -109,6 +109,34 @@ const body = (c) => {
   };
 };
 
+// --- Tools (7.7) ----------------------------------------------------------------------
+
+// journal: open. The shown day is the one journal-entry last announced in day.shown;
+// which day the page shows is that view's rule, so this fact only remembers it. Its text
+// is the day's record, or empty for today's page not yet written on. A day.shown without
+// `writable` counts only today as writable, as that event says.
+const opened = (c) => {
+  if (!c.shown) return { shown: null };
+  const { day, writable } = c.shown;
+  const record = c.days
+    .filter((d) => !d.deleted && d.day === day)
+    .reduce((a, b) => (a && a.editedAt >= b.editedAt ? a : b), null);
+  return { shown: { day, text: record?.text ?? "", writable: writable ?? day === dateOf(c.now()) } };
+};
+
+// journal: days. `from` alone names one day; both ends are included.
+const between = (c, { from, to } = {}) => {
+  const last = to ?? from;
+  return {
+    days: c.days
+      .filter((d) => !d.deleted && d.text !== "" && (!from || d.day >= from) && (!last || d.day <= last))
+      .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id))
+      .map(({ day, text }) => ({ day, text })),
+  };
+};
+
+const remember = assign({ shown: ({ event }) => ({ day: event.day, ...(typeof event.writable === "boolean" ? { writable: event.writable } : {}) }) });
+
 // --- The actor ------------------------------------------------------------------------
 
 // A day's row in the outbox, keyed by kind and id; the kind is the server's route.
@@ -390,7 +418,10 @@ export const machine = setup({
       "typed and never changes. Only one day can be edited: the one whose date is today, or " +
       "that was edited less than an hour ago, so writing past midnight keeps going in the same " +
       "entry; a save to any other day is refused. When no day can be edited, the journal opens " +
-      "an empty page for today.",
+      "an empty page for today. The chat may read it through two lookups: the day the journal " +
+      "page shows, with its text and whether it can still be written, remembered from what the " +
+      "page last announced and kept only while the page is open; and the days in a range of " +
+      "dates, oldest first, leaving out days with nothing written.",
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days",
@@ -400,6 +431,8 @@ export const machine = setup({
   context: ({ input }) => ({
     days: [],
     open: null,
+    // The day the journal page shows (day.shown), in memory only, for journal: open.
+    shown: null,
     userId: null,
     cursor: 0,
     outbox: new Map(),
@@ -456,6 +489,9 @@ export const machine = setup({
         "day.saved": { actions: queue },
         "session.changed": { actions: queue },
         "read?": { actions: queue },
+        "open?": { actions: queue },
+        "days?": { actions: queue },
+        "day.shown": { actions: remember },
       },
     },
     ready: {
@@ -487,6 +523,9 @@ export const machine = setup({
           }),
         },
         "read?": { actions: ({ context, event }) => event.reply(body(context)) },
+        "open?": { actions: ({ context, event }) => event.reply(opened(context)) },
+        "days?": { actions: ({ context, event }) => event.reply(between(context, event.payload)) },
+        "day.shown": { actions: remember },
       },
       initial: "idle",
       states: {

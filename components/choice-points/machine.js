@@ -203,7 +203,8 @@ export const machine = setup({
       "from acceptance and commitment therapy: the situation, the thoughts and feelings it " +
       "brought, what the user did or would do when hooked (away) and when unhooked (towards). " +
       "Each one names its journal day by date and keeps that day for good. `choice-points: list` " +
-      "answers one day's choice points, or every day's when no day is given, oldest first. A " +
+      "answers one day's choice points, or every day's when no day is given, oldest first; the " +
+      "chat may use it as a lookup, Reading choice points. A " +
       "choice point the user opened and left with all four boxes empty is not kept, and a save " +
       "that empties all four boxes of a kept one removes it at once, without an undo window; " +
       "its tombstone keeps the texts it had. It works " +
