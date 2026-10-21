@@ -41,3 +41,5 @@ The architecture is the spec. If a request conflicts with it, name the section a
 The server at 127.0.0.1:8080 is both dev and production, and reloads on every edit. It can list every component, every contract (event, query and command) and every page. Ask it before searching the code: `python3 checks/show.py --help`. Read a component's code only when the listing does not answer the question.
 
 That server writes into the real `data/`. To drive a page with a forged session cookie (a Playwright experiment, a single test by hand), never point it at :8080: `python3 checks/check.py --server` starts a throwaway server on another port and prints the `UNBLENT_URL` and `UNBLENT_DATA` to use, so nothing lands in `data/` or R2.
+
+Stop every throwaway server and browser as soon as you are done with it. `python3 checks/leftovers.py` lists, in milliseconds, test servers and test browsers whose session or check has ended; run it before you report done, and `--kill` stops them. Never stop :8080.
