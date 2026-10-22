@@ -673,7 +673,7 @@ The architecture document describes the rules; the checks are what make them rea
 
 Where the product is heading. Nothing here is designed or built; each line is one sentence, and a proposal says how it leaves every line open.
 
-- An open-source Mac release: a free ePub reader with notes, the journal and highlights, usable from the keyboard alone with Vim keys, installed with one `brew` command and working offline for one person, without Chats, Evaluators or Choice Points; unblent.com becoming its landing page and the hosted app moving to app.unblent.com (sketch: `~/.claude/plans/open-source-mac-release.md`; landing page design, Paper, in light and dark with real screenshots: https://claude.ai/artifact/WkbgfhfoYDKkP7ssh9WiXU).
+- An open-source Mac release: a free ePub reader with notes, the journal and highlights, usable from the keyboard alone with Vim keys, installed with one `brew` command and working offline for one person, without Chats, Evaluators or Choice Points; unblent.com becoming its landing page and the hosted app moving to app.unblent.com (sketch: `~/.claude/plans/open-source-mac-release.md`; landing page design, Paper, in light and dark with real screenshots: https://claude.ai/artifact/E2p4LZcZ7dvfZ7jguv6K2d).
 
 - Evaluators that trigger tools, where an evaluator notices something in what the user writes (a yes / no or pick-one judgment by Jev), a tool does something, and a tool can be set to run when an evaluator fires; these tools act, unlike the chat's tools of 7.7, which only look things up.
 - Try pages for Chats, Books and the Journal, each one more page under `/try/`, made as the try-page skill describes (sketch: `~/.claude/plans/try-links.md`).
