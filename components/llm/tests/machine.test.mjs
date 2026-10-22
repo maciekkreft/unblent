@@ -27,6 +27,7 @@ const SPENDING = load("queries/spending.json");
 const READ = load("queries/read.json");
 const COMPLETE = load("queries/complete.json");
 const DECIDE = load("queries/decide.json");
+const GENERATE = load("queries/generate.json");
 const SESSION_READ = JSON.parse(readFileSync(resolve(HERE, "..", "..", "session", "queries", "read.json"), "utf8"));
 
 // A valid ULID for the pending assistant turn (the complete id, and so the run id).
@@ -62,8 +63,8 @@ const completePayload = (over = {}) => ({
 const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
-function start({ userId = "u1", picture = PICTURE, save, decide, guest, spending, edit } = {}) {
-  const calls = { read: 0, save: [], decide: [], guest: 0, edit: [] };
+function start({ userId = "u1", picture = PICTURE, save, decide, generate, guest, spending, edit } = {}) {
+  const calls = { read: 0, save: [], decide: [], generate: [], guest: 0, edit: [] };
   const streamer = {};
   const input = {
     session: () => {
@@ -100,6 +101,10 @@ function start({ userId = "u1", picture = PICTURE, save, decide, guest, spending
   input.decide = (payload) => {
     calls.decide.push(payload);
     return decide ? decide(payload) : Promise.resolve({ answers: [], inputTokens: 0, ms: 0 });
+  };
+  input.generate = (payload) => {
+    calls.generate.push(payload);
+    return generate ? generate(payload) : Promise.resolve({ text: "Echo: hello" });
   };
   const clock = new SimulatedClock();
   const actor = createActor(machine, { input, clock });
@@ -429,6 +434,53 @@ test("llm.edited carries the Jev key through to the server and never into contex
   assert.deepEqual(h.calls.save[0], { jevKey: "jev-secret-value" });
   assert.deepEqual(h.emitted.filter((e) => e.type === "llm.changed").at(-1).jev, { keySet: true });
   assert.ok(!JSON.stringify(h.actor.getSnapshot().context).includes("jev-secret-value"));
+});
+
+const WANTED = { model: "echo", prompt: "Name this chat.", text: "First message:\nhello" };
+
+test("generate? passes the payload to the server and replies its text", async () => {
+  const h = start({ generate: () => Promise.resolve({ text: "A greeting" }) });
+  await ready(h.actor);
+  see(WANTED, GENERATE.payload);
+  assert.deepEqual(await query(h.actor, "generate?", WANTED, GENERATE.reply), { text: "A greeting" });
+  assert.deepEqual(h.calls.generate, [WANTED]);
+});
+
+test("generate? asked before the picture is read still reaches the server, which decides", async () => {
+  const h = start({ userId: null, generate: () => Promise.resolve({ error: "signed-out" }) });
+  assert.deepEqual(await query(h.actor, "generate?", WANTED, GENERATE.reply), { error: "signed-out" });
+  assert.equal(h.calls.generate.length, 1);
+  assert.equal(h.calls.guest, 0, "a generator never makes a guest");
+});
+
+test("generate? is busy while one runs, and a failure is unavailable", async () => {
+  let finish;
+  const h = start({ generate: () => (finish ? Promise.resolve({ text: "Again" }) : new Promise((r) => (finish = r))) });
+  await ready(h.actor);
+  const first = query(h.actor, "generate?", WANTED, GENERATE.reply);
+  assert.deepEqual(await query(h.actor, "generate?", WANTED, GENERATE.reply), { error: "busy" });
+  assert.equal(h.calls.generate.length, 1, "the second is not sent");
+  finish({ error: "no-key" });
+  assert.deepEqual(await first, { error: "no-key" }, "the server's error rides the reply");
+  assert.deepEqual(await query(h.actor, "generate?", WANTED, GENERATE.reply), { text: "Again" }, "free again");
+
+  const broken = start({ generate: () => Promise.reject(new Error("offline")) });
+  await ready(broken.actor);
+  assert.deepEqual(await query(broken.actor, "generate?", WANTED, GENERATE.reply), { error: "unavailable" });
+});
+
+test("a generation runs beside a chat answer, and a chat answer beside a generation", async () => {
+  let finish;
+  const h = start({ generate: () => new Promise((r) => (finish = r)) });
+  await ready(h.actor);
+  const generating = query(h.actor, "generate?", WANTED, GENERATE.reply);
+  assert.deepEqual(await query(h.actor, "complete?", completePayload(), COMPLETE.reply), { id: TURN });
+  h.streamer.onPiece({ type: "text", text: "Hi" });
+  h.streamer.onPiece({ type: "end", status: "done", raw: [{ type: "text", text: "Hi" }], provider: "echo", model: "echo", usage: {} });
+  await flush();
+  assert.ok(h.actor.getSnapshot().matches({ completion: "idle", generation: "running" }));
+  finish({ text: "Hello" });
+  assert.deepEqual(await generating, { text: "Hello" });
 });
 
 test("every payload matches its schema", () => {

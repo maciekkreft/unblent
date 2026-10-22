@@ -5,6 +5,7 @@ import progressed from "./events/completion.progressed.json" with { type: "json"
 import read from "./queries/read.json" with { type: "json" };
 import complete from "./queries/complete.json" with { type: "json" };
 import decide from "./queries/decide.json" with { type: "json" };
+import generate from "./queries/generate.json" with { type: "json" };
 import spendingChanged from "./events/spending.changed.json" with { type: "json" };
 import spending from "./queries/spending.json" with { type: "json" };
 
@@ -146,6 +147,25 @@ const decideOnce = async (payload) => {
   }
 };
 
+// POST one generator request. The server answers with the text or an error code; a
+// request nobody signed in made is signed-out, and any other failure (offline, a
+// refused body) is unavailable.
+const generateOnce = async (payload) => {
+  try {
+    const res = await fetch("/api/llm/generate", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", ...json },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 401) return { error: "signed-out" };
+    if (!res.ok) return { error: "unavailable" };
+    return await res.json();
+  } catch {
+    return { error: "unavailable" };
+  }
+};
+
 // GET what guests spent, for the admin (7.7); anyone else gets not-admin in the body.
 // A failure (offline, a lapsed session) is unavailable.
 const readSpending = async () => {
@@ -186,9 +206,10 @@ mount(machine, {
     save: savePatch,
     stream,
     decide: decideOnce,
+    generate: generateOnce,
     spending: readSpending,
     edit: editSpending,
   },
   events: { "llm.changed": changed, "completion.progressed": progressed, "spending.changed": spendingChanged },
-  queries: { read, complete, decide, spending },
+  queries: { read, complete, decide, generate, spending },
 });

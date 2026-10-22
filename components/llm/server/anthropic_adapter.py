@@ -79,6 +79,28 @@ async def stream(settings, key, request, forward, tool_name):
         yield {"type": "end", "status": "failed", "error": "unavailable"}
 
 
+def generate(key: str, model: str, system: str, text: str) -> dict:
+    """One short text in one go (llm: generate): the generator's prompt is the system
+    text and the item's content the one user message. Not streamed and no thinking,
+    because the answer is a few words to a paragraph. Returns {"text", "usage"} or
+    {"error"} in complete's words: a key the provider refuses is no usable key."""
+    try:
+        final = Anthropic(api_key=key).messages.create(
+            model=model,
+            max_tokens=400,
+            system=system,
+            messages=[{"role": "user", "content": text}],
+        )
+    except anthropic.AuthenticationError:
+        return {"error": "no-key"}
+    except anthropic.APIError:
+        return {"error": "unavailable"}
+    if final.stop_reason == "refusal":
+        return {"error": "unavailable"}
+    written = "".join(block.text for block in final.content if block.type == "text").strip()
+    return {"text": written, "usage": final.usage.model_dump(mode="json")}
+
+
 def client_for(key: str) -> AsyncAnthropic:
     return AsyncAnthropic(api_key=key)
 

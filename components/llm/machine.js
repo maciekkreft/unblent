@@ -5,10 +5,12 @@ import { setup, assign, emit, enqueueActions, fromPromise, fromCallback } from "
 // account's model settings and API key (3.1, 7.7). It answers `read` (the account's
 // picture, never the key) and `complete` (start one answer; the answer arrives as
 // `completion.progressed` events, 6.3), and `decide` (ask Jev yes/no and pick-one questions; the
-// answers come back in the reply, because there is nothing to stream). It follows `session.changed`, because the
+// answers come back in the reply, because there is nothing to stream), and `generate`
+// (one short text in one go, for a generator, also answered in the reply). It follows `session.changed`, because the
 // picture depends on who is signed in (3.4), `llm.edited` (the user's settings
-// gestures) and `turn.steered` (a stop). Three parallel regions keep the account
-// picture, the running answer and the running decision from waiting on each other. Everything with a side
+// gestures) and `turn.steered` (a stop). Parallel regions keep the account picture,
+// the running answer, the running decision and the running generation from waiting
+// on each other. Everything with a side
 // effect — the fetch, the stream — arrives through `input`, so the machine is a pure
 // definition importable in Node.
 
@@ -128,6 +130,9 @@ export const machine = setup({
     // One Jev request (llm: decide): the server module answers with Jev's answers or an
     // error code, so a failure rides the reply to the asker.
     decide: fromPromise(({ input }) => input.decide(input.payload)),
+    // One short text (llm: generate): the server module answers with the text or an
+    // error code, so a failure rides the reply to the asker.
+    generate: fromPromise(({ input }) => input.generate(input.payload)),
     // Signed out, the first decide makes a guest when the page is a try page (3.4):
     // session answers with the new account, or not-a-try-page anywhere else.
     guest: fromPromise(({ input }) => input.guest()),
@@ -208,7 +213,11 @@ export const machine = setup({
       "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
       "server and never sent back to the browser. A chat answer streams back piece by piece as " +
       "events, one answer at a time; `decide` asks Jev yes-or-no and pick-one questions and " +
-      "returns the answers in the reply, on the account's own Jev key. Signed out on a try page, the first `decide` makes a guest and is asked as that guest. " +
+      "returns the answers in the reply, on the account's own Jev key. `generate` writes one short text in one go " +
+      "for a generator, the generator's prompt as the instruction and the item's content as the message, on the account's " +
+      "own Anthropic key whichever provider the chat uses, one at a time and beside a chat answer; a model the key does not " +
+      "offer is refused as unavailable, guests and signed-out visitors are refused as signed-out, and the model \"echo\" " +
+      "answers \"Echo: \" and the content's first line, without a key or a network call, for any signed-in account. Signed out on a try page, the first `decide` makes a guest and is asked as that guest. " +
       "A guest spends only on the guest keys, one per provider, which the admin enters; a provider without a guest key is " +
       "not offered to guests. Every use costs the tokens the provider reports at that provider's published price (Jev $42 " +
       "per billion tokens read; Anthropic each model's price), kept as running totals per guest and per provider since the " +
@@ -240,6 +249,9 @@ export const machine = setup({
     run: null, // the answer being streamed: { id, text, thinking, calls, dirty }
     decided: null, // the reply of the decide? in flight
     asked: null, // the payload of the decide? in flight
+    generate: input.generate,
+    generated: null, // the reply of the generate? in flight
+    wanted: null, // the payload of the generate? in flight
     spending: input.spending,
     edit: input.edit,
     spendingPending: [], // spending? replies held while a read or an edit is in flight
@@ -415,6 +427,39 @@ export const machine = setup({
             },
           },
           on: { "decide?": { actions: ({ event }) => event.reply({ error: "busy" }) } },
+        },
+      },
+    },
+    // One generator text at a time, beside a chat answer and a decision (12): a second
+    // asker is told busy, as with decide.
+    generation: {
+      initial: "idle",
+      states: {
+        idle: {
+          on: {
+            // Who may generate and with which key is decided by the server alone, not
+            // from the picture, so an ask that arrives while the picture is still being
+            // read at page load is not refused as signed out.
+            "generate?": {
+              target: "running",
+              actions: assign({ generated: ({ event }) => event.reply, wanted: ({ event }) => event.payload }),
+            },
+          },
+        },
+        running: {
+          invoke: {
+            src: "generate",
+            input: ({ context }) => ({ generate: context.generate, payload: context.wanted }),
+            onDone: {
+              target: "idle",
+              actions: [({ context, event }) => context.generated(event.output), assign({ generated: null, wanted: null })],
+            },
+            onError: {
+              target: "idle",
+              actions: [({ context }) => context.generated({ error: "unavailable" }), assign({ generated: null, wanted: null })],
+            },
+          },
+          on: { "generate?": { actions: ({ event }) => event.reply({ error: "busy" }) } },
         },
       },
     },

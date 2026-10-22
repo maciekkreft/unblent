@@ -90,3 +90,11 @@ def _last_user(turns):
         if turn.get("role") == "user":
             return turn
     return None
+
+
+def generate(text: str) -> dict:
+    """Echo's one-shot text (llm: generate): "Echo: " and the input's first non-empty
+    line cut to 40 characters, so a test can tell which item it named, with no key and
+    no network call."""
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return {"text": f"Echo: {first[:40]}".strip(), "usage": _usage(text)}

@@ -1,0 +1,65 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Write one short text in one go, not streamed: `prompt` is the instruction (the generator's), `text` is the item's content, `model` one of the account's Anthropic models.",
+    "type": "object",
+    "properties": {
+      "model": {
+        "type": "string",
+        "minLength": 1
+      },
+      "prompt": {
+        "type": "string",
+        "minLength": 1
+      },
+      "text": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "model",
+      "prompt",
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The text the model wrote, or an honest refusal (4.2) in complete's words.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "enum": [
+              "busy",
+              "signed-out",
+              "no-key",
+              "unavailable",
+              "used-up",
+              "paused",
+              "blocked"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": []
+}

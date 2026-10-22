@@ -248,3 +248,33 @@ test("only the admin blocks a guest or resets its use, and a blocked guest's Jev
   const unblocked = await (await put("blocked", admin, { user: guestId, blocked: false })).json();
   assert.equal(unblocked.guests.some((g) => g.userId === guestId), false);
 });
+
+const generate = (body, cookie) =>
+  fetch(`${BASE_URL}/api/llm/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify(body),
+  });
+const WANTED = { model: "echo", prompt: "Name this chat.", text: "\nFirst message:\nhow do I keep a journal every day of the week" };
+
+// No test reaches Anthropic: Echo answers, and the one Anthropic model is refused for
+// want of a key before any call.
+test("generate with Echo answers its fixed text from the content's first line, on any account's chat provider", async () => {
+  const cookie = cookieFor(freshUser());
+  assert.deepEqual(await (await generate(WANTED, cookie)).json(), { text: "Echo: First message:" });
+  await edit({ provider: "echo" }, cookie);
+  const empty = await (await generate({ ...WANTED, text: "" }, cookie)).json();
+  assert.deepEqual(empty, { text: "Echo:" });
+});
+
+test("generate needs a user, refuses a guest and a bad body, and replies no-key for an Anthropic model without a key", async () => {
+  assert.equal((await generate(WANTED)).status, 401);
+  const guest = cookieFor(`${freshUser()}|guest`);
+  assert.deepEqual(await (await generate(WANTED, guest)).json(), { error: "signed-out" });
+  const cookie = cookieFor(freshUser());
+  assert.deepEqual(await (await generate({ ...WANTED, model: "claude-haiku-5-5" }, cookie)).json(), { error: "no-key" });
+  assert.equal((await generate({ ...WANTED, model: "" }, cookie)).status, 400);
+  assert.equal((await generate({ model: "echo", prompt: "x" }, cookie)).status, 400);
+  assert.equal((await generate({ ...WANTED, extra: 1 }, cookie)).status, 400);
+  assert.equal((await generate({ ...WANTED, text: 5 }, cookie)).status, 400);
+});

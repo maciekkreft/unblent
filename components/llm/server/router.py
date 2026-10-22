@@ -7,7 +7,9 @@ SQLite file, so isolation holds by construction.
 Routes: GET "" returns the account's picture (without signedIn, which the browser
 adds); PUT "" changes settings and the keys; POST "/complete" streams one answer as
 newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
-questions and returns its answers, on the account's own Jev key. A request body that fails validation is answered
+questions and returns its answers, on the account's own Jev key; POST "/generate"
+writes one short text in one go on the account's own Anthropic key, whichever
+provider the chat uses, and model "echo" answers with Echo. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
 
 A guest (3.4) spends only on the guest keys, within the limits, counted in
@@ -32,7 +34,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.user import require_user, session_of, user_dir
 
-from . import anthropic_adapter, crypto, jev_adapter, spending
+from . import anthropic_adapter, crypto, echo_adapter, jev_adapter, spending
 from .adapters import complete
 
 _log = logging.getLogger("uvicorn.error")
@@ -353,6 +355,50 @@ async def do_decide(request: Request, user_id: str = Depends(require_user)):
         return JSONResponse({"error": "bad-request"}, status_code=400)
     state, questions = parsed
     return await run_in_threadpool(_decide, user_id, state, questions, _guest(request))
+
+
+def _generate(user_id: str, model: str, prompt: str, text: str) -> dict:
+    # Echo needs no key and calls nothing, for any signed-in account (12).
+    if model == "echo":
+        reply = echo_adapter.generate(text)
+        _log_usage("echo", model, reply["usage"])
+        return {"text": reply["text"]}
+    # The account's own Anthropic key, independent of the chat's provider: a generator
+    # runs on the model it names.
+    with _connect(user_id) as connection:
+        key = _key(connection, "anthropic")
+    if key is None:
+        return {"error": "no-key"}
+    if model not in {m["id"] for m in _models(user_id, "anthropic", key)}:
+        # A model the key does not offer (renamed, retired, or a list that failed).
+        return {"error": "unavailable"}
+    reply = anthropic_adapter.generate(key, model, prompt, text)
+    if "error" in reply:
+        return {"error": reply["error"]}
+    _log_usage("anthropic", model, reply["usage"])
+    return {"text": reply["text"]}
+
+
+@router.post("/generate")
+async def do_generate(request: Request, user_id: str = Depends(require_user)):
+    try:
+        body = await request.json()
+    except ValueError:
+        body = None
+    fields = ("model", "prompt", "text")
+    if (
+        not isinstance(body, dict)
+        or set(body) != set(fields)
+        or not all(isinstance(body[f], str) for f in fields)
+        or not body["model"]
+        or not body["prompt"]
+    ):
+        return JSONResponse({"error": "bad-request"}, status_code=400)
+    # Generators belong to an account with a passkey; a guest spends only through the
+    # tools a try page offers (7.7), so it is refused as not signed in.
+    if _guest(request):
+        return {"error": "signed-out"}
+    return await run_in_threadpool(_generate, user_id, body["model"], body["prompt"], body["text"])
 
 
 @router.get("/spending")
