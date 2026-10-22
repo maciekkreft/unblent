@@ -269,6 +269,27 @@ test("a chat is named once, when its first answer finishes, before older days; R
   s.actor.stop();
 });
 
+test("a title the user types while the model names the chat is kept; only Run replaces it", async () => {
+  const f = fakeAsk();
+  const s = start({ ask: f.ask });
+  await settle();
+  s.actor.send(conversation([Q, A]));
+  await settle();
+  assert.equal(f.asked.length, 1);
+  s.actor.send({ type: "conversation.renamed", id: CHAT, title: "My herons" });
+  f.asked[0].answer({ text: "Heron nests" });
+  await settle();
+  assert.equal(s.results.at(-1).text, "My herons");
+  assert.equal(f.asked.length, 1, "a typed title counts as named");
+  s.actor.send({ type: "conversation.opened", id: CHAT });
+  s.actor.send({ type: "generation.requested", generator: "chat-title" });
+  await settle();
+  f.asked[1].answer({ text: "Heron nests" });
+  await settle();
+  assert.equal(s.results.at(-1).text, "Heron nests");
+  s.actor.stop();
+});
+
 test("nothing runs signed out, for a guest, or on a try page", async () => {
   for (const [over, tryPage] of [[{ userId: null }], [{ guest: true }], [{}, true]]) {
     const f = fakeAsk({ days: [day(10, "Ten")], ...over });

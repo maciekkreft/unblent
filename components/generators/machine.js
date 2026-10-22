@@ -149,16 +149,33 @@ function applyResult(context, event, enqueue) {
   commit(context, enqueue, next);
 }
 
+// The SHA-256 of no content: the source of a title the user typed for a chat the
+// generator has not named yet. chat-title names a chat only while it has no result
+// (strategies/chat-title.js done), so the typed title is never replaced.
+const TYPED = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+// A title the user typed for a chat (conversation.renamed) is kept as that chat's
+// chat-title result, so a device that pulls the results later shows what the user last
+// set, not an older generated title. The text is kept as typed, trimmed: an empty one
+// tells conversations to give the chat back its first line, on every device alike. The
+// source stays the one the result has, so the chat still counts as named.
+function applyRename(context, event, enqueue) {
+  const id = `chat-title:${event.id}`;
+  const current = context.results.get(id);
+  commit(context, enqueue, { id, generator: "chat-title", item: event.id, text: event.title.trim(), source: current?.source ?? TYPED });
+}
+
 // A query or message that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.reply);
   else if (message.type === "results?") replyResults(context, message.payload.generator, message.reply);
   else if (message.type === "generator.edited") applyEdit(context, message, enqueue);
   else if (message.type === "_result") applyResult(context, message, enqueue);
+  else if (message.type === "conversation.renamed") applyRename(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
-const QUEUED = Object.fromEntries(["list?", "results?", "generator.edited", "_result"].map((t) => [t, { actions: queue }]));
+const QUEUED = Object.fromEntries(["list?", "results?", "generator.edited", "_result", "conversation.renamed"].map((t) => [t, { actions: queue }]));
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
 const SYNC_IDLE_MS = 2000;
@@ -258,13 +275,17 @@ const resume = (r, enqueue) => {
   if (!isResultId(r.id)) enqueue.assign({ dirty: true, stopped: false });
 };
 
-// The model's reply to the job in flight: a text is kept as the item's result; an error
-// stops the engine until the page loads again, a generator changes or a new item is ready.
+// The model's reply to the job in flight: a text is kept as the item's result, unless
+// the item got one while the model worked (a title the user typed) and only Run may
+// replace it; an error stops the engine until the page loads again, a generator changes
+// or a new item is ready.
 function settle(context, output, enqueue) {
   const job = context.current;
   const forced = context.forced.filter((f) => !(f.generator === job.generator && f.item === job.item));
   enqueue.assign({ current: null, forced });
-  if (typeof output?.text === "string") {
+  const held = context.results.get(`${job.generator}:${job.item}`);
+  if (!job.force && strategyOf(job.generator).done(held, job.source)) enqueue.assign({ dirty: true });
+  else if (typeof output?.text === "string") {
     applyResult(context, { generator: job.generator, item: job.item, text: output.text.trim(), source: job.source }, enqueue);
     enqueue.assign({ dirty: true });
   } else enqueue.assign({ stopped: true, dirty: forced.length > 0 });
@@ -306,7 +327,7 @@ export const machine = setup({
         }
         const strategy = strategyOf(job.generator);
         if (!job.force && strategy.done(input.results.get(`${job.generator}:${job.item}`), hex)) continue;
-        return { generator: job.generator, item: job.item, source: hex, model: job.model, prompt: job.prompt, text: strategy.input(job.source) };
+        return { generator: job.generator, item: job.item, source: hex, force: job.force, model: job.model, prompt: job.prompt, text: strategy.input(job.source) };
       }
       return null;
     }),
@@ -385,7 +406,12 @@ export const machine = setup({
       "or the day last shown (day.shown), first in the queue. A chat whose first round looked " +
       "something up is not named yet, because conversation.changed carries a lookup's size, not " +
       "its content. `generators: results` answers one generator's results, and every result kept " +
-      "or pulled is announced as generation.changed. Replicated (5): it works signed out, " +
+      "or pulled is announced as generation.changed. A title the user types for a chat in the list " +
+      "(conversation.renamed) is kept as that chat's chat-title result, trimmed, so every device " +
+      "shows the title the user set last and an older generated one never comes back; an empty " +
+      "one is kept empty, which gives the chat back its first line everywhere. It keeps the " +
+      "result's source, so the chat stays named, and a text the model was still writing for that " +
+      "chat is dropped; only Run names it again. Replicated (5): it works signed out, " +
       "numbering versions itself, and syncs to the account when signed in, so generators and " +
       "results are the same on every device; the last write wins and nothing is deleted.",
     kind: "fact",
@@ -487,6 +513,7 @@ export const machine = setup({
         "results?": { actions: ({ context, event }) => replyResults(context, event.payload.generator, event.reply) },
         "generator.edited": { actions: enqueueActions(({ context, event, enqueue }) => applyEdit(context, event, enqueue)) },
         _result: { actions: enqueueActions(({ context, event, enqueue }) => applyResult(context, event, enqueue)) },
+        "conversation.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
         // Signing in enqueues the whole cache, so what was made signed out becomes the
         // account's (5); a different user resets the cursor.
         "session.changed": {

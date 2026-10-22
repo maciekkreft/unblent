@@ -291,6 +291,48 @@ test("a local change not yet sent wins over a pulled one", async () => {
   assert.equal((await list(actor))[0].name, "Local");
 });
 
+test("a title the user types is kept as the chat's result with the source it had; an empty one is kept empty", async () => {
+  const renamedSchema = new Validator(schema("../../conversation-list/events/conversation.renamed.json"), "2020-12");
+  const renamed = (title, id = CHAT) => {
+    assert.ok(renamedSchema.validate({ id, title }).valid);
+    return { type: "conversation.renamed", id, title };
+  };
+  const { actor, results } = start(fakeStore());
+  await ready(actor);
+  actor.send(result());
+  actor.send(renamed("  Herons  "));
+  assert.deepEqual(results.at(-1), { id: "chat-title:" + CHAT, generator: "chat-title", item: CHAT, text: "Herons", source: SOURCE, version: 2 });
+  actor.send(renamed(""));
+  assert.deepEqual([results.at(-1).text, results.at(-1).source, results.at(-1).version], ["", SOURCE, 3]);
+  const OTHER = "01ARZ3NDEKTSV4RRFFQ69G5CP2";
+  actor.send(renamed("Before any title", OTHER));
+  assert.equal(results.at(-1).text, "Before any title");
+  assert.match(results.at(-1).source, /^[0-9a-f]{64}$/, "a chat not named yet still counts as named");
+});
+
+test("signed in: a typed title is uploaded, and an older generated title pulled later does not replace it", async () => {
+  const store = fakeStore();
+  const generated = { id: "chat-title:" + CHAT, generator: "chat-title", item: CHAT, text: "Generated", source: SOURCE, version: 1 };
+  let pulled = [generated];
+  const api = fakeApi({ pull: (since) => ({ generators: [], results: pulled, cursor: since + 1 }) });
+  const { actor, clock, results } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  assert.equal(results.at(-1).text, "Generated");
+  api.server.set(generated.id, generated);
+  actor.send({ type: "conversation.renamed", id: CHAT, title: "Typed" });
+  await drain(clock);
+  assert.deepEqual([api.puts.at(-1).text, api.puts.at(-1).baseVersion, api.server.get(generated.id).version], ["Typed", 1, 2]);
+  const announced = results.length;
+  actor.send({ type: "_sync", pull: true });
+  await flush();
+  assert.equal(results.length, announced, "the older version is not adopted");
+  assert.equal((await resultsOf(actor, "chat-title"))[0].text, "Typed");
+  pulled = [api.server.get(generated.id)];
+  actor.send({ type: "_sync", pull: true });
+  await flush();
+  assert.equal((await resultsOf(actor, "chat-title"))[0].text, "Typed");
+});
+
 test("sign-in uploads what was made signed out, with its history", async () => {
   const store = fakeStore();
   const api = fakeApi();
