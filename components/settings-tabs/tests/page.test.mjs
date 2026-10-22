@@ -1,9 +1,9 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The gear's sheet on the product page (12): the admin sees two tabs, Settings and
-// Administration, and Administration shows People, Limits and Guest keys; everyone else
-// sees Settings as before, with no tab bar, and Administration never asks the server.
+// The gear's sheet on the product page (12): everyone sees Settings and Generators, and
+// the admin sees Administration last, which shows People, Limits and Guest keys;
+// Administration never asks the server for anyone else.
 // Who is the admin, who came and what they spent are answered by request routing, so
 // nothing here makes an admin in the throwaway registry or spends anything; what the
 // server answers is tested in session's and llm's own tests.
@@ -74,8 +74,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
-        await until(async () => (await tabs(page)).length === 2);
-        assert.deepEqual(await tabs(page), ["Settings", "Administration"]);
+        await until(async () => (await tabs(page)).length === 3);
+        assert.deepEqual(await tabs(page), ["Settings", "Generators", "Administration"]);
         assert.deepEqual(await slotted(page), ["settings-sheet"], "Settings is shown first");
 
         await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
@@ -158,7 +158,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test(`everyone else sees Settings alone, and Administration asks nothing, in ${engine.name}`, async () => {
+    test(`everyone else sees Settings and Generators, and Administration asks nothing, in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
         context.setDefaultTimeout(4000);
@@ -170,7 +170,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
         await page.locator("settings-sheet h3").first().waitFor();
-        assert.deepEqual(await tabs(page), [], "no tab bar");
+        await until(async () => (await tabs(page)).length === 2);
+        assert.deepEqual(await tabs(page), ["Settings", "Generators"], "no Administration");
         assert.deepEqual(await slotted(page), ["settings-sheet"]);
         assert.deepEqual(asked, [], "Administration never asks for anyone but the admin");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);

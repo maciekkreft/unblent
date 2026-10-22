@@ -9,10 +9,8 @@ const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 // The product page holds the journal, so `books` presents it there and the Books panel
-// shows its contents. Until `generators` is on that page, its fact is added to the page
-// this test loads; once it is, the page is served as it is.
+// shows its contents; `generators` is on that page too.
 const PAGE = `${BASE_URL}/`;
-const GENERATORS = '<script type="module" src="/static/components/generators/fact.js"></script>';
 
 const DAY_ID = "01K00000000000000000000DAY";
 const SUMMARY = "A long walk by the river and a choice point about calling Mum.";
@@ -58,11 +56,6 @@ for (const engine of ENGINES) {
       await signedIn(context, cookie);
       const page = await context.newPage();
       watch(page, problems);
-      await page.route(PAGE, async (route) => {
-        const res = await route.fetch();
-        const body = await res.text();
-        await route.fulfill({ response: res, body: body.includes(GENERATORS) ? body : body.replace("</head>", `${GENERATORS}</head>`) });
-      });
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("book-shelf")?.shadowRoot);
       const journal = page.locator("book-shelf").getByText("Journal", { exact: true }).first();
