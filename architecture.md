@@ -496,7 +496,12 @@ components/
     machine.js
     store.js          localStorage, behind the store interface
     fact.js
+  generators/
+    machine.js
+    strategies/       one file per strategy (13), each a plain object only machine.js imports
 ```
+
+A component whose engine does one job in more than one way keeps each way in its own file under `strategies/`. A strategy is a plain object exported by a module that imports nothing outside its own component: only other files of its `strategies/` folder and the bare specifiers the import map resolves. Only that component's `machine.js` imports it, and the machine chooses the strategy for each job. Strategies are browser code and are served like `machine.js`, but no other component imports them, and a component that does each job one way has no `strategies/` folder.
 
 The components tree sits inside a small repository-wide layout:
 
@@ -565,7 +570,7 @@ Deleting a component is deleting one directory and its databases. Nothing else n
 | A browser test says why it needs the browser | Reason check: every browser test is preceded by a comment naming one of the five reasons of section 9; the check fails one that names none |
 | Manifests cannot be stale | There is nothing to keep in sync: they are read from the machine, and undeclared emits fail at runtime |
 | Manifests are well-formed | Manifest check: every machine imports in Node, its id equals its directory name, `description` is a non-empty string, `kind` and `emits` are present and valid, `shape` and `owns` are present on fact components only, `attributes` on view components only, and `status` is absent because it is derived |
-| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `fact.js`, `store.js`, `events/`, `queries/`, `commands/`, `server/`, `tests/`; a view has no `fact.js`, store, server or `queries/`, a fact has no `view.js`; `view.js` defines the element named after its directory; a component with a browser entry has tests |
+| A component is one directory of known shape | Component check: `machine.js` present, no entries beyond `machine.js`, `view.js`, `fact.js`, `store.js`, `events/`, `queries/`, `commands/`, `server/`, `strategies/`, `tests/`; a file under `strategies/` imports nothing outside that folder but bare specifiers, and only the component's `machine.js` imports it; a view has no `fact.js`, store, server or `queries/`, a fact has no `view.js`; `view.js` defines the element named after its directory; a component with a browser entry has tests |
 | Pages compose only what exists | Page check: every custom element on a page is a built view whose `view.js` the page loads, every loaded `view.js` is used, and every loaded `fact.js` belongs to a fact component; the composer script is allowed, and a role's default tag needs only its own `view.js` loaded |
 | A `shows-on` names a gesture its container follows | Page check: every `shows-on` on a page names an event that the custom element directly around the tag (its container: a `list-then-item` or `dock-desk`) consumes according to its manifest, since the bus delivers a container only the events its machine handles and a tag waiting for any other would never be shown; the failure names the page, the tag, the event and the container's `machine.js` to edit |
 | Two of one view have distinct ids | Page check: a custom-element tag that appears more than once on a page carries an `id` on every occurrence, all distinct, and no `id` is used twice on a page (4.1) |
@@ -643,7 +648,7 @@ The architecture document describes the rules; the checks are what make them rea
 - **Tool**: one of the system's own queries, opted in by its owner, that the model may ask during a chat; it only reads, never acts (7.7).
 - **Evaluator**: a name and a list of yes / no or pick-one questions Jev can answer about a text, kept with one book and switched on or off; owned by `evaluators`. What it reads and when it runs is not decided yet.
 - **Generator**: an instruction the model runs by itself at a fixed moment, whose short text lands in a fixed place: a chat's title, or a past journal day's summary. It has a name, on or off, a model and a prompt, and belongs to the account; owned by `generators`, and changed in the Generators tab of the gear's sheet. An evaluator judges text; a generator writes it.
-- **Recipe**: what one kind of generator needs to run: which events make an item ready, how to build the text sent to the model, and the content whose SHA-256 says whether the item needs a new text. It says nothing about where the text is shown; the place that shows it follows the announcement.
+- **Strategy**: one interchangeable way of doing one job of a component's engine, kept as a plain object in its own file under the component's `strategies/` (11.1); the engine picks the strategy for the job and runs it the same way as any other. This is the Strategy pattern. In `generators` there is one strategy per kind of generator, and it says what that kind needs to run: which events make an item ready, how to build the text sent to the model, and the content whose SHA-256 says whether the item needs a new text. It says nothing about where the text is shown; the place that shows it follows the announcement.
 - **Journal**: the one book the user writes, one chapter per day, only today's page editable. Its days are owned by `journal`, and `books` presents them as a book.
 - **Choice point**: one worksheet from acceptance and commitment therapy, kept with one journal day: a situation, the thoughts and feelings it brought, what the user did or would do when hooked (away) and when unhooked (towards); owned by `choice-points`.
 - **Guest**: an account without a passkey, made for a visitor of a try page at its first use of the server; it spends only on the guest keys, within the limits (7.7).

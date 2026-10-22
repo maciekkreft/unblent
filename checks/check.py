@@ -278,7 +278,7 @@ def check_composer() -> None:
 
 # --- Component check (architecture.md 11.1) --------------------------------------
 
-_ALLOWED_ENTRIES = {"machine.js", "view.js", "fact.js", "store.js", "events", "queries", "commands", "server", "tests"}
+_ALLOWED_ENTRIES = {"machine.js", "view.js", "fact.js", "store.js", "events", "queries", "commands", "server", "strategies", "tests"}
 _KIND_FORBIDS = {"view": {"store.js", "server", "queries", "fact.js"}, "fact": {"view.js"}}
 
 
@@ -837,7 +837,8 @@ def check_editor(manifests: dict) -> None:
 
 
 def check_imports() -> None:
-    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
+    paths = glob.glob("components/*/*.js", root_dir=ROOT) + glob.glob("components/*/strategies/*.js", root_dir=ROOT)
+    for path in sorted(paths):
         file = ROOT / path
         component_dir = file.parent
         src = _strip_comments(file.read_text())
@@ -851,6 +852,11 @@ def check_imports() -> None:
                 if component_dir not in target.parents and target != component_dir:
                     fail(path, "import check (11.2)",
                          f'relative import "{spec}" leaves {component_dir.name}/')
+                # A strategy is imported only by its own component's machine.js (11.1).
+                if (target.parent.name == "strategies" and file.name != "machine.js"
+                        and file.parent.name != "strategies"):
+                    fail(path, "import check (11.2)",
+                         f'imports the strategy "{spec}"; only machine.js imports a strategy (11.1)')
             elif spec.startswith("/"):
                 fail(path, "import check (11.2)",
                      f'absolute import "{spec}" is not allowed; use a bare name or a local path')

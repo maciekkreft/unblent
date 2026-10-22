@@ -1,4 +1,9 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { chatTitle, firstRound } from "./strategies/chat-title.js";
+import { journalSummary, daySource } from "./strategies/journal-summary.js";
+
+// The engine tests reach the strategies through the machine, their one importer (11.1).
+export { chatTitle, firstRound, journalSummary, daySource };
 
 // The fact component that owns the generators and what they write (3.1), replicated (5)
 // the way `choice-points` is: local-first, cached in the browser, numbering versions
@@ -6,7 +11,7 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // write wins and nothing is deleted (5). The view where the user acted emits
 // generator.edited (4.3, fifth rule). Everything with a side effect (the store, the
 // network, the ask) arrives through input, so this stays a pure definition importable in
-// Node. It also runs the generators: the Recipes and Engine sections below.
+// Node. It also runs the generators: the Strategies and Engine sections below.
 
 const IDS = ["chat-title", "journal-summary"];
 const isGenerator = (v) => IDS.includes(v);
@@ -177,176 +182,20 @@ async function claim(store, ask) {
   if (kept !== userId) await store.metaPut("userId", userId).catch(() => {});
 }
 
-// --- Recipes --------------------------------------------------------------------------
+// --- Strategies -----------------------------------------------------------------------
 
-// One recipe per kind of generator, a plain object: the events it follows, what makes an
-// item ready, the content a text is made from (its `source` object, keys in the order the
-// backfill script writes them) and the text the model reads. Nothing about where the
-// result shows: the result is announced and the place that shows it follows that.
+// One strategy per kind of generator (13), a plain object in strategies/: the events it
+// follows, what makes an item ready, the content a text is made from (its `source`
+// object, keys in the order the backfill script writes them) and the text the model
+// reads. Nothing about where the result shows: the result is announced and the place
+// that shows it follows that.
 
-// Python's str.isspace, so a turn counts as having text exactly when the backfill
-// script's strip() says so.
-const PY_SPACE = /^[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
-const hasText = (t) => typeof t?.text === "string" && !PY_SPACE.test(t.text);
-// Cut by characters as Python counts them (code points), not UTF-16 units.
-const cut = (s, n) => (s.length <= n ? s : Array.from(s).slice(0, n).join(""));
-
-// A chat's first round: the first user turn with text, every turn up to the next user
-// turn with text, the last finished answer with text in it, and the lookups made before
-// that answer, each matched to its result anywhere in the round (a stored result can
-// sort after the next answer). Null when there is no answer yet, or when a lookup's
-// result arrived without its content: conversation.changed carries a result's size, not
-// its content (4.3), and without it the source cannot be known.
-export function firstRound(turns) {
-  const isQuestion = (t) => t.role === "user" && hasText(t);
-  const q = turns.findIndex(isQuestion);
-  if (q < 0) return null;
-  let end = turns.findIndex((t, i) => i > q && isQuestion(t));
-  if (end < 0) end = turns.length;
-  const round = turns.slice(q + 1, end);
-  let at = -1;
-  round.forEach((t, i) => {
-    if (t.role === "assistant" && t.status === "done" && hasText(t)) at = i;
-  });
-  if (at < 0) return null;
-  const results = new Map();
-  for (const t of round) if (t.role === "user") for (const r of t.results ?? []) results.set(r.callId, r);
-  const lookups = [];
-  for (const t of round.slice(0, at)) {
-    if (t.role !== "assistant") continue;
-    for (const call of t.calls ?? []) {
-      const r = results.get(call.id);
-      if (!r || r.isError) continue;
-      if (typeof r.content !== "string") return null;
-      lookups.push({ label: call.label ?? "", text: cut(r.content, 2000) });
-    }
-  }
-  return { question: turns[q].text, lookups, answer: cut(round[at].text, 8000) };
-}
-
-export const chatTitle = {
-  generator: "chat-title",
-  start: () => ({ chats: new Map(), opened: null }),
-  follows: ["conversation.changed", "conversation.opened"],
-  follow(seen, event) {
-    if (event.type === "conversation.opened") {
-      seen.opened = event.id ?? null;
-      return;
-    }
-    const turns = Array.isArray(event.turns) ? event.turns : [];
-    const last = turns.at(-1);
-    seen.chats.set(event.id, {
-      source: firstRound(turns),
-      at: event.updatedAt ?? 0,
-      // Ready: one question so far, and the answer to it finished with no lookup pending.
-      ready:
-        turns.filter((t) => t.role === "user" && hasText(t)).length === 1 &&
-        last?.role === "assistant" &&
-        last.status === "done" &&
-        !(last.calls?.length > 0),
-    });
-  },
-  items(seen) {
-    const items = [];
-    for (const [item, chat] of seen.chats) if (chat.ready && chat.source) items.push({ item, at: chat.at, source: chat.source });
-    return items;
-  },
-  target(seen) {
-    const chat = seen.chats.get(seen.opened);
-    return chat?.source ? { item: seen.opened, at: chat.at, source: chat.source } : null;
-  },
-  // A chat is named once (the plan's "no result yet for that chat"); Run names it again.
-  done: (result) => result != null,
-  input: ({ question, lookups, answer }) =>
-    `First message:\n${question}\n\n` +
-    (lookups.length ? `Looked up:\n${lookups.map((l) => `- ${l.label}: ${l.text}`).join("\n")}\n\n` : "") +
-    `First answer:\n${answer}`,
-};
-
-const choicePoint = (c) => ({ id: c.id, day: c.day, situation: str(c.situation), thoughts: str(c.thoughts), away: str(c.away), towards: str(c.towards) });
-
-// A day's source, or null when it has no text and no choice points. Choice points in the
-// order they were made: their ids are ULIDs, whose text sorts by the time in them.
-export function daySource(day, points) {
-  const cps = points
-    .filter((c) => c.day === day.day)
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .map((c) => ({ situation: c.situation, thoughts: c.thoughts, away: c.away, towards: c.towards }));
-  if (day.text === "" && cps.length === 0) return null;
-  return { day: day.day, text: day.text, choicePoints: cps };
-}
-
-export const journalSummary = {
-  generator: "journal-summary",
-  // `heard` and `touched` keep what the events said while the starting read was open, so
-  // the read's older answer does not undo it.
-  start: () => ({ days: [], open: null, points: new Map(), heard: false, touched: new Map(), shown: null }),
-  follows: ["journal.changed", "choice-point.changed", "choice-point.deleted", "day.shown"],
-  load: async (ask) => {
-    const [journal, points] = await Promise.all([
-      ask("journal", "read", {}).catch(() => null),
-      ask("choice-points", "list", {}).catch(() => null),
-    ]);
-    return { journal, points };
-  },
-  loaded(seen, { journal, points }) {
-    if (!seen.heard && Array.isArray(journal?.days)) {
-      seen.days = journal.days.map((d) => ({ id: d.id, day: d.day, text: str(d.text), at: d.editedAt ?? 0 }));
-      seen.open = journal.open ?? null;
-    }
-    const map = new Map((Array.isArray(points?.choicePoints) ? points.choicePoints : []).map((c) => [c.id, choicePoint(c)]));
-    for (const [id, c] of seen.touched) c ? map.set(id, c) : map.delete(id);
-    seen.points = map;
-  },
-  follow(seen, event) {
-    if (event.type === "day.shown") seen.shown = event.day;
-    else if (event.type === "journal.changed") {
-      seen.days = event.days.map((d) => ({ id: d.id, day: d.day, text: str(d.text), at: d.editedAt ?? 0 }));
-      seen.open = event.open ?? null;
-      seen.heard = true;
-    } else if (event.type === "choice-point.changed") {
-      const c = choicePoint(event.choicePoint);
-      seen.points.set(c.id, c);
-      seen.touched.set(c.id, c);
-    } else if (event.type === "choice-point.deleted") {
-      seen.points.delete(event.id);
-      seen.touched.set(event.id, null);
-    }
-  },
-  // The days that can no longer be written (the open one is still being written).
-  items(seen) {
-    const points = [...seen.points.values()];
-    const items = [];
-    for (const d of seen.days) {
-      if (d.id === seen.open) continue;
-      const source = daySource(d, points);
-      if (source) items.push({ item: d.day, at: d.at, source });
-    }
-    return items;
-  },
-  // Run writes the day shown on the stage, even while it can still be written.
-  target(seen) {
-    const d = seen.days.find((x) => x.day === seen.shown);
-    const source = d && daySource(d, [...seen.points.values()]);
-    return source ? { item: d.day, at: d.at, source } : null;
-  },
-  done: (result, source) => result?.source === source,
-  input: ({ day, text, choicePoints }) =>
-    `Journal entry for ${day}:\n${text}` +
-    (choicePoints.length
-      ? "\n\nChoice points:\n" +
-        choicePoints
-          .map((c) => `- Situation: ${c.situation}\n  Thoughts and feelings: ${c.thoughts}\n  Away: ${c.away}\n  Towards: ${c.towards}`)
-          .join("\n")
-      : ""),
-};
-
-const RECIPES = [chatTitle, journalSummary];
-const recipeOf = (generator) => RECIPES.find((r) => r.generator === generator);
+const STRATEGIES = [chatTitle, journalSummary];
+const strategyOf = (generator) => STRATEGIES.find((s) => s.generator === generator);
 
 // --- The engine -----------------------------------------------------------------------
 
-// The bytes a source is hashed from: keys in the order the recipe wrote them and no
+// The bytes a source is hashed from: keys in the order the strategy wrote them and no
 // spaces, the same bytes as Python's json.dumps(obj, separators=(",", ":"),
 // ensure_ascii=False), so the backfill script computes the same `source`.
 export const canonical = (source) => JSON.stringify(source);
@@ -358,32 +207,32 @@ async function sha256(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const candidateKeys = (recipe, seen) =>
-  new Set(recipe.items(seen).map((c) => `${c.item}\u0000${canonical(c.source)}`));
+const candidateKeys = (strategy, seen) =>
+  new Set(strategy.items(seen).map((c) => `${c.item}\u0000${canonical(c.source)}`));
 
-// A recipe hears one of its events. Only an item that is ready with content not seen
+// A strategy hears one of its events. Only an item that is ready with content not seen
 // before is news: it wakes the engine, and resumes it after an error.
-function follow(context, recipe, event, enqueue) {
-  const seen = context.seen[recipe.generator];
-  const before = candidateKeys(recipe, seen);
-  recipe.follow(seen, event);
-  const after = candidateKeys(recipe, seen);
+function follow(context, strategy, event, enqueue) {
+  const seen = context.seen[strategy.generator];
+  const before = candidateKeys(strategy, seen);
+  strategy.follow(seen, event);
+  const after = candidateKeys(strategy, seen);
   if ([...after].some((k) => !before.has(k))) enqueue.assign({ dirty: true, stopped: false });
 }
 
 const FOLLOWING = Object.fromEntries(
-  RECIPES.flatMap((recipe) =>
-    recipe.follows.map((type) => [type, { actions: enqueueActions(({ context, event, enqueue }) => follow(context, recipe, event, enqueue)) }]),
+  STRATEGIES.flatMap((strategy) =>
+    strategy.follows.map((type) => [type, { actions: enqueueActions(({ context, event, enqueue }) => follow(context, strategy, event, enqueue)) }]),
   ),
 );
 
 // Run (generation.requested): the item in front goes first and is made even when a text
 // from the same content exists.
 function request(context, event, enqueue) {
-  const recipe = recipeOf(event.generator);
-  const target = recipe?.target(context.seen[recipe.generator]);
+  const strategy = strategyOf(event.generator);
+  const target = strategy?.target(context.seen[strategy.generator]);
   if (!target) return;
-  const job = { generator: recipe.generator, ...target, force: true };
+  const job = { generator: strategy.generator, ...target, force: true };
   const others = context.forced.filter((f) => !(f.generator === job.generator && f.item === job.item));
   enqueue.assign({ forced: [job, ...others], dirty: true });
 }
@@ -393,10 +242,10 @@ function request(context, event, enqueue) {
 function jobs(context) {
   const background = context.stopped
     ? []
-    : RECIPES.flatMap((recipe) => {
-        const g = generatorOf(context, recipe.generator);
+    : STRATEGIES.flatMap((strategy) => {
+        const g = generatorOf(context, strategy.generator);
         if (!g.on || g.prompt === "") return [];
-        return recipe.items(context.seen[recipe.generator]).map((c) => ({ generator: recipe.generator, ...c, force: false }));
+        return strategy.items(context.seen[strategy.generator]).map((c) => ({ generator: strategy.generator, ...c, force: false }));
       }).sort((a, b) => b.at - a.at);
   return [...context.forced, ...background].map((job) => {
     const g = generatorOf(context, job.generator);
@@ -439,10 +288,10 @@ export const machine = setup({
       (context.forced.length > 0 || !context.stopped),
   },
   actors: {
-    // The starting picture of each recipe that reads one (journal: read, choice-points: list).
+    // The starting picture of each strategy that reads one (journal: read, choice-points: list).
     scan: fromPromise(async ({ input }) => {
       const out = {};
-      for (const recipe of RECIPES) if (recipe.load && input.ask) out[recipe.generator] = await recipe.load(input.ask);
+      for (const strategy of STRATEGIES) if (strategy.load && input.ask) out[strategy.generator] = await strategy.load(input.ask);
       return out;
     }),
     // The first job whose item has no text from its current content (Run's always has
@@ -455,9 +304,9 @@ export const machine = setup({
           hex = await input.hash(text);
           input.cache.set(text, hex);
         }
-        const recipe = recipeOf(job.generator);
-        if (!job.force && recipe.done(input.results.get(`${job.generator}:${job.item}`), hex)) continue;
-        return { generator: job.generator, item: job.item, source: hex, model: job.model, prompt: job.prompt, text: recipe.input(job.source) };
+        const strategy = strategyOf(job.generator);
+        if (!job.force && strategy.done(input.results.get(`${job.generator}:${job.item}`), hex)) continue;
+        return { generator: job.generator, item: job.item, source: hex, model: job.model, prompt: job.prompt, text: strategy.input(job.source) };
       }
       return null;
     }),
@@ -559,9 +408,9 @@ export const machine = setup({
     leaving: false,
     resync: false,
     pull: false,
-    // The engine: what each recipe has heard, Run's items, whether an error stopped it,
+    // The engine: what each strategy has heard, Run's items, whether an error stopped it,
     // whether something may have become work, the job in flight, and hashes already made.
-    seen: Object.fromEntries(RECIPES.map((r) => [r.generator, r.start()])),
+    seen: Object.fromEntries(STRATEGIES.map((r) => [r.generator, r.start()])),
     forced: [],
     stopped: false,
     dirty: false,
@@ -754,7 +603,7 @@ export const machine = setup({
                 onDone: {
                   target: "idle",
                   actions: enqueueActions(({ context, event, enqueue }) => {
-                    for (const recipe of RECIPES) if (event.output[recipe.generator]) recipe.loaded(context.seen[recipe.generator], event.output[recipe.generator]);
+                    for (const strategy of STRATEGIES) if (event.output[strategy.generator]) strategy.loaded(context.seen[strategy.generator], event.output[strategy.generator]);
                     enqueue.assign({ dirty: true });
                   }),
                 },
