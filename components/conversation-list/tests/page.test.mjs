@@ -123,6 +123,43 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("with Vim keys on, cc edits a chat's title in place: Enter saves, Escape cancels, empty gives back the first line", async () => {
+      const { context, page, problems } = await open(true);
+      try {
+        const field = () => inList(page, (root) => root.activeElement?.matches(".title-input") ?? false);
+        await focusList(page);
+        await page.keyboard.press("j");
+        await until(async () => (await focusedTitle(page)) === "chat 2");
+        await page.keyboard.press("c");
+        await page.keyboard.press("c");
+        await until(field);
+        await page.keyboard.type("Reading plans");
+        await page.keyboard.press("Enter");
+        await until(async () => (await focusedTitle(page)) === "Reading plans");
+        const stored = async () => (await (await context.request.get(`${BASE_URL}/api/conversations`)).json()).conversations.map((c) => c.title).sort().join();
+        await until(async () => (await stored()) === "Reading plans,chat 1");
+        // Escape leaves the title as it was, and the keyboard on the row.
+        await page.keyboard.press("c");
+        await page.keyboard.press("c");
+        await until(field);
+        await page.keyboard.type("Other");
+        await page.keyboard.press("Escape");
+        await until(async () => (await focusedTitle(page)) === "Reading plans");
+        // An empty title gives back the first line of the first message.
+        await page.keyboard.press("c");
+        await page.keyboard.press("c");
+        await until(field);
+        await page.keyboard.press("Backspace");
+        await page.keyboard.press("Enter");
+        await until(async () => (await rowTitles(page)).join() === "New chat,q,chat 1");
+        await until(async () => (await stored()) === "chat 1,q");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys off, j does nothing", async () => {
       const { context, page, problems } = await open(false);
       try {

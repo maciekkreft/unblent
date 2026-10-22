@@ -1066,6 +1066,69 @@ test("a delete the corner notice settles removes the chat", async () => {
   assert.equal(h.emitted.at(-1).type, "conversation.deleted");
 });
 
+const GENERATION = JSON.parse(readFileSync(resolve(HERE, "..", "..", "generators", "events", "generation.changed.json"), "utf8"));
+const RENAMED = JSON.parse(readFileSync(resolve(HERE, "..", "..", "conversation-list", "events", "conversation.renamed.json"), "utf8"));
+const generated = (item, text, generator = "chat-title") => {
+  const event = { type: "generation.changed", result: { id: generator + ":" + item, generator, item, text, source: "a".repeat(64), version: 1 } };
+  see(event, GENERATION);
+  return event;
+};
+const renamed = (id, title) => {
+  const event = { type: "conversation.renamed", id, title };
+  see(event, RENAMED);
+  return event;
+};
+const renames = (h) => h.calls.saved.filter((s) => s.body.rename);
+const LINKS = [{ kind: "book", id: "b1" }];
+const loaded = (id, over = {}) => ({ id, title: "hello", about: LINKS, start: "S", turns: [{ id: USER, role: "user", text: "\n hello there \nmore", at: 1 }], updatedAt: 500, ...over });
+
+test("a chat-title result names the open chat, is announced and saved with its links", async () => {
+  const h = start({ conversations: [heading(CHAT, 500, { about: LINKS })], chatsById: { [CHAT]: loaded(CHAT) } });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length > 0, "loaded");
+  h.actor.send(generated(CHAT, "Reading plans"));
+  await flush();
+  assert.equal(lastChange(h).title, "Reading plans");
+  assert.deepEqual(renames(h).map((s) => s.body), [{ rename: true, title: "Reading plans", about: LINKS }]);
+  const listed = (await query(h.actor, "list", {}, QUERIES.list.reply)).conversations;
+  assert.equal(listed[0].title, "Reading plans");
+  // The same title again, or another generator's result, changes nothing.
+  const before = changes(h).length;
+  h.actor.send(generated(CHAT, "Reading plans"));
+  h.actor.send(generated("2026-10-01", "A day", "journal-summary"));
+  await flush();
+  assert.equal(changes(h).length, before);
+  assert.equal(renames(h).length, 1);
+});
+
+test("a chat only listed is read, then named and announced; one already so named is not read", async () => {
+  const h = start({ conversations: [heading(CHAT, 500, { about: LINKS }), heading(CHAT2, 600, { title: "Done" })], chatsById: { [CHAT]: loaded(CHAT) } });
+  await ready(h);
+  h.actor.send(generated(CHAT2, "Done"));
+  h.actor.send(generated(CHAT, "Plans for October"));
+  await until(() => changes(h).length > 0, "announced");
+  assert.deepEqual(h.calls.reads, [CHAT]);
+  assert.equal(lastChange(h).title, "Plans for October");
+  assert.deepEqual(lastChange(h).about, LINKS);
+  await until(() => renames(h).length === 1, "saved");
+  assert.deepEqual(renames(h)[0].body.about, LINKS);
+});
+
+test("a rename by hand names the chat; an empty one gives back the first line of the first message", async () => {
+  const h = start({ conversations: [heading(CHAT, 500)], chatsById: { [CHAT]: loaded(CHAT, { title: "Old" }) } });
+  await ready(h);
+  h.actor.send(renamed(CHAT, "  Mine  "));
+  await until(() => changes(h).length > 0, "announced");
+  assert.equal(lastChange(h).title, "Mine");
+  await until(() => renames(h).length === 1, "saved");
+  h.actor.send(renamed(CHAT, "   "));
+  await flush();
+  assert.equal(lastChange(h).title, "hello there");
+  await until(() => renames(h).length === 2, "saved again");
+  assert.equal(renames(h)[1].body.title, "hello there");
+});
+
 test("every payload matches its schema", () => {
   assert.ok(recorded.length > 0, "the tests above recorded traffic");
   for (const { value, schema } of recorded) {

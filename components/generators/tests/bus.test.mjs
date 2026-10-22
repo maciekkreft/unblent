@@ -94,6 +94,7 @@ test("a closed day and a chat whose first answer finished are written through ll
   ];
   const chat = { id: CHAT, title: "Where do herons nest?", about: [], start: "", turns, updatedAt: Date.now() };
   const asked = [];
+  const saved = [];
   let open = CHAT;
   const { machine } = await import("../machine.js");
   const { unwire } = await wire(["journal", "choice-points", "conversations", "llm", "generators"], {
@@ -105,6 +106,7 @@ test("a closed day and a chat whose first answer finished are written through ll
       pins: () => Promise.resolve({}),
       list: () => Promise.resolve({ conversations: [chat], tools: { tools: {}, approval: "auto" } }),
       read: () => Promise.resolve(chat),
+      saveChat: (id, body) => (saved.push({ id, body }), Promise.resolve({ updatedAt: 1000 })),
       store: { read: () => open, write: (id) => (open = id) },
       ulid: () => "01HQ8ZK7M4N5P6Q7R8S9T0V1X9",
       now: () => 1000,
@@ -128,6 +130,9 @@ test("a closed day and a chat whose first answer finished are written through ll
     const [title] = (await view.results("chat-title")).results;
     assert.deepEqual([title.item, title.text], [CHAT, "Echo: First message:"]);
     assert.equal(asked.length, 2, "one text each");
+    // conversations names the chat with it, and keeps the name on the server.
+    await until(async () => (await view.read(CHAT)).conversation.title === "Echo: First message:");
+    assert.ok(saved.some((s) => s.body.rename && s.body.title === "Echo: First message:"));
   } finally {
     unmount(view.actor);
     unwire();

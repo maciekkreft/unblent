@@ -516,3 +516,27 @@ test("dd does nothing on the New chat row", async () => {
   actor.send({ type: "_cut", id: MINTED });
   assert.equal(actor.getSnapshot().context.cut, null);
 });
+
+test("_rename emits conversation.renamed with the trimmed text, and only when it changed", async () => {
+  const { actor } = keyed(placed);
+  const renamed = [];
+  const RENAMED = load("events/conversation.renamed.json");
+  actor.on("conversation.renamed", (e) => {
+    renamed.push({ id: e.id, title: e.title });
+    const { type, ...rest } = e;
+    assert.ok(new Validator(RENAMED, "2020-12").validate(rest).valid, "matches its schema");
+  });
+  await tick();
+  actor.send({ type: "_rename", id: A, title: "  Reading plans " });
+  assert.deepEqual(renamed, [{ id: A, title: "Reading plans" }]);
+  assert.equal(actor.getSnapshot().context.chats.find((c) => c.id === A).title, "Reading plans", "shown at once");
+  actor.send({ type: "_rename", id: A, title: "Reading plans" });
+  assert.equal(renamed.length, 1, "unchanged text says nothing");
+  actor.send({ type: "_rename", id: B, title: "  " });
+  assert.deepEqual(renamed[1], { id: B, title: "" }, "an empty title is announced");
+  assert.equal(actor.getSnapshot().context.chats.find((c) => c.id === B).title, "B", "and waits for conversations");
+  actor.send({ type: "_rename", id: MINTED, title: "x" });
+  actor.send({ type: "_cut", id: C });
+  actor.send({ type: "_rename", id: C, title: "x" });
+  assert.equal(renamed.length, 2, "not New chat, not a cut row");
+});

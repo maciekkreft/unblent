@@ -7,6 +7,7 @@ import selected from "./events/conversation.selected.json" with { type: "json" }
 import discarded from "./events/conversation.discarded.json" with { type: "json" };
 import moved from "./events/conversation.moved.json" with { type: "json" };
 import removalStarted from "./events/removal.started.json" with { type: "json" };
+import renamed from "./events/conversation.renamed.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
 // the token is the one clock, shared with the bar's animation.
@@ -41,6 +42,7 @@ class ActorController {
         "conversation.selected": selected,
         "conversation.discarded": discarded,
         "conversation.moved": moved,
+        "conversation.renamed": renamed,
         "removal.started": removalStarted,
       },
     });
@@ -335,6 +337,24 @@ class ConversationList extends LitElement {
         transform: scaleX(0);
       }
     }
+    /* A title being edited in place (cc): the field takes the title line. */
+    .title-input {
+      font: inherit;
+      font-weight: var(--weight-semibold);
+      color: var(--color-ink);
+      background: var(--color-canvas);
+      border: var(--border-width) solid var(--color-accent);
+      border-radius: var(--radius-sm);
+      padding: 0 var(--space-2xs);
+      width: 100%;
+      box-sizing: border-box;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .title-input:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
     .empty {
       margin: 0;
       padding: var(--space-md);
@@ -386,9 +406,10 @@ class ConversationList extends LitElement {
   // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
   // held (those belong to the browser and the desk), and never inside a field, where a
   // letter is typed text. gg is two presses, so a first g waits a moment for the second.
-  // dd is the same idiom.
+  // dd (cut) and cc (rename) are the same idiom.
   #gAt = 0;
   #dAt = 0;
+  #cAt = 0;
   #vim(event) {
     if (this.#actor.snapshot?.context.vimKeys !== true) return null;
     if (event.ctrlKey || event.metaKey || event.altKey) return null;
@@ -400,8 +421,11 @@ class ConversationList extends LitElement {
     const cut = event.key === "d" && Date.now() - this.#dAt < 1000;
     this.#dAt = event.key === "d" && !cut ? Date.now() : 0;
     if (cut) return "cut";
+    const cc = event.key === "c" && Date.now() - this.#cAt < 1000;
+    this.#cAt = event.key === "c" && !cc ? Date.now() : 0;
+    if (cc) return "rename";
     return (
-      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", p: "below", P: "above", u: "undo", o: "openBelow", O: "openAbove" }[
+      { j: "down", k: "up", G: "last", g: "prefix", d: "prefix", c: "prefix", p: "below", P: "above", u: "undo", o: "openBelow", O: "openAbove" }[
         event.key
       ] ?? null
     );
@@ -438,6 +462,9 @@ class ConversationList extends LitElement {
     const current = this.#focusRow(rows, context.open);
     if (vim === "cut") {
       this.#actor.send({ type: "_cut", id: current });
+    } else if (vim === "rename") {
+      const row = rows.find((r) => r.id === current);
+      if (row && !row.draft && context.cut !== current && !context.discarding.has(current)) this.#startEdit(current);
     } else if (vim === "below" || vim === "above") {
       if (!context.cut) return;
       const id = context.cut;
@@ -490,6 +517,52 @@ class ConversationList extends LitElement {
     if (discarding.has(id)) this.#actor.send({ type: "_undo", id });
     else if (cut === id) this.#actor.send({ type: "_uncut" });
     else this.#pick(id);
+  }
+
+  // Which row's title is being edited in place (cc). Ephemeral view state, nothing a
+  // reload should keep: null means no field is open. The draft lives in the input.
+  #editingId = null;
+
+  // Turn a row's title into a field holding the current text, selected, so a rename
+  // starts from what is there and one keystroke can replace it.
+  #startEdit(id) {
+    this.#editingId = id;
+    this.requestUpdate();
+    this.updateComplete.then(() => {
+      const input = this.renderRoot.querySelector(".title-input");
+      if (!input) return;
+      // Set imperatively (not a value binding), so a re-render from another chat's
+      // conversation.changed never clobbers the text being typed.
+      input.value = this.#actor.snapshot?.context.chats.find((c) => c.id === id)?.title ?? "";
+      input.focus();
+      input.select();
+    });
+  }
+
+  // Enter or blur saves, Escape cancels; the machine ignores unchanged text and reads an
+  // empty string as "give back the first line". The field is cleared first, so the blur a
+  // programmatic close fires finds nothing to save again.
+  #commitEdit(id, value) {
+    if (this.#editingId !== id) return;
+    this.#editingId = null;
+    this.#actor.send({ type: "_rename", id, title: value });
+    this.requestUpdate();
+  }
+
+  #editKeydown(event, id) {
+    // Every keystroke stays in the field: Enter must not open the chat, the arrow keys
+    // must not move the row, and Escape must not reach a container as Back.
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      this.#commitEdit(id, event.target.value);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      this.#editingId = null;
+      this.requestUpdate();
+    } else return;
+    // The keyboard goes back to the row it renamed, so the list keys work on at once.
+    this.#follow(id);
   }
 
   #clickRow(id) {
@@ -659,7 +732,17 @@ class ConversationList extends LitElement {
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
             ${r.apart ? html`<span class="tag">Open from elsewhere</span>` : nothing}
-            <span class="name ${untitled ? "untitled" : ""}">${untitled ? "New chat" : r.title}</span>
+            ${this.#editingId === r.id
+              ? html`<input
+                  class="title-input"
+                  placeholder="Empty gives back the first message"
+                  aria-label="Chat title"
+                  @click=${(e) => e.stopPropagation()}
+                  @pointerdown=${(e) => e.stopPropagation()}
+                  @keydown=${(e) => this.#editKeydown(e, r.id)}
+                  @blur=${(e) => this.#commitEdit(r.id, e.target.value)}
+                />`
+              : html`<span class="name ${untitled ? "untitled" : ""}">${untitled ? "New chat" : r.title}</span>`}
             <span class="subtitle">${r.subtitle || " "}</span>
           </span>
           <span class="trailing">${trailing}</span>

@@ -20,6 +20,15 @@ import { setup, fromPromise, fromCallback, enqueueActions } from "xstate";
 // A chat's title is the first non-empty line of the first message, cut short (12).
 const firstLine = (text) => (text.split("\n").find((l) => l.trim() !== "") || "").trim().slice(0, 60);
 
+// A title given to a chat (12): what the chat-title generator wrote, or what the user
+// typed in the list. A blank one gives back the first line of the first message.
+const titled = (chat, text) => {
+  const title = (text ?? "").trim();
+  if (title) return title;
+  const first = chat.turns.find((t) => t.role === "user" && (t.text ?? "").trim() !== "");
+  return first ? firstLine(first.text) : chat.title;
+};
+
 // A chat's subtitle is the first line of its latest answer that has text, as plain
 // text, so a list shows two lines like a note's (notes/machine.js subtitleOf) without
 // holding the turns. The answer is markdown: a heading line ("## Summary") says little
@@ -643,6 +652,27 @@ const fireSave = (context, self, chatId) => {
     .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks, sendPosition: sentPosition }));
 };
 
+// A title is last write wins (5), so one rename is in flight per chat; a title changed
+// meanwhile is sent when it comes back (_renamed). The links ride along, because a save
+// that names a chat without them would leave it with none.
+const fireRename = (context, self, id) => {
+  if (context.titleInFlight.has(id) || !context.renaming.has(id)) return;
+  const title = context.renaming.get(id);
+  const about = context.chats.get(id)?.about ?? context.headings.find((h) => h.id === id)?.about ?? [];
+  context.titleInFlight.add(id);
+  context
+    .saveChat(id, { rename: true, title, about })
+    .then((r) => self.send({ type: "_renamed", id, title, missing: Boolean(r && r.missing) }))
+    .catch(() => self.send({ type: "_renameFailed", id }));
+};
+
+const onRenamed = (context, event, enqueue, self) => {
+  context.titleInFlight.delete(event.id);
+  // A chat the server does not have yet gets its title with its first turns (fireSave).
+  if (event.missing || context.renaming.get(event.id) === event.title) context.renaming.delete(event.id);
+  else enqueue(() => fireRename(context, self, event.id));
+};
+
 // The comments go away when a new answer starts: sent with the message, or dropped by
 // Continue. The server is told too, so a reload does not bring them back.
 const clearMarks = (context, chat) => {
@@ -900,6 +930,35 @@ const onCompleteReply = (context, event, enqueue, self) => {
   enqueue.emit(changedPayload(context, chat));
 };
 
+// Give a chat in memory its new title, list it under it and send it; false when the
+// title is the one it has.
+const retitle = (context, chat, text, enqueue, self) => {
+  const title = titled(chat, text);
+  if (title === chat.title) return false;
+  chat.title = title;
+  context.headings = context.headings.map((h) => (h.id === chat.id ? { ...h, title } : h));
+  context.renaming.set(chat.id, title);
+  enqueue(() => fireRename(context, self, chat.id));
+  return true;
+};
+
+// A chat's title from the chat-title generator (generation.changed) or from the user
+// (conversation.renamed). A chat only listed is read first, so a blank title can find the
+// first message and the change is announced with the whole chat (4.3, third rule). A
+// title it already has changes nothing, so a result pulled from another device that
+// already named the chat costs no read.
+const onTitle = (context, id, text, enqueue, self) => {
+  const chat = context.chats.get(id);
+  if (chat) {
+    if (retitle(context, chat, text, enqueue, self)) enqueue.emit(changedPayload(context, chat));
+    return;
+  }
+  const listed = context.headings.find((h) => h.id === id);
+  if (!listed || ((text ?? "").trim() !== "" && listed.title === text.trim())) return;
+  context.retitle.set(id, text);
+  enqueue(() => fireLoad(context, self, id));
+};
+
 const onSelect = (context, event, enqueue, self) => {
   setOpen(context, enqueue, event.id);
   if (event.id != null && !context.chats.has(event.id) && context.headings.some((h) => h.id === event.id))
@@ -1022,7 +1081,14 @@ const onLoaded = (context, event, enqueue, self) => {
   const held = context.headings.find((h) => h.id === event.id)?.position;
   const position = context.unsentPosition.has(event.id) || !isPosition(c.position) ? held : c.position;
   if (isPosition(position)) chat.position = position;
+  // A title not yet on the server is the latest write; one waiting for this read is given now.
+  if (context.renaming.has(event.id)) chat.title = context.renaming.get(event.id);
   context.chats.set(event.id, chat);
+  if (context.retitle.has(event.id)) {
+    const text = context.retitle.get(event.id);
+    context.retitle.delete(event.id);
+    retitle(context, chat, text, enqueue, self);
+  }
   upsertHeading(context, chat);
   const waiting = context.reading.get(event.id);
   if (waiting) {
@@ -1062,6 +1128,7 @@ const onToolEntries = (context, event, enqueue) => {
 
 const onLoadFailed = (context, event) => {
   context.loading.delete(event.id);
+  context.retitle.delete(event.id);
   const held = context.reading.get(event.id);
   if (held) {
     for (const reply of held) reply({ error: "unavailable" });
@@ -1103,7 +1170,8 @@ const onListed = (context, event) => {
   const local = new Map(context.headings.map((h) => [h.id, h]));
   const placed = (h) => {
     const mine = local.get(h.id);
-    return mine && context.unsentPosition.has(h.id) && isPosition(mine.position) ? { ...h, position: mine.position } : h;
+    const kept = mine && context.unsentPosition.has(h.id) && isPosition(mine.position) ? { ...h, position: mine.position } : h;
+    return context.renaming.has(h.id) ? { ...kept, title: context.renaming.get(h.id) } : kept;
   };
   context.headings = [...result.conversations.map(fromServer).map(placed), ...keptLocal];
   if (result.tools) {
@@ -1123,10 +1191,12 @@ const onFocus = (context, enqueue, self) => {
   if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && !hasUnsentMarks(context, context.openId) && context.headings.some((h) => h.id === context.openId))
     enqueue(() => fireLoad(context, self, context.openId));
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
+  for (const id of context.renaming.keys()) enqueue(() => fireRename(context, self, id));
 };
 
 const onOnline = (context, enqueue, self) => {
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
+  for (const id of context.renaming.keys()) enqueue(() => fireRename(context, self, id));
 };
 
 // The boot picture: who is signed in decides whether the server is read at all (3.4);
@@ -1138,7 +1208,7 @@ const onOnline = (context, enqueue, self) => {
 // views ask for (4.3), so it announces nothing.
 const applyBoot = (context, out, enqueue, self) => {
   const before = context.openId;
-  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), reading: new Map(), loading: new Set(), running: null };
+  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
   } else if (out.failed) {
@@ -1218,7 +1288,11 @@ export const machine = setup({
       "a new message never moves a chat, and a move from the list puts it between its new " +
       "neighbours. A place is last write wins and changes nothing else. A chat from before " +
       "places keeps the order it had, newest first, until it changes or is moved. A delete " +
-      "handed to the corner notice happens when that notice's undo window ends.",
+      "handed to the corner notice happens when that notice's undo window ends. A chat is " +
+      "titled at first with the first line of its first message; the chat-title generator's " +
+      "text replaces it, and so does a title the user types in the list, where an empty one " +
+      "gives the first line back. A rename keeps the chat's links and its place and does not " +
+      "count as news, so it never makes a chat the latest about its subject.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",
@@ -1252,6 +1326,9 @@ export const machine = setup({
     marksInFlight: new Set(), // chat ids with a save carrying comments on its way
     unsentPosition: new Set(), // chat ids whose place the server does not have yet (5)
     positionInFlight: new Set(), // chat ids with a save carrying a place on its way
+    renaming: new Map(), // chat id -> a title the server does not have yet (5)
+    titleInFlight: new Set(), // chat ids with a rename on its way
+    retitle: new Map(), // chat id -> a title waiting for the chat to be read
     reading: new Map(), // id -> [reply]; read replies held while a chat loads
     loading: new Set(),
     openId: null,
@@ -1300,6 +1377,8 @@ export const machine = setup({
         "removal.settled": { guard: ({ event }) => event.kind === "conversation", actions: queue },
         "tools.edited": { actions: queue },
         "marks.edited": { actions: queue },
+        "generation.changed": { guard: ({ event }) => event.result.generator === "chat-title", actions: queue },
+        "conversation.renamed": { actions: queue },
       },
     },
     ready: {
@@ -1329,6 +1408,12 @@ export const machine = setup({
         "tools.edited": { actions: enqueueActions(({ context, event, enqueue }) => onToolsEdited(context, event, enqueue)) },
         "marks.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onMarksEdited(context, event, enqueue, self)) },
         "subject.changed": { actions: enqueueActions(({ context, event, enqueue, self }) => onSubjectChanged(context, event, enqueue, self)) },
+        // A chat's title (12): written by the chat-title generator, or by the user in the list.
+        "generation.changed": {
+          guard: ({ event }) => event.result.generator === "chat-title",
+          actions: enqueueActions(({ context, event, enqueue, self }) => onTitle(context, event.result.item, event.result.text, enqueue, self)),
+        },
+        "conversation.renamed": { actions: enqueueActions(({ context, event, enqueue, self }) => onTitle(context, event.id, event.title, enqueue, self)) },
         // The fact's own news about who is signed in (4.3): a different user re-boots
         // the chats; signing out clears them.
         "session.changed": [
@@ -1345,6 +1430,9 @@ export const machine = setup({
             if (event.sendPosition) context.positionInFlight.delete(event.chatId);
           },
         },
+        _renamed: { actions: enqueueActions(({ context, event, enqueue, self }) => onRenamed(context, event, enqueue, self)) },
+        // The title stays waiting, and the next focus or connection sends it again.
+        _renameFailed: { actions: ({ context, event }) => context.titleInFlight.delete(event.id) },
         _loaded: { actions: enqueueActions(({ context, event, enqueue, self }) => onLoaded(context, event, enqueue, self)) },
         _loadFailed: { actions: ({ context, event }) => onLoadFailed(context, event) },
         _listed: { actions: ({ context, event }) => onListed(context, event) },

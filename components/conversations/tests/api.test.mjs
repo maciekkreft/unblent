@@ -168,3 +168,18 @@ test("a place is last write wins: saved alone or with a turn, never moves the ch
   assert.equal((await put(CHAT, { position: "a0" }, cookie)).status, 422);
   assert.deepEqual(await (await put(U("Z9"), { position: "V" }, cookie)).json(), { missing: true });
 });
+
+test("a rename writes the title and keeps the links, start, turns and time", async () => {
+  const cookie = cookieFor(freshUser());
+  const first = await (await put(CHAT, chat(), cookie)).json();
+  const renamed = await (await put(CHAT, { rename: true, title: "Named", about: [{ kind: "book", id: "b1" }] }, cookie)).json();
+  assert.equal(renamed.updatedAt, first.updatedAt);
+  const got = await (await get(`/${CHAT}`, cookie)).json();
+  assert.equal(got.title, "Named");
+  assert.deepEqual(got.about, [{ kind: "book", id: "b1" }]);
+  assert.equal(got.start, "START");
+  assert.equal(got.turns.length, 1);
+  await put(CHAT, { rename: true, title: "Again" }, cookie);
+  assert.deepEqual((await (await get(`/${CHAT}`, cookie)).json()).about, [{ kind: "book", id: "b1" }], "a rename without links keeps them");
+  assert.deepEqual(await (await put(U("Z8"), { rename: true, title: "x", about: [] }, cookie)).json(), { missing: true });
+});

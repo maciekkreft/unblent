@@ -168,7 +168,10 @@ export const machine = setup({
       "or counting down (a row opened, another panel, a click elsewhere), the delete moves to " +
       "the dark notice in the corner with its Undo. o starts a new chat below the cursor row " +
       "and O above it; it takes that place once its first message is sent. New chat stays " +
-      "put: dd does nothing there. With a subject a move places the chat between its " +
+      "put: dd does nothing there. cc on a chat row edits its title in place: Enter or " +
+      "leaving the field saves, Escape cancels, and an empty title gives back the first line " +
+      "of the chat's first message; New chat, a cut row and a row counting down are not " +
+      "renamed. With a subject a move places the chat between its " +
       "neighbours as the filtered list shows them. While a subject is on the stage only the chats " +
       "about it are listed; with no subject every chat is listed. The open chat, when it is not " +
       "about the subject, such as a pinned chat, is listed apart at the top so the open row is " +
@@ -179,7 +182,7 @@ export const machine = setup({
       "reload; \"Chats need a connection.\" is only for a signed-in account whose chats cannot " +
       "be reached.",
     kind: "view",
-    emits: ["conversation.selected", "conversation.discarded", "conversation.moved", "removal.started"],
+    emits: ["conversation.selected", "conversation.discarded", "conversation.moved", "conversation.renamed", "removal.started"],
     // The subject attribute (12): off is every chat shown, no subject ask; on, only the
     // chats about the subject on the stage.
     attributes: ["subject"],
@@ -407,6 +410,23 @@ export const machine = setup({
         handOff(context, enqueue);
         enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
         enqueue.emit({ type: "conversation.selected", id: context.draft });
+      }),
+    },
+    // The user edited a chat's title in place (cc, 12): announce the trimmed text as
+    // conversation.renamed, which conversations keeps and announces back. Unchanged text
+    // emits nothing, so a blur that changed nothing is silent; an empty string is a real
+    // change (it gives back the first line of the first message), so it is announced. A
+    // typed title shows at once; an empty one waits for conversations, which knows the
+    // first message.
+    _rename: {
+      guard: ({ context, event }) => {
+        const chat = context.chats.find((c) => c.id === event.id);
+        return Boolean(chat) && live(context, event.id) && context.cut !== event.id && event.title.trim() !== chat.title;
+      },
+      actions: enqueueActions(({ event, enqueue }) => {
+        const title = event.title.trim();
+        if (title) enqueue.assign({ chats: ({ context }) => context.chats.map((c) => (c.id === event.id ? { ...c, title } : c)) });
+        enqueue.emit({ type: "conversation.renamed", id: event.id, title });
       }),
     },
     // Undo, or a click anywhere on a counting-down row: cancel the window, emit nothing.
