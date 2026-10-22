@@ -117,6 +117,8 @@ Authentication is one more fact component: `session`. Its server module runs the
 
 Some accounts are **guests**: accounts without a passkey. A guest is made the first time a visitor on a try page (section 8) does something that needs the server, such as the first Run of an evaluator; opening a try page makes nothing on the server. The fact that first needs the server asks `session: guest`, and `session` makes the account and sets the cookie. For each guest it keeps when the guest was first and last seen, the country and city Cloudflare's visitor location headers report, and the browser, the system, and phone or desk, read from the user agent. Guests do not count toward `MAX_USERS`. The admin may delete a guest (12): `session` keeps the account's row marked deleted, so its number is never given again and a browser still holding its cookie is signed out, removes the guest's directory `data/<user>/` through `server/user.py`, which leaves a mark so that every server module refuses that cookie and nothing is saved for the account again, and `llm` removes what the guest spent from its shared file, so it no longer counts toward any limit; copies already in the online backup are not removed. The account registered first with a passkey is the **admin**. The session cookie says which account the browser holds and whether it is a guest or the admin, and while the admin views as someone (12) it also names the admin, so Back to you needs no passkey. `server/user.py` reads this from the cookie, so a server module can tell a guest or the admin without asking `session`.
 
+**The local edition.** The Mac app runs the same server on the user's own computer, for one person. When the server is started with `UNBLENT_LOCAL_USER` set to an account id in hex, every request without a valid cookie belongs to that one account, and that account is the admin. There is no registration, no passkey and no guest. The Mac launcher creates the id and `SESSION_SECRET` on its first run and keeps them in the data folder (5). Without `UNBLENT_LOCAL_USER` the server is the web edition, as described above.
+
 A request whose browser goes away before the whole request has arrived is dropped without a reply and without an error in the log. Nothing arrived, so there is nothing to save, and no one is waiting for an answer. This is how a save ends when its tab is closed while the save is still being sent. Every other error still prints.
 
 ### 3.5 Pages
@@ -195,6 +197,8 @@ For replicated fact components:
 On the server, each replicated fact component has **one SQLite file per user**: `data/<user>/<component>.db`. The session resolves the user, the component's router resolves the file, and neither the schema nor the browser ever mentions users. The backend is written as if for a single user. Litestream streams every file continuously to object storage; the architecture never sees it, and restoring is one command.
 
 `session` is the exception: it keeps one shared file `data/session.db`, the identity registry, because it defines users and so cannot be per-user. While no user is signed in a replicated fact's outbox does not drain; signing in starts draining, so what was written anonymously becomes the account's, and what was not acknowledged before sign-out uploads at the next sign-in.
+
+In the local edition (3.4) the data folder is `~/Library/Application Support/Unblent`, given to the server through `UNBLENT_DATA`. Its files are laid out as on the web, and Litestream does not run, so they stay on the user's computer only.
 
 `llm` keeps, beside each user's own file, one shared file `data/llm.db` for what guests spend: the guest keys, encrypted like an account's own keys; the limits; every guest's running total for each provider; and which guests are blocked. It is shared because the limit for all guests adds up many accounts. `evaluators` keeps one shared file `data/evaluators.db` with a copy of the admin's evaluators ticked as starters, rewritten whenever the admin saves one, so a try page can show them to a visitor who has no account.
 
@@ -404,6 +408,8 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others: it groups its links by kind and shows none in the product profile (§12). A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`, `try`; `pages: list` returns pages in that order, then by path.
 
+The Mac page, `pages/workshop/apps/macapp.html`, is the app page the Mac app opens (3.4). It leaves out Chats, Evaluators, Choice Points, Generators, the language model (`llm`), Administration, sign-in and the workshop switch.
+
 The contracts page and the components page show the same data in two arrangements. Neither is hand-written, so they cannot diverge.
 
 ---
@@ -452,8 +458,10 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Icons | Phosphor Icons | MIT | Regular-weight path data, one icon at a time, copied verbatim from `@phosphor-icons/core` 2.1.1 `assets/regular/<name>.svg` (7.6) | The font, the web and react packages, other weights, the whole set |
 | WebAuthn | py_webauthn | BSD-3 | The passkey ceremonies (registration and authentication options, and verifying the browser's response) in `session`'s server module | Cookies or sessions, which are `server/user.py`'s HMAC over the user id |
 | Tests | Node's `node --test` and Playwright (WebKit, then Chromium) | MIT / Apache-2 | Browser tests per component under `tests/`, WebKit at task end and in the full run, WebKit then Chromium in the push run (11); Node tests for the bus under `bus/tests/`; not vendored, Playwright is located through `PLAYWRIGHT_MODULE` in the gitignored `.env`. Actors can also be imported in Node through `checks/register.mjs`, which resolves the import map the way the browser does. A WebAuthn ceremony is tested in Chromium only, through its virtual authenticator; WebKit covers the rendering. A test that forges a session cookie refuses to start unless `UNBLENT_DATA` names a throwaway data directory, which the check passes to the tests beside `UNBLENT_URL`, so a suite pointed by hand at the running server on :8080 stops before it writes into `data/`. A test reaches the check's own helpers through `UNBLENT_KIT`, which the check sets to `checks/kit.mjs`; the kit knows no component: it holds only helpers that are the same for every test (launching an engine, waiting, watching a page for failures, a forged session cookie, the undo window, and mounting named machines on the real bus in Node), never a fixture, a selector, or the name of any component, so deleting a component is still deleting one directory. A test may mount, through the kit and by name, its own machine and the machines of its one-hop bus partners, with their real schemas and faked inputs, which is how what two components do together is tested without a browser | A test framework |
+| Mac app | Tauri | MIT / Apache-2 | The window of the Mac app, in `mac/` only: it starts the packaged server through its shell plugin's sidecar, opens the Mac page (8), and offers updates through its updater plugin, installing one only after the user agrees | Any Tauri API from a page or a component; the pages know nothing of Tauri |
+| Server package | PyInstaller | GPL-2 with an exception for bundled programs | Packaging the server and its Python packages as one program for the Mac app, in `mac/` only | Packaging the web edition |
 
-Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve.
+Libraries are vendored as their official builds at pinned versions, copied verbatim with their licence and source map, and recorded in `vendor/vendor.json` with their source URLs, licences, and a sha256 per file. The vendor check (section 11.2) fails on any file that is unlisted, missing, altered, or whose source-map reference does not resolve. Tauri and PyInstaller are not vendored: they are used only in `mac/`, when the Mac app is built, and nothing of theirs is served.
 
 Two pieces are wrapped behind our own small interfaces, because their surface is small and swapping is plausible: the **store** (Dexie now, could be SQLite in the browser) and the **bus** (`EventTarget` now, could be a worker). XState and Lit are not wrapped: they are the actor and view semantics, and a wrapper would be a thinner XState.
 
@@ -512,13 +520,15 @@ server/          FastAPI entry (named "server", not "app", so it never clashes w
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
 tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
-pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design/<name>.html, and pages/try/<name>.html, the try pages
+pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design/<name>.html, and pages/workshop/apps/<name>.html, such as macapp.html, the Mac page, and pages/try/<name>.html, the try pages
 checks/          check.py, the one check command; show.py, prints the components, contracts and pages the server reports (7.1); tests/ its own unit tests, never served
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
 editor/          the editor kit (10); tests/ never served
 store/           the store interface; tests/ never served
 deploy/          systemd unit, litestream.yml (section 5) and the rclone units that copy the files (section 5) and anything else the host needs; never served
+mac/             the Mac app (3.4): the Tauri shell, the script that packages the server, the Homebrew cask template, and the ePub opened on first run; never served
+.github/         the workflow that builds and publishes a Mac release from a version tag; never served
 data/            per-user SQLite files (section 5), the shared files `session.db`, `llm.db` and `evaluators.db`, and `books/`, the imported files, gitignored
 .env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
 ```
