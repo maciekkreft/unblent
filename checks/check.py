@@ -1399,9 +1399,13 @@ def backup_files() -> dict:
 
 
 def check_backup() -> None:
-    # Only the production host runs the backup; elsewhere there is nothing to check.
-    state = subprocess.run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", BACKUP_UNIT],
-                           capture_output=True, text=True)
+    # Only the production host runs the backup; elsewhere there is nothing to check,
+    # and a machine without systemd (a Mac) has no systemctl at all.
+    try:
+        state = subprocess.run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", BACKUP_UNIT],
+                               capture_output=True, text=True)
+    except FileNotFoundError:
+        return
     fields = dict(line.partition("=")[::2] for line in state.stdout.splitlines())
     if state.returncode != 0 or fields.get("LoadState") != "loaded":
         return
