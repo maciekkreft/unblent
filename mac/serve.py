@@ -13,8 +13,11 @@ import errno
 import json
 import os
 import secrets
+import signal
 import socket
 import sys
+import threading
+import time
 from pathlib import Path
 
 # Fixed for good: the browser's storage for the Mac page is tied to it.
@@ -78,12 +81,29 @@ def listen(port: int) -> socket.socket:
     return sock
 
 
+def follow_parent() -> None:
+    """The Mac app passes its process id, so a server whose app ended without stopping
+    it (a crash, a forced quit) stops too, instead of holding the port the next start
+    needs."""
+    parent = os.environ.get("UNBLENT_PARENT_PID")
+    if not parent:
+        return
+
+    def watch() -> None:
+        while os.getppid() == int(parent):
+            time.sleep(1)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main() -> None:
     root = bundle_root()
     data = data_folder()
     data.mkdir(parents=True, exist_ok=True, mode=0o700)
     port = int(os.environ.get("UNBLENT_PORT") or DEFAULT_PORT)
     sock = listen(port)
+    follow_parent()
 
     held = identity(data)
     # The server reads these at import (server/user.py), so they are set before it loads.

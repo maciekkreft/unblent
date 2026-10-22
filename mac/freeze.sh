@@ -31,7 +31,9 @@ cp "$repo/mac/books/meditations.epub" "$stage/mac/books/"
 
 # Because the routers are loaded from files, PyInstaller cannot see what they import:
 # every module they and the server entry import is named here, read from their source.
-mapfile -t hidden < <("$venv/bin/python" - "$stage" <<'PY'
+# A read loop rather than mapfile, which the bash 3.2 that macOS ships does not have.
+hidden=()
+while IFS= read -r line; do hidden+=("$line"); done < <("$venv/bin/python" - "$stage" <<'PY'
 import ast, importlib.util, sys
 from pathlib import Path
 names = set()

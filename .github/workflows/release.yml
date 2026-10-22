@@ -1,0 +1,109 @@
+# Builds and publishes the Mac app when the owner pushes a version tag (architecture.md
+# 11.1). A push to main never reaches users. mac/RELEASING.md says how to use it.
+name: Mac release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from the tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # The same Python as the server's requirements are pinned for.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mac/src-tauri
+
+      - name: Install the Tauri command line
+        run: cargo tauri --version 2>/dev/null || cargo install tauri-cli --version "^2" --locked
+
+      - name: Package the server
+        run: PYTHON=python3 bash mac/freeze.sh
+
+      - name: Build the app
+        working-directory: mac/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cargo tauri build --target aarch64-apple-darwin --config "{\"version\":\"$VERSION\"}"
+
+      - name: Gather the release files
+        run: |
+          bundle=mac/src-tauri/target/aarch64-apple-darwin/release/bundle
+          mkdir -p release
+          cp "$bundle"/dmg/*.dmg release/Unblent.dmg
+          cp "$bundle"/macos/Unblent.app.tar.gz release/Unblent.app.tar.gz
+          cp "$bundle"/macos/Unblent.app.tar.gz.sig release/Unblent.app.tar.gz.sig
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          tag = os.environ["GITHUB_REF_NAME"]
+          url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}/Unblent.app.tar.gz"
+          manifest = {
+              "version": os.environ["VERSION"],
+              "notes": f"Unblent {os.environ['VERSION']}",
+              "pub_date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": {
+                  "darwin-aarch64": {
+                      "signature": open("release/Unblent.app.tar.gz.sig").read().strip(),
+                      "url": url,
+                  }
+              },
+          }
+          with open("release/latest.json", "w") as file:
+              json.dump(manifest, file, indent=2)
+          PY
+          shasum -a 256 release/Unblent.dmg | cut -d' ' -f1 > release/dmg.sha256
+          ls -l release
+
+      # Marked latest, never pre-release, so the app's update check
+      # (releases/latest/download/latest.json) finds it, an rc tag included.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "Unblent $VERSION" --latest \
+            --notes "Download Unblent.dmg, open it and drag Unblent to Applications. Or: brew install --cask maciekkreft/tap/unblent" \
+            release/Unblent.dmg release/Unblent.app.tar.gz release/Unblent.app.tar.gz.sig release/latest.json
+
+      - name: Update the Homebrew cask
+        if: env.TAP_TOKEN != ''
+        run: |
+          sha=$(cat release/dmg.sha256)
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/maciekkreft/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          sed -e "s/^  version \".*\"/  version \"$VERSION\"/" \
+              -e "s/^  sha256 \".*\"/  sha256 \"$sha\"/" \
+              mac/cask/unblent.rb > tap/Casks/unblent.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/unblent.rb
+          git commit -m "unblent $VERSION"
+          git push
+
+      - name: Skip the Homebrew cask
+        if: env.TAP_TOKEN == ''
+        run: echo "TAP_TOKEN is not set, so the cask in maciekkreft/homebrew-tap was not updated."

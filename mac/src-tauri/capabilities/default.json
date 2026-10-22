@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Nothing: the window shows the local server's page, which never calls the shell (architecture.md 10).",
+  "windows": ["main"],
+  "permissions": []
+}
