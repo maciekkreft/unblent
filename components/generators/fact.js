@@ -44,8 +44,11 @@ const api = {
   },
 };
 
+// A try page (8) runs no generator: the engine reads this.
+const tryPage = location.pathname.startsWith("/try/");
+
 const actor = mount(machine, {
-  input: { store, api, ask: (target, name, payload) => ask(machine, target, name, payload) },
+  input: { store, api, tryPage, ask: (target, name, payload) => ask(machine, target, name, payload) },
   events: { "generator.changed": generatorChanged, "generation.changed": generationChanged },
   queries: { list, results },
 });

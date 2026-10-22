@@ -6,7 +6,7 @@ import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 // write wins and nothing is deleted (5). The view where the user acted emits
 // generator.edited (4.3, fifth rule). Everything with a side effect (the store, the
 // network, the ask) arrives through input, so this stays a pure definition importable in
-// Node.
+// Node. It also runs the generators: the Recipes and Engine sections below.
 
 const IDS = ["chat-title", "journal-summary"];
 const isGenerator = (v) => IDS.includes(v);
@@ -24,9 +24,11 @@ const DEFAULTS = {
     on: true,
     model: "claude-haiku-5-5",
     prompt:
-      "Name this chat in 3 to 6 words from its first message and the first answer. The message " +
-      "may be a question, a request or a note, so name the subject, not the kind of message. Use " +
-      "the language of the message. No quotes and no full stop.",
+      "Name this chat in 3 to 6 words from its first message, what was looked up for it and the " +
+      "first answer. The message may be a question, a request or a note, so name the subject, not " +
+      "the kind of message. When the message points at something (\"my open note\", \"this " +
+      "chapter\"), name what that note, passage or book is about, and never use the words " +
+      "\"note\" or \"open note\". Use the language of the message. No quotes and no full stop.",
     version: 1,
   },
   "journal-summary": {
@@ -35,9 +37,9 @@ const DEFAULTS = {
     on: true,
     model: "claude-haiku-5-5",
     prompt:
-      "Summarise this journal entry in one short paragraph of at most two sentences: what the day " +
-      "was about, including what I was working on in its choice points. Keep my own words. No " +
-      "advice and no judgement.",
+      "Summarise this journal entry in one sentence of at most 25 words: what the day was about, " +
+      "including what I was working on in its choice points. Keep my own words. No advice and no " +
+      "judgement.",
     version: 1,
   },
 };
@@ -118,6 +120,7 @@ function commit(context, enqueue, next) {
     enqueue(() => context.store.outboxPut(row).catch(() => {}));
   }
   enqueue.emit(announce(r));
+  resume(r, enqueue);
   if (context.userId != null) enqueue.raise({ type: "_drain" });
 }
 
@@ -174,10 +177,249 @@ async function claim(store, ask) {
   if (kept !== userId) await store.metaPut("userId", userId).catch(() => {});
 }
 
-// The part that asks the model is not built yet: the events it will follow are consumed
-// and change nothing. XState lists only a transition that does
-// something, so each key needs an action for the manifest reader to see it.
-const later = { actions: () => {} };
+// --- Recipes --------------------------------------------------------------------------
+
+// One recipe per kind of generator, a plain object: the events it follows, what makes an
+// item ready, the content a text is made from (its `source` object, keys in the order the
+// backfill script writes them) and the text the model reads. Nothing about where the
+// result shows: the result is announced and the place that shows it follows that.
+
+// Python's str.isspace, so a turn counts as having text exactly when the backfill
+// script's strip() says so.
+const PY_SPACE = /^[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u;
+const hasText = (t) => typeof t?.text === "string" && !PY_SPACE.test(t.text);
+// Cut by characters as Python counts them (code points), not UTF-16 units.
+const cut = (s, n) => (s.length <= n ? s : Array.from(s).slice(0, n).join(""));
+
+// A chat's first round: the first user turn with text, every turn up to the next user
+// turn with text, the last finished answer with text in it, and the lookups made before
+// that answer, each matched to its result anywhere in the round (a stored result can
+// sort after the next answer). Null when there is no answer yet, or when a lookup's
+// result arrived without its content: conversation.changed carries a result's size, not
+// its content (4.3), and without it the source cannot be known.
+export function firstRound(turns) {
+  const isQuestion = (t) => t.role === "user" && hasText(t);
+  const q = turns.findIndex(isQuestion);
+  if (q < 0) return null;
+  let end = turns.findIndex((t, i) => i > q && isQuestion(t));
+  if (end < 0) end = turns.length;
+  const round = turns.slice(q + 1, end);
+  let at = -1;
+  round.forEach((t, i) => {
+    if (t.role === "assistant" && t.status === "done" && hasText(t)) at = i;
+  });
+  if (at < 0) return null;
+  const results = new Map();
+  for (const t of round) if (t.role === "user") for (const r of t.results ?? []) results.set(r.callId, r);
+  const lookups = [];
+  for (const t of round.slice(0, at)) {
+    if (t.role !== "assistant") continue;
+    for (const call of t.calls ?? []) {
+      const r = results.get(call.id);
+      if (!r || r.isError) continue;
+      if (typeof r.content !== "string") return null;
+      lookups.push({ label: call.label ?? "", text: cut(r.content, 2000) });
+    }
+  }
+  return { question: turns[q].text, lookups, answer: cut(round[at].text, 8000) };
+}
+
+export const chatTitle = {
+  generator: "chat-title",
+  start: () => ({ chats: new Map(), opened: null }),
+  follows: ["conversation.changed", "conversation.opened"],
+  follow(seen, event) {
+    if (event.type === "conversation.opened") {
+      seen.opened = event.id ?? null;
+      return;
+    }
+    const turns = Array.isArray(event.turns) ? event.turns : [];
+    const last = turns.at(-1);
+    seen.chats.set(event.id, {
+      source: firstRound(turns),
+      at: event.updatedAt ?? 0,
+      // Ready: one question so far, and the answer to it finished with no lookup pending.
+      ready:
+        turns.filter((t) => t.role === "user" && hasText(t)).length === 1 &&
+        last?.role === "assistant" &&
+        last.status === "done" &&
+        !(last.calls?.length > 0),
+    });
+  },
+  items(seen) {
+    const items = [];
+    for (const [item, chat] of seen.chats) if (chat.ready && chat.source) items.push({ item, at: chat.at, source: chat.source });
+    return items;
+  },
+  target(seen) {
+    const chat = seen.chats.get(seen.opened);
+    return chat?.source ? { item: seen.opened, at: chat.at, source: chat.source } : null;
+  },
+  // A chat is named once (the plan's "no result yet for that chat"); Run names it again.
+  done: (result) => result != null,
+  input: ({ question, lookups, answer }) =>
+    `First message:\n${question}\n\n` +
+    (lookups.length ? `Looked up:\n${lookups.map((l) => `- ${l.label}: ${l.text}`).join("\n")}\n\n` : "") +
+    `First answer:\n${answer}`,
+};
+
+const choicePoint = (c) => ({ id: c.id, day: c.day, situation: str(c.situation), thoughts: str(c.thoughts), away: str(c.away), towards: str(c.towards) });
+
+// A day's source, or null when it has no text and no choice points. Choice points in the
+// order they were made: their ids are ULIDs, whose text sorts by the time in them.
+export function daySource(day, points) {
+  const cps = points
+    .filter((c) => c.day === day.day)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((c) => ({ situation: c.situation, thoughts: c.thoughts, away: c.away, towards: c.towards }));
+  if (day.text === "" && cps.length === 0) return null;
+  return { day: day.day, text: day.text, choicePoints: cps };
+}
+
+export const journalSummary = {
+  generator: "journal-summary",
+  // `heard` and `touched` keep what the events said while the starting read was open, so
+  // the read's older answer does not undo it.
+  start: () => ({ days: [], open: null, points: new Map(), heard: false, touched: new Map(), shown: null }),
+  follows: ["journal.changed", "choice-point.changed", "choice-point.deleted", "day.shown"],
+  load: async (ask) => {
+    const [journal, points] = await Promise.all([
+      ask("journal", "read", {}).catch(() => null),
+      ask("choice-points", "list", {}).catch(() => null),
+    ]);
+    return { journal, points };
+  },
+  loaded(seen, { journal, points }) {
+    if (!seen.heard && Array.isArray(journal?.days)) {
+      seen.days = journal.days.map((d) => ({ id: d.id, day: d.day, text: str(d.text), at: d.editedAt ?? 0 }));
+      seen.open = journal.open ?? null;
+    }
+    const map = new Map((Array.isArray(points?.choicePoints) ? points.choicePoints : []).map((c) => [c.id, choicePoint(c)]));
+    for (const [id, c] of seen.touched) c ? map.set(id, c) : map.delete(id);
+    seen.points = map;
+  },
+  follow(seen, event) {
+    if (event.type === "day.shown") seen.shown = event.day;
+    else if (event.type === "journal.changed") {
+      seen.days = event.days.map((d) => ({ id: d.id, day: d.day, text: str(d.text), at: d.editedAt ?? 0 }));
+      seen.open = event.open ?? null;
+      seen.heard = true;
+    } else if (event.type === "choice-point.changed") {
+      const c = choicePoint(event.choicePoint);
+      seen.points.set(c.id, c);
+      seen.touched.set(c.id, c);
+    } else if (event.type === "choice-point.deleted") {
+      seen.points.delete(event.id);
+      seen.touched.set(event.id, null);
+    }
+  },
+  // The days that can no longer be written (the open one is still being written).
+  items(seen) {
+    const points = [...seen.points.values()];
+    const items = [];
+    for (const d of seen.days) {
+      if (d.id === seen.open) continue;
+      const source = daySource(d, points);
+      if (source) items.push({ item: d.day, at: d.at, source });
+    }
+    return items;
+  },
+  // Run writes the day shown on the stage, even while it can still be written.
+  target(seen) {
+    const d = seen.days.find((x) => x.day === seen.shown);
+    const source = d && daySource(d, [...seen.points.values()]);
+    return source ? { item: d.day, at: d.at, source } : null;
+  },
+  done: (result, source) => result?.source === source,
+  input: ({ day, text, choicePoints }) =>
+    `Journal entry for ${day}:\n${text}` +
+    (choicePoints.length
+      ? "\n\nChoice points:\n" +
+        choicePoints
+          .map((c) => `- Situation: ${c.situation}\n  Thoughts and feelings: ${c.thoughts}\n  Away: ${c.away}\n  Towards: ${c.towards}`)
+          .join("\n")
+      : ""),
+};
+
+const RECIPES = [chatTitle, journalSummary];
+const recipeOf = (generator) => RECIPES.find((r) => r.generator === generator);
+
+// --- The engine -----------------------------------------------------------------------
+
+// The bytes a source is hashed from: keys in the order the recipe wrote them and no
+// spaces, the same bytes as Python's json.dumps(obj, separators=(",", ":"),
+// ensure_ascii=False), so the backfill script computes the same `source`.
+export const canonical = (source) => JSON.stringify(source);
+
+// SHA-256 hex of the UTF-8 of a text, through Web Crypto, which the browser and Node both
+// have; a test may pass its own as input.sha256.
+async function sha256(text) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const candidateKeys = (recipe, seen) =>
+  new Set(recipe.items(seen).map((c) => `${c.item}\u0000${canonical(c.source)}`));
+
+// A recipe hears one of its events. Only an item that is ready with content not seen
+// before is news: it wakes the engine, and resumes it after an error.
+function follow(context, recipe, event, enqueue) {
+  const seen = context.seen[recipe.generator];
+  const before = candidateKeys(recipe, seen);
+  recipe.follow(seen, event);
+  const after = candidateKeys(recipe, seen);
+  if ([...after].some((k) => !before.has(k))) enqueue.assign({ dirty: true, stopped: false });
+}
+
+const FOLLOWING = Object.fromEntries(
+  RECIPES.flatMap((recipe) =>
+    recipe.follows.map((type) => [type, { actions: enqueueActions(({ context, event, enqueue }) => follow(context, recipe, event, enqueue)) }]),
+  ),
+);
+
+// Run (generation.requested): the item in front goes first and is made even when a text
+// from the same content exists.
+function request(context, event, enqueue) {
+  const recipe = recipeOf(event.generator);
+  const target = recipe?.target(context.seen[recipe.generator]);
+  if (!target) return;
+  const job = { generator: recipe.generator, ...target, force: true };
+  const others = context.forced.filter((f) => !(f.generator === job.generator && f.item === job.item));
+  enqueue.assign({ forced: [job, ...others], dirty: true });
+}
+
+// What may be made, in order: Run's items first, then every ready item of a generator
+// that is on, newest first. After an error only Run's items are left.
+function jobs(context) {
+  const background = context.stopped
+    ? []
+    : RECIPES.flatMap((recipe) => {
+        const g = generatorOf(context, recipe.generator);
+        if (!g.on || g.prompt === "") return [];
+        return recipe.items(context.seen[recipe.generator]).map((c) => ({ generator: recipe.generator, ...c, force: false }));
+      }).sort((a, b) => b.at - a.at);
+  return [...context.forced, ...background].map((job) => {
+    const g = generatorOf(context, job.generator);
+    return { ...job, model: g.model, prompt: g.prompt };
+  });
+}
+
+// A generator changed here or on another device: what it skipped or stopped on may run now.
+const resume = (r, enqueue) => {
+  if (!isResultId(r.id)) enqueue.assign({ dirty: true, stopped: false });
+};
+
+// The model's reply to the job in flight: a text is kept as the item's result; an error
+// stops the engine until the page loads again, a generator changes or a new item is ready.
+function settle(context, output, enqueue) {
+  const job = context.current;
+  const forced = context.forced.filter((f) => !(f.generator === job.generator && f.item === job.item));
+  enqueue.assign({ current: null, forced });
+  if (typeof output?.text === "string") {
+    applyResult(context, { generator: job.generator, item: job.item, text: output.text.trim(), source: job.source }, enqueue);
+    enqueue.assign({ dirty: true });
+  } else enqueue.assign({ stopped: true, dirty: forced.length > 0 });
+}
 
 export const machine = setup({
   guards: {
@@ -186,8 +428,42 @@ export const machine = setup({
     // The browser is changing account (12): empty the local copy once nothing is left
     // to upload.
     leftover: ({ context }) => context.leaving && context.outbox.size === 0,
+    // The engine works only for an account signed in with a passkey, never on a try
+    // page, and not while the browser changes account (12).
+    work: ({ context }) =>
+      Boolean(context.userId) &&
+      !context.guest &&
+      !context.tryPage &&
+      !context.leaving &&
+      context.dirty &&
+      (context.forced.length > 0 || !context.stopped),
   },
   actors: {
+    // The starting picture of each recipe that reads one (journal: read, choice-points: list).
+    scan: fromPromise(async ({ input }) => {
+      const out = {};
+      for (const recipe of RECIPES) if (recipe.load && input.ask) out[recipe.generator] = await recipe.load(input.ask);
+      return out;
+    }),
+    // The first job whose item has no text from its current content (Run's always has
+    // none), with its source hashed; null when nothing is left.
+    pick: fromPromise(async ({ input }) => {
+      for (const job of input.jobs) {
+        const text = canonical(job.source);
+        let hex = input.cache.get(text);
+        if (!hex) {
+          hex = await input.hash(text);
+          input.cache.set(text, hex);
+        }
+        const recipe = recipeOf(job.generator);
+        if (!job.force && recipe.done(input.results.get(`${job.generator}:${job.item}`), hex)) continue;
+        return { generator: job.generator, item: job.item, source: hex, model: job.model, prompt: job.prompt, text: recipe.input(job.source) };
+      }
+      return null;
+    }),
+    generate: fromPromise(({ input }) =>
+      input.ask ? input.ask("llm", "generate", input.payload) : Promise.resolve({ error: "unavailable" }),
+    ),
     load: fromPromise(async ({ input }) => {
       const { store, ask } = input;
       await claim(store, ask);
@@ -235,22 +511,34 @@ export const machine = setup({
   id: "generators",
   meta: {
     description:
-      "Owns the generators and what they write. A generator is an instruction the model runs " +
-      "by itself at a fixed moment, whose short text lands in a fixed place; an evaluator judges " +
-      "text, a generator writes it. There are two, with fixed ids: chat-title, for naming a chat " +
-      "from its first message and answer, and journal-summary, for one short paragraph about a " +
-      "past journal day. Each has a name, on or off, a model and a prompt; `generators: list` " +
-      "answers both, with the approved defaults (Haiku 5.5, on) for one the account never " +
-      "changed. A change made in the Generators tab (generator.edited) carries only the fields " +
-      "changed; it is kept and announced as generator.changed. Each result is kept per generator " +
-      "and item (a chat's id, a day's date) with the SHA-256 of the content it was made from, so " +
-      "an item needs a new text only when its content changes, never because the prompt did; " +
-      "`generators: results` answers one generator's results, and every result kept or pulled " +
-      "is announced as generation.changed. Nothing on the page writes a result yet: the part " +
-      "that asks the model is not built, so results arrive only from the account's server. " +
-      "Replicated (5): it works signed out, numbering versions itself, and syncs to the account " +
-      "when signed in, so generators and results are the same on every device; the last write " +
-      "wins and nothing is deleted.",
+      "Owns the generators and what they write, and runs them. A generator is an instruction " +
+      "the model runs by itself at a fixed moment, whose short text lands in a fixed place; an " +
+      "evaluator judges text, a generator writes it. There are two, with fixed ids: chat-title " +
+      "names a chat from its first message, what was looked up for it and the first answer; " +
+      "journal-summary writes one sentence about a past journal day and its choice points. Each " +
+      "has a name, on or off, a model and a prompt; `generators: list` answers both, with the " +
+      "approved defaults (Haiku 5.5, on) for one the account never changed. A change made in the " +
+      "Generators tab (generator.edited) carries only the fields changed; it is kept and announced " +
+      "as generator.changed. While an account signed in with a passkey has a page open (never a " +
+      "guest, never on a try page), it finds the items that are ready and have no text from their " +
+      "current content: a chat whose first answer has just finished and that has no title from " +
+      "here yet, heard through conversation.changed; and every day `journal: read` lists that can " +
+      "no longer be written and has text or choice points (`choice-points: list`). It asks " +
+      "`llm: generate` for one text at a time, newest item first, skipping a generator that is " +
+      "off. Each result is kept per generator and item (a chat's id, a day's date) with the " +
+      "SHA-256 of the content it was made from, so an item needs a new text only when its content " +
+      "changes, never because the prompt did; the content is hashed as compact JSON with keys in " +
+      "a fixed order, the same bytes Python writes, so a script can compute the same value. It " +
+      "looks again when the page loads, when a day closes or its choice points change, and when " +
+      "a chat's first answer finishes. An error from the model stops it until the page loads " +
+      "again, a generator changes or a new item is ready. Run (generation.requested) makes the " +
+      "text again now, with the current prompt, for the chat last opened (conversation.opened) " +
+      "or the day last shown (day.shown), first in the queue. A chat whose first round looked " +
+      "something up is not named yet, because conversation.changed carries a lookup's size, not " +
+      "its content. `generators: results` answers one generator's results, and every result kept " +
+      "or pulled is announced as generation.changed. Replicated (5): it works signed out, " +
+      "numbering versions itself, and syncs to the account when signed in, so generators and " +
+      "results are the same on every device; the last write wins and nothing is deleted.",
     kind: "fact",
     shape: "replicated",
     owns: "the generators and the texts they wrote",
@@ -271,18 +559,24 @@ export const machine = setup({
     leaving: false,
     resync: false,
     pull: false,
+    // The engine: what each recipe has heard, Run's items, whether an error stopped it,
+    // whether something may have become work, the job in flight, and hashes already made.
+    seen: Object.fromEntries(RECIPES.map((r) => [r.generator, r.start()])),
+    forced: [],
+    stopped: false,
+    dirty: false,
+    current: null,
+    hashes: new Map(),
+    sha256: input.sha256 ?? sha256,
+    tryPage: input.tryPage === true,
+    guest: false,
   }),
   // While loading, only whether the browser is leaving is kept (12); the rest of the
   // news is read from session once the store is loaded.
   on: {
     "session.changed": { actions: assign({ leaving: ({ event }) => event.leaving === true }) },
-    "generation.requested": later,
-    "conversation.changed": later,
-    "conversation.opened": later,
-    "journal.changed": later,
-    "choice-point.changed": later,
-    "choice-point.deleted": later,
-    "day.shown": later,
+    "generation.requested": { actions: enqueueActions(({ context, event, enqueue }) => request(context, event, enqueue)) },
+    ...FOLLOWING,
   },
   initial: "loading",
   states: {
@@ -323,22 +617,22 @@ export const machine = setup({
         src: "session",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: {
-          target: "ready.idle",
+          target: "ready",
           actions: enqueueActions(({ context, event, enqueue }) => {
             context.userId = event.output?.userId ?? null;
-            enqueue.assign({ userId: context.userId });
+            enqueue.assign({ userId: context.userId, guest: event.output?.guest === true });
             ready(context, enqueue);
           }),
         },
         onError: {
-          target: "ready.idle",
+          target: "ready",
           actions: enqueueActions(({ context, enqueue }) => ready(context, enqueue)),
         },
       },
       on: QUEUED,
     },
     ready: {
-      initial: "idle",
+      type: "parallel",
       on: {
         "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
         "results?": { actions: ({ context, event }) => replyResults(context, event.payload.generator, event.reply) },
@@ -356,9 +650,10 @@ export const machine = setup({
               return;
             }
             if (context.leaving) enqueue.assign({ leaving: false });
+            enqueue.assign({ guest: event.guest === true });
             const userId = event.userId;
             if (userId === context.userId) return;
-            enqueue.assign({ userId });
+            enqueue.assign({ userId, dirty: true, stopped: false });
             enqueue(() => context.store.metaPut("userId", userId).catch(() => {}));
             if (!userId) return;
             enqueue.assign({ cursor: 0 });
@@ -374,73 +669,122 @@ export const machine = setup({
         },
       },
       states: {
-        // Leaving (12): what is left is uploaded at once, then the local copy is emptied.
-        emptying: {
-          entry: assign({ generators: () => new Map(), results: () => new Map() }),
-          invoke: {
-            src: "empty",
-            input: ({ context }) => ({ store: context.store }),
-            onDone: { target: "left" },
-            onError: { target: "left" },
-          },
-        },
-        // Emptied; a change made meanwhile is uploaded and emptied again. When the
-        // change of account is called off, syncing goes on as before.
-        left: {
-          always: { guard: ({ context }) => !context.leaving, target: "idle" },
-          on: {
-            _drain: { guard: "syncable", target: "syncing" },
-            _sync: { guard: "syncable", target: "syncing" },
-            _leave: { guard: "syncable", target: "syncing" },
-          },
-        },
-        idle: {
-          always: { guard: "leftover", target: "emptying" },
-          on: {
-            _leave: { guard: "syncable", target: "syncing" },
-            _drain: { guard: "syncable", target: "debouncing" },
-            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
-          },
-        },
-        // A _drain reenters, which restarts the window; a focus, sign-in or hidden tab
-        // (_sync) does not wait.
-        debouncing: {
-          on: {
-            _drain: { target: "debouncing", reenter: true },
-            _leave: { guard: "syncable", target: "syncing" },
-            _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
-          },
-          after: {
-            [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
-          },
-        },
-        syncing: {
-          entry: assign({ resync: false, pull: false }),
-          invoke: {
-            src: "sync",
-            // pull comes from the triggering event: the entry assign above would wipe it.
-            input: ({ context, event }) => ({
-              api: context.api,
-              store: context.store,
-              rows: [...context.outbox.values()],
-              cursor: context.cursor,
-              pull: Boolean(event.pull) && !context.leaving,
-            }),
-            onDone: {
-              target: "idle",
-              actions: enqueueActions(({ context, event, enqueue }) => {
-                applySync(context, event.output, enqueue);
-                const { authFailed, networkError } = event.output;
-                if (authFailed || networkError) return;
-                if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
-                else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
-              }),
+        sync: {
+          initial: "idle",
+          states: {
+            // Leaving (12): what is left is uploaded at once, then the local copy is emptied.
+            emptying: {
+              entry: assign({ generators: () => new Map(), results: () => new Map() }),
+              invoke: {
+                src: "empty",
+                input: ({ context }) => ({ store: context.store }),
+                onDone: { target: "left" },
+                onError: { target: "left" },
+              },
             },
-            onError: { target: "idle" },
+            // Emptied; a change made meanwhile is uploaded and emptied again. When the
+            // change of account is called off, syncing goes on as before.
+            left: {
+              always: { guard: ({ context }) => !context.leaving, target: "idle" },
+              on: {
+                _drain: { guard: "syncable", target: "syncing" },
+                _sync: { guard: "syncable", target: "syncing" },
+                _leave: { guard: "syncable", target: "syncing" },
+              },
+            },
+            idle: {
+              always: { guard: "leftover", target: "emptying" },
+              on: {
+                _leave: { guard: "syncable", target: "syncing" },
+                _drain: { guard: "syncable", target: "debouncing" },
+                _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+              },
+            },
+            // A _drain reenters, which restarts the window; a focus, sign-in or hidden tab
+            // (_sync) does not wait.
+            debouncing: {
+              on: {
+                _drain: { target: "debouncing", reenter: true },
+                _leave: { guard: "syncable", target: "syncing" },
+                _sync: { guard: and(["syncable", "needed"]), target: "syncing" },
+              },
+              after: {
+                [SYNC_IDLE_MS]: [{ guard: "syncable", target: "syncing" }, { target: "idle" }],
+              },
+            },
+            syncing: {
+              entry: assign({ resync: false, pull: false }),
+              invoke: {
+                src: "sync",
+                // pull comes from the triggering event: the entry assign above would wipe it.
+                input: ({ context, event }) => ({
+                  api: context.api,
+                  store: context.store,
+                  rows: [...context.outbox.values()],
+                  cursor: context.cursor,
+                  pull: Boolean(event.pull) && !context.leaving,
+                }),
+                onDone: {
+                  target: "idle",
+                  actions: enqueueActions(({ context, event, enqueue }) => {
+                    applySync(context, event.output, enqueue);
+                    const { authFailed, networkError } = event.output;
+                    if (authFailed || networkError) return;
+                    if (context.resync) enqueue.raise({ type: "_sync", pull: context.pull });
+                    else if (context.outbox.size > 0) enqueue.raise({ type: "_drain" });
+                  }),
+                },
+                onError: { target: "idle" },
+              },
+              on: {
+                _leave: { actions: assign({ resync: true }) },
+                _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
+              },
+            },
           },
-          on: {
-            _leave: { actions: assign({ resync: true }) },
-            _sync: { actions: assign({ resync: true, pull: ({ context, event }) => context.pull || Boolean(event.pull) }) },
+        },
+        // One request to the model at a time (see the Engine section above).
+        engine: {
+          initial: "scanning",
+          states: {
+            scanning: {
+              invoke: {
+                src: "scan",
+                input: ({ context }) => ({ ask: context.ask }),
+                onDone: {
+                  target: "idle",
+                  actions: enqueueActions(({ context, event, enqueue }) => {
+                    for (const recipe of RECIPES) if (event.output[recipe.generator]) recipe.loaded(context.seen[recipe.generator], event.output[recipe.generator]);
+                    enqueue.assign({ dirty: true });
+                  }),
+                },
+                onError: { target: "idle", actions: assign({ dirty: true }) },
+              },
+            },
+            idle: { always: { guard: "work", target: "picking" } },
+            picking: {
+              entry: assign({ dirty: false }),
+              invoke: {
+                src: "pick",
+                input: ({ context }) => ({ jobs: jobs(context), results: context.results, cache: context.hashes, hash: context.sha256 }),
+                onDone: [
+                  { guard: ({ event }) => event.output != null, target: "asking", actions: assign({ current: ({ event }) => event.output }) },
+                  { target: "idle" },
+                ],
+                onError: { target: "idle" },
+              },
+            },
+            asking: {
+              invoke: {
+                src: "generate",
+                input: ({ context }) => {
+                  const { model, prompt, text } = context.current;
+                  return { ask: context.ask, payload: { model, prompt, text } };
+                },
+                onDone: { target: "idle", actions: enqueueActions(({ context, event, enqueue }) => settle(context, event.output, enqueue)) },
+                onError: { target: "idle", actions: enqueueActions(({ context, enqueue }) => settle(context, null, enqueue)) },
+              },
+            },
           },
         },
       },
@@ -460,6 +804,7 @@ function adopt(context, server, enqueue) {
   table(context, r.id).set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
   enqueue.emit(announce(r));
+  resume(r, enqueue);
 }
 
 // Apply a sync's summary: adopt acknowledged and pulled records, advance the cursor, and
@@ -486,6 +831,7 @@ function applySync(context, output, enqueue) {
     table(context, r.id).set(r.id, r);
     enqueue(() => context.store.put(r).catch(() => {}));
     enqueue.emit(announce(r));
+    resume(r, enqueue);
   }
 
   for (const server of pulled) {
