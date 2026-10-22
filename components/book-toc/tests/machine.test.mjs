@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, markedChapter, chapterCounts, counts, choiceLabel, showing } from "../machine.js";
+import { machine, markedChapter, chapterCounts, counts, choiceLabel, markedSummary, showing } from "../machine.js";
 
 // The actor is where the contents' decisions live (3.2): which book it shows, and the
 // chapter it marks. The mark is the chapter the user just chose (a jump the fact has
@@ -30,8 +30,11 @@ const book = (over = {}) => ({
 
 const changed = (over = {}) => ({ type: "book.changed", ...book(over) });
 
-function start({ read, open, list } = {}) {
-  const ask = (target, name) => {
+function start({ read, open, list, results } = {}) {
+  const asked = [];
+  const ask = (target, name, payload) => {
+    asked.push(target + ": " + name);
+    if (name === "results") return results instanceof Error ? Promise.reject(results) : Promise.resolve(results ?? { error: "no-answerer" });
     if (name === "open") return Promise.resolve(open ?? { id: null });
     if (name === "read") return Promise.resolve(read ?? { book: book() });
     if (name === "list") return Promise.resolve(list ?? { error: "no-answerer" });
@@ -41,7 +44,7 @@ function start({ read, open, list } = {}) {
   const selected = [];
   actor.on("chapter.selected", (e) => selected.push(e));
   actor.start();
-  return { actor, selected };
+  return { actor, selected, asked };
 }
 
 // Open a book and settle in showing, as book-shelf's selection does (4.3, fourth rule).
@@ -312,4 +315,57 @@ test("signing in shows the same book's contents again without a reload, and sign
   assert.equal(ctx().book.id, ID);
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(ctx()), "sign-in");
+});
+
+// --- The journal's summaries -------------------------------------------------------------
+
+const SRC = "a".repeat(64);
+const summary = (day, text, version = 1, generator = "journal-summary") => ({
+  id: generator + ":" + day, generator, item: day, text, source: SRC, version,
+});
+const shownSummary = (actor) => markedSummary(ctx(actor).book, ctx(actor).summaries, mark(actor));
+
+test("the marked journal day shows its summary, and picking another day shows that one", async () => {
+  const { actor, asked } = await open({
+    read: { book: journal({ position: { chapter: 1, block: 0 } }) },
+    results: { results: [summary(DAY1, "A walk by the river."), summary(DAY2, "Planning the week.")] },
+  });
+  assert.ok(asked.includes("generators: results"));
+  assert.equal(shownSummary(actor), "Planning the week.");
+  actor.send({ type: "_select", id: ID, chapter: 0 });
+  assert.equal(shownSummary(actor), "A walk by the river.");
+});
+
+test("a day without a summary shows none", async () => {
+  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results: { results: [summary(DAY1, "A walk.")] } });
+  assert.equal(shownSummary(actor), null, "the marked day has no result");
+});
+
+test("a new summary arrives through generation.changed; an older one is ignored, a chat title too", async () => {
+  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results: { results: [] } });
+  assert.equal(shownSummary(actor), null);
+  actor.send({ type: "generation.changed", result: summary(DAY2, "First.", 2) });
+  assert.equal(shownSummary(actor), "First.");
+  actor.send({ type: "generation.changed", result: summary(DAY2, "Stale.", 1) });
+  assert.equal(shownSummary(actor), "First.");
+  actor.send({ type: "generation.changed", result: summary(DAY2, "Chat name", 3, "chat-title") });
+  assert.equal(shownSummary(actor), "First.");
+  actor.send({ type: "generation.changed", result: summary(DAY2, "Second.", 3) });
+  assert.equal(shownSummary(actor), "Second.");
+});
+
+test("any other book asks for no summaries and shows none", async () => {
+  const { actor, asked } = await open({ results: { results: [summary(DAY1, "A walk.")] } });
+  assert.ok(!asked.includes("generators: results"));
+  assert.equal(markedSummary(ctx(actor).book, { [DAY1]: { text: "A walk.", version: 1 } }, 0), null);
+});
+
+test("when generators cannot be asked the journal shows no summary and works as before", async () => {
+  for (const results of [undefined, { error: "unknown-query" }, new Error("gone")]) {
+    const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results });
+    assert.ok(actor.getSnapshot().matches("showing"));
+    assert.equal(shownSummary(actor), null);
+    actor.send({ type: "_select", id: ID, chapter: 0 });
+    assert.equal(mark(actor), 0, "picking a day still works");
+  }
 });

@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, markedChapter, chapterCounts, choiceLabel, showing } from "./machine.js";
+import { machine, markedChapter, chapterCounts, choiceLabel, markedSummary, showing } from "./machine.js";
 import selected from "./events/chapter.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -108,6 +108,15 @@ class BookToc extends LitElement {
       font-weight: var(--weight-normal);
       color: var(--color-body-mid);
     }
+    /* The marked day's summary, the journal only: as quiet as the count, under the row
+       and on its lit rail, so it reads as part of the marked day. */
+    .summary {
+      margin: 0;
+      border-inline-start: calc(var(--border-width) * 2) solid var(--color-accent);
+      padding: 0 var(--space-md) var(--space-xs);
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+    }
     .empty {
       display: flex;
       align-items: center;
@@ -122,6 +131,9 @@ class BookToc extends LitElement {
     @container (max-width: 45rem) {
       .entry {
         padding-inline: var(--space-sm);
+      }
+      .summary {
+        padding-inline-end: var(--space-sm);
       }
     }
   `;
@@ -215,6 +227,7 @@ class BookToc extends LitElement {
     const marked = markedChapter(book.toc, snapshot.context.jump ?? book.chapter);
     const focusAt = this.#focusRow(rows, marked);
     const perChapter = chapterCounts(book, snapshot.context.choicePoints);
+    const summary = markedSummary(book, snapshot.context.summaries, marked);
     return html`
       <div class="toc">
         <ul role="tree" aria-label="Contents" @keydown=${(e) => this.#keydown(e, rows, marked)}>
@@ -226,12 +239,14 @@ class BookToc extends LitElement {
                   type="button"
                   data-at=${at}
                   tabindex=${at === focusAt ? 0 : -1}
+                  aria-describedby=${summary && r.chapter === marked ? "summary" : nothing}
                   style="padding-inline-start: calc(var(--space-md) + var(--space-md) * ${r.depth})"
                   @click=${() => this.#select(r, at)}
                 >
                   ${r.title}
                   ${perChapter[r.chapter] ? html`<span class="choices">· ${choiceLabel(perChapter[r.chapter])}</span>` : nothing}
                 </button>
+                ${summary && r.chapter === marked ? html`<p class="summary" id="summary">${summary}</p>` : nothing}
               </li>
             `,
           )}

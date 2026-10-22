@@ -13,6 +13,8 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // user's jump as chapter.selected (4.3, fifth rule). For the journal it also asks
 // choice-points: list and follows its two events, to count each day's choice points. It
 // asks session: read and follows session.changed only for whether anyone is signed in.
+// While the book is the journal it asks generators: results for the days' summaries
+// and follows generation.changed, to show the marked day's summary under its row.
 
 // Only the fields the contents needs are kept from a read reply or a book.changed (both
 // carry the whole book, 4.3, third rule): the id to address a jump at, the tree to
@@ -45,6 +47,20 @@ export const counts = (choicePoints) => {
   const out = {};
   for (const c of Object.values(choicePoints)) if (!c.removing) out[c.day] = (out[c.day] ?? 0) + 1;
   return out;
+};
+
+// What a summary needs of a result: its text, and its version, so an announcement
+// older than what is held is ignored (4.3, fourth rule).
+const summaryOf = (r) => ({ text: r.text, version: r.version });
+const isSummary = (r) => r?.generator === "journal-summary";
+
+// The summary to show under the marked row: only the written book's days have one, and
+// only a day the generator has written a non-empty text for.
+export const markedSummary = (book, summaries, marked) => {
+  if (!book?.days || marked == null) return null;
+  const day = book.days[marked];
+  const text = day ? summaries[day]?.text?.trim() : "";
+  return text || null;
 };
 
 export const choiceLabel = (n) => (n === 1 ? "1 choice point" : `${n} choice points`);
@@ -107,6 +123,9 @@ export const machine = setup({
     choicePoints: fromPromise(({ input }) => input.ask("choice-points", "list", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
+    // The journal's days' summaries; generation.changed is held until the reply lands
+    // (supersededBy).
+    summaries: fromPromise(({ input }) => input.ask("generators", "results", { generator: "journal-summary" })),
   },
   guards: {
     found: ({ event }) => "book" in event.output,
@@ -124,14 +143,17 @@ export const machine = setup({
       "counts as part of the entry before it. While the book is the journal, a day with choice " +
       "points says how many under its date, \"· 1 choice point\" or \"· 3 choice points\"; one " +
       "being deleted is not counted while its Undo is offered, and counts again after an undo. " +
-      "Any other book shows no counts, and when the choice points cannot be read the journal's " +
-      "contents show none and work as before. Signed out they show only \"Sign in to see " +
+      "Under the marked day the journal also shows that day's summary, one short sentence the " +
+      "account's journal summary generator wrote, and updates it when a new one arrives; today " +
+      "shows none until one is written. " +
+      "Any other book shows no counts and no summaries, and when the choice points or the " +
+      "summaries cannot be read the journal's contents show none of them and work as before. Signed out they show only \"Sign in to see " +
       "your books.\", and the same book's contents come back when the user signs in, without " +
       "a reload. On a try page a visitor not yet signed in still sees them.",
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],
-    asks: ["books: open", "books: read", "settings: read", "choice-points: list", "session: read"],
+    asks: ["books: open", "books: read", "settings: read", "choice-points: list", "session: read", "generators: results"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -147,6 +169,9 @@ export const machine = setup({
     jump: null,
     // Every choice point by id, as held(): only the journal's counts are drawn from them.
     choicePoints: {},
+    // Each journal day's summary by date, as summaryOf(): only drawn while the book is
+    // the journal.
+    summaries: {},
     // Whether someone is signed in (3.4): null until session answers.
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
@@ -185,6 +210,10 @@ export const machine = setup({
     "choice-point.changed": {
       guard: ({ context, event }) => !(context.choicePoints[event.choicePoint.id]?.version > event.choicePoint.version),
       actions: assign(({ context, event }) => ({ choicePoints: { ...context.choicePoints, [event.choicePoint.id]: held(event.choicePoint) } })),
+    },
+    "generation.changed": {
+      guard: ({ context, event }) => isSummary(event.result) && !(context.summaries[event.result.item]?.version > event.result.version),
+      actions: assign(({ context, event }) => ({ summaries: { ...context.summaries, [event.result.item]: summaryOf(event.result) } })),
     },
     "choice-point.deleted": {
       actions: assign(({ context, event }) => {
@@ -265,6 +294,33 @@ export const machine = setup({
         onError: "empty",
       },
     },
-    showing: {},
+    // The journal asks for its days' summaries each time it is shown; any other book
+    // asks nothing. An error reply (no generators on the page, signed out) shows none.
+    showing: {
+      initial: "deciding",
+      states: {
+        deciding: {
+          always: [{ guard: ({ context }) => context.book?.written === true, target: "summarising" }, { target: "settled" }],
+        },
+        summarising: {
+          invoke: {
+            src: "summaries",
+            input: ({ context }) => ({ ask: context.ask }),
+            onDone: [
+              {
+                guard: ({ event }) => Array.isArray(event.output?.results),
+                target: "settled",
+                actions: assign(({ event }) => ({
+                  summaries: Object.fromEntries(event.output.results.filter(isSummary).map((r) => [r.item, summaryOf(r)])),
+                })),
+              },
+              { target: "settled" },
+            ],
+            onError: "settled",
+          },
+        },
+        settled: {},
+      },
+    },
   },
 });
