@@ -77,6 +77,12 @@ def remove_files(user_id: str) -> None:
         shutil.rmtree(directory)
 
 
+def local_user() -> str | None:
+    """The one account of the local edition (3.4), or None on the web. Read per call,
+    so the variable alone decides which edition a request meets."""
+    return os.environ.get("UNBLENT_LOCAL_USER") or None
+
+
 def _secret() -> bytes:
     # Section 3.4: losing the secret only forces a re-login; it never breaks the
     # user-to-database link. Absent, it must fail loudly rather than sign with ""
@@ -136,14 +142,16 @@ def clear_session_cookie(response: Response) -> None:
 def session_of(request: Request) -> dict | None:
     """Who the cookie names (3.4): {"userId", "guest", "admin", "viewer"}, or None
     when anonymous or the account was deleted. viewer is the admin's id while the
-    admin views as someone (12), else None. Which flags a cookie carries is set by session's server module."""
+    admin views as someone (12), else None. Which flags a cookie carries is set by session's server module.
+    In the local edition a request without a valid cookie is the local account (3.4)."""
     payload = verify(request.cookies.get(SESSION_COOKIE))
-    if not payload:
-        return None
-    user_id, *flags = payload.split("|")
+    user_id, *flags = (payload or "").split("|")
     # A deleted account's cookie is no one's (3.4): every module sees the browser signed out.
-    if removed(user_id):
-        return None
+    if not payload or removed(user_id):
+        # The local edition (3.4): a browser holding no valid cookie is the one
+        # account, and that account is the admin, so no sign-in ever happens.
+        local = local_user()
+        return {"userId": local, "guest": False, "admin": True, "viewer": None} if local else None
     viewer = next((f[3:] for f in flags if f.startswith("by:") and len(f) > 3), None)
     return {"userId": user_id, "guest": "guest" in flags, "admin": "admin" in flags and not viewer, "viewer": viewer}
 

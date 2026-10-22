@@ -19,7 +19,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from server.user import SESSION_COOKIE, clear_session_cookie, remove_files, session_of, set_session_cookie, sign, space, verify
+from server.user import SESSION_COOKIE, clear_session_cookie, local_user, remove_files, session_of, set_session_cookie, sign, space, verify
 
 from . import registry, visitor
 
@@ -35,8 +35,16 @@ def _max_users() -> int:
 
 def _registration_open() -> bool:
     # Section 5: a passkey may be registered only while the registry has room, so a
-    # single-user install (MAX_USERS=1) admits its owner and nobody else.
-    return registry.user_count() < _max_users()
+    # single-user install (MAX_USERS=1) admits its owner and nobody else. The local
+    # edition has no registration at all (3.4).
+    return not local_user() and registry.user_count() < _max_users()
+
+
+def _passkeys() -> None:
+    """The local edition has no passkeys (3.4): its ceremonies do not exist there, so
+    RP_ID is never read."""
+    if local_user():
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 def _rp(request: Request) -> tuple[str, str]:
@@ -113,6 +121,11 @@ def me(request: Request):
         response = _json(_picture(None), request)
         clear_session_cookie(response)
         return response
+    # The local account is in the registry from its first visit (3.4), so it is the
+    # admin by the same rule as on the web. Its id is hex, the handle a passkey would carry.
+    local = local_user()
+    if held["userId"] == local and not registry.account(local):
+        registry.create_user(id=local, handle=bytes.fromhex(local), label=RP_NAME, details=visitor.from_request(request))
     # The admin looking at someone's account is not that person's visit (12).
     if not held["viewer"]:
         registry.seen(held["userId"], visitor.from_request(request))
@@ -193,6 +206,7 @@ def back(request: Request):
 
 @router.post("/register/begin")
 def register_begin(request: Request):
+    _passkeys()
     # Validate the request Origin before the capacity gate, uniformly with
     # login/begin, so a bad Origin is always a 400 (3.4), open registry or not.
     rp_id, _ = _rp(request)
@@ -218,6 +232,7 @@ def register_begin(request: Request):
 
 @router.post("/register/finish")
 async def register_finish(request: Request):
+    _passkeys()
     ticket = verify(request.cookies.get(CHALLENGE_COOKIE))
     if not ticket or not ticket.startswith("reg:"):
         raise HTTPException(status_code=400, detail="No registration in progress")
@@ -245,6 +260,7 @@ async def register_finish(request: Request):
 
 @router.post("/login/begin")
 def login_begin(request: Request):
+    _passkeys()
     rp_id, _ = _rp(request)
     # No allow-list (3.4): the browser offers the discoverable passkeys itself.
     options = webauthn.generate_authentication_options(rp_id=rp_id)
@@ -255,6 +271,7 @@ def login_begin(request: Request):
 
 @router.post("/login/finish")
 async def login_finish(request: Request):
+    _passkeys()
     ticket = verify(request.cookies.get(CHALLENGE_COOKIE))
     if not ticket or not ticket.startswith("auth:"):
         raise HTTPException(status_code=400, detail="No login in progress")
