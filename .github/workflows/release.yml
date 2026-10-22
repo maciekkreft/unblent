@@ -21,6 +21,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          case "$version" in
+            *-*) echo "PRERELEASE=true" >> "$GITHUB_ENV" ;;
+            *) echo "PRERELEASE=false" >> "$GITHUB_ENV" ;;
+          esac
 
       # The same Python as the server's requirements are pinned for.
       - uses: actions/setup-python@v5
@@ -78,18 +82,25 @@ jobs:
           shasum -a 256 release/Unblent.dmg | cut -d' ' -f1 > release/dmg.sha256
           ls -l release
 
-      # Marked latest, never pre-release, so the app's update check
-      # (releases/latest/download/latest.json) finds it, an rc tag included.
+      # The app's update check reads releases/latest/download/latest.json, and GitHub's
+      # latest is never a pre-release, so a tag with a hyphen (v0.1.0-rc1) is a test
+      # build no installed copy is offered. Its files live under its own tag only.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "Unblent $VERSION" --latest \
+          if [ "$PRERELEASE" = true ]; then
+            channel=(--prerelease --latest=false)
+          else
+            channel=(--latest)
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "Unblent $VERSION" "${channel[@]}" \
             --notes "Download Unblent.dmg, open it and drag Unblent to Applications. Or: brew install --cask maciekkreft/tap/unblent" \
             release/Unblent.dmg release/Unblent.app.tar.gz release/Unblent.app.tar.gz.sig release/latest.json
 
+      # The cask is what brew installs, so a test build never reaches it.
       - name: Update the Homebrew cask
-        if: env.TAP_TOKEN != ''
+        if: env.TAP_TOKEN != '' && env.PRERELEASE == 'false'
         run: |
           sha=$(cat release/dmg.sha256)
           git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/maciekkreft/homebrew-tap.git" tap
@@ -105,5 +116,5 @@ jobs:
           git push
 
       - name: Skip the Homebrew cask
-        if: env.TAP_TOKEN == ''
-        run: echo "TAP_TOKEN is not set, so the cask in maciekkreft/homebrew-tap was not updated."
+        if: env.TAP_TOKEN == '' || env.PRERELEASE == 'true'
+        run: echo "A pre-release, or TAP_TOKEN is not set, so the cask in maciekkreft/homebrew-tap was not updated."

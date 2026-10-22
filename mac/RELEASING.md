@@ -2,7 +2,9 @@
 
 A release is made by pushing a version tag such as `v0.1.0`. GitHub then builds the
 app on a Mac, publishes it on the repository's Releases page, and updates the Homebrew
-cask. A push to `main` never reaches users. Every tag does: there is no test channel.
+cask. A push to `main` never reaches users. A tag with a hyphen, such as `v0.1.0-rc1`,
+is a test build: it is published as a pre-release, which installed copies are never
+offered and Homebrew never gets. Every other tag reaches users.
 
 ## Once: the update key
 
@@ -39,14 +41,21 @@ Users then install with `brew install --cask maciekkreft/tap/unblent`.
 ## Each release
 
 1. Make sure `main` holds what should ship and the checks pass.
-2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`. A version may carry a
-   suffix for a trial, such as `v0.1.0-rc1`; it is published to users all the same.
+2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
 3. Watch the run under the repository's Actions tab. It takes about 15 minutes.
 4. On success the release holds `Unblent.dmg`, `Unblent.app.tar.gz`, its `.sig`
    and `latest.json`, and the cask in the tap names the new version.
 
 The version comes from the tag, not from `tauri.conf.json`. A tag must be higher
 than the last one, or installed copies will not see it as an update.
+
+## Testing a release
+
+1. Push a test tag, such as `v0.1.0-rc1`. Download `Unblent.dmg` from that
+   pre-release in Safari and install it, to see what a new user sees on first open.
+2. When it works, push `v0.1.0`, the first real release.
+3. Updating cannot be tried with a test tag, because a pre-release is never offered as
+   an update. It is first tried with `v0.1.1`: a copy of `v0.1.0` should offer it.
 
 ## What users see
 
