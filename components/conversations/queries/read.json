@@ -53,7 +53,9 @@
                               "callId": { "type": "string" },
                               "content": { "type": "string" },
                               "size": { "type": "integer" },
-                              "isError": { "type": "boolean" }
+                              "isError": { "type": "boolean" },
+                              "name": { "type": "string", "minLength": 1, "description": "What the lookup read, named: the reply field its query's tool entry points at with `name` (7.2), such as a note's or chapter's title. Computed from the content when announced; absent for an error, a listing, or a reply without it." },
+                              "excerpt": { "type": "string", "minLength": 1, "description": "The first 30 words of the reply field the tool entry points at with `excerpt` (7.2), split on runs of whitespace and joined by one space. Absent when there is none." }
                             },
                             "required": ["callId"],
                             "additionalProperties": false

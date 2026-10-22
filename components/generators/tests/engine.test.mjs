@@ -20,9 +20,11 @@ const sha = (text) => createHash("sha256").update(text, "utf8").digest("hex");
 // The same fixture was written to SQLite and read by the backfill script
 // (scratchpad backfill/build_inputs.py, Python's json.dumps(obj, separators=(",", ":"),
 // ensure_ascii=False)); these are the hashes it printed for the source and for the
-// model input. The fixture covers non-ASCII, quotes, a backslash, a control character,
+// model input; the chat's by a Python copy of the chat-title rule (scratchpad
+// chat_title_hash.py, the same json.dumps and SHA-256 hex of the UTF-8). The fixture covers non-ASCII, quotes, a backslash, a control character,
 // U+2028, an emoji at the cut, a question of only Python whitespace, a result stored
-// after the answer, an error result and a second question.
+// after the answer, an error result, a listing without a name, a lookup with a name
+// and no excerpt and one with both, and a second question.
 const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
 const T = (n) => `01HQ8ZK7M4N5P6Q7R8S9T0V1A${n}`;
 const TURNS = [
@@ -37,6 +39,7 @@ const TURNS = [
       { id: "c1", target: "books", name: "chapter", payload: {}, label: "Reading a chapter" },
       { id: "c2", target: "notes", name: "read", payload: {}, label: "Reading a note" },
       { id: "c3", target: "notes", name: "list", payload: {}, label: "Listing notes" },
+      { id: "c4", target: "notes", name: "read", payload: {}, label: "Reading a note" },
     ],
   },
   { id: T(3), role: "assistant", text: "Ä".repeat(8005) + "😀".repeat(3), status: "done" },
@@ -45,16 +48,17 @@ const TURNS = [
     role: "user",
     text: "",
     results: [
-      { callId: "c1", content: "Kapitel 😀 " + "x".repeat(2100) },
-      { callId: "c2", content: "gone", isError: true },
-      { callId: "c3", content: "[]" },
+      { callId: "c1", size: 2111, name: "Kapitel 😀 “eins”" },
+      { callId: "c2", size: 4, isError: true, name: "gone" },
+      { callId: "c3", size: 2 },
+      { callId: "c4", size: 40, name: 'Cats\\ "x"', excerpt: "They purr\u2028 softly — Ü" },
     ],
   },
   { id: T(5), role: "user", text: "Second question" },
   { id: T(6), role: "assistant", text: "Later", status: "done" },
 ];
-const CHAT_SOURCE = "78548f6fbadb0b24e260bfb9888a1373e05f854a0ce31d74f3f37bab45064ba8";
-const CHAT_INPUT = "0121fbb0854fae10f53d8a8a11951fc0fc1ba3f547692e9d1cf73c01bb464d9b";
+const CHAT_SOURCE = "6277359530cad2c0d72d7243b8b7909a4ec4fab8fe9b5a83de3381029021ebbc";
+const CHAT_INPUT = "5c9babf5227c28cb20792ea21f566f1d01723b88159ea379e1e1eae22d9955c6";
 
 const DAY = { id: "01K7TEST00000000000000DA01", day: "2026-10-20", text: "Tag “eins”\n\tzwei — Ü" };
 const POINTS = [
@@ -67,7 +71,10 @@ const DAY_INPUT = "69dc3cdc57d38d1f69f7aba029dd940a686f527a2dc2de4e8bdcfdf7e877c
 test("a chat's and a day's source and model input are the backfill script's, byte for byte", () => {
   const chat = firstRound(TURNS);
   assert.deepEqual(Object.keys(chat), ["question", "lookups", "answer"]);
-  assert.deepEqual(chat.lookups.map((l) => l.label), ["Reading a chapter", "Listing notes"], "in call order, the error left out");
+  assert.deepEqual(chat.lookups, [
+    { label: "Reading a chapter", name: "Kapitel 😀 “eins”", excerpt: "" },
+    { label: "Reading a note", name: 'Cats\\ "x"', excerpt: "They purr\u2028 softly — Ü" },
+  ], "in call order, the error and the listing left out");
   assert.equal(sha(canonical(chat)), CHAT_SOURCE);
   assert.equal(sha(chatTitle.input(chat)), CHAT_INPUT);
 
@@ -86,9 +93,10 @@ test("the default hash, Web Crypto, gives the same hex as Python's hashlib", asy
   actor.stop();
 });
 
-test("a lookup whose content did not ride the event leaves the chat unnamed", () => {
-  const stripped = TURNS.map((t) => (t.results ? { ...t, results: t.results.map(({ callId, content, isError }) => ({ callId, size: content.length, ...(isError ? { isError } : {}) })) } : t));
-  assert.equal(firstRound(stripped), null);
+test("a chat whose lookups name nothing is named from its question and answer alone", () => {
+  const unnamed = TURNS.map((t) => (t.results ? { ...t, results: t.results.map(({ callId, size, isError }) => ({ callId, size, ...(isError ? { isError } : {}) })) } : t));
+  assert.deepEqual(firstRound(unnamed).lookups, []);
+  assert.ok(!chatTitle.input(firstRound(unnamed)).includes("Looked up:"));
   assert.equal(firstRound(TURNS.slice(0, 2)), null, "no answer yet");
 });
 

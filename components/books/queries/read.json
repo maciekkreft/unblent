@@ -81,6 +81,7 @@
   "supersededBy": ["book.changed", "book.deleted"],
   "tool": {
     "description": "Returns one book's details: title, author, the table of contents with chapter titles, and the reading position. Use to see a book's structure before reading a chapter. The id comes from listing the books or from checking what is open.",
-    "label": "Opening a book"
+    "label": "Opening a book",
+    "name": "/book/title"
   }
 }

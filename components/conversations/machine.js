@@ -133,19 +133,91 @@ const mostRecentAbout = (headings, sub) => {
 
 const sameSubject = (a, b) => (a && b ? a.kind === b.kind && a.id === b.id : a === b);
 
+// Python's whitespace (str.isspace), so a word here is a word of Python's `str.split()`
+// and a script outside the browser can reproduce an excerpt exactly (7.2).
+const SPACE = /[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
+const words = (text) => text.split(SPACE).filter((w) => w !== "");
+const EXCERPT_WORDS = 30;
+
+// A JSON pointer (RFC 6901) followed into a value; undefined when it leads nowhere.
+export const pointAt = (value, pointer) => {
+  if (pointer === "") return value;
+  let at = value;
+  for (const raw of pointer.slice(1).split("/")) {
+    const key = raw.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(at)) {
+      if (!/^(0|[1-9][0-9]*)$/.test(key)) return undefined;
+      at = at[Number(key)];
+    } else if (at && typeof at === "object" && Object.prototype.hasOwnProperty.call(at, key)) at = at[key];
+    else return undefined;
+  }
+  return at;
+};
+
+// The reply a stored result was made from, as far as its content still holds it: the
+// compact JSON most replies become, or, for a reply whose one HTML field became
+// markdown (convertReply), that field with its one other string field (a chapter's
+// title) read back from the head before the first blank line. A result cut short of
+// valid JSON gives nothing.
+const replyOf = (content, replySchema) => {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === "object") return parsed;
+  } catch {
+    // not JSON: perhaps a converted HTML reply
+  }
+  const htmlFields = [...htmlFieldNames(replySchema)];
+  if (htmlFields.length !== 1) return null;
+  const field = htmlFields[0];
+  const branches = replySchema ? [replySchema, ...(replySchema.oneOf || []), ...(replySchema.anyOf || [])] : [];
+  const branch = branches.find((b) => b && b.properties && b.properties[field]);
+  const heads = Object.entries((branch && branch.properties) || {}).filter(([k, sub]) => k !== field && sub && sub.type === "string").map(([k]) => k);
+  const gap = content.indexOf("\n\n");
+  if (heads.length === 0) return { [field]: content };
+  if (heads.length === 1 && gap >= 0) return { [heads[0]]: content.slice(0, gap), [field]: content.slice(gap + 2) };
+  return null;
+};
+
+// What a lookup read, named from its result (7.2, 7.7): the string the tool entry's
+// `name` points at, and the first 30 words of the one `excerpt` points at, each only
+// when it holds a word. Computed whenever a result is announced, never stored, so a
+// chat from before this still gets them; an error and a listing get neither.
+export const lookupName = (result, entry) => {
+  if (!entry || !entry.name || result.isError || typeof result.content !== "string") return {};
+  const reply = replyOf(result.content, entry.reply);
+  if (!reply) return {};
+  const out = {};
+  const name = pointAt(reply, entry.name);
+  if (typeof name !== "string" || words(name).length === 0) return {};
+  out.name = name;
+  const text = entry.excerpt ? pointAt(reply, entry.excerpt) : undefined;
+  if (typeof text === "string") {
+    const first = words(text).slice(0, EXCERPT_WORDS);
+    if (first.length) out.excerpt = first.join(" ");
+  }
+  return out;
+};
+
 // A tool result rides to views as its size, not its content (4.3): the content can
 // be very large and conversation.changed is announced many times a second, so
-// `conversations` keeps the content and sends only its length.
-const stripTurn = (turn) => {
+// `conversations` keeps the content and sends only its length, with the name of what
+// it read (lookupName). `targets` maps a call id to its "target: query".
+const stripTurn = (turn, targets, entries) => {
   if (turn.role !== "user" || !turn.results) return turn;
   return {
     ...turn,
     results: turn.results.map((r) => {
       const out = { callId: r.callId, size: r.content != null ? r.content.length : r.size ?? 0 };
       if (r.isError !== undefined) out.isError = r.isError;
-      return out;
+      return { ...out, ...lookupName(r, entries[targets.get(r.callId)]) };
     }),
   };
+};
+
+const callTargets = (turns) => {
+  const targets = new Map();
+  for (const t of turns) if (t.calls) for (const c of t.calls) targets.set(c.id, `${c.target}: ${c.name}`);
+  return targets;
 };
 
 // Unsent comments are tracked apart from unsent turns: they are not a finished turn, so
@@ -161,13 +233,14 @@ const hasUnsent = (context, id) => {
 // their content, and pending while a finished turn is not yet on the server (5).
 // The unsent comments are left out when there are none, as the schema has no null.
 const changedPayload = (context, chat) => {
+  const targets = callTargets(chat.turns);
   const payload = {
     type: "conversation.changed",
     id: chat.id,
     title: chat.title,
     about: chat.about,
     start: chat.start,
-    turns: chat.turns.map(stripTurn),
+    turns: chat.turns.map((t) => stripTurn(t, targets, context.toolEntries)),
     pending: hasUnsent(context, chat.id),
     updatedAt: chat.updatedAt,
     subtitle: subtitleOf(latestAnswer(chat.turns)),
@@ -415,7 +488,7 @@ const buildTools = (context, reply) => {
   for (const q of queries) {
     if (!q.tool) continue;
     const key = `${q.target}: ${q.name}`;
-    meta[key] = { label: q.tool.label, reply: q.reply };
+    meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
     if (context.tools[key] === false) continue;
     offered.push({ key, target: q.target, name: q.name, description: q.tool.description, payload: q.payload });
   }
@@ -704,6 +777,7 @@ const onContracts = (context, event, enqueue, self) => {
   const { tools, meta } = buildTools(context, event.reply);
   context.running.tools = tools;
   context.running.meta = meta;
+  if (Object.keys(meta).length) context.toolEntries = meta;
   const answerId = context.running.turnId;
   const prior = chat.turns[chat.turns.length - 2]; // the turn before the pending answer
   if (prior && prior.role === "assistant" && prior.calls && prior.calls.length) {
@@ -940,7 +1014,7 @@ const answerRead = (context, event, enqueue, self) => {
   event.reply({ conversation: readShape(context, emptyChat(id)) });
 };
 
-const onLoaded = (context, event, enqueue) => {
+const onLoaded = (context, event, enqueue, self) => {
   context.loading.delete(event.id);
   const c = event.conversation;
   const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0, marks: c.marks ?? null };
@@ -956,6 +1030,34 @@ const onLoaded = (context, event, enqueue) => {
     context.reading.delete(event.id);
   }
   enqueue.emit(changedPayload(context, chat));
+  if (!context.entriesAsked && !Object.keys(context.toolEntries).length && hasResults(chat)) {
+    context.entriesAsked = true;
+    enqueue(() => fireToolEntries(context, self));
+  }
+};
+
+// A chat from before this page's first question is announced with what its lookups
+// read (lookupName), which needs the tool entries; they come from the catalog with the
+// tool list, so the first chat loaded with results asks for them once, and the loaded
+// chats are announced again when they arrive.
+const hasResults = (chat) => chat.turns.some((t) => t.results && t.results.length);
+
+const fireToolEntries = (context, self) => {
+  if (!context.contracts) return;
+  context
+    .contracts()
+    .then((reply) => self.send({ type: "_toolEntries", reply }))
+    .catch(() => self.send({ type: "_toolEntries", reply: {} }));
+};
+
+const onToolEntries = (context, event, enqueue) => {
+  const { meta } = buildTools(context, event.reply);
+  if (!Object.keys(meta).length) {
+    context.entriesAsked = false; // the catalog was unavailable: ask again with the next chat
+    return;
+  }
+  context.toolEntries = meta;
+  for (const chat of context.chats.values()) if (hasResults(chat)) enqueue.emit(changedPayload(context, chat));
 };
 
 const onLoadFailed = (context, event) => {
@@ -1161,6 +1263,8 @@ export const machine = setup({
     pinsObserved: false,
     tools: {},
     approval: "auto",
+    toolEntries: {}, // "target: query" -> { label, reply, name, excerpt }, from the catalog (7.7)
+    entriesAsked: false,
     running: null, // { chatId, turnId, phase, tools, meta, rounds } while a question is being answered
     queued: [],
   }),
@@ -1173,6 +1277,7 @@ export const machine = setup({
         context.pinsObserved = true;
       },
     },
+    _toolEntries: { actions: enqueueActions(({ context, event, enqueue }) => onToolEntries(context, event, enqueue)) },
   },
   states: {
     loading: {
@@ -1240,7 +1345,7 @@ export const machine = setup({
             if (event.sendPosition) context.positionInFlight.delete(event.chatId);
           },
         },
-        _loaded: { actions: enqueueActions(({ context, event, enqueue }) => onLoaded(context, event, enqueue)) },
+        _loaded: { actions: enqueueActions(({ context, event, enqueue, self }) => onLoaded(context, event, enqueue, self)) },
         _loadFailed: { actions: ({ context, event }) => onLoadFailed(context, event) },
         _listed: { actions: ({ context, event }) => onListed(context, event) },
         _focus: { actions: enqueueActions(({ context, enqueue, self }) => onFocus(context, enqueue, self)) },

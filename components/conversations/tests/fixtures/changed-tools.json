@@ -216,7 +216,8 @@
         "results": [
           {
             "callId": "call-1",
-            "size": 30
+            "size": 30,
+            "name": "One"
           }
         ],
         "at": 1
@@ -285,7 +286,8 @@
         "results": [
           {
             "callId": "call-1",
-            "size": 30
+            "size": 30,
+            "name": "One"
           }
         ],
         "at": 1
@@ -354,7 +356,8 @@
         "results": [
           {
             "callId": "call-1",
-            "size": 30
+            "size": 30,
+            "name": "One"
           }
         ],
         "at": 1
@@ -435,7 +438,8 @@
         "results": [
           {
             "callId": "call-1",
-            "size": 30
+            "size": 30,
+            "name": "One"
           }
         ],
         "at": 1

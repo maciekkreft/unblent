@@ -11,10 +11,11 @@ const cut = (s, n) => (s.length <= n ? s : Array.from(s).slice(0, n).join(""));
 
 // A chat's first round: the first user turn with text, every turn up to the next user
 // turn with text, the last finished answer with text in it, and the lookups made before
-// that answer, each matched to its result anywhere in the round (a stored result can
-// sort after the next answer). Null when there is no answer yet, or when a lookup's
-// result arrived without its content: conversation.changed carries a result's size, not
-// its content (4.3), and without it the source cannot be known.
+// that answer that name what they read, each matched to its result anywhere in the
+// round (a stored result can sort after the next answer). A lookup is its call's label
+// with the `name` and `excerpt` conversation.changed carries on its result (7.2, 7.7),
+// the excerpt "" when the result has none; an error, or a result without a name (a
+// listing), is left out. Null when there is no answer yet.
 export function firstRound(turns) {
   const isQuestion = (t) => t.role === "user" && hasText(t);
   const q = turns.findIndex(isQuestion);
@@ -34,9 +35,8 @@ export function firstRound(turns) {
     if (t.role !== "assistant") continue;
     for (const call of t.calls ?? []) {
       const r = results.get(call.id);
-      if (!r || r.isError) continue;
-      if (typeof r.content !== "string") return null;
-      lookups.push({ label: call.label ?? "", text: cut(r.content, 2000) });
+      if (!r || r.isError || typeof r.name !== "string" || r.name === "") continue;
+      lookups.push({ label: call.label ?? "", name: r.name, excerpt: typeof r.excerpt === "string" ? r.excerpt : "" });
     }
   }
   return { question: turns[q].text, lookups, answer: cut(round[at].text, 8000) };
@@ -77,6 +77,6 @@ export const chatTitle = {
   done: (result) => result != null,
   input: ({ question, lookups, answer }) =>
     `First message:\n${question}\n\n` +
-    (lookups.length ? `Looked up:\n${lookups.map((l) => `- ${l.label}: ${l.text}`).join("\n")}\n\n` : "") +
+    (lookups.length ? `Looked up:\n${lookups.map((l) => `- ${l.label}: ${l.name}` + (l.excerpt ? `\n  ${l.excerpt}` : "")).join("\n")}\n\n` : "") +
     `First answer:\n${answer}`,
 };

@@ -34,6 +34,7 @@
   "supersededBy": ["book.changed", "book.deleted"],
   "tool": {
     "description": "Returns one chapter's text. Use to read what a chapter actually says. The book id comes from listing the books or from checking what is open; the chapter number comes from the table of contents when opening a book.",
-    "label": "Reading a chapter"
+    "label": "Reading a chapter",
+    "name": "/title"
   }
 }

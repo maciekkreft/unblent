@@ -360,7 +360,8 @@ def check_contracts(manifests: dict) -> None:
                         _check_draft(schema_path, schema[key], key)
                     # Section 7.2, 7.7: a query schema file holds only these keys; `tool`
                     # opts the query in as a tool and must be a { description, label } of
-                    # non-empty strings.
+                    # non-empty strings, with an optional `name` and `excerpt`, each a JSON
+                    # pointer (RFC 6901) into the reply.
                     for key in schema:
                         if key not in ("payload", "reply", "supersededBy", "tool"):
                             fail(schema_path, "contract check (11.2)",
@@ -373,6 +374,10 @@ def check_contracts(manifests: dict) -> None:
                         if not ok:
                             fail(schema_path, "contract check (11.2)",
                                  "a query's tool entry must be a { description, label } of non-empty strings (7.7)")
+                        for f in ("name", "excerpt"):
+                            if ok and f in tool and not (isinstance(tool[f], str) and tool[f].startswith("/")):
+                                fail(schema_path, "contract check (11.2)",
+                                     f"a query's tool entry {f!r} must be a JSON pointer, a string starting with \"/\" (7.2)")
                 else:
                     _check_draft(schema_path, schema, "the schema")
 

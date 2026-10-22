@@ -189,5 +189,5 @@
     ]
   },
   "supersededBy": ["note.changed", "note.deleted"],
-  "tool": { "description": "Returns the note the reader has open right now, in full. The reader sees all of a book's highlights as one note named Highlights, so when that is open this returns every highlight of the book in reading order: each one's body is the reader's comment, and the quote on its link to the book is the passage. Returns a null note when nothing is open. Call this when the reader says \"this note\" or \"the note I have open\". Takes no arguments.", "label": "Reading the open note" }
+  "tool": { "description": "Returns the note the reader has open right now, in full. The reader sees all of a book's highlights as one note named Highlights, so when that is open this returns every highlight of the book in reading order: each one's body is the reader's comment, and the quote on its link to the book is the passage. Returns a null note when nothing is open. Call this when the reader says \"this note\" or \"the note I have open\". Takes no arguments.", "label": "Reading the open note", "name": "/note/title", "excerpt": "/note/body" }
 }

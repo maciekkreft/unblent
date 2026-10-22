@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, toMarkdown, commentsBlock, forModel, between, positionOf, byPosition } from "../machine.js";
+import { machine, toMarkdown, commentsBlock, forModel, between, positionOf, byPosition, lookupName, pointAt } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -33,6 +33,8 @@ const SUBJECT_READ = other("subject", "queries", "read");
 const COMPLETE = other("llm", "queries", "complete");
 const CONTRACTS = other("catalog", "queries", "contracts");
 const BOOKS_CHAPTER = other("books", "queries", "chapter");
+const NOTES_READ = other("notes", "queries", "read");
+const NOTES_LIST = other("notes", "queries", "list");
 
 // A catalog: contracts reply carrying one query as a tool (7.7): what the loop reads to
 // build the tool list and to convert a tool's HTML reply to markdown.
@@ -845,6 +847,61 @@ test("the recorded tool exchange is what the machine emits (seam for the views)"
     return;
   }
   assert.deepEqual(events, JSON.parse(readFileSync(file, "utf8")), "changed-tools.json is stale; re-run with RECORD=1");
+});
+
+// --- what a lookup read (7.2, 7.7) -------------------------------------------------
+
+const entryOf = (q) => ({ label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt });
+
+test("a JSON pointer is followed as RFC 6901 says", () => {
+  const doc = { "a/b": { "m~n": ["x", "y"] }, "": 1 };
+  assert.equal(pointAt(doc, "/a~1b/m~0n/1"), "y");
+  assert.equal(pointAt(doc, "/"), 1);
+  assert.equal(pointAt(doc, "/a~1b/m~0n/01"), undefined);
+  assert.equal(pointAt(doc, "/missing/x"), undefined);
+});
+
+test("a note read is named by its title, with the first 30 words of its body split as Python splits", () => {
+  // \u00a0, \u3000 and \u2029 are whitespace to Python's str.split(); \u200b and \ufeff are not.
+  const body = "One\u00a0two\u3000three\u2029four\x1cfive zero\u200bwidth bom\ufeffhere " + Array.from({ length: 30 }, (_, i) => "w" + i).join("\n\t ");
+  const content = JSON.stringify({ note: { id: BOOK, title: "Cats", body, version: 1, about: [] } });
+  const out = lookupName({ callId: "c", content }, entryOf(NOTES_READ));
+  assert.equal(out.name, "Cats");
+  assert.equal(out.excerpt, ["One", "two", "three", "four", "five", "zero\u200bwidth", "bom\ufeffhere", ...Array.from({ length: 23 }, (_, i) => "w" + i)].join(" "));
+});
+
+test("an error, a listing, a cut result and an empty body name nothing more than they hold", () => {
+  const note = (title, body) => JSON.stringify({ note: { id: BOOK, title, body, version: 1, about: [] } });
+  assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x"), isError: true }, entryOf(NOTES_READ)), {});
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ notes: [] }) }, entryOf(NOTES_LIST)), {});
+  assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x").slice(0, 20) + "\n\n[cut]" }, entryOf(NOTES_READ)), {});
+  assert.deepEqual(lookupName({ callId: "c", content: note("Cats", " \n ") }, entryOf(NOTES_READ)), { name: "Cats" });
+  assert.deepEqual(lookupName({ callId: "c", content: note("  ", "body") }, entryOf(NOTES_READ)), {});
+  assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x") }, undefined), {});
+});
+
+test("a chapter, stored as its title over its markdown, is named by its title", () => {
+  assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER)), { name: "Chapter One" });
+});
+
+test("a chat loaded from before carries what its lookups read once the tool entries arrive", async () => {
+  const chat = {
+    id: CHAT, title: "t", about: [], start: "s", updatedAt: 5,
+    turns: [
+      { id: USER, role: "user", text: "first" },
+      { id: ANSWER, role: "assistant", text: "", status: "done", calls: [{ id: "c1", target: "notes", name: "read", payload: { id: BOOK }, label: "Reading a note" }], provider: "echo", model: "echo" },
+      { id: RESULT1, role: "user", text: "", results: [{ callId: "c1", content: JSON.stringify({ note: { id: BOOK, title: "Cats", body: "They purr.", version: 1, about: [] } }) }] },
+      { id: ANSWER2, role: "assistant", text: "Cats purr.", status: "done" },
+    ],
+  };
+  const h = start({ conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5 }], chatsById: { [CHAT]: chat }, contracts: { queries: [toolQuery("notes", "read", NOTES_READ)] } });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length >= 2, "announced again with the names");
+  const results = (e) => e.turns.find((t) => t.id === RESULT1).results[0];
+  assert.deepEqual(results(changes(h)[0]), { callId: "c1", size: chat.turns[2].results[0].content.length });
+  assert.deepEqual(results(changes(h).at(-1)), { callId: "c1", size: chat.turns[2].results[0].content.length, name: "Cats", excerpt: "They purr." });
+  assert.equal(h.calls.contracts, 1, "the tool entries are asked once");
 });
 
 // --- comments on the last answer ---------------------------------------------------

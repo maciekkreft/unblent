@@ -34,6 +34,7 @@
   "supersededBy": ["subject.changed"],
   "tool": {
     "description": "Tells which book the reader currently has open, and its title, or that no book is open. It covers books only: the note the reader has open, or the Highlights, has its own lookup, reading the open note. The journal is a book too; when it is the open book, the day its page shows has its own lookup, reading the open journal day. What they have open can change during the chat, so call this to know what \"this\" book or chapter refers to right now. Takes no arguments.",
-    "label": "Checking what's open"
+    "label": "Checking what's open",
+    "name": "/subject/title"
   }
 }

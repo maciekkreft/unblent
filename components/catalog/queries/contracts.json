@@ -42,7 +42,9 @@
                   "type": "object",
                   "properties": {
                     "description": { "type": "string" },
-                    "label": { "type": "string" }
+                    "label": { "type": "string" },
+                    "name": { "type": "string", "description": "A JSON pointer (RFC 6901) into the reply to the string naming what was read (7.2)." },
+                    "excerpt": { "type": "string", "description": "A JSON pointer (RFC 6901) into the reply to text whose first 30 words describe what was read (7.2)." }
                   },
                   "required": ["description", "label"],
                   "additionalProperties": false
