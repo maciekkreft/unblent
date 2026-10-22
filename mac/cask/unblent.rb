@@ -4,8 +4,7 @@ cask "unblent" do
   version :latest
   sha256 :no_check
 
-  url "https://github.com/maciekkreft/unblent/releases/latest/download/Unblent.dmg",
-      verified: "github.com/maciekkreft/unblent/"
+  url "https://github.com/maciekkreft/unblent/releases/latest/download/Unblent.dmg"
   name "Unblent"
   desc "Reader for ePub books with notes, highlights and a journal"
   homepage "https://unblent.com"
@@ -13,7 +12,7 @@ cask "unblent" do
   # No auto_updates and no livecheck: Homebrew's audit refuses both on a :latest cask,
   # and brew upgrade already leaves a :latest cask alone unless --greedy is given.
   depends_on arch: :arm64
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "Unblent.app"
 
