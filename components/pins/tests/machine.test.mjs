@@ -188,6 +188,24 @@ test("the chat open at the start is pinned, asked again at the next read when co
   assert.equal((await read(actor)).chat, CHAT, "and asks again, so the next read has the chat");
 });
 
+test("a page without conversations is asked at the start and once more, then never again", async () => {
+  let asked = 0;
+  const ask = (target) => {
+    if (target === "conversations") {
+      asked += 1;
+      return Promise.resolve({ error: "no-answerer" });
+    }
+    return Promise.resolve(target === "subject" ? { subject: null } : { userId: ADMIN, registrationOpen: false });
+  };
+  const actor = createActor(machine, { input: { stored: null, save: () => {}, ask } }).start();
+  await flush();
+  for (let i = 0; i < 4; i += 1) {
+    await read(actor);
+    await flush();
+  }
+  assert.equal(asked, 2);
+});
+
 test("a deleted note, chat or book lets go of its pin, which stays on for the next one", async () => {
   const { actor } = await start(null, ADMIN, { stage: ON_BOOK(BOOK) });
   actor.send({ type: "note.opened", id: NOTE });

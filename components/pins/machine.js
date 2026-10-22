@@ -210,7 +210,8 @@ export const machine = setup({
       // The chat open at the start, which `conversations` restores without announcing it.
       // A page mounts pins before `conversations`, which asks pins: read as it starts, so
       // the first ask may find no one; it is asked again at the next pins: read, which
-      // comes once every fact on the page is mounted.
+      // comes once every fact on the page is mounted. A second no-answerer means the
+      // page has no chats (the Mac page, section 8), so it is not asked again.
       initial: "askingChat",
       states: {
         askingChat: {
@@ -230,7 +231,20 @@ export const machine = setup({
           },
         },
         chatUnasked: {
-          on: { "read?": { target: "askingChat", actions: ({ context, event }) => event.reply({ ...context.pins }) } },
+          on: { "read?": { target: "askingChatAgain", actions: ({ context, event }) => event.reply({ ...context.pins }) } },
+        },
+        askingChatAgain: {
+          invoke: {
+            src: "chat",
+            input: ({ context }) => ({ ask: context.ask }),
+            onDone: {
+              target: "chatKnown",
+              actions: enqueueActions(({ context, event, enqueue }) => {
+                if (event.output && "id" in event.output) shown(context, "chat", event.output.id, enqueue);
+              }),
+            },
+            onError: "chatKnown",
+          },
         },
         chatKnown: {},
       },

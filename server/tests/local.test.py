@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -46,7 +47,8 @@ class LocalEdition(unittest.TestCase):
         cls.data = tempfile.mkdtemp(prefix="unblent-test-local-")
         cls.port = _free_port()
         env = {k: v for k, v in os.environ.items() if k not in ("RP_ID", "MAX_USERS", "UNBLENT_URL")}
-        env.update(UNBLENT_DATA=cls.data, UNBLENT_LOCAL_USER=LOCAL)
+        env.update(UNBLENT_DATA=cls.data, UNBLENT_LOCAL_USER=LOCAL,
+                   UNBLENT_FIRST_BOOK=str(ROOT / "mac" / "books" / "meditations.epub"))
         env.setdefault("SESSION_SECRET", "local-test-secret")
         cls.server = subprocess.Popen(
             [str(ROOT / ".venv" / "bin" / "uvicorn"), "server.main:app", "--host", "127.0.0.1",
@@ -93,6 +95,22 @@ class LocalEdition(unittest.TestCase):
         self.assertIn("Hello", [n["title"] for n in listed["notes"]])
         self.assertTrue((Path(self.data) / LOCAL / "notes.db").is_file())
 
+    def test_the_first_book_is_on_the_shelf_once(self):
+        # Three first pulls at once still import it once.
+        with ThreadPoolExecutor(3) as pool:
+            pulls = list(pool.map(lambda _: _call(self.port, "GET", "/api/books"), range(3)))
+        for status, listed in pulls:
+            self.assertEqual(status, 200)
+            self.assertEqual([b["title"] for b in listed["books"]], ["Meditations"])
+        book = pulls[0][1]["books"][0]
+        self.assertGreater(len(book["chapters"]), 5)
+        status, _ = _call(self.port, "GET", f"/api/books/{book['id']}/1/chapters/1")
+        self.assertEqual(status, 200)
+        # A deleted first book does not come back.
+        self.assertEqual(_call(self.port, "PUT", f"/api/books/{book['id']}/deleted")[0], 200)
+        status, listed = _call(self.port, "GET", "/api/books")
+        self.assertEqual([b["deleted"] for b in listed["books"]], [True])
+
     def test_passkeys_and_guests_do_not_exist(self):
         for path in ("/register/begin", "/register/finish", "/login/begin", "/login/finish"):
             self.assertEqual(_call(self.port, "POST", f"/api/session{path}", {})[0], 404, path)
@@ -114,6 +132,7 @@ class WebEdition(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(me["userId"])
         self.assertEqual(_call(self.port, "GET", "/api/notes")[0], 401)
+        self.assertEqual(_call(self.port, "GET", "/api/books")[0], 401)
         self.assertNotEqual(_call(self.port, "POST", "/api/session/login/begin", {})[0], 404)
 
 

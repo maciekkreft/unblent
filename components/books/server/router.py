@@ -9,9 +9,11 @@ never serves a stale cache. A position is last write wins and never refused (Dec
 
 import json
 import mimetypes
+import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -20,7 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from server.user import require_user, user_dir
+from server.user import local_user, require_user, user_dir
 
 from .importer import import_book, purge
 
@@ -87,6 +89,27 @@ def _record(row: sqlite3.Row) -> dict:
 
 def _reread(connection: sqlite3.Connection, book_id: str) -> dict:
     return _record(connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone())
+
+
+def _insert(connection: sqlite3.Connection, book_id: str, fields: dict) -> None:
+    """The row of a freshly imported book, version 1 of content version 1."""
+    now = int(time.time() * 1000)
+    connection.execute(
+        "INSERT INTO books (id, title, author, cover, chapters, toc, position_chapter, position_block,"
+        " version, content_version, added_at, updated_at, seq, deleted)"
+        " VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, 1, ?, ?, ?, 0)",
+        (
+            book_id,
+            fields["title"],
+            fields["author"],
+            fields["cover"],
+            json.dumps(fields["chapters"]),
+            json.dumps(fields["toc"]),
+            now,
+            now,
+            _next_seq(connection),
+        ),
+    )
 
 
 def reimport(user_id: str, book_id: str) -> dict:
@@ -166,24 +189,8 @@ async def import_epub(book_id: str, request: Request, user_id: str = Depends(req
         purge(book_dir)
         return JSONResponse({"error": "unreadable"}, status_code=422)
 
-    now = int(time.time() * 1000)
     with _connect(user_id) as connection:
-        connection.execute(
-            "INSERT INTO books (id, title, author, cover, chapters, toc, position_chapter, position_block,"
-            " version, content_version, added_at, updated_at, seq, deleted)"
-            " VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, 1, ?, ?, ?, 0)",
-            (
-                book_id,
-                fields["title"],
-                fields["author"],
-                fields["cover"],
-                json.dumps(fields["chapters"]),
-                json.dumps(fields["toc"]),
-                now,
-                now,
-                _next_seq(connection),
-            ),
-        )
+        _insert(connection, book_id, fields)
         return _reread(connection, book_id)
 
 
@@ -268,8 +275,40 @@ def _open(connection: sqlite3.Connection) -> dict:
     return {"id": row["book_id"], "at": row["at"]} if row else {"id": None, "at": 0}
 
 
+# The book the local edition (3.4) starts with: the Mac launcher sets UNBLENT_FIRST_BOOK
+# to the bundled mac/books/meditations.epub, Standard Ebooks' public-domain edition from
+# https://standardebooks.org/ebooks/marcus-aurelius/meditations/george-long. Its id is
+# fixed, so the import is idempotent; the lock keeps two first pulls from both importing.
+FIRST_BOOK = "0000000000000000000000MED1"
+_first_book_lock = threading.Lock()
+
+
+def _first_book(user_id: str) -> None:
+    """Import the first book into the local account's empty shelf, before the first pull
+    answers, so the browser sees it on first load. Only ever while the shelf has no row at
+    all: a deleted first book stays a tombstone and does not come back. On the web, or
+    without the variable, nothing happens."""
+    source = os.environ.get("UNBLENT_FIRST_BOOK")
+    if not source or user_id != local_user():
+        return
+    with _first_book_lock, _connect(user_id) as connection:
+        if connection.execute("SELECT 1 FROM books LIMIT 1").fetchone() is not None:
+            return
+        book_dir = _book_dir(user_id, FIRST_BOOK)
+        book_dir.mkdir(parents=True, exist_ok=True)
+        # Kept as source.epub, as an upload is, so a re-import (5) can run over it.
+        shutil.copyfile(source, book_dir / "source.epub")
+        try:
+            fields = import_book(book_dir / "source.epub", book_dir, FIRST_BOOK, 1)
+        except Exception:
+            purge(book_dir)
+            raise
+        _insert(connection, FIRST_BOOK, fields)
+
+
 @router.get("")
 def pull(since: int = 0, user_id: str = Depends(require_user)):
+    _first_book(user_id)
     with _connect(user_id) as connection:
         rows = connection.execute("SELECT * FROM books WHERE seq > ? ORDER BY seq", (since,)).fetchall()
         open_row = _open(connection)
