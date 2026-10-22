@@ -31,9 +31,11 @@ cp "$repo/mac/books/meditations.epub" "$stage/mac/books/"
 
 # Because the routers are loaded from files, PyInstaller cannot see what they import:
 # every module they and the server entry import is named here, read from their source.
-# A read loop rather than mapfile, which the bash 3.2 that macOS ships does not have.
-hidden=()
-while IFS= read -r line; do hidden+=("$line"); done < <("$venv/bin/python" - "$stage" <<'PY'
+# The reader is written to a file and run on its own line, not inside <( ), because the
+# bash 3.2 that macOS ships cannot parse a here-document inside a process substitution,
+# and so that a failing reader stops the build. A read loop rather than mapfile, which
+# bash 3.2 does not have.
+cat > "$build/imports.py" <<'PY'
 import ast, importlib.util, sys
 from pathlib import Path
 names = set()
@@ -55,7 +57,9 @@ for name in sorted(names):
     if name.split(".")[0] not in {"server", "components"} and name != "collections.abc":
         print(f"--hidden-import={name}")
 PY
-)
+"$venv/bin/python" "$build/imports.py" "$stage" > "$build/imports.txt"
+hidden=()
+while IFS= read -r line; do hidden+=("$line"); done < "$build/imports.txt"
 
 data_args=()
 for dir in server components vendor tokens bus store editor composer pages mac; do
