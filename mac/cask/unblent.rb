@@ -1,22 +1,17 @@
-# The template for Casks/unblent.rb in github.com/maciekkreft/homebrew-tap. The release
-# workflow (.github/workflows/release.yml) fills in version and sha256 on every release.
+# The cask in github.com/maciekkreft/homebrew-unblent (Casks/unblent.rb), kept here so it
+# is reviewed with the app. It always installs the newest release; the app updates itself.
 cask "unblent" do
-  version "0.1.0"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  version :latest
+  sha256 :no_check
 
-  url "https://github.com/maciekkreft/unblent/releases/download/v#{version}/Unblent.dmg",
+  url "https://github.com/maciekkreft/unblent/releases/latest/download/Unblent.dmg",
       verified: "github.com/maciekkreft/unblent/"
   name "Unblent"
   desc "Reader for ePub books with notes, highlights and a journal"
   homepage "https://unblent.com"
 
-  livecheck do
-    url :url
-    strategy :github_latest
-  end
-
-  # The app updates itself after asking the user.
-  auto_updates true
+  # No auto_updates and no livecheck: Homebrew's audit refuses both on a :latest cask,
+  # and brew upgrade already leaves a :latest cask alone unless --greedy is given.
   depends_on arch: :arm64
   depends_on macos: ">= :monterey"
 

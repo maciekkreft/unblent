@@ -12,8 +12,6 @@ permissions:
 jobs:
   release:
     runs-on: macos-14
-    env:
-      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +55,8 @@ jobs:
         run: |
           bundle=mac/src-tauri/target/aarch64-apple-darwin/release/bundle
           mkdir -p release
+          # Tauri names the image Unblent_<version>_aarch64.dmg; the cask and the landing
+          # page download releases/latest/download/Unblent.dmg, so the name is fixed.
           cp "$bundle"/dmg/*.dmg release/Unblent.dmg
           cp "$bundle"/macos/Unblent.app.tar.gz release/Unblent.app.tar.gz
           cp "$bundle"/macos/Unblent.app.tar.gz.sig release/Unblent.app.tar.gz.sig
@@ -79,7 +79,6 @@ jobs:
           with open("release/latest.json", "w") as file:
               json.dump(manifest, file, indent=2)
           PY
-          shasum -a 256 release/Unblent.dmg | cut -d' ' -f1 > release/dmg.sha256
           ls -l release
 
       # The app's update check reads releases/latest/download/latest.json, and GitHub's
@@ -95,26 +94,5 @@ jobs:
             channel=(--latest)
           fi
           gh release create "$GITHUB_REF_NAME" --title "Unblent $VERSION" "${channel[@]}" \
-            --notes "Download Unblent.dmg, open it and drag Unblent to Applications. Or: brew install --cask maciekkreft/tap/unblent" \
+            --notes "Download Unblent.dmg, open it and drag Unblent to Applications. Or: brew install --cask maciekkreft/unblent/unblent" \
             release/Unblent.dmg release/Unblent.app.tar.gz release/Unblent.app.tar.gz.sig release/latest.json
-
-      # The cask is what brew installs, so a test build never reaches it.
-      - name: Update the Homebrew cask
-        if: env.TAP_TOKEN != '' && env.PRERELEASE == 'false'
-        run: |
-          sha=$(cat release/dmg.sha256)
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/maciekkreft/homebrew-tap.git" tap
-          mkdir -p tap/Casks
-          sed -e "s/^  version \".*\"/  version \"$VERSION\"/" \
-              -e "s/^  sha256 \".*\"/  sha256 \"$sha\"/" \
-              mac/cask/unblent.rb > tap/Casks/unblent.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/unblent.rb
-          git commit -m "unblent $VERSION"
-          git push
-
-      - name: Skip the Homebrew cask
-        if: env.TAP_TOKEN == '' || env.PRERELEASE == 'true'
-        run: echo "A pre-release, or TAP_TOKEN is not set, so the cask in maciekkreft/homebrew-tap was not updated."

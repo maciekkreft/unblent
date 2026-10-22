@@ -1,10 +1,10 @@
 # Releasing Unblent for Mac
 
 A release is made by pushing a version tag such as `v0.1.0`. GitHub then builds the
-app on a Mac, publishes it on the repository's Releases page, and updates the Homebrew
-cask. A push to `main` never reaches users. A tag with a hyphen, such as `v0.1.0-rc1`,
-is a test build: it is published as a pre-release, which installed copies are never
-offered and Homebrew never gets. Every other tag reaches users.
+app on a Mac and publishes it on the repository's Releases page. A push to `main`
+never reaches users. A tag with a hyphen, such as `v0.1.0-rc1`, is a test build: it is
+published as a pre-release, which installed copies are never offered and Homebrew
+never installs. Every other tag reaches users.
 
 ## Once: the update key
 
@@ -27,16 +27,13 @@ The app installs an update only if it was signed with your private update key.
 Never change `identifier` (`com.unblent.app`) in `tauri.conf.json`: macOS keeps the
 app's stored pages and settings under it, and a new one would look like a new app.
 
-## Once: the Homebrew tap
+## Homebrew
 
-1. Create a public repository named `homebrew-tap` under `maciekkreft`, with a folder
-   `Casks`.
-2. Create a fine-grained personal access token that can write the contents of that one
-   repository only.
-3. Add it to the `unblent` repository's Actions secrets as `TAP_TOKEN`.
-
-Without `TAP_TOKEN` the release still works; only the cask is not updated.
-Users then install with `brew install --cask maciekkreft/tap/unblent`.
+The cask lives in the public repository `maciekkreft/homebrew-unblent`, as
+`Casks/unblent.rb`; `mac/cask/unblent.rb` is the same file. It always downloads
+`Unblent.dmg` from the newest real release, so a release never changes it and needs no
+token. Users install with `brew install --cask maciekkreft/unblent/unblent`. A change
+to the cask is copied into that repository by hand.
 
 ## Each release
 
@@ -44,7 +41,7 @@ Users then install with `brew install --cask maciekkreft/tap/unblent`.
 2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
 3. Watch the run under the repository's Actions tab. It takes about 15 minutes.
 4. On success the release holds `Unblent.dmg`, `Unblent.app.tar.gz`, its `.sig`
-   and `latest.json`, and the cask in the tap names the new version.
+   and `latest.json`, and Homebrew installs the new version.
 
 The version comes from the tag, not from `tauri.conf.json`. A tag must be higher
 than the last one, or installed copies will not see it as an update.
@@ -67,9 +64,10 @@ than the last one, or installed copies will not see it as an update.
   is installed until they choose Restart to update. Their books and notes stay in
   `~/Library/Application Support/Unblent` and are not touched by an update. An
   updated app does not ask for Open Anyway again.
-- **Homebrew.** The cask says the app updates itself, so a plain `brew upgrade` leaves
-  it alone and `brew upgrade --greedy` updates it. `brew uninstall --zap unblent` deletes
-  the user's books and notes too; a plain `brew uninstall` does not.
+- **Homebrew.** The cask names no version, so `brew upgrade` leaves the app alone and
+  the app updates itself; `brew upgrade --greedy` reinstalls the newest release.
+  `brew uninstall --zap unblent` deletes the user's books and notes too; a plain
+  `brew uninstall` does not.
 
 ## Building on your own Mac
 
