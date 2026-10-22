@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, markedChapter, chapterCounts, counts, choiceLabel, markedSummary, showing } from "../machine.js";
+import { machine, markedChapter, chapterCounts, counts, choiceLabel, chapterSummaries, showing } from "../machine.js";
 
 // The actor is where the contents' decisions live (3.2): which book it shows, and the
 // chapter it marks. The mark is the chapter the user just chose (a jump the fact has
@@ -323,48 +323,52 @@ const SRC = "a".repeat(64);
 const summary = (day, text, version = 1, generator = "journal-summary") => ({
   id: generator + ":" + day, generator, item: day, text, source: SRC, version,
 });
-const shownSummary = (actor) => markedSummary(ctx(actor).book, ctx(actor).summaries, mark(actor));
+const shown = (actor) => chapterSummaries(ctx(actor).book, ctx(actor).summaries);
 
-test("the marked journal day shows its summary, and picking another day shows that one", async () => {
+test("every journal day with a summary shows it, whichever day is marked", async () => {
   const { actor, asked } = await open({
     read: { book: journal({ position: { chapter: 1, block: 0 } }) },
     results: { results: [summary(DAY1, "A walk by the river."), summary(DAY2, "Planning the week.")] },
   });
   assert.ok(asked.includes("generators: results"));
-  assert.equal(shownSummary(actor), "Planning the week.");
+  assert.deepEqual(shown(actor), { 0: "A walk by the river.", 1: "Planning the week." });
   actor.send({ type: "_select", id: ID, chapter: 0 });
-  assert.equal(shownSummary(actor), "A walk by the river.");
+  assert.deepEqual(shown(actor), { 0: "A walk by the river.", 1: "Planning the week." }, "picking a day changes none");
 });
 
-test("a day without a summary shows none", async () => {
-  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results: { results: [summary(DAY1, "A walk.")] } });
-  assert.equal(shownSummary(actor), null, "the marked day has no result");
+test("a day without a summary, or with only spaces, shows none", async () => {
+  const { actor } = await open({
+    read: { book: journal({ position: { chapter: 1, block: 0 } }) },
+    results: { results: [summary(DAY1, "A walk."), summary(DAY2, "  ")] },
+  });
+  assert.deepEqual(shown(actor), { 0: "A walk." });
 });
 
 test("a new summary arrives through generation.changed; an older one is ignored, a chat title too", async () => {
-  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results: { results: [] } });
-  assert.equal(shownSummary(actor), null);
+  const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results: { results: [summary(DAY1, "A walk.")] } });
+  assert.deepEqual(shown(actor), { 0: "A walk." });
   actor.send({ type: "generation.changed", result: summary(DAY2, "First.", 2) });
-  assert.equal(shownSummary(actor), "First.");
+  assert.deepEqual(shown(actor), { 0: "A walk.", 1: "First." });
   actor.send({ type: "generation.changed", result: summary(DAY2, "Stale.", 1) });
-  assert.equal(shownSummary(actor), "First.");
+  assert.equal(shown(actor)[1], "First.");
   actor.send({ type: "generation.changed", result: summary(DAY2, "Chat name", 3, "chat-title") });
-  assert.equal(shownSummary(actor), "First.");
+  assert.equal(shown(actor)[1], "First.");
+  actor.send({ type: "generation.changed", result: summary(DAY1, "A long walk.", 2) });
   actor.send({ type: "generation.changed", result: summary(DAY2, "Second.", 3) });
-  assert.equal(shownSummary(actor), "Second.");
+  assert.deepEqual(shown(actor), { 0: "A long walk.", 1: "Second." });
 });
 
 test("any other book asks for no summaries and shows none", async () => {
   const { actor, asked } = await open({ results: { results: [summary(DAY1, "A walk.")] } });
   assert.ok(!asked.includes("generators: results"));
-  assert.equal(markedSummary(ctx(actor).book, { [DAY1]: { text: "A walk.", version: 1 } }, 0), null);
+  assert.deepEqual(chapterSummaries(ctx(actor).book, { [DAY1]: { text: "A walk.", version: 1 } }), {});
 });
 
 test("when generators cannot be asked the journal shows no summary and works as before", async () => {
   for (const results of [undefined, { error: "unknown-query" }, new Error("gone")]) {
     const { actor } = await open({ read: { book: journal({ position: { chapter: 1, block: 0 } }) }, results });
     assert.ok(actor.getSnapshot().matches("showing"));
-    assert.equal(shownSummary(actor), null);
+    assert.deepEqual(shown(actor), {});
     actor.send({ type: "_select", id: ID, chapter: 0 });
     assert.equal(mark(actor), 0, "picking a day still works");
   }

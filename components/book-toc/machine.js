@@ -14,7 +14,7 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // choice-points: list and follows its two events, to count each day's choice points. It
 // asks session: read and follows session.changed only for whether anyone is signed in.
 // While the book is the journal it asks generators: results for the days' summaries
-// and follows generation.changed, to show the marked day's summary under its row.
+// and follows generation.changed, to show each day's summary under its row.
 
 // Only the fields the contents needs are kept from a read reply or a book.changed (both
 // carry the whole book, 4.3, third rule): the id to address a jump at, the tree to
@@ -54,13 +54,16 @@ export const counts = (choicePoints) => {
 const summaryOf = (r) => ({ text: r.text, version: r.version });
 const isSummary = (r) => r?.generator === "journal-summary";
 
-// The summary to show under the marked row: only the written book's days have one, and
-// only a day the generator has written a non-empty text for.
-export const markedSummary = (book, summaries, marked) => {
-  if (!book?.days || marked == null) return null;
-  const day = book.days[marked];
-  const text = day ? summaries[day]?.text?.trim() : "";
-  return text || null;
+// The summary to show under each row, by chapter number: only the written book's days
+// have one, and only a day the generator has written a non-empty text for.
+export const chapterSummaries = (book, summaries) => {
+  if (!book?.days) return {};
+  const out = {};
+  book.days.forEach((day, chapter) => {
+    const text = day ? summaries[day]?.text?.trim() : "";
+    if (text) out[chapter] = text;
+  });
+  return out;
 };
 
 export const choiceLabel = (n) => (n === 1 ? "1 choice point" : `${n} choice points`);
@@ -143,9 +146,10 @@ export const machine = setup({
       "counts as part of the entry before it. While the book is the journal, a day with choice " +
       "points says how many under its date, \"· 1 choice point\" or \"· 3 choice points\"; one " +
       "being deleted is not counted while its Undo is offered, and counts again after an undo. " +
-      "Under the marked day the journal also shows that day's summary, one short sentence the " +
-      "account's journal summary generator wrote, and updates it when a new one arrives; today " +
-      "shows none until one is written. " +
+      "Under every day that has one, the journal also shows that day's summary, one short " +
+      "sentence the account's journal summary generator wrote, in small grey text aligned with " +
+      "the date, without the day being clicked; it updates when a new one arrives, and a day " +
+      "without one, such as today until it closes, shows nothing more. " +
       "Any other book shows no counts and no summaries, and when the choice points or the " +
       "summaries cannot be read the journal's contents show none of them and work as before. Signed out they show only \"Sign in to see " +
       "your books.\", and the same book's contents come back when the user signs in, without " +
