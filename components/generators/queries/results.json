@@ -1,0 +1,81 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The generator whose results are wanted.",
+    "type": "object",
+    "properties": {
+      "generator": {
+        "enum": [
+          "chat-title",
+          "journal-summary"
+        ],
+        "description": "Which generator: fixed, one per kind."
+      }
+    },
+    "required": [
+      "generator"
+    ],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Every result that generator has made, one per item.",
+    "type": "object",
+    "properties": {
+      "results": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^(chat-title|journal-summary):.+$",
+              "description": "The generator and the item, as <generator>:<item>."
+            },
+            "generator": {
+              "enum": [
+                "chat-title",
+                "journal-summary"
+              ],
+              "description": "Which generator: fixed, one per kind."
+            },
+            "item": {
+              "type": "string",
+              "minLength": 1,
+              "description": "What the text is about: a chat's id for chat-title, a journal day's date (YYYY-MM-DD) for journal-summary."
+            },
+            "text": {
+              "type": "string",
+              "description": "What the model wrote."
+            },
+            "source": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "The SHA-256 of the content the text was made from; the item needs a new text only when its content gives another."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "id",
+            "generator",
+            "item",
+            "text",
+            "source",
+            "version"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "results"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "generation.changed"
+  ]
+}

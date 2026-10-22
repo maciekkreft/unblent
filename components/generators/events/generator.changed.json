@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A generator now looks like this: the whole generator (4.3, third rule), after an edit here or on another device.",
+  "type": "object",
+  "properties": {
+    "generator": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "enum": [
+            "chat-title",
+            "journal-summary"
+          ],
+          "description": "Which generator: fixed, one per kind."
+        },
+        "name": {
+          "type": "string",
+          "description": "The name the user sees in the Generators tab."
+        },
+        "on": {
+          "type": "boolean",
+          "description": "Whether it runs; one that is off is skipped."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The model it asks, one of those the account's Anthropic key offers."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Ask the model: the instruction sent with each item's text."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "on",
+        "model",
+        "prompt",
+        "version"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "generator"
+  ],
+  "additionalProperties": false
+}

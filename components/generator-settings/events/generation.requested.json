@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user pressed Run on a generator: make its text again now, with the current prompt, for the item in front (the open chat, or the journal day shown on the stage), even when one exists.",
+  "type": "object",
+  "properties": {
+    "generator": {
+      "enum": [
+        "chat-title",
+        "journal-summary"
+      ],
+      "description": "Which generator: fixed, one per kind."
+    }
+  },
+  "required": [
+    "generator"
+  ],
+  "additionalProperties": false
+}

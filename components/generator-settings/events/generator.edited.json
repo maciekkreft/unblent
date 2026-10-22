@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user changed a generator in the Generators tab; only the fields changed are present. generators keeps the change, and the last write wins (5).",
+  "type": "object",
+  "properties": {
+    "id": {
+      "enum": [
+        "chat-title",
+        "journal-summary"
+      ],
+      "description": "Which generator: fixed, one per kind."
+    },
+    "name": {
+      "type": "string"
+    },
+    "on": {
+      "type": "boolean"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+}
