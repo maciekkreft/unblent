@@ -133,7 +133,9 @@ test("begin, Safari's code, commit: the Mac is ready, then on, with the account'
   assert.equal((await finish({ code, state })).status, 400, "the same visit cannot finish twice");
   const on = await onMac("POST", "/connect/commit");
   assert.deepEqual(await on.json(), { connect: "on", remote: "Admin" });
-  assert.equal((await me()).connect, "on");
+  // From now on /me goes through the relay (3.4): the Mac is the account.
+  const connected = await me();
+  assert.deepEqual([connected.userId, connected.connect, connected.remote], [ADMIN, "on", "Admin"]);
   assert.equal(statSync(join(macData, "remote.json")).mode & 0o777, 0o600);
   assert.equal((await onMac("POST", "/connect/begin")).status, 409, "a connected Mac disconnects first");
 

@@ -14,6 +14,8 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 from starlette.types import Scope
 
+from server.relay import Relay
+
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR = ROOT / "vendor"
 COMPONENTS = ROOT / "components"
@@ -81,6 +83,11 @@ def _include_component_routers() -> None:
 
 
 _include_component_routers()
+
+# The connected local edition (3.4): around every router, so while the Mac is connected
+# /api/* reaches the account and not the Mac's own server modules. On the web it passes
+# every request straight on.
+app.add_middleware(Relay)
 
 app.mount("/static/vendor", RevalidatingStaticFiles(directory=VENDOR), name="vendor")
 app.mount("/static/components", ComponentStaticFiles(directory=COMPONENTS), name="components")

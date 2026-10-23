@@ -31,6 +31,8 @@ from server.user import (
     SESSION_COOKIE,
     clear_remote,
     clear_session_cookie,
+    connection,
+    cross_site,
     device_of,
     local_user,
     remote,
@@ -170,7 +172,7 @@ def me(request: Request):
         registry.seen(held["userId"], visitor.from_request(request))
     picture = _picture(held["userId"], held["viewer"])
     if local:
-        picture.update(_connection())
+        picture.update(connection())
     # A cookie from before guests and the admin, or one whose account became the
     # admin, is set again so server modules read the flags from it (3.4).
     stale = (held["guest"], held["admin"]) != (picture.get("guest", False), picture.get("admin", False))
@@ -351,23 +353,9 @@ def _local_only() -> None:
 
 
 def _same_origin(request: Request) -> None:
-    """A page on another site must not connect or disconnect this Mac (3.4): the
-    browser marks a request it sends for another site, and names that site's Origin."""
-    if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+    """A page on another site must not connect or disconnect this Mac (3.4)."""
+    if cross_site(request.headers, request.scope.get("server", (None, None))[1]):
         raise HTTPException(status_code=403, detail="cross-site")
-    origin = request.headers.get("origin")
-    port = request.scope.get("server", (None, None))[1]
-    if origin and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
-        raise HTTPException(status_code=403, detail="cross-site")
-
-
-def _connection() -> dict:
-    """What /me adds in the local edition (3.4): connect, and the account's name once
-    there is a device sign-in. A Mac waiting for Safari is still off."""
-    held = remote()
-    if not held or held["state"] == "pending":
-        return {"connect": "off"}
-    return {"connect": held["state"], "remote": held.get("name") or ""}
 
 
 def _answer(words: tuple[str, str], status: int = 200) -> HTMLResponse:
@@ -473,7 +461,7 @@ def connect_commit(request: Request):
     if not held or held["state"] not in ("ready", "on"):
         return JSONResponse({"error": "not-ready"}, status_code=409)
     save_remote({**held, "state": "on"})
-    return _connection()
+    return connection()
 
 
 @router.post("/connect/disconnect")
@@ -483,7 +471,7 @@ def connect_disconnect(request: Request):
     _local_only()
     _same_origin(request)
     clear_remote()
-    return _connection()
+    return connection()
 
 
 @router.post("/viewas")

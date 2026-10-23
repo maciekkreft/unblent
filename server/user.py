@@ -128,6 +128,27 @@ def clear_remote() -> None:
     REMOTE.unlink(missing_ok=True)
 
 
+def connection() -> dict:
+    """What /me adds in the local edition (3.4): connect, and the account's name once
+    there is a device sign-in. A Mac waiting for Safari is still off. session's /me and
+    the relay both answer with it, so the Mac sees one picture connected or not."""
+    held = remote()
+    if not held or held["state"] == "pending":
+        return {"connect": "off"}
+    return {"connect": held["state"], "remote": held.get("name") or ""}
+
+
+def cross_site(headers, port) -> bool:
+    """Whether a request to the local edition came from another site (3.4): the browser
+    marks a request it sends for another site, same-site included, since another port of
+    127.0.0.1 is same-site, and names that site's Origin. A request with neither header
+    (a program, an older browser's GET) is not refused here."""
+    if headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+        return True
+    origin = headers.get("origin")
+    return bool(origin) and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}")
+
+
 def _secret() -> bytes:
     # Section 3.4: losing the secret only forces a re-login; it never breaks the
     # user-to-database link. Absent, it must fail loudly rather than sign with ""

@@ -4,3 +4,4 @@ webauthn==2.7.0
 anthropic==1.7.0
 cryptography==50.0.1
 jsonschema==4.26.0
+httpx==0.28.1
