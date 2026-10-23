@@ -169,6 +169,15 @@ test("a second import of the same id is idempotent, returning the row unchanged"
   assert.equal(again.updatedAt, first.updatedAt);
 });
 
+// The Mac's own file of a book is read only in the local edition (3.4); the web never
+// serves it, even for the account's own book.
+test("a book's source file is not served on the web", async () => {
+  const cookie = cookieFor(freshUser());
+  await importBook(ID, SAMPLE, cookie);
+  const res = await fetch(`${BASE_URL}/api/books/${ID}/source`, { headers: { Cookie: cookie, "X-Unblent-Local": "1" } });
+  assert.equal(res.status, 404);
+});
+
 test("a chapter is served as immutable HTML with the whitelist applied", async () => {
   const cookie = cookieFor(freshUser());
   await importBook(ID, SAMPLE, cookie);

@@ -159,7 +159,8 @@ const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, 
 // A book has a local change not yet acknowledged when it has an outbox row — a
 // position or delete keyed by the book id, or a title keyed under `title:<id>` (kept
 // apart so a rename never overwrites a pending page turn, D11).
-const pendingFor = (context, id) => context.outbox.has(id) || context.outbox.has(`title:${id}`);
+const pendingFor = (context, id) =>
+  context.outbox.has(id) || context.outbox.has(`title:${id}`) || context.outbox.has(`adopt:${id}`);
 
 const tile = (context, r) => ({
   id: r.id,
@@ -211,7 +212,8 @@ function answerChapter(context, event, self) {
     event.reply({ title: record.chapters[chapter].title, html: htmlOf(record.texts[chapter]) });
     return;
   }
-  if (context.api == null) {
+  // A book still on its way to the account (adopt) has no chapters there yet.
+  if (context.api == null || context.outbox.has(`adopt:${id}`)) {
     event.reply({ error: "unavailable" });
     return;
   }
@@ -351,6 +353,8 @@ function applyDiscard(context, event, enqueue) {
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const row = { id, kind: "delete" };
+  // A book not yet added to the account (adopt) is not uploaded only to be deleted.
+  if (context.outbox.delete(`adopt:${id}`)) enqueue(() => context.store.outboxDelete(`adopt:${id}`).catch(() => {}));
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit({ type: "book.deleted", id });
@@ -443,14 +447,47 @@ const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 // The browser changed account while this fact was not on the page (12): a copy kept for
 // another account is emptied before it is read, outbox included, so none of it is shown
-// to the account now signed in or uploaded as its own.
+// to the account now signed in or uploaded as its own. A copy marked to be added to the
+// account (12, keep) is kept instead, and `keepFor` sends it.
 async function claim(store, ask) {
   const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
   const userId = typeof session?.userId === "string" ? session.userId : null;
   if (!userId) return;
-  const kept = await store.metaGet("userId");
-  if (kept && kept !== userId) await store.empty();
+  const [kept, from] = await Promise.all([store.metaGet("userId"), store.metaGet("adopt")]);
+  if (kept && kept !== userId && !from) await store.empty();
+  await keepFor(store, from, userId);
 }
+
+// The browser joined an account keeping this copy (12, keep): every book gets one outbox
+// row that adds it to the account (kind "adopt", synced first): its file is read from
+// this Mac's own server and imported, then its place and the user's title are sent. The
+// cursor goes back to 0 and the copy is marked as the account's, so the pull then brings
+// the account's own books and the sign-in path (switchAccount) does not empty the copy.
+// A tombstone is not sent: the account never had the book. The mark is cleared only once
+// every row is stored in the outbox, so a reload midway queues the books again (one row
+// per book) rather than losing them. A mark left by a change of account that was called
+// off names the account still signed in, and is only cleared.
+async function keepFor(store, from, userId) {
+  if (!from) return;
+  if (from !== userId) {
+    for (const book of await store.all()) {
+      if (book.deleted || book.id === JOURNAL) continue;
+      const row = { id: `adopt:${book.id}`, kind: "adopt", book: book.id, position: book.position };
+      if (book.fileTitle && book.title !== book.fileTitle) row.title = book.title;
+      await store.outboxPut(row);
+      // No cover is shown until the account has the file, so its image is never asked of
+      // the account before it exists; the account's row brings it back.
+      if (book.cover) await store.put({ ...book, cover: null });
+    }
+    await store.metaPut("cursor", 0);
+    await store.metaPut("userId", userId);
+  }
+  await store.metaPut("adopt", null);
+}
+
+// A book being added to the account (adopt) is sent before any other row, so a place or
+// a title for it never reaches the account before the book does.
+const adoptFirst = (a, b) => (a.kind === "adopt") === (b.kind === "adopt") ? byId(a, b) : a.kind === "adopt" ? -1 : 1;
 
 export const machine = setup({
   guards: {
@@ -476,7 +513,9 @@ export const machine = setup({
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
     journal: fromPromise(({ input }) => (input.ask ? input.ask("journal", "read", {}) : Promise.resolve(null))),
     // Empties the local copy in one transaction, outbox and cache together (12).
-    empty: fromPromise(({ input }) => input.store.empty()),
+    // With keep (12) the copy stays and is marked, under the account it came from, to be
+    // added to the account the browser joins after the reload.
+    empty: fromPromise(({ input }) => (input.keep ? input.store.metaPut("adopt", input.from ?? true) : input.store.empty())),
     // One sync: drain the outbox in id order, then pull what changed since the
     // cursor. Positions and deletes never conflict (Decision 4, 6), so a drained row
     // is simply acknowledged; a network error stops with what it had, a 401 reports
@@ -484,9 +523,24 @@ export const machine = setup({
     sync: fromPromise(async ({ input }) => {
       const { api, store, rows, cursor, pull } = input;
       const acks = [];
-      for (const row of [...rows].sort(byId)) {
+      // The account's books, read once before the first book is added (adopt): one it
+      // already has, such as the first book with its fixed id, is not uploaded again.
+      let held = null;
+      for (const row of [...rows].sort(adoptFirst)) {
         let result;
         try {
+          if (row.kind === "adopt") {
+            if (!held) {
+              const all = await api.pull(0);
+              if (all.error === "unauthorized") return { acks, authFailed: true };
+              held = new Map(all.books.map((b) => [b.id, b]));
+            }
+            result = held.has(row.book) ? { had: held.get(row.book) } : await api.adopt(row);
+            if (result.error === "unauthorized") return { acks, authFailed: true };
+            acks.push({ id: row.id, kind: "adopt", book: row.book, ...result });
+            await store.outboxDelete(row.id).catch(() => {});
+            continue;
+          }
           result =
             row.kind === "delete"
               ? await api.remove(row.id)
@@ -539,7 +593,10 @@ export const machine = setup({
       "were; what was changed but not yet sent is sent then. A refused session is treated the " +
       "same way. A sign-in by a different account empties this browser's copy first, including " +
       "what was waiting to be sent, so one account's books are never shown to or sent under " +
-      "another.",
+      "another. When a connected Mac joins an account keeping its own copy, each of its books " +
+      "is added to the account: the file is read from the Mac and imported, then its place and " +
+      "title are sent; a book the account already has is left as the account has it, and one " +
+      "whose file cannot be read is left out with a notice.",
     kind: "fact",
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
@@ -568,6 +625,8 @@ export const machine = setup({
     queued: [],
     // The browser is changing account (12), from session.changed until it is over.
     leaving: false,
+    // The browser joins the next account keeping this copy (12, keep).
+    keep: false,
     resync: false,
     pull: false,
   }),
@@ -581,7 +640,9 @@ export const machine = setup({
   on: {
     // While loading, only whether the browser is leaving is kept (12); the rest of the
     // news is read from session once the store is loaded.
-    "session.changed": { actions: assign({ leaving: ({ event }) => event.leaving === true }) },
+    "session.changed": {
+      actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
+    },
     "journal.changed": { actions: enqueueActions(({ context, event, enqueue }) => applyJournal(context, event, enqueue)) },
   },
   initial: "loading",
@@ -715,11 +776,13 @@ export const machine = setup({
             // The browser is changing account (12): upload what is left, then empty the local
             // copy. Any other news ends it, and syncing goes on as before.
             if (event.leaving) {
-              enqueue.assign({ leaving: true });
+              enqueue.assign({ leaving: true, keep: event.keep === true });
               enqueue.raise({ type: "_leave" });
               return;
             }
-            if (context.leaving) enqueue.assign({ leaving: false });
+            if (context.leaving) enqueue.assign({ leaving: false, keep: false });
+            // A keep called off (12): the copy stays this account's, so its mark goes.
+            if (context.keep) enqueue(() => context.store.metaPut("adopt", null).catch(() => {}));
             const userId = event.userId;
             if (userId === context.userId) return;
             if (userId) {
@@ -737,7 +800,7 @@ export const machine = setup({
         emptying: {
           invoke: {
             src: "empty",
-            input: ({ context }) => ({ store: context.store }),
+            input: ({ context }) => ({ store: context.store, keep: context.keep, from: context.userId }),
             onDone: { target: "left" },
             onError: { target: "left" },
           },
@@ -822,6 +885,10 @@ function applySync(context, output, enqueue) {
   const { acks = [], pulled = [], newCursor, authFailed } = output;
 
   for (const ack of acks) {
+    if (ack.kind === "adopt") {
+      applyAdopted(context, ack, enqueue);
+      continue;
+    }
     if (ack.kind === "open") {
       // The open was acknowledged; adopt the server's time so a later pull's open is
       // compared fairly. Only drain the outbox row if a newer open has not queued since.
@@ -927,4 +994,31 @@ function applySync(context, output, enqueue) {
     // `session` to re-check so the auth control flips too (session.rejected).
     signOut(context, enqueue, { sawReject: true });
   }
+}
+
+// A book of this browser's copy reached the account (adopt), or could not. Added: the
+// account's row is cached and announced, keeping the place. Already the account's: the
+// account's copy replaces this browser's, whose file and versions are another server's,
+// and a book the account deleted goes. Its file missing or unreadable: the book cannot
+// be added, so it goes from this browser's copy, which keeps it on the Mac's own server,
+// and the notice says the file could not be read.
+function applyAdopted(context, ack, enqueue) {
+  context.outbox.delete(ack.id);
+  const current = context.books.get(ack.book);
+  const server = ack.row ?? ack.had;
+  if (server) {
+    const record = serverRecord(server);
+    if (ack.row && current) record.position = current.position;
+    context.books.set(ack.book, record);
+    enqueue(() => context.store.put(record).catch(() => {}));
+    if (!record.deleted) enqueue.emit(changed(record, pendingFor(context, ack.book)));
+    else if (visible(current)) enqueue.emit({ type: "book.deleted", id: ack.book });
+    return;
+  }
+  if (!current) return;
+  const record = { ...current, deleted: true };
+  context.books.set(ack.book, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  if (visible(current)) enqueue.emit({ type: "book.deleted", id: ack.book });
+  enqueue.emit({ type: "book.refused", id: ack.book, reason: "unreadable" });
 }

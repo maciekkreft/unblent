@@ -57,6 +57,41 @@ const api = {
       URL.revokeObjectURL(url);
     }
   },
+  // Adds a book of this browser's copy to the account the browser joined (12, keep): its
+  // file is read from the Mac's own server, which X-Unblent-Local asks for past the relay
+  // (3.4), and uploaded as an import; then its place and the user's title are sent. A file
+  // the Mac does not have (404) or that is not an epub (422) cannot be added; a 401 is the
+  // session; anything else throws, so the machine retries it at the next sync, as offline.
+  async adopt(row) {
+    const local = await fetch(`/api/books/${row.book}/source`, {
+      credentials: "same-origin",
+      headers: { "X-Unblent-Local": "1", Accept: "application/epub+zip" },
+    });
+    if (local.status === 404) return { error: "unreadable" };
+    if (!local.ok) throw new Error(`books source ${local.status}`);
+    const res = await fetch(`/api/books/${row.book}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/epub+zip", Accept: "application/json" },
+      body: await local.blob(),
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (res.status === 422) return { error: "unreadable" };
+    if (!res.ok) throw new Error(`books adopt ${res.status}`);
+    let book = await res.json();
+    const { chapter = 0, block = 0 } = row.position ?? {};
+    if (chapter !== 0 || block !== 0) {
+      const placed = await api.position(row.book, chapter, block);
+      if (placed.error) return placed;
+      book = placed;
+    }
+    if (row.title) {
+      const titled = await api.title(row.book, row.title);
+      if (titled.error) return titled;
+      book = titled;
+    }
+    return { row: book };
+  },
   async position(id, chapterIndex, block) {
     const res = await fetch(`/api/books/${id}/position`, {
       method: "PUT",

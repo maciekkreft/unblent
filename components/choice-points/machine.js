@@ -132,15 +132,39 @@ const ready = (context, enqueue) => {
 
 // The browser changed account while this fact was not on the page (12): a copy kept for
 // another account, with nothing of it left to upload, is emptied before it is read, so
-// none of it is shown to the account now signed in or uploaded as its own.
+// none of it is shown to the account now signed in or uploaded as its own. A copy marked
+// to be added to the account (12, keep) is kept instead, and `keepFor` sends it.
 // The copy is marked with the account it now follows, so the next account change finds it.
 async function claim(store, ask) {
   const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
   const userId = typeof session?.userId === "string" ? session.userId : null;
   if (!userId) return;
-  const [kept, outbox] = await Promise.all([store.metaGet("userId"), store.outboxAll()]);
-  if (kept && kept !== userId && outbox.length === 0) await store.empty();
+  const [kept, outbox, from] = await Promise.all([store.metaGet("userId"), store.outboxAll(), store.metaGet("adopt")]);
+  if (kept && kept !== userId && outbox.length === 0 && !from) await store.empty();
   if (kept !== userId) await store.metaPut("userId", userId).catch(() => {});
+  await keepFor(store, from, userId);
+}
+
+// The browser joined an account keeping this copy (12, keep): every choice point is queued
+// for the account on the version it holds, which the server adopts on first insert, and
+// the cursor goes back to 0, so the pull then brings the account's own. A tombstone is not sent: the account never had the record, so there is nothing
+// to delete. The mark is
+// cleared only once every row is stored in the outbox, so a reload midway sends the copy
+// again (coalesced by id) rather than losing it. A mark left by a change of account that
+// was called off names the account still signed in, and is only cleared.
+async function keepFor(store, from, userId) {
+  if (!from) return;
+  if (from !== userId) {
+    const [records, outbox] = await Promise.all([store.all(), store.outboxAll()]);
+    const queued = new Set(outbox.map((row) => row.id));
+    for (const r of records.filter((r) => isId(r?.id) && isDay(r?.day)).map(record)) {
+      if (r.deleted || queued.has(r.id)) continue;
+      const row = outboxRow(r, r.version);
+      await store.outboxPut(row);
+    }
+    await store.metaPut("cursor", 0);
+  }
+  await store.metaPut("adopt", null);
 }
 
 export const machine = setup({
@@ -166,7 +190,9 @@ export const machine = setup({
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
     // Empties the local copy in one transaction, outbox and cache together (12).
-    empty: fromPromise(({ input }) => input.store.empty()),
+    // With keep (12) the copy stays and is marked, under the account it came from, to be
+    // added to the account the browser joins after the reload.
+    empty: fromPromise(({ input }) => (input.keep ? input.store.metaPut("adopt", input.from ?? true) : input.store.empty())),
     // One sync: drain the outbox in id order, then pull what changed since the cursor
     // when asked to. It returns a summary the machine applies; it never emits (4.3). A
     // network error stops it with what it had; 401 reports the session is gone.
@@ -230,13 +256,17 @@ export const machine = setup({
     queued: [],
     // The browser is changing account (12), from session.changed until it is over.
     leaving: false,
+    // The browser joins the next account keeping this copy (12, keep).
+    keep: false,
     resync: false,
     pull: false,
   }),
   // While loading, only whether the browser is leaving is kept (12); the rest of the
   // news is read from session once the store is loaded.
   on: {
-    "session.changed": { actions: assign({ leaving: ({ event }) => event.leaving === true }) },
+    "session.changed": {
+      actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
+    },
   },
   initial: "loading",
   states: {
@@ -297,11 +327,13 @@ export const machine = setup({
             // The browser is changing account (12): upload what is left, then empty the local
             // copy. Any other news ends it, and syncing goes on as before.
             if (event.leaving) {
-              enqueue.assign({ leaving: true });
+              enqueue.assign({ leaving: true, keep: event.keep === true });
               enqueue.raise({ type: "_leave" });
               return;
             }
-            if (context.leaving) enqueue.assign({ leaving: false });
+            if (context.leaving) enqueue.assign({ leaving: false, keep: false });
+            // A keep called off (12): the copy stays this account's, so its mark goes.
+            if (context.keep) enqueue(() => context.store.metaPut("adopt", null).catch(() => {}));
             const userId = event.userId;
             if (userId === context.userId) return;
             enqueue.assign({ userId });
@@ -324,7 +356,7 @@ export const machine = setup({
         emptying: {
           invoke: {
             src: "empty",
-            input: ({ context }) => ({ store: context.store }),
+            input: ({ context }) => ({ store: context.store, keep: context.keep, from: context.userId }),
             onDone: { target: "left" },
             onError: { target: "left" },
           },

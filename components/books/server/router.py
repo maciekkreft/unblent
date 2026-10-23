@@ -30,6 +30,7 @@ router = APIRouter()
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 _NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+_ID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 # The browser's HTTP cache is the only copy of a chapter or image (Decision 2); the
 # content-version URL prefix makes a re-import a different URL, so the old cache lapses.
 _IMMUTABLE = "private, max-age=31536000, immutable"
@@ -304,6 +305,20 @@ def _first_book(user_id: str) -> None:
             purge(book_dir)
             raise
         _insert(connection, FIRST_BOOK, fields)
+
+
+# The connected local edition (3.4): the Mac's own file of a book, which the browser asks
+# for past the relay with X-Unblent-Local to add the book to the account it joined (12,
+# keep). Only the local account's files, and only in the local edition; 404 on the web.
+@router.get("/{book_id}/source")
+def get_source(book_id: str, user_id: str = Depends(require_user)):
+    local = local_user()
+    if not local or user_id != local or not _ID.match(book_id):
+        raise HTTPException(status_code=404)
+    path = _book_dir(local, book_id) / "source.epub"
+    if not path.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(path, media_type="application/epub+zip")
 
 
 @router.get("")
