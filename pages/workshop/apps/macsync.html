@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="kind" content="app" />
+    <title>MacSync</title>
+    <link rel="stylesheet" href="/static/tokens/tokens.css" />
+    <link rel="stylesheet" href="/static/tokens/base.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "lit": "/static/vendor/lit/lit-core.min.js",
+          "xstate": "/static/vendor/xstate/xstate.esm.js",
+          "ulid": "/static/vendor/ulid/index.js",
+          "dexie": "/static/vendor/dexie/dexie.mjs",
+          "@cfworker/json-schema": "/static/vendor/@cfworker/json-schema/dist/esm/index.js",
+          "bus": "/static/bus/bus.js",
+          "store": "/static/store/store.js",
+          "icons": "/static/tokens/icons.js",
+          "editor": "/static/editor/editor.js",
+          "@codemirror/state": "/static/vendor/@codemirror/state/dist/index.js",
+          "@codemirror/view": "/static/vendor/@codemirror/view/dist/index.js",
+          "@codemirror/commands": "/static/vendor/@codemirror/commands/dist/index.js",
+          "@codemirror/language": "/static/vendor/@codemirror/language/dist/index.js",
+          "@codemirror/search": "/static/vendor/@codemirror/search/dist/index.js",
+          "@replit/codemirror-vim": "/static/vendor/@replit/codemirror-vim/dist/index.js",
+          "@lezer/common": "/static/vendor/@lezer/common/dist/index.js",
+          "@lezer/highlight": "/static/vendor/@lezer/highlight/dist/index.js",
+          "@marijn/find-cluster-break": "/static/vendor/@marijn/find-cluster-break/src/index.js",
+          "style-mod": "/static/vendor/style-mod/src/style-mod.js",
+          "w3c-keyname": "/static/vendor/w3c-keyname/index.js",
+          "crelt": "/static/vendor/crelt/index.js"
+        }
+      }
+    </script>
+    <script type="module" src="/static/components/color-scheme/fact.js"></script>
+    <script type="module" src="/static/components/trace/fact.js"></script>
+    <script type="module" src="/static/components/pages/fact.js"></script>
+    <script type="module" src="/static/components/viewport/fact.js"></script>
+    <script type="module" src="/static/components/settings/fact.js"></script>
+    <script type="module" src="/static/components/session/fact.js"></script>
+    <script type="module" src="/static/components/pins/fact.js"></script>
+    <script type="module" src="/static/components/catalog/fact.js"></script>
+    <script type="module" src="/static/components/dock/fact.js"></script>
+    <script type="module" src="/static/components/notes/fact.js"></script>
+    <script type="module" src="/static/components/journal/fact.js"></script>
+    <script type="module" src="/static/components/books/fact.js"></script>
+    <script type="module" src="/static/components/subject/fact.js"></script>
+    <script type="module" src="/static/components/llm/fact.js"></script>
+    <script type="module" src="/static/components/conversations/fact.js"></script>
+    <script type="module" src="/static/components/evaluators/fact.js"></script>
+    <script type="module" src="/static/components/choice-points/fact.js"></script>
+    <script type="module" src="/static/components/choice-point-checks/fact.js"></script>
+    <script type="module" src="/static/components/generators/fact.js"></script>
+    <script type="module" src="/static/components/page-nav/view.js"></script>
+    <script type="module" src="/static/components/viewport-switch/view.js"></script>
+    <script type="module" src="/static/components/dock-desk/view.js"></script>
+    <script type="module" src="/static/components/note-list/view.js"></script>
+    <script type="module" src="/static/components/note-editor/view.js"></script>
+    <script type="module" src="/static/components/highlight-notes/view.js"></script>
+    <script type="module" src="/static/components/layout-switch/view.js"></script>
+    <script type="module" src="/static/components/profile-switch/view.js"></script>
+    <script type="module" src="/static/components/settings-sheet/view.js"></script>
+    <script type="module" src="/static/components/settings-tabs/view.js"></script>
+    <script type="module" src="/static/components/mac-account/view.js"></script>
+    <script type="module" src="/static/components/notice-stack/view.js"></script>
+    <script type="module" src="/static/components/book-shelf/view.js"></script>
+    <script type="module" src="/static/components/book-toc/view.js"></script>
+    <script type="module" src="/static/components/book-reader/view.js"></script>
+    <script type="module" src="/static/components/journal-entry/view.js"></script>
+    <script type="module" src="/static/components/choice-point-cards/view.js"></script>
+    <script type="module" src="/static/components/book-stage/view.js"></script>
+    <script type="module" src="/static/components/conversation-list/view.js"></script>
+    <script type="module" src="/static/components/chat-thread/view.js"></script>
+    <script type="module" src="/static/components/chat-input/view.js"></script>
+    <script type="module" src="/static/components/list-then-item/view.js"></script>
+    <script type="module" src="/static/components/evaluator-list/view.js"></script>
+    <script type="module" src="/static/components/evaluator-editor/view.js"></script>
+    <script type="module" src="/static/components/generator-settings/view.js"></script>
+    <script type="module" src="/static/composer/composer.js"></script>
+  </head>
+  <body>
+    <page-nav></page-nav>
+    <dock-desk>
+      <book-stage label="Reader" height="fill" shows-on="note.staged"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"><choice-point-cards></choice-point-cards></journal-entry><note-editor id="stage" stage height="fill"></note-editor></book-stage>
+      <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
+        <book-shelf label="Books" renames></book-shelf>
+        <book-toc shows-on="book.selected"></book-toc>
+      </list-then-item>
+      <list-then-item id="notes" label="Notes" side="right" height="fill" shows-on="note.selected">
+        <note-list subject label="Notes"></note-list>
+        <note-editor id="notes-editor" follows subject height="fill" shows-on="note.selected"></note-editor>
+        <highlight-notes shows-on="highlights.selected" height="fill"></highlight-notes>
+      </list-then-item>
+      <list-then-item id="chats" label="Chats" side="right" height="fill" shows-on="conversation.selected">
+        <conversation-list subject label="Chats"></conversation-list>
+        <chat-thread shows-on="conversation.selected" height="fill" markdown><chat-input></chat-input></chat-thread>
+      </list-then-item>
+      <list-then-item id="evaluators" label="Evaluators" side="right" height="fill" shows-on="evaluator.selected">
+        <evaluator-list subject label="Evaluators"></evaluator-list>
+        <evaluator-editor subject shows-on="evaluator.selected" height="fill"></evaluator-editor>
+      </list-then-item>
+      <profile-switch control></profile-switch>
+      <layout-switch control></layout-switch>
+      <settings-tabs label="Settings" button="gear">
+        <settings-sheet label="Settings" account></settings-sheet>
+        <generator-settings label="Generators"></generator-settings>
+        <mac-account label="Account"></mac-account>
+      </settings-tabs>
+    </dock-desk>
+    <viewport-switch></viewport-switch>
+    <notice-stack></notice-stack>
+  </body>
+</html>

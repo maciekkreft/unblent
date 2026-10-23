@@ -354,11 +354,15 @@ function handing(stored, impl, pendingAnswers = [false]) {
   const went = [];
   const saved = [];
   const events = [];
-  const calls = { viewAs: [], back: 0 };
+  const calls = { viewAs: [], back: 0, connectBegin: 0, connectCommit: 0, disconnect: 0, me: 0 };
+  const opened = [];
   const api = {
     viewAs: async (user) => (calls.viewAs.push(user), impl.viewAs),
     back: async () => (calls.back++, impl.back),
-    me: async () => ({ error: "unavailable" }),
+    me: async () => (calls.me++, impl.me ?? { error: "unavailable" }),
+    connectBegin: async () => (calls.connectBegin++, impl.connectBegin),
+    connectCommit: async () => (calls.connectCommit++, impl.connectCommit),
+    disconnect: async () => (calls.disconnect++, impl.disconnect),
   };
   const actor = createActor(machine, {
     input: {
@@ -368,14 +372,15 @@ function handing(stored, impl, pendingAnswers = [false]) {
       pending: async () => (pendingAnswers.length > 1 ? pendingAnswers.shift() : pendingAnswers[0]),
       sleep: async (ms) => void (t += ms),
       now: () => t,
-      go: (picture) => went.push(picture),
+      go: (path) => went.push(path),
+      open: (url) => opened.push(url),
       waitMs: 1000,
     },
   });
   actor.on("session.changed", (e) => events.push(e));
   actor.on("session.refused", (e) => events.push(e));
   actor.start();
-  return { actor, went, saved, events, calls };
+  return { actor, went, saved, events, calls, opened };
 }
 
 const ADMIN = { userId: "a1", registrationOpen: false, admin: true, name: "Admin" };
@@ -387,7 +392,7 @@ test("View as tells the facts the browser is leaving, waits for the outboxes, th
   await flush(12);
   assert.deepEqual(h.events, [{ type: "session.changed", ...ADMIN, leaving: true }], "leaving, and nothing more is announced");
   assert.deepEqual(h.calls.viewAs, ["g14"], "the cookie changes only once no outbox holds a row");
-  assert.deepEqual(h.went, [{ userId: "g14", registrationOpen: false, guest: true, name: "Guest 14", viewingAs: "Guest 14" }]);
+  assert.deepEqual(h.went, ["/try/evaluators"], "the guest's try page");
   assert.equal(h.saved.at(-1).viewingAs, "Guest 14", "the reloaded page starts as the guest");
 });
 
@@ -418,7 +423,7 @@ test("Back to you needs no passkey and opens the admin's own page", async () => 
   h.actor.send({ type: "viewas.requested", user: null });
   await flush(12);
   assert.equal(h.calls.back, 1);
-  assert.deepEqual(h.went, [ADMIN]);
+  assert.deepEqual(h.went, ["/"]);
   assert.equal(h.saved.at(-1).viewingAs, null);
 });
 
@@ -441,4 +446,92 @@ test("read? says whom the admin is viewing as, and never that they are the admin
   let reply;
   h.actor.send({ type: "read?", cid: "c", payload: {}, reply: (v) => (reply = v) });
   assert.deepEqual(reply, GUEST_VIEW);
+});
+
+// Connecting this Mac to an account (3.4) is a change of who the browser belongs to (12).
+const MAC = { userId: "d1", registrationOpen: false, admin: true, name: "Unblent", connect: "off" };
+const READY = { ...MAC, connect: "ready", remote: "Maciek" };
+const ACCOUNT = { userId: "a1", registrationOpen: false, admin: true, name: "Maciek", connect: "on", remote: "Maciek" };
+
+test("Connect account opens the connect page the Mac's server names, only while off", async () => {
+  const h = handing(MAC, { connectBegin: { url: "https://app.example/workshop/apps/connect?state=s" } });
+  h.actor.send({ type: "connect.requested" });
+  await flush();
+  assert.deepEqual(h.opened, ["https://app.example/workshop/apps/connect?state=s"]);
+  const failing = handing(MAC, { connectBegin: { error: "unavailable" } });
+  failing.actor.send({ type: "connect.requested" });
+  await flush();
+  assert.deepEqual(failing.opened, []);
+  assert.deepEqual(failing.events, [{ type: "session.refused", reason: "unavailable" }]);
+  const web = handing(ADMIN, { connectBegin: { url: "x" } });
+  web.actor.send({ type: "connect.requested" });
+  await flush();
+  assert.equal(web.calls.connectBegin, 0, "the web edition has nothing to connect");
+});
+
+test("a revalidation that finds the sign-in ready announces it with the account's name", async () => {
+  const { api } = fakeApi({ me: READY });
+  const { actor, events, saved } = start(MAC, api);
+  actor.send({ type: "_revalidate" });
+  await flush();
+  assert.deepEqual(events, [{ type: "session.changed", ...READY }]);
+  assert.equal(saved.at(-1).connect, "ready", "kept for a reload offline");
+  let reply;
+  actor.send({ type: "read?", cid: "c", payload: {}, reply: (v) => (reply = v) });
+  assert.deepEqual(reply, READY);
+});
+
+for (const keep of [false, true]) {
+  test(`Connect with keep ${keep}: leaving, the outboxes empty, the relay on, then /mac as the account`, async () => {
+    const h = handing(READY, { connectCommit: { connect: "on", remote: "Maciek" }, me: ACCOUNT }, [true, false]);
+    h.actor.send({ type: "connect.confirmed", keep });
+    await flush(12);
+    assert.deepEqual(h.events, [{ type: "session.changed", ...READY, leaving: true, keep }]);
+    assert.equal(h.calls.connectCommit, 1);
+    assert.deepEqual(h.went, ["/mac"]);
+    assert.equal(h.saved.at(-1).userId, "a1", "the reloaded page starts as the account");
+    assert.equal(h.saved.at(-1).connect, "on");
+  });
+}
+
+test("Connect is refused when nothing is ready, and offline after commit starts signed out", async () => {
+  const off = handing(MAC, {});
+  off.actor.send({ type: "connect.confirmed", keep: false });
+  await flush(6);
+  assert.deepEqual(off.events, []);
+  const h = handing(READY, { connectCommit: { connect: "on", remote: "Maciek" } });
+  h.actor.send({ type: "connect.confirmed", keep: false });
+  await flush(12);
+  assert.deepEqual(h.went, ["/mac"]);
+  assert.equal(h.saved.at(-1).userId, null);
+  assert.equal(h.saved.at(-1).connect, "on");
+});
+
+test("Disconnect uploads to the account first, then turns the relay off and opens the Mac's own copy", async () => {
+  const h = handing(ACCOUNT, { disconnect: { connect: "off" }, me: MAC }, [true, true, false]);
+  h.actor.send({ type: "disconnect.requested" });
+  await flush(12);
+  assert.deepEqual(h.events, [{ type: "session.changed", ...ACCOUNT, leaving: true, keep: false }]);
+  assert.equal(h.calls.disconnect, 1);
+  assert.deepEqual(h.went, ["/mac"]);
+  assert.equal(h.saved.at(-1).userId, "d1");
+  assert.equal(h.saved.at(-1).connect, "off");
+});
+
+test("Disconnect with changes that cannot be sent changes nothing and says so (12)", async () => {
+  const h = handing(ACCOUNT, { disconnect: { connect: "off" } }, [true]);
+  h.actor.send({ type: "disconnect.requested" });
+  await flush(40);
+  assert.equal(h.calls.disconnect, 0, "the relay stays on");
+  assert.deepEqual(h.went, []);
+  assert.deepEqual(h.events.slice(1), [{ type: "session.changed", ...ACCOUNT }, { type: "session.refused", reason: "unsaved" }]);
+});
+
+test("Cancel on the choice forgets the waiting sign-in without a change of account", async () => {
+  const h = handing(READY, { disconnect: { connect: "off" }, me: MAC });
+  h.actor.send({ type: "disconnect.requested" });
+  await flush(12);
+  assert.equal(h.calls.disconnect, 1);
+  assert.deepEqual(h.went, [], "no reload: the browser never left the Mac's copy");
+  assert.deepEqual(h.events, [{ type: "session.changed", ...MAC }]);
 });

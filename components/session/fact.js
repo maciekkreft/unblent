@@ -204,6 +204,33 @@ const api = {
       return { error: "unavailable" };
     }
   },
+  // Connecting this Mac to an account, in the Mac app (3.4): begin names the connect
+  // page to open, commit turns the relay on once the outboxes are empty, disconnect
+  // turns it off. Always the Mac's own routes, never relayed.
+  async connectBegin() {
+    try {
+      const res = await post("/connect/begin");
+      return res.ok ? { url: (await res.json()).url } : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
+  async connectCommit() {
+    try {
+      const res = await post("/connect/commit");
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
+  async disconnect() {
+    try {
+      const res = await post("/connect/disconnect");
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
   async logout() {
     try {
       const res = await post("/logout");
@@ -227,7 +254,9 @@ const actor = mount(machine, {
     pending: () => outboxesHoldRows().catch(() => true),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
-    go: (picture) => location.assign(picture.guest ? "/try/evaluators" : "/"),
+    go: (path) => location.assign(path),
+    // The Mac app's shell opens a window.open address in the user's browser (3.4).
+    open: (url) => window.open(url, "_blank"),
   },
   events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged },
   queries: { read, guest, people, connect, connectCode },
@@ -237,6 +266,9 @@ const actor = mount(machine, {
 // is how a sign-in or sign-out on another device arrives, and how an owed sign-out
 // is retried. Reading visibilityState is a read of the document, allowed to any
 // component; the machine only ever receives the message, so it stays Node-importable.
+// The Mac app's window stays visible behind Safari, so its focus counts too: coming
+// back from the connect page is how a waiting device sign-in arrives (3.4).
 const revalidate = () => actor.send({ type: "_revalidate" });
 document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && revalidate());
+window.addEventListener("focus", revalidate);
 revalidate();

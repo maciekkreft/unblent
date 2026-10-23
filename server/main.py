@@ -15,6 +15,7 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from server.relay import Relay
+from server.user import remote
 
 ROOT = Path(__file__).resolve().parent.parent
 VENDOR = ROOT / "vendor"
@@ -139,6 +140,15 @@ async def app_page(name: str) -> FileResponse:
     if not page.is_file() or page.parent != PAGES_APPS:
         raise HTTPException(status_code=404)
     return FileResponse(page, headers={"Cache-Control": "no-cache"})
+
+
+# The page the Mac app opens (3.4, 8): the connected Mac page while the relay forwards
+# to an account, otherwise the Mac's own.
+@app.api_route("/mac", methods=["GET", "HEAD"])
+async def mac_page() -> FileResponse:
+    held = remote()
+    page = "macsync" if held and held["state"] == "on" else "macapp"
+    return FileResponse(PAGES_APPS / f"{page}.html", headers={"Cache-Control": "no-cache"})
 
 
 # A try page (8, 11.1): one tool shared by a link with someone who has no account.

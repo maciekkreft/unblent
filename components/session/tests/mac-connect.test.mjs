@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -197,4 +197,20 @@ test("another site cannot begin, commit or disconnect; the web edition has none 
   }
   assert.equal((await fetch(`${web}/api/session/connect/finish?state=x&code=y`)).status, 404);
   assert.equal((await (await fetch(`${web}/api/session/me`)).json()).connect, undefined);
+});
+
+test("/mac opens the connected Mac page while connected; disconnect also drops the disk copy of book files", async () => {
+  const title = async () => (await (await fetch(`${mac}/mac`)).text()).match(/<title>(.*)<\/title>/)[1];
+  assert.equal(await title(), "MacApp");
+  const { state, code } = await begin();
+  assert.equal((await finish({ code, state })).status, 200);
+  assert.equal(await title(), "MacApp", "a sign-in waiting for the hand-over is not connected yet");
+  assert.equal((await onMac("POST", "/connect/commit")).status, 200);
+  assert.equal(await title(), "MacSync");
+  const cache = join(macData, "remote-cache");
+  mkdirSync(cache, { recursive: true });
+  writeFileSync(join(cache, "chapter"), "the account's book");
+  await onMac("POST", "/connect/disconnect");
+  assert.equal(existsSync(cache), false, "nothing of the account stays on the Mac (5)");
+  assert.equal(await title(), "MacApp");
 });

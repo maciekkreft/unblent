@@ -18,7 +18,8 @@ use tauri_plugin_updater::UpdaterExt;
 
 // mac/serve.py's port: the webview keeps its storage per origin, so it never changes.
 const DEFAULT_PORT: u16 = 47321;
-const PAGE: &str = "/workshop/apps/macapp";
+// /mac serves the Mac page, or the connected Mac page while the Mac is connected (3.4).
+const PAGE: &str = "/mac";
 const READY_PATH: &str = "/api/session/me";
 // A first open can be slow while macOS checks every file of the new app once.
 const READY_TIMEOUT: Duration = Duration::from_secs(60);

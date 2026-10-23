@@ -12,6 +12,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -28,6 +29,7 @@ from webauthn.helpers.structs import (
 )
 
 from server.user import (
+    DATA,
     SESSION_COOKIE,
     clear_remote,
     clear_session_cookie,
@@ -467,10 +469,12 @@ def connect_commit(request: Request):
 @router.post("/connect/disconnect")
 def connect_disconnect(request: Request):
     # The undo of connecting (3.4): the token is forgotten and the Mac's own copy is
-    # back. Harmless when there is nothing to forget.
+    # back. Harmless when there is nothing to forget. The relay's disk copy of the
+    # account's book files goes too: nothing of the account stays on the Mac (5).
     _local_only()
     _same_origin(request)
     clear_remote()
+    shutil.rmtree(DATA / "remote-cache", ignore_errors=True)
     return connection()
 
 

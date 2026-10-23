@@ -25,8 +25,19 @@ const clean = (value) => {
     admin: v.userId != null && v.admin === true,
     name: v.userId != null && typeof v.name === "string" ? v.name : null,
     viewingAs: v.userId != null && typeof v.viewingAs === "string" ? v.viewingAs : null,
+    // The local edition's connection (3.4), kept so a reload offline still shows it.
+    ...connection(v),
   };
 };
+
+// Whether this Mac is connected to an account, and that account's name (3.4). Absent
+// outside the local edition, so the web's picture is the same as before.
+const CONNECT = ["off", "ready", "on"];
+function connection(answer) {
+  const connect = CONNECT.includes(answer.connect) ? answer.connect : null;
+  const remote = connect && connect !== "off" && typeof answer.remote === "string" ? answer.remote : null;
+  return { connect, remote };
+}
 
 // What the account is, from a server answer: absent flags read as false (3.4).
 const account = (answer) => ({
@@ -46,6 +57,8 @@ const picture = (c) => ({
   ...(c.admin ? { admin: true } : {}),
   ...(c.name ? { name: c.name } : {}),
   ...(c.viewingAs ? { viewingAs: c.viewingAs } : {}),
+  ...(c.connect ? { connect: c.connect } : {}),
+  ...(c.remote != null ? { remote: c.remote } : {}),
 });
 const changed = (c) => ({ type: "session.changed", ...picture(c) });
 
@@ -67,6 +80,8 @@ const persist = ({ context }) =>
       admin: context.admin,
       name: context.name,
       viewingAs: context.viewingAs,
+      connect: context.connect,
+      remote: context.remote,
     }),
   );
 
@@ -75,6 +90,23 @@ const persist = ({ context }) =>
 const mayHand = ({ context, event }) =>
   Boolean(context.userId) &&
   (event.user == null ? Boolean(context.viewingAs) : context.admin && !context.viewingAs && event.user !== context.userId);
+
+// The server's half of a change of account (12), once the outboxes are empty.
+async function switchOf(api, change) {
+  if (change.type === "viewas.requested") {
+    const picture = change.user == null ? await api.back() : await api.viewAs(change.user);
+    if (picture?.error || !picture?.userId) return { error: "unavailable" };
+    return { picture, path: picture.guest ? "/try/evaluators" : "/" };
+  }
+  // Connect and Disconnect (3.4): /mac serves the page of whichever copy the Mac now
+  // shows. /me is asked after the switch, so the reloaded page starts as the account it
+  // will show; offline, it starts signed out and the next revalidation says who.
+  const done = change.type === "connect.confirmed" ? await api.connectCommit() : await api.disconnect();
+  if (done?.error) return { error: "unavailable" };
+  const me = await api.me();
+  const picture = me?.error ? { userId: null, registrationOpen: false, ...done } : me;
+  return { picture, path: "/mac" };
+}
 
 export const machine = setup({
   actors: {
@@ -98,9 +130,11 @@ export const machine = setup({
     logout: fromPromise(({ input }) => input.api.logout()),
     // Hand the browser to another account (12). The replicated facts were told
     // `leaving` and upload their outboxes, then empty their local copies; this waits
-    // until no outbox in the browser holds a row, then has the server change the
-    // cookie. A first pause lets a fact with nothing to upload empty its copy before
-    // the first look. Returns the new picture, or { error }.
+    // until no outbox in the browser holds a row, then has the server make the change:
+    // a new cookie for View as and Back to you, the relay turned on or off for Connect
+    // and Disconnect (3.4). A first pause lets a fact with nothing to upload empty its
+    // copy before the first look. Returns { picture, path } of the account the browser
+    // now holds and the page to open, or { error }.
     handOver: fromPromise(async ({ input }) => {
       const deadline = input.now() + input.waitMs;
       await input.sleep(input.firstMs);
@@ -108,7 +142,7 @@ export const machine = setup({
         if (input.now() >= deadline) return { error: "unsaved" };
         await input.sleep(input.stepMs);
       }
-      return input.user == null ? input.api.back() : input.api.viewAs(input.user);
+      return switchOf(input.api, input.change);
     }),
     // Who am I, per the server. When a sign-out is owed, retry it first and report
     // whether it was acknowledged, so a still-signed-in answer can be ignored.
@@ -142,7 +176,13 @@ export const machine = setup({
       "their own included; it is off at first. On the web, an account with Can sync on may " +
       "connect a Mac: the connect page asks for a one-time code, good for one try within two " +
       "minutes, which the Mac trades for a lasting sign-in of its own. While Can sync is off, " +
-      "the account gets no code and its connected Macs are treated as signed out.",
+      "the account gets no code and its connected Macs are treated as signed out. In the Mac " +
+      "app it also knows whether the Mac is connected to an account, and that account's name. " +
+      "Connect account opens the connect page in the user's browser; once the user has chosen " +
+      "how to connect, what is not yet saved on the Mac is saved there, the local copies are " +
+      "emptied and the page reloads as the account. Disconnect does the same the other way, " +
+      "and like View as it changes nothing, with a notice, if that cannot be done within a few " +
+      "seconds.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
@@ -163,6 +203,8 @@ export const machine = setup({
     sleep: input.sleep,
     now: input.now,
     go: input.go,
+    // Opening an address outside the app: the Mac app's shell sends it to the browser.
+    open: input.open,
     waitMs: input.waitMs ?? 5000,
   }),
   initial: "ready",
@@ -260,6 +302,42 @@ export const machine = setup({
           target: "handing",
           actions: emit(({ context }) => ({ ...changed(context), leaving: true })),
         },
+        // Connect account in the Mac app (3.4): the server keeps a secret and names the
+        // connect page, which opens in the user's browser; the shell sends it to Safari.
+        "connect.requested": {
+          guard: ({ context }) => context.connect === "off",
+          actions: ({ context, self }) =>
+            Promise.resolve()
+              .then(() => context.api.connectBegin())
+              .then((reply) => (typeof reply?.url === "string" ? context.open(reply.url) : self.send({ type: "_refused", reason: "unavailable" })))
+              .catch(() => self.send({ type: "_refused", reason: "unavailable" })),
+        },
+        // The user chose how to connect (3.4): a change of who the browser belongs to
+        // (12). With keep the facts are to keep their copy and send it to the account;
+        // until they do (plan step 7), they empty it as on any change.
+        "connect.confirmed": {
+          guard: ({ context }) => context.connect === "ready",
+          target: "handing",
+          actions: emit(({ context, event }) => ({ ...changed(context), leaving: true, keep: event.keep === true })),
+        },
+        // Disconnect while connected is the same change back to the Mac's own copy (12).
+        "disconnect.requested": [
+          {
+            guard: ({ context }) => context.connect === "on",
+            target: "handing",
+            actions: emit(({ context }) => ({ ...changed(context), leaving: true, keep: false })),
+          },
+          // Cancel before connecting: the browser never left the Mac's copy, so the
+          // waiting sign-in is only forgotten, and nothing is uploaded or emptied.
+          {
+            guard: ({ context }) => context.connect === "ready",
+            actions: ({ context, self }) =>
+              Promise.resolve()
+                .then(() => context.api.disconnect())
+                .then((reply) => (reply?.error ? self.send({ type: "_refused", reason: "unavailable" }) : self.send({ type: "_revalidate" })))
+                .catch(() => self.send({ type: "_refused", reason: "unavailable" })),
+          },
+        ],
         // Sign out is local-first (5): announce it at once so the UI flips, mark it
         // owed, then tell the server. An offline logout is retried on revalidation.
         "signout.requested": {
@@ -271,7 +349,7 @@ export const machine = setup({
           ],
           target: "deauthing",
         },
-        // Internal (7.2): sent by fact.js on mount and when the tab regains focus.
+        // Internal (7.2): sent by fact.js on mount and when the window regains focus.
         _revalidate: { target: "revalidating" },
         // A fact's request was rejected by the server as unauthenticated (books emits
         // session.rejected on a 401): the cookie is gone though this cache still reads
@@ -357,7 +435,7 @@ export const machine = setup({
         src: "handOver",
         input: ({ context, event }) => ({
           api: context.api,
-          user: event.user ?? null,
+          change: { type: event.type, user: event.user ?? null },
           pending: context.pending,
           sleep: context.sleep,
           now: context.now,
@@ -370,16 +448,17 @@ export const machine = setup({
             // The server changed the cookie: keep the new picture so the reloaded page
             // starts as that account, and open its page. Nothing is announced: the
             // facts' in-memory copies belong to the account being left.
-            guard: ({ event }) => !event.output?.error && Boolean(event.output?.userId),
+            guard: ({ event }) => !event.output?.error && Boolean(event.output?.picture),
             actions: [
               assign(({ event }) => ({
-                userId: event.output.userId,
-                registrationOpen: event.output.registrationOpen === true,
+                userId: event.output.picture.userId ?? null,
+                registrationOpen: event.output.picture.registrationOpen === true,
                 logoutOwed: false,
-                ...account(event.output),
+                ...account(event.output.picture),
+                ...connection(event.output.picture),
               })),
               persist,
-              ({ context }) => context.go(picture(context)),
+              ({ context, event }) => context.go(event.output.path),
             ],
           },
           // Nothing changes (12): the facts stop leaving, and a notice says why.
@@ -426,7 +505,7 @@ export const machine = setup({
             // Offline or 5xx: keep the cached picture untouched (no news).
             if (me.error) return;
             const registrationOpen = me.registrationOpen === true;
-            const now = account(me);
+            const now = { ...account(me), ...connection(me) };
             if (context.logoutOwed) {
               // A sign-out is owed: never adopt a still-signed-in answer. If the
               // retry was acknowledged, stop owing; otherwise keep owing. userId is
@@ -447,7 +526,9 @@ export const machine = setup({
               now.guest !== context.guest ||
               now.admin !== context.admin ||
               now.name !== context.name ||
-              now.viewingAs !== context.viewingAs;
+              now.viewingAs !== context.viewingAs ||
+              now.connect !== context.connect ||
+              now.remote !== context.remote;
             enqueue.assign({ registrationOpen, userId: me.userId, ...now });
             if (userChanged || regChanged || accountChanged) {
               enqueue.emit(changed({ userId: me.userId, registrationOpen, ...now }));
