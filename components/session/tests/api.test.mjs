@@ -44,6 +44,15 @@ test("register/begin refuses an Origin whose host is not the RP id", async () =>
   assert.equal(res.status, 400);
 });
 
+test("login/begin accepts an https subdomain of the RP id and refuses look-alikes", async () => {
+  // A page on app.<RP_ID> may use its parent's RP id (WebAuthn), so the passkeys
+  // registered at the parent keep working there.
+  assert.equal((await post("/login/begin", { Origin: "https://app.localhost" })).status, 200);
+  assert.equal((await post("/login/begin", { Origin: "http://app.localhost" })).status, 400);
+  assert.equal((await post("/login/begin", { Origin: "https://evillocalhost" })).status, 400);
+  assert.equal((await post("/login/begin", { Origin: "https://localhost.evil.example" })).status, 400);
+});
+
 test("register/finish with no challenge in progress is a 400", async () => {
   const res = await fetch(`${BASE_URL}/api/session/register/finish`, {
     method: "POST",

@@ -5,7 +5,7 @@ description: Make a try page for one tool (Chats, Books, the Journal, ...), the 
 
 # Making a try page for X
 
-A try page shares one tool by a link, `unblent.com/try/<name>`, with someone who has
+A try page shares one tool by a link, `app.unblent.com/try/<name>`, with someone who has
 no account (architecture.md 8). The Evaluators try page is the first one; copy it.
 
 ## 1. Copy the page file

@@ -49,16 +49,22 @@ def _passkeys() -> None:
 
 def _rp(request: Request) -> tuple[str, str]:
     """(rp_id, expected_origin): the configured RP_ID, and the request Origin only
-    when its host matches it. The RP id is never taken from the Origin (3.4)."""
+    when its host is RP_ID or, over https, a subdomain of it. The RP id is never
+    taken from the Origin (3.4)."""
     origin = request.headers.get("origin")
-    host = urlparse(origin).hostname if origin else None
+    parsed = urlparse(origin) if origin else None
+    host = parsed.hostname if parsed else None
     # Configured, never defaulted: an unset RP_ID must fail loudly rather than pin
     # the ceremony to a wrong domain, the same rule as SESSION_SECRET (server.user).
     rp_id = os.environ.get("RP_ID")
     if not rp_id:
         raise RuntimeError("RP_ID is not set")
     # A port is not part of the hostname, so localhost matches on any port.
-    if not host or host != rp_id:
+    # WebAuthn lets a page on a subdomain use its parent's RP id, so the app at
+    # app.unblent.com keeps the passkeys registered at unblent.com. The leading dot
+    # refuses a look-alike such as evilunblent.com.
+    subdomain = parsed is not None and parsed.scheme == "https" and bool(host) and host.endswith("." + rp_id)
+    if not host or (host != rp_id and not subdomain):
         raise HTTPException(status_code=400, detail="Origin does not match the configured RP")
     return rp_id, origin
 

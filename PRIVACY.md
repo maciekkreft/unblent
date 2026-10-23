@@ -1,6 +1,6 @@
 # Privacy
 
-This note covers Unblent for Mac. The hosted web app at unblent.com is a separate
+This note covers Unblent for Mac. The hosted web app at app.unblent.com is a separate
 service and is not described here.
 
 ## Where your data lives
