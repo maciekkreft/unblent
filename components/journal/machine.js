@@ -30,13 +30,62 @@ const endOf = (day) => {
   return new Date(y, m - 1, d + 1).getTime();
 };
 
+// --- Two days of one date --------------------------------------------------------------
+
+// One device never starts a second day beside the open one, but two devices can each
+// start the same date offline, and a journal added to an account can hold a date the
+// account already has; each record keeps its own id, so both arrive live. The journal
+// still shows one day per date: the newest, while the other waits for the user to keep
+// one of the two (journal.conflicted).
+const newest = (a, b) => (a.editedAt !== b.editedAt ? b.editedAt - a.editedAt : a.id < b.id ? 1 : -1);
+
+// The live records of each date, newest first.
+const byDate = (days) => {
+  const dates = new Map();
+  for (const d of days) {
+    if (d.deleted) continue;
+    if (!dates.has(d.day)) dates.set(d.day, []);
+    dates.get(d.day).push(d);
+  }
+  for (const list of dates.values()) list.sort(newest);
+  return dates;
+};
+
+// The days with a second record of a date that holds nothing the user could lose
+// deleted: an empty one beside a written one, and a copy of the same text, the newest
+// kept. Both stay as tombstones (5), so nothing is gone from the server.
+export const tidy = (days) => {
+  const gone = new Set();
+  for (const list of byDate(days).values()) {
+    if (list.length < 2) continue;
+    const written = list.filter((d) => d.text !== "");
+    const keep = written.length ? written : list.slice(0, 1);
+    const texts = new Set();
+    for (const d of list) {
+      if (!keep.includes(d) || texts.has(d.text)) gone.add(d.id);
+      else texts.add(d.text);
+    }
+  }
+  return gone.size ? days.map((d) => (gone.has(d.id) ? { ...d, deleted: true } : d)) : days;
+};
+
+// The days the journal shows: live, one per date, the newest.
+export const visible = (days) => [...byDate(tidy(days)).values()].map((list) => list[0]);
+
+// Two written records of one date, or null: the newest, which the journal shows, and
+// the next, which waits for the user's choice.
+export const clashOn = (days, date) => {
+  const list = byDate(tidy(days)).get(date) ?? [];
+  return list.length > 1 ? { kept: list[0], other: list[1] } : null;
+};
+
 // The day that can still be edited at `now`, or null: the one whose date is today, or
 // that was edited less than an hour ago, so writing past midnight keeps going in the
 // same entry. A new day is only started while none is open, so at most one qualifies;
 // the latest edited wins should a clock change ever let two.
 export const openDay = (days, now) =>
-  days
-    .filter((d) => !d.deleted && (d.day === dateOf(now) || now - d.editedAt < HOUR))
+  visible(days)
+    .filter((d) => d.day === dateOf(now) || now - d.editedAt < HOUR)
     .reduce((a, b) => (a && a.editedAt >= b.editedAt ? a : b), null);
 
 // The earliest moment the open day can close. Only a schedule: whether it is open is
@@ -89,6 +138,26 @@ const daySaved = (days, { id, text }, now) => {
   return [...days, { id, day: dateOf(now), text, editedAt: now, version: 1 }];
 };
 
+// The user kept one of the two copies journal.conflicted showed: a save, not left, of
+// one copy's exact text to the day the conflict named. That day takes the text, also
+// when it has closed, since the user only chose between what was already written, and
+// keeps its time of last edit unless it is the open day; the other record of the same
+// date, if there was one, becomes a tombstone (5). Anything else is an ordinary save.
+const kept = (context, { id, text, left }) => {
+  const choice = context.pending.get(id);
+  const day = context.days.find((d) => d.id === id && !d.deleted);
+  if (left || !choice || !day || !choice.copies.includes(text)) return null;
+  const now = context.now();
+  const open = openDay(context.days, now)?.id === id;
+  return mint(
+    context.days,
+    context.days.map((d) => {
+      if (d.id === id) return d.text === text ? d : { ...d, text, editedAt: open ? now : d.editedAt };
+      return d.id === choice.other && !d.deleted ? { ...d, deleted: true } : d;
+    }),
+  );
+};
+
 // --- The picture ----------------------------------------------------------------------
 
 // journal.changed and journal: read keep the fields of the journal's detectors and Jev's
@@ -97,8 +166,7 @@ const daySaved = (days, { id, text }, now) => {
 const body = (c) => {
   const open = openDay(c.days, c.now());
   return {
-    days: c.days
-      .filter((d) => !d.deleted)
+    days: visible(c.days)
       .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id))
       .map(({ id, day, text, editedAt, version }) => ({ id, day, text, editedAt, version, waiting: [], unanswered: [] })),
     projects: [],
@@ -118,9 +186,7 @@ const body = (c) => {
 const opened = (c) => {
   if (!c.shown) return { shown: null };
   const { day, writable } = c.shown;
-  const record = c.days
-    .filter((d) => !d.deleted && d.day === day)
-    .reduce((a, b) => (a && a.editedAt >= b.editedAt ? a : b), null);
+  const record = visible(c.days).find((d) => d.day === day);
   return { shown: { day, text: record?.text ?? "", writable: writable ?? day === dateOf(c.now()) } };
 };
 
@@ -128,14 +194,15 @@ const opened = (c) => {
 const between = (c, { from, to } = {}) => {
   const last = to ?? from;
   return {
-    days: c.days
-      .filter((d) => !d.deleted && d.text !== "" && (!from || d.day >= from) && (!last || d.day <= last))
+    days: visible(c.days)
+      .filter((d) => d.text !== "" && (!from || d.day >= from) && (!last || d.day <= last))
       .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id))
       .map(({ day, text }) => ({ day, text })),
   };
 };
 
-const remember = assign({ shown: ({ event }) => ({ day: event.day, ...(typeof event.writable === "boolean" ? { writable: event.writable } : {}) }) });
+const shownOf = (event) => ({ day: event.day, ...(typeof event.writable === "boolean" ? { writable: event.writable } : {}) });
+const remember = assign({ shown: ({ event }) => shownOf(event) });
 
 // --- The actor ------------------------------------------------------------------------
 
@@ -160,10 +227,32 @@ const arm = (enqueue, days, now) => {
   if (open) enqueue.raise({ type: "_close" }, { id: "close", delay: Math.min(closesAt(open) - now, 2 ** 31 - 1) });
 };
 
+// Two records of the date the page shows are put to the user as a conflict, the way a
+// day saved on two devices is: the newest is the day the page shows, "theirs", and the
+// other is offered as "mine", on the newest's version, so keeping it is a save of its
+// text to the shown day (kept). It is told when the page shows that date and again only
+// when either copy changes, so typing elsewhere does not repeat it.
+const tell = (enqueue, c, again = false) => {
+  const clash = c.shown && clashOn(c.days, c.shown.day);
+  if (!clash) return;
+  const { kept: day, other } = clash;
+  const copies = [day.text, other.text];
+  const was = c.pending.get(day.id);
+  if (!again && was?.other === other.id && same(was.copies, copies)) return;
+  enqueue.assign({ pending: new Map(c.pending).set(day.id, { copies, other: other.id }) });
+  enqueue.emit({
+    type: "journal.conflicted",
+    id: day.id,
+    mine: { text: other.text, baseVersion: day.version },
+    theirs: { text: day.text, version: day.version, editedAt: day.editedAt },
+  });
+};
+
 const announce = (enqueue, c) => {
   const picture = body(c);
   enqueue.assign({ open: picture.open });
   enqueue.emit({ type: "journal.changed", ...picture });
+  tell(enqueue, c);
 };
 
 // --- The outbox (5) -------------------------------------------------------------------
@@ -271,13 +360,15 @@ const applySync = (context, output, enqueue) => {
 
   // A day's text was written on a version another device had moved past. The server's
   // copy is kept and both copies are announced, so a view can show the user what they
-  // wrote rather than lose it.
+  // wrote rather than lose it, and keep either (kept).
+  const pending = new Map(context.pending);
   for (const { row, record } of conflicts) {
     const theirs = dayRecord(record);
     if (!theirs) continue;
     const mine = context.outbox.get(row.key) ?? row;
     dropRow(row.key);
     keep(theirs);
+    pending.set(theirs.id, { copies: [mine.record.text, theirs.text], other: null });
     enqueue.emit({
       type: "journal.conflicted",
       id: theirs.id,
@@ -299,11 +390,13 @@ const applySync = (context, output, enqueue) => {
     keep(r);
   }
 
+  if (conflicts.length) enqueue.assign({ pending });
   if (!same(days, context.days)) {
     persist(context.store, context.days, days, enqueue);
     enqueue.assign({ days });
-    announce(enqueue, { ...context, days });
+    announce(enqueue, { ...context, days, pending });
     arm(enqueue, days, context.now());
+    enqueue.raise({ type: "_tidy" });
   }
   if (newCursor !== undefined) {
     enqueue.assign({ cursor: newCursor });
@@ -316,6 +409,14 @@ const applySync = (context, output, enqueue) => {
 };
 
 const saved = enqueueActions(({ context, event, enqueue }) => {
+  const choice = kept(context, event);
+  if (choice) {
+    const pending = new Map(context.pending);
+    pending.delete(event.id);
+    enqueue.assign({ pending });
+    update({ ...context, pending }, enqueue, choice);
+    return;
+  }
   const days = daySaved(context.days, event, context.now());
   if (days) update(context, enqueue, days);
 });
@@ -417,7 +518,12 @@ export const machine = setup({
       "moves it to the account. A day's date is the local date when its first character was " +
       "typed and never changes. Only one day can be edited: the one whose date is today, or " +
       "that was edited less than an hour ago, so writing past midnight keeps going in the same " +
-      "entry; a save to any other day is refused. When no day can be edited, the journal opens " +
+      "entry; a save to any other day is refused. When a day was saved on two devices at once, " +
+      "or two records hold the same date (two devices each started it offline, or a journal was " +
+      "added to an account that already had that date), the journal shows one day per date, the " +
+      "newest, and puts both copies to the page showing that date; keeping one saves its text to " +
+      "that day, also once it has closed, and deletes the other record. A second record that is " +
+      "empty or holds the same text is deleted without asking. When no day can be edited, the journal opens " +
       "an empty page for today. The chat may read it through two lookups: the day the journal " +
       "page shows, with its text and whether it can still be written, remembered from what the " +
       "page last announced and kept only while the page is open; and the days in a range of " +
@@ -433,6 +539,9 @@ export const machine = setup({
     open: null,
     // The day the journal page shows (day.shown), in memory only, for journal: open.
     shown: null,
+    // The conflicts announced and not yet settled, by the id they named: the two copies'
+    // texts and, for two records of one date, the other record's id (kept).
+    pending: new Map(),
     userId: null,
     cursor: 0,
     outbox: new Map(),
@@ -475,6 +584,8 @@ export const machine = setup({
             // sign-in like any other.
             if (userId && userId !== output.stored) adopt(c, enqueue, userId);
             else if (userId) enqueue.raise({ type: "_sync", pull: true });
+            tell(enqueue, c);
+            enqueue.raise({ type: "_tidy" });
             replay(context, enqueue);
           }),
         },
@@ -522,10 +633,23 @@ export const machine = setup({
             arm(enqueue, context.days, now);
           }),
         },
+        // Two records of one date that hold nothing to choose between keep only one (tidy).
+        _tidy: {
+          actions: enqueueActions(({ context, enqueue }) => {
+            const next = tidy(context.days);
+            if (next !== context.days) update(context, enqueue, mint(context.days, next));
+          }),
+        },
         "read?": { actions: ({ context, event }) => event.reply(body(context)) },
         "open?": { actions: ({ context, event }) => event.reply(opened(context)) },
         "days?": { actions: ({ context, event }) => event.reply(between(context, event.payload)) },
-        "day.shown": { actions: remember },
+        "day.shown": {
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            const shown = shownOf(event);
+            enqueue.assign({ shown });
+            tell(enqueue, { ...context, shown }, true);
+          }),
+        },
       },
       initial: "idle",
       states: {

@@ -11,6 +11,7 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 const STEM = `${BASE_URL}/workshop/design/journal`;
 
 const SUNDAY = "01K7TEST00000000000000DY01";
+const SUNDAY_PHONE = "01K7TEST00000000000000DY02";
 
 const entry = (page) => page.locator("journal-entry");
 const editor = (page) => entry(page).locator(".cm-content");
@@ -93,6 +94,29 @@ for (const engine of ENGINES) {
       // Back to today: the text can be typed in again.
       await page.locator('journal-days .row[data-day="new"]').click();
       await until(async () => (await editor(page).getAttribute("contenteditable")) === "true");
+    });
+
+    // Browser: rendering and layout.
+    run("two records of one earlier date show both copies, and keeping one leaves one day", async (page) => {
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await editor(page).waitFor();
+      const at = (h) => new Date(2025, 2, 2, h).getTime();
+      await seed(page, [
+        { id: SUNDAY, day: "2025-03-02", text: "Written on the Mac.", editedAt: at(9), version: 1 },
+        { id: SUNDAY_PHONE, day: "2025-03-02", text: "Written on the phone.", editedAt: at(21), version: 1 },
+      ]);
+      // The Days list holds one row for the date, the newest; picking it shows both copies.
+      assert.equal(await page.locator(`journal-days .row[data-day="${SUNDAY}"]`).count(), 0);
+      await page.locator(`journal-days .row[data-day="${SUNDAY_PHONE}"]`).click();
+      const conflict = entry(page).locator(".conflict");
+      await conflict.waitFor();
+      assert.equal(await conflict.locator(".mine pre").textContent(), "Written on the Mac.");
+      assert.equal(await conflict.locator(".theirs pre").textContent(), "Written on the phone.");
+      await conflict.locator(".keep-mine").click();
+      await conflict.waitFor({ state: "detached" });
+      await until(async () => (await times(page, "Written on the Mac.")) === 1);
+      assert.equal(await times(page, "Written on the phone."), 0, "the other copy is gone");
+      assert.equal(await page.locator(`journal-days .row[data-day="${SUNDAY_PHONE}"]`).count(), 1, "still one day for the date");
     });
 
     run("with Vim keys on, the editor shows Vim's block cursor", async (page) => {

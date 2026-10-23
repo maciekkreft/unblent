@@ -85,10 +85,10 @@ const midnightAfter = (now) => {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
 };
 
-// A conflict on the shown day, or null. Keeping one's own copy saves it over the other,
-// which the journal accepts only while the day is open; a closed day keeps the other.
-export const conflictOn = (conflict, day, editable) =>
-  conflict && conflict.id === day.id ? { mine: conflict.mine.text, theirs: conflict.theirs.text, keepable: editable } : null;
+// A conflict on the shown day, or null. Either copy can be kept, on any day: the journal
+// takes a kept copy as a save to the day the conflict named, also once it has closed.
+export const conflictOn = (conflict, day) =>
+  conflict && conflict.id === day.id ? { mine: conflict.mine.text, theirs: conflict.theirs.text } : null;
 
 const EMPTY = { days: [], open: null };
 
@@ -260,8 +260,9 @@ export const machine = setup({
       "buttons under the text set the level of the lines the cursor spans, show the cursor " +
       "line's level, and name the Vim keys \\1, \\2, \\3 and \\0 while Vim is on; an earlier " +
       "day shows its levels but offers no buttons. The text is saved a short time into " +
-      "typing and when the box loses focus. When a day was saved on two devices at once, the " +
-      "entry shows both copies and the user keeps one. It announces which day it shows and whether " +
+      "typing and when the box loses focus. When a day was saved on two devices at once, or the " +
+      "journal holds two records of the shown date, the entry shows both copies, also on an " +
+      "earlier day, and the user keeps one. It announces which day it shows and whether " +
       "it can still be written, when the page has loaded and whenever either changes, also at " +
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
@@ -387,18 +388,29 @@ export const machine = setup({
         },
       },
       on: {
-        // A conflict is settled in one step. Keeping one's own copy saves it over the
-        // other while the day is open; keeping the other's saves nothing, because the
-        // journal already holds it.
+        // A conflict is settled in one step: the kept copy leaves as a save of its exact
+        // text to the day the conflict named, which tells the journal which copy stays
+        // (journal's kept). Keeping the copy the journal holds changes no text, yet still
+        // lets the journal delete the other record when the two were two records of one date.
         _keepMine: {
-          guard: ({ context }) => Boolean(context.conflict) && context.picture.open === context.conflict.id,
+          guard: ({ context }) => Boolean(context.conflict),
           target: ".clean",
           actions: [
-            assign(({ context }) => ({ draft: { id: context.conflict.id, text: context.conflict.mine.text }, conflict: null, editing: false })),
-            save(false),
+            emit(({ context }) => ({ type: "day.saved", id: context.conflict.id, text: context.conflict.mine.text })),
+            assign(({ context }) => ({
+              ...(context.picture.open === context.conflict.id ? { draft: { id: context.conflict.id, text: context.conflict.mine.text } } : {}),
+              conflict: null,
+              editing: false,
+            })),
           ],
         },
-        _keepTheirs: { actions: assign({ conflict: null }) },
+        _keepTheirs: {
+          guard: ({ context }) => Boolean(context.conflict),
+          actions: [
+            emit(({ context }) => ({ type: "day.saved", id: context.conflict.id, text: context.conflict.theirs.text })),
+            assign({ conflict: null }),
+          ],
+        },
         _midnight: { actions: [announce, atMidnight] },
       },
     },

@@ -40,12 +40,11 @@ test("the entry shows the picked earlier day read only, else the open day, else 
   assert.equal(longDate("2026-10-12"), "Monday 12 October");
 });
 
-test("a conflict on the shown day can be kept only while the day is open", () => {
+test("a conflict shows on the day it names, and on no other", () => {
   const c = { id: TODAY, mine: { text: "Mine.", baseVersion: 1 }, theirs: { text: "Theirs.", version: 2, editedAt: at(12, 9) } };
-  assert.deepEqual(conflictOn(c, day(TODAY, "2026-10-12", "Theirs."), true), { mine: "Mine.", theirs: "Theirs.", keepable: true });
-  assert.equal(conflictOn(c, day(TODAY, "2026-10-12", "Theirs."), false).keepable, false);
-  assert.equal(conflictOn(c, day(SUNDAY, "2026-10-11", "Other."), false), null);
-  assert.equal(conflictOn(null, day(TODAY, "2026-10-12", ""), true), null);
+  assert.deepEqual(conflictOn(c, day(TODAY, "2026-10-12", "Theirs.")), { mine: "Mine.", theirs: "Theirs." });
+  assert.equal(conflictOn(c, day(SUNDAY, "2026-10-11", "Other.")), null);
+  assert.equal(conflictOn(null, day(TODAY, "2026-10-12", "")), null);
 });
 
 // --- The actor -------------------------------------------------------------------------
@@ -145,14 +144,22 @@ test("a conflict shows both copies, and Keep yours saves the user's copy in one 
   assert.equal(actor.getSnapshot().context.draft.text, "Mine.");
 });
 
-test("on a closed day the other copy stays: Keep yours does nothing, Done clears it", async () => {
+test("on a closed day either copy can be kept, each as a save of its exact text", async () => {
   const sunday = day(SUNDAY, "2026-10-11", "Theirs.");
+  const conflicted = { type: "journal.conflicted", id: SUNDAY, mine: { text: "Mine.", baseVersion: 1 }, theirs: { text: "Theirs.", version: 2, editedAt: at(11, 20) } };
   const { actor, emitted } = await start(picture({ days: [sunday], open: null }));
-  actor.send({ type: "journal.conflicted", id: SUNDAY, mine: { text: "Mine.", baseVersion: 1 }, theirs: { text: "Theirs.", version: 2, editedAt: at(11, 20) } });
+  actor.send(conflicted);
   actor.send({ type: "_keepMine" });
-  assert.equal(emitted.length, 0);
-  actor.send({ type: "_keepTheirs" });
+  assert.deepEqual(emitted, [{ type: "day.saved", id: SUNDAY, text: "Mine." }]);
   assert.equal(actor.getSnapshot().context.conflict, null);
+  assert.notEqual(actor.getSnapshot().context.draft?.id, SUNDAY, "a closed day is not typed in");
+  actor.send(conflicted);
+  actor.send({ type: "_keepTheirs" });
+  assert.deepEqual(emitted.at(-1), { type: "day.saved", id: SUNDAY, text: "Theirs." });
+  assert.equal(actor.getSnapshot().context.conflict, null);
+  actor.send({ type: "_keepTheirs" });
+  assert.equal(emitted.length, 2, "nothing to keep once settled");
+  valid(emitted);
 });
 
 test("Vim keys start from settings: read and follow settings.changed", async () => {

@@ -338,6 +338,7 @@ class JournalEntry extends LitElement {
     }
     .copy button {
       align-self: flex-start;
+      font-size: var(--text-sm);
     }
     /* On a stage that fills, the open day reaches the bottom, like a page, and a
        click anywhere in it lands in the text. A page that nests a view under the text
@@ -563,7 +564,7 @@ class JournalEntry extends LitElement {
   get #content() {
     const { context } = this.#actor.snapshot;
     const { day, editable } = shown(context.picture, selectedOf(context), context.fresh, Date.now());
-    const conflict = conflictOn(context.conflict, day, editable);
+    const conflict = conflictOn(context.conflict, day);
     return { text: editable && context.draft ? context.draft.text : day.text, editable: editable && !conflict };
   }
 
@@ -581,7 +582,7 @@ class JournalEntry extends LitElement {
     const { picture, fresh, vimKeys } = context;
     // The actor's midnight announcement (shownDay) is what redraws a new page then.
     const { day, editable } = shown(picture, selectedOf(context), fresh, Date.now());
-    const conflict = conflictOn(context.conflict, day, editable);
+    const conflict = conflictOn(context.conflict, day);
     // The slot under the text takes the view a page nests in the entry, as chat-thread
     // holds chat-input; it sits in the page so it scrolls with the day it is about.
     return html`
@@ -651,28 +652,21 @@ class JournalEntry extends LitElement {
     this.requestUpdate();
   };
 
-  // Both copies, each kept in one step. A closed day can no longer be saved, so only the
-  // other copy can stay, and the user's own is shown to copy from.
+  // Both copies, each kept in one step, on any day.
   #conflict(c) {
     return html`
       <section class="conflict" aria-label="Two copies of this entry">
-        <p>
-          ${c.keepable
-            ? "This entry was also changed on another device. Keep one copy."
-            : "This entry was also changed on another device, and it has closed, so the other copy is kept. Yours is here to copy from."}
-        </p>
+        <p>This entry was also written on another device. Keep one copy.</p>
         <div class="copies">
           <div class="copy mine">
             <h3>Yours</h3>
             <pre>${c.mine}</pre>
-            ${c.keepable ? html`<button type="button" class="keep-mine" @click=${() => this.#send({ type: "_keepMine" })}>Keep this copy</button>` : nothing}
+            <button type="button" class="keep-mine" @click=${() => this.#send({ type: "_keepMine" })}>Keep this copy</button>
           </div>
           <div class="copy theirs">
             <h3>The other device's</h3>
             <pre>${c.theirs}</pre>
-            <button type="button" class="keep-theirs" @click=${() => this.#send({ type: "_keepTheirs" })}>
-              ${c.keepable ? "Keep this copy" : "Done"}
-            </button>
+            <button type="button" class="keep-theirs" @click=${() => this.#send({ type: "_keepTheirs" })}>Keep this copy</button>
           </div>
         </div>
       </section>

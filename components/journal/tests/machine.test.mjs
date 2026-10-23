@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, openDay, dateOf, HOUR } from "../machine.js";
+import { machine, openDay, dateOf, HOUR, tidy, visible, clashOn } from "../machine.js";
 
 // The actor is where the journal's decisions live (3.2): it is driven with a fake store,
 // a clock the test sets, and a SimulatedClock for the timer that closes the open day.
@@ -348,6 +348,129 @@ test("an outbox row that is not a day is dropped at load, so the days behind it 
   assert.deepEqual(server.puts.map((r) => r.key), [`days\n${D1}`]);
   assert.equal(server.held("days", D1).text, "Kept");
   assert.equal(s.store.outbox.size, 0);
+});
+
+// --- Two records of one date ----------------------------------------------------------
+
+const D3 = "01K7TEST00000000000000DA03";
+const DAY_SHOWN = json("..", "journal-entry", "events", "day.shown.json");
+const record = (id, day, text, editedAt, extra = {}) => ({ id, day, text, editedAt, version: 1, ...extra });
+const shown = (s, day, writable = false) => s.send({ type: "day.shown", day, writable }, DAY_SHOWN);
+
+test("two written records of one date show as one day, the newest, and are a clash", () => {
+  const older = record(D1, "2026-10-11", "From the Mac", at(11, 9));
+  const newer = record(D2, "2026-10-11", "From the phone", at(11, 20));
+  const days = [older, newer, record(D3, "2026-10-10", "Saturday", at(10, 9))];
+  assert.deepEqual(visible(days).map((d) => d.id).sort(), [D2, D3]);
+  assert.deepEqual(clashOn(days, "2026-10-11"), { kept: newer, other: older });
+  assert.equal(clashOn(days, "2026-10-10"), null);
+  assert.equal(openDay([older, newer], at(11, 21))?.id, D2, "the open day is the one shown");
+});
+
+test("a second record that is empty or the same text is deleted, the written or newest kept", () => {
+  const empty = record(D1, "2026-10-11", "", at(11, 22));
+  const written = record(D2, "2026-10-11", "Words", at(11, 9));
+  assert.deepEqual(tidy([empty, written]).map((d) => [d.id, Boolean(d.deleted)]), [[D1, true], [D2, false]]);
+  const copy = record(D3, "2026-10-11", "Words", at(11, 10));
+  assert.deepEqual(tidy([written, copy]).map((d) => [d.id, Boolean(d.deleted)]), [[D2, true], [D3, false]]);
+  assert.equal(clashOn([empty, written], "2026-10-11"), null, "nothing to choose between");
+  const alone = [written];
+  assert.equal(tidy(alone), alone, "one record per date is left as it is");
+});
+
+test("the page showing a clashed date is told both copies, and keeping the older deletes the newer record", async () => {
+  const store = fakeStore({ days: [record(D1, "2026-10-11", "From the Mac", at(11, 9)), record(D2, "2026-10-11", "From the phone", at(11, 20))] });
+  const s = await start({ store, time: at(12, 10) });
+  assert.deepEqual(s.read().days.map((d) => d.id), [D2]);
+  assert.equal(s.conflicted.length, 0, "nobody shows that date yet");
+  shown(s, "2026-10-11");
+  assert.deepEqual(s.conflicted.map(({ type, ...e }) => e), [
+    { id: D2, mine: { text: "From the Mac", baseVersion: 1 }, theirs: { text: "From the phone", version: 1, editedAt: at(11, 20) } },
+  ]);
+  write(s, D2, "From the Mac");
+  const [day] = s.read().days;
+  assert.deepEqual([day.id, day.text, day.editedAt], [D2, "From the Mac", at(11, 20)], "kept on its closed day, its time of last edit unchanged");
+  assert.equal(store.tables.days.get(D1).deleted, true, "the other record is a tombstone");
+  assert.equal(store.tables.days.get(D1).text, "From the Mac", "and keeps its text");
+  shown(s, "2026-10-11");
+  assert.equal(s.conflicted.length, 1, "settled: nothing more to tell");
+});
+
+test("keeping the copy the day shows deletes the other record and changes no text", async () => {
+  const store = fakeStore({ days: [record(D1, "2026-10-11", "From the Mac", at(11, 9)), record(D2, "2026-10-11", "From the phone", at(11, 20))] });
+  const s = await start({ store, time: at(12, 10) });
+  shown(s, "2026-10-11");
+  write(s, D2, "From the phone");
+  assert.equal(store.tables.days.get(D1).deleted, true);
+  assert.deepEqual(s.read().days.map((d) => [d.id, d.text]), [[D2, "From the phone"]]);
+});
+
+test("only a save of a copy's exact text, not one made on leaving the box, settles a clash", async () => {
+  const today = "2026-10-12";
+  const store = fakeStore({ days: [record(D1, today, "Laptop", at(12, 8)), record(D2, today, "Phone", at(12, 9))] });
+  const s = await start({ store, time: at(12, 10) });
+  shown(s, today, true);
+  s.send({ type: "day.saved", id: D2, text: "Phone", left: true }, DAY_SAVED);
+  write(s, D2, "Phone, more");
+  assert.equal(store.tables.days.get(D1).deleted, undefined, "typing is not a choice");
+  assert.equal(s.read().days[0].text, "Phone, more");
+  assert.equal(s.conflicted.length, 2, "a changed copy is told again");
+  write(s, D2, "Laptop");
+  assert.equal(store.tables.days.get(D1).deleted, true);
+  assert.equal(s.read().days[0].editedAt, at(12, 10), "the open day takes the time of the save");
+});
+
+test("signed in, a clash pulled from the account is told, and a choice sends the tombstone up", async () => {
+  const server = fakeServer();
+  server.other("days", record(D1, "2026-10-12", "Written on the Mac", at(12, 8)));
+  const store = fakeStore({ userId: "u1", days: [record(D2, "2026-10-12", "Written here", at(12, 9))] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api });
+  shown(s, "2026-10-12", true);
+  // The page showed the date before the pull landed: the clash is told when it arrives.
+  s.actor.send({ type: "_sync", pull: true });
+  await flush();
+  assert.equal(s.conflicted.at(-1).id, D2);
+  assert.equal(s.conflicted.at(-1).mine.text, "Written on the Mac");
+  write(s, D2, "Written on the Mac");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.held("days", D1).deleted, true, "the other record is deleted on the account");
+  assert.equal(server.held("days", D2).text, "Written on the Mac");
+});
+
+test("signed in, an empty second record pulled from the account is deleted without asking", async () => {
+  const server = fakeServer();
+  server.other("days", record(D1, "2026-10-12", "", at(12, 9, 30)));
+  const store = fakeStore({ userId: "u1", days: [record(D2, "2026-10-12", "Written here", at(12, 9))] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api });
+  shown(s, "2026-10-12", true);
+  await flush();
+  s.advance(IDLE);
+  await flush();
+  assert.equal(s.conflicted.length, 0);
+  assert.deepEqual(s.read().days.map((d) => d.id), [D2]);
+  assert.equal(server.held("days", D1).deleted, true);
+});
+
+test("a day saved on two devices can keep the user's copy after it has closed", async () => {
+  const server = fakeServer();
+  server.other("days", record(D1, "2026-10-11", "Evening", at(11, 20)));
+  const store = fakeStore({ userId: "u1", days: [record(D1, "2026-10-11", "Evening", at(11, 20))] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api, time: at(11, 21) });
+  server.other("days", record(D1, "2026-10-11", "Evening, phone", at(11, 21)));
+  write(s, D1, "Evening, laptop");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(s.conflicted.length, 1);
+  // The day closes before the user chooses.
+  s.setNow(at(12, 10));
+  write(s, D1, "Something else");
+  assert.equal(s.read().days[0].text, "Evening, phone", "an ordinary save to a closed day is still refused");
+  write(s, D1, "Evening, laptop");
+  assert.equal(s.read().days[0].text, "Evening, laptop");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.held("days", D1).text, "Evening, laptop");
 });
 
 test("every payload matches its schema", () => {
