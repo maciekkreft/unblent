@@ -760,15 +760,14 @@ How results are measured:
 ### Due today, 2026-10-23
 
 - Release 0.1.2, which stops today's journal page jumping while the user types, and change "Unblent 0.1.1" on the landing page to 0.1.2.
-- Change the GitHub repository's description to "A free, open-source ePub reader for the Mac that keeps your notes with your books. Works offline, no account." (the owner, on GitHub).
-- Make the report of section 16's numbers, and take the first reading before any post.
-- Post on r/PracticePsychology, the owner's subreddit: what Unblent does today, the tools from psychology books it is growing towards, and how they connect to practising psychology, drawn from the owner's journal of 2026-10-23, with a short video of the app. Link `?ref=practicepsychology`.
+- Change the confirmation email of the landing page's sign-up form in Kit: sent from magic@unblent.com, and text about Unblent instead of the old project's (the owner, in Kit).
+- Update the X and Reddit profiles and the r/PracticePsychology description so each leads with unblent.com (the owner).
 
 ### Later
 
 - Show HN at https://news.ycombinator.com/submit, on a Tuesday, Wednesday or Thursday between 8 and 10 a.m. US Eastern time. Link `?ref=hn`.
 - Product Hunt, on a different weekday from Show HN, with a picture or a short clip. Link `?ref=producthunt`.
-- Reddit: r/macapps, r/ebooks, r/Zettelkasten, r/PKMS, r/vim, r/opensource and r/SideProject, a few days apart, each after reading its rules on posts about one's own work. Link `?ref=reddit-<subreddit>`.
+- Reddit: r/vim, r/Journaling, r/macapps, r/ebooks, r/Zettelkasten, r/PKMS, r/vim, r/opensource and r/SideProject, a few days apart, each after reading its rules on posts about one's own work. Link `?ref=reddit-<subreddit>`.
 - Mastodon and Bluesky, with the README screenshot. Link `?ref=mastodon` or `?ref=bluesky`.
 - Lobsters, with the "show" tag, once a member invites the owner. Link `?ref=lobsters`.
 - AlternativeTo, as an alternative to Apple Books, Calibre, Readwise and Kindle; MacUpdate; and the lists jaywcjlove/awesome-mac, serhii-londar/open-source-mac-os-apps and iCHAIT/awesome-macOS on GitHub.
