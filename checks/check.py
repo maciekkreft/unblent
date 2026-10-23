@@ -2152,7 +2152,7 @@ USAGE = """The one check command (architecture.md 11).
   push run              python3 checks/check.py --push
                         the full run, then every browser test again in
                         Chromium; the pre-push hook in .githooks/ runs it.
-                        Never in a session: the owner pushes by hand
+                        In a session, only after the owner says yes
   debug a journey       python3 checks/check.py --only <component> --isolate
                         each journey step that declares its starting state
                         runs alone, in a fresh page brought to that state; a
