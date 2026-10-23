@@ -192,7 +192,9 @@ export const machine = setup({
       "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +
       "bar, and the key is removed only when the window ends; leaving the page before then " +
-      "keeps it.",
+      "keeps it. The last line of the sheet, on every page, reads \"Something not working, or an " +
+      "idea? Send feedback\": the link opens the project's form chooser for a new issue in a new " +
+      "tab, or in the Mac app in the user's browser, and fills nothing in.",
     kind: "view",
     emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside

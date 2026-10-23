@@ -19,6 +19,7 @@ const EFFORT_LABELS = {
   xhigh: "Extra high",
   max: "Maximum",
 };
+const FEEDBACK_URL = "https://github.com/maciekkreft/unblent/issues/new/choose";
 const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
 const TTL_NOTE = "1 hour costs more to start and pays off from the third question within the hour.";
@@ -257,6 +258,31 @@ class SettingsSheet extends LitElement {
       margin: 0;
       color: var(--color-body-mid);
       font-size: var(--text-sm);
+    }
+    /* The last line of the sheet, set apart like a section, so it reads as a way out
+       of the settings rather than one of them. */
+    .feedback {
+      margin: var(--space-xl) 0 0;
+      padding-top: var(--space-lg);
+      border-top: var(--border-width) solid var(--color-border);
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .feedback a {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2xs);
+      color: var(--color-ink);
+      text-decoration: underline;
+      text-underline-offset: var(--space-2xs);
+      border-radius: var(--radius-sm);
+    }
+    .feedback a:hover {
+      color: var(--color-accent-hover);
+    }
+    .feedback a:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .keys-fold summary {
       width: fit-content;
@@ -617,12 +643,25 @@ class SettingsSheet extends LitElement {
     // Without the `account` attribute the sheet is the page-links sheet exactly as
     // before; with it, "This device" and "Your account" stand as two named sections
     // (7.7, §12).
-    if (!account) return device;
+    if (!account) return html`${device}${this.#feedback()}`;
     return html`
       <h3>This device</h3>
       ${device}
       <h3 class="later">Your account</h3>
       ${this.#account(llm, profile, toolList, tools, checks, evaluators)}
+      ${this.#feedback()}
+    `;
+  }
+
+  // The project's issue chooser, opened in a new tab or, in the Mac app, in the user's
+  // browser (architecture.md 10), so the sheet stays where it was. The icon says the
+  // link leaves the app (Don Norman: visible signifiers).
+  #feedback() {
+    return html`
+      <p class="feedback">
+        Something not working, or an idea?
+        <a href=${FEEDBACK_URL} target="_blank" rel="noopener">Send feedback ${icon("arrow-square-out")}</a>
+      </p>
     `;
   }
 

@@ -17,6 +17,13 @@ All notable changes to Unblent for Mac are listed here. The format follows
 - Forms on GitHub for reporting a problem and for asking for something new, and
   [Discussions › Ideas](https://github.com/maciekkreft/unblent/discussions/categories/ideas)
   for voting on ideas.
+- A line at the bottom of Settings: "Something not working, or an idea? Send
+  feedback". The link opens the GitHub page where you choose a form to fill in.
+
+### Fixed
+
+- A link to a web page, in a book or in Settings, now opens in your own browser, and
+  Unblent stays where you were. Before, such a link in a book did nothing.
 
 ## [0.1.0] — 2026-10-22
 

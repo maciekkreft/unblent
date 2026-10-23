@@ -107,5 +107,40 @@ for (const engine of ENGINES) {
         await context.close();
       }
     });
+
+    // Browser: rendering and layout.
+    test("the sheet ends with a feedback link that opens in a new tab", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/settings`, { waitUntil: "domcontentloaded" });
+        const line = page.locator("settings-sheet p.feedback");
+        await line.waitFor();
+        const seen = await line.evaluate((p) => {
+          const a = p.querySelector("a");
+          return {
+            last: p === [...p.parentNode.children].at(-1),
+            text: p.textContent.replace(/\s+/g, " ").trim(),
+            href: a.getAttribute("href"),
+            target: a.getAttribute("target"),
+            rel: a.getAttribute("rel"),
+            icon: !!a.querySelector("svg"),
+          };
+        });
+        assert.deepEqual(seen, {
+          last: true,
+          text: "Something not working, or an idea? Send feedback",
+          href: "https://github.com/maciekkreft/unblent/issues/new/choose",
+          target: "_blank",
+          rel: "noopener",
+          icon: true,
+        });
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
   });
 }

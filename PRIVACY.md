@@ -33,7 +33,7 @@ to *Restart to update* or *Later*. Nothing is installed until you choose
 
 **Links in a book.** A book may contain links to web pages. Unblent never opens them by
 itself, and an image a book points to on the internet is left out. If you click such a
-link, it may open that web page.
+link, that web page opens in your own browser, not in Unblent.
 
 Nothing else leaves your Mac. There is no analytics, no crash reporting and no
 advertising. The font, the icons and every library are inside the app, and

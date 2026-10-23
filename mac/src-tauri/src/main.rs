@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::menu::{MenuBuilder, SubmenuBuilder};
+use tauri::webview::{NewWindowResponse, Url};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::UpdaterExt;
@@ -162,6 +163,28 @@ fn stop_server(app: &AppHandle) {
     let _ = child.wait();
 }
 
+/// The window shows only the local server's page and the loading page bundled with the
+/// app; `about:`, `blob:` and `data:` are what a page makes for itself.
+fn ours(url: &Url) -> bool {
+    match url.scheme() {
+        "tauri" | "about" | "blob" | "data" => true,
+        "http" => url.host_str() == Some("127.0.0.1") && url.port() == Some(port()),
+        _ => false,
+    }
+}
+
+/// Any other address, a link in a book or the feedback form, opens in the user's own
+/// browser and the window stays on the page (architecture.md 10).
+fn open_outside(app: &AppHandle, url: &Url) {
+    match Command::new("/usr/bin/open").arg(url.as_str()).spawn() {
+        // A thread waits for `open`, so it does not stay behind as a zombie process.
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+        }
+        Err(e) => log(app, &format!("cannot open {url}: {e}")),
+    }
+}
+
 fn fail(app: &AppHandle, message: &str) {
     log(app, message);
     app.dialog()
@@ -245,6 +268,8 @@ fn main() {
                 .build()
         })
         .setup(|app| {
+            let on_navigation = app.handle().clone();
+            let on_new_window = app.handle().clone();
             let window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title(TITLE)
@@ -252,6 +277,21 @@ fn main() {
                     .min_inner_size(480.0, 480.0)
                     .on_document_title_changed(|window, _| {
                         let _ = window.set_title(TITLE);
+                    })
+                    // A link with target=_blank asks here first, so it opens outside once.
+                    .on_navigation(move |url| {
+                        if ours(url) {
+                            return true;
+                        }
+                        open_outside(&on_navigation, url);
+                        false
+                    })
+                    // window.open: no second window of the app, ever.
+                    .on_new_window(move |url, _| {
+                        if !ours(&url) {
+                            open_outside(&on_new_window, &url);
+                        }
+                        NewWindowResponse::Deny
                     })
                     .build()?;
             let handle = app.handle().clone();
