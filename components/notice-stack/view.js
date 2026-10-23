@@ -72,6 +72,8 @@ function describe(source) {
       return "This passkey is not known here.";
     case "unsaved":
       return "Not switched: some changes are not saved yet. Try again when you are online.";
+    case "unsent":
+      return "Can't disconnect yet: changes haven't reached your account. Try again when you are online, so nothing is left behind.";
     default:
       return "That could not be done.";
   }

@@ -316,7 +316,12 @@ class MacAccount extends LitElement {
         <p>Sync was turned off for this account</p>
       </div>
       <p class="more">Nothing is sent from this Mac until sync is turned on again.</p>
-      ${waiting ? html`<p class="waiting-on" role="status">Changes are waiting on this Mac.</p>` : nothing}
+      ${waiting
+        ? html`<p class="waiting-on" role="status">
+            Changes are waiting on this Mac. Turn sync on again for this account in Administration on app.unblent.com, then
+            disconnect.
+          </p>`
+        : nothing}
       ${this.#disconnect(doing)}`;
   }
 

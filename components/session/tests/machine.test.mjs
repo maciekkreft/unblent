@@ -524,7 +524,7 @@ test("Disconnect with changes that cannot be sent changes nothing and says so (1
   await flush(40);
   assert.equal(h.calls.disconnect, 0, "the relay stays on");
   assert.deepEqual(h.went, []);
-  assert.deepEqual(h.events.slice(1), [{ type: "session.changed", ...ACCOUNT }, { type: "session.refused", reason: "unsaved" }]);
+  assert.deepEqual(h.events.slice(1), [{ type: "session.changed", ...ACCOUNT }, { type: "session.refused", reason: "unsent" }]);
 });
 
 test("Cancel on the choice forgets the waiting sign-in without a change of account", async () => {

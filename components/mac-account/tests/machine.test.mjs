@@ -84,7 +84,7 @@ test("connected, Disconnect asks session; a refusal for unsent changes says they
   assert.equal(state(), "switching");
   // As session stops leaving: the picture again, then why.
   actor.send({ type: "session.changed", userId: "a1", connect: "on", remote: "Maciek" });
-  actor.send({ type: "session.refused", reason: "unsaved" });
+  actor.send({ type: "session.refused", reason: "unsent" });
   assert.equal(state(), "connected");
   assert.equal(actor.getSnapshot().context.waiting, true);
   actor.send({ type: "_disconnect" });
@@ -98,4 +98,14 @@ test("connected but signed out means sync was turned off, and Disconnect still w
   assert.deepEqual(emitted, [{ type: "disconnect.requested" }]);
   actor.send({ type: "session.refused", reason: "unavailable" });
   assert.equal(state(), "syncOff", "a refusal ends the wait");
+  assert.equal(actor.getSnapshot().context.waiting, false);
+});
+
+test("sync off with changes waiting: the Mac stays connected and the tab says to turn sync on first", async () => {
+  const { actor, state } = await start({ userId: null, registrationOpen: false, connect: "on", remote: "Maciek" });
+  actor.send({ type: "_disconnect" });
+  actor.send({ type: "session.changed", userId: null, registrationOpen: false, connect: "on", remote: "Maciek" });
+  actor.send({ type: "session.refused", reason: "unsent" });
+  assert.equal(state(), "syncOff", "still connected, nothing thrown away");
+  assert.equal(actor.getSnapshot().context.waiting, true);
 });

@@ -139,7 +139,8 @@ export const machine = setup({
       const deadline = input.now() + input.waitMs;
       await input.sleep(input.firstMs);
       while (await input.pending()) {
-        if (input.now() >= deadline) return { error: "unsaved" };
+        // A refused Disconnect has its own notice: the Mac stays connected (3.4).
+        if (input.now() >= deadline) return { error: input.change.type === "disconnect.requested" ? "unsent" : "unsaved" };
         await input.sleep(input.stepMs);
       }
       return switchOf(input.api, input.change);
@@ -466,7 +467,7 @@ export const machine = setup({
             target: "ready",
             actions: [
               emit(({ context }) => changed(context)),
-              emit(({ event }) => ({ type: "session.refused", reason: event.output?.error === "unsaved" ? "unsaved" : "unavailable" })),
+              emit(({ event }) => ({ type: "session.refused", reason: ["unsaved", "unsent"].includes(event.output?.error) ? event.output.error : "unavailable" })),
             ],
           },
         ],

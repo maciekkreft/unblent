@@ -1,9 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A sign-in or sign-out gesture could not be honoured. notice-stack surfaces it (12). unsaved: the browser could not change account because a change could not be uploaded yet (12).",
+  "description": "A sign-in or sign-out gesture could not be honoured. notice-stack surfaces it (12). unsaved: the browser could not change account because a change could not be uploaded yet (12). unsent: the same for a Disconnect of the Mac app, which stays connected (3.4).",
   "type": "object",
   "properties": {
-    "reason": { "enum": ["cancelled", "registration-closed", "unknown-credential", "unavailable", "unsaved"] }
+    "reason": { "enum": ["cancelled", "registration-closed", "unknown-credential", "unavailable", "unsaved", "unsent"] }
   },
   "required": ["reason"],
   "additionalProperties": false

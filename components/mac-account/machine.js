@@ -50,7 +50,10 @@ export const machine = setup({
       "back to the Mac's own copy. When the admin has turned sync off for the account, it says " +
       "Sync was turned off for this account, with Disconnect. Disconnect is the undo of " +
       "Connect; if what is not yet sent cannot be sent within a few seconds, nothing changes, " +
-      "the tab says changes are waiting on this Mac, and a notice says why.",
+      "the tab says changes are waiting on this Mac, and a notice says why. With sync off, " +
+      "nothing waiting is ever thrown away and there is no Disconnect anyway: the tab says to " +
+      "turn sync on again for this account in Administration on app.unblent.com, so the " +
+      "changes are sent, and then disconnect.",
     kind: "view",
     attributes: [],
     emits: ["connect.requested", "connect.confirmed", "disconnect.requested"],
@@ -73,7 +76,7 @@ export const machine = setup({
   on: {
     // session announces the change it could not make right after it stops leaving.
     "session.refused": {
-      guard: ({ context, event }) => context.disconnecting && event.reason === "unsaved",
+      guard: ({ context, event }) => context.disconnecting && event.reason === "unsent",
       actions: assign({ waiting: true, disconnecting: false }),
     },
   },
@@ -166,7 +169,7 @@ export const machine = setup({
         "session.refused": {
           target: "deciding",
           actions: assign(({ context, event }) =>
-            context.disconnecting && event.reason === "unsaved" ? { waiting: true, disconnecting: false } : { disconnecting: false },
+            context.disconnecting && event.reason === "unsent" ? { waiting: true, disconnecting: false } : { disconnecting: false },
           ),
         },
       },
