@@ -191,14 +191,7 @@ export const machine = setup({
           .then(() => context.api.forget(event.id))
           .then((reply) => reply && Array.isArray(reply.people) && self.send({ type: "_people", people: reply.people }), () => {}),
     },
-    // people.changed has no Can sync field (7.1: an event schema changes only with
-    // permission), so it travels without it; People keeps the switch it already shows.
-    _people: {
-      actions: emit(({ event }) => ({
-        type: "people.changed",
-        people: event.people.map(({ sync, ...person }) => person),
-      })),
-    },
+    _people: { actions: emit(({ event }) => ({ type: "people.changed", people: event.people })) },
     // Can sync on a passkey account in People (3.4, 12): the server records it and the
     // new list goes out. If it cannot, a notice says so, and People reads the list again.
     "sync.allowed": {

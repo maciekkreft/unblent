@@ -192,17 +192,7 @@ export const machine = setup({
       guard: ({ event }) => event.kind === "guest",
       actions: assign({ deleting: ({ context, event }) => context.deleting.filter((id) => id !== event.id) }),
     },
-    // people.changed carries no Can sync (session leaves it out), so each passkey row
-    // keeps the switch it shows; session: people, read at each opening, is the truth.
-    "people.changed": {
-      actions: assign({
-        people: ({ context, event }) =>
-          event.people.map((p) =>
-            p.guest || "sync" in p ? p : { ...p, sync: context.people?.find((q) => q.userId === p.userId)?.sync },
-          ),
-        failed: false,
-      }),
-    },
+    "people.changed": { actions: assign({ people: ({ event }) => event.people, failed: false }) },
     // A gesture session could not honour, Can sync among them: read the list again, so
     // the switches show what the registry holds.
     "session.refused": { guard: ({ context }) => context.people !== null, target: ".reading" },

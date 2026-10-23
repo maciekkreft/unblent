@@ -310,8 +310,7 @@ test("Can sync reaches the server from the admin only and announces the new list
   admin.actor.send({ type: "sync.allowed", user: "u1", allowed: true });
   await flush();
   assert.equal(ok.calls.allowSync, 1);
-  // people.changed has no Can sync field, so the list travels without it.
-  assert.deepEqual(changed, [{ type: "people.changed", people: [{ userId: "u1", name: "Admin", guest: false, admin: true }] }]);
+  assert.deepEqual(changed, [{ type: "people.changed", ...list }]);
 
   const down = fakeApi({ allowSync: { error: "unavailable" } });
   const failing = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, down.api);

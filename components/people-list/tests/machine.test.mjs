@@ -148,9 +148,8 @@ test("Can sync is a switch on every passkey account, yours included, never a gue
     { type: "sync.allowed", user: "a", allowed: true },
     { type: "sync.allowed", user: "a", allowed: false },
   ]);
-  // session's news carries no Can sync, so each row keeps the switch it shows.
-  actor.send({ type: "people.changed", people: people.map(({ sync, ...p }) => p) });
-  assert.deepEqual(actor.getSnapshot().context.people.map((p) => p.sync), [false, true, undefined]);
+  actor.send({ type: "people.changed", people });
+  assert.deepEqual(actor.getSnapshot().context.people.map((p) => p.sync), [false, true, undefined], "session's list is the truth");
 });
 
 test("a refused gesture reads the list again, so the switches show what the registry holds", async () => {
