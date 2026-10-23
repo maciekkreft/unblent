@@ -110,6 +110,8 @@ def main() -> None:
     os.environ["UNBLENT_DATA"] = str(data)
     os.environ["UNBLENT_LOCAL_USER"] = held["user"]
     os.environ["SESSION_SECRET"] = held["secret"]
+    # The account a Mac connects to (3.4); kept when set, so a test points it at its own server.
+    os.environ.setdefault("UNBLENT_REMOTE", "https://app.unblent.com")
     os.environ["UNBLENT_FIRST_BOOK"] = str(root / "mac" / "books" / "meditations.epub")
     sys.path.insert(0, str(root))
 

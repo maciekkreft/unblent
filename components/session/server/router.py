@@ -13,11 +13,13 @@ import os
 import re
 import secrets
 import time
-from urllib.parse import urlparse
+import urllib.error
+import urllib.request
+from urllib.parse import urlencode, urlparse
 
 import webauthn
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url, options_to_json_dict
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
@@ -27,10 +29,14 @@ from webauthn.helpers.structs import (
 
 from server.user import (
     SESSION_COOKIE,
+    clear_remote,
     clear_session_cookie,
     device_of,
     local_user,
+    remote,
+    remote_url,
     remove_files,
+    save_remote,
     session_of,
     session_token,
     set_session_cookie,
@@ -163,6 +169,8 @@ def me(request: Request):
     if not held["viewer"]:
         registry.seen(held["userId"], visitor.from_request(request))
     picture = _picture(held["userId"], held["viewer"])
+    if local:
+        picture.update(_connection())
     # A cookie from before guests and the admin, or one whose account became the
     # admin, is set again so server modules read the flags from it (3.4).
     stale = (held["guest"], held["admin"]) != (picture.get("guest", False), picture.get("admin", False))
@@ -320,6 +328,162 @@ async def connect_token(request: Request):
     registry.add_device(id=device, user_id=user_id)
     token = session_token(user_id, admin=found["admin"], device=device)
     return {"token": token, "userId": user_id, "name": found["name"]}
+
+
+# Connecting, on the Mac (3.4): the local edition's half of the same sign-in. begin
+# keeps the verifier and opens the web connect page in Safari; Safari comes back to
+# finish with the code, which is traded for a device sign-in kept as ready; commit
+# turns it on once the hand-over (12) has emptied the outboxes; disconnect forgets it.
+_DONE = ("Done. Go back to Unblent.",
+         "You can close this tab. The app on your Mac will ask one last question before it switches.")
+_CANCELLED = ("Not connected. Go back to Unblent.", "You can close this tab. Nothing changed on your Mac.")
+_STALE = ("This link has expired.", "Go back to Unblent and press Connect account again.")
+_SYNC_OFF = ("Sync is not turned on for this account.",
+             "Go back to Unblent. The account's owner can turn it on in Administration.")
+_OFFLINE = ("Unblent could not reach your account.",
+            "Check the internet connection, then reload this tab or press Connect account again.")
+
+
+def _local_only() -> None:
+    """The Mac's half exists only in the local edition (3.4)."""
+    if not local_user():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _same_origin(request: Request) -> None:
+    """A page on another site must not connect or disconnect this Mac (3.4): the
+    browser marks a request it sends for another site, and names that site's Origin."""
+    if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+        raise HTTPException(status_code=403, detail="cross-site")
+    origin = request.headers.get("origin")
+    port = request.scope.get("server", (None, None))[1]
+    if origin and origin not in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+        raise HTTPException(status_code=403, detail="cross-site")
+
+
+def _connection() -> dict:
+    """What /me adds in the local edition (3.4): connect, and the account's name once
+    there is a device sign-in. A Mac waiting for Safari is still off."""
+    held = remote()
+    if not held or held["state"] == "pending":
+        return {"connect": "off"}
+    return {"connect": held["state"], "remote": held.get("name") or ""}
+
+
+def _answer(words: tuple[str, str], status: int = 200) -> HTMLResponse:
+    # What Safari shows after the web connect page sends it back here: a server answer,
+    # not a page of the app, so it carries its own few styles and nothing else.
+    title, line = words
+    body = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unblent</title>
+<style>
+:root{{color-scheme:light dark;--ground:#fffefb;--ink:#201515;--muted:#605d52}}
+@media (prefers-color-scheme: dark){{:root{{--ground:#1c1a17;--ink:#f3efe9;--muted:#b5b0a5}}}}
+body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+box-sizing:border-box;background:var(--ground);color:var(--ink);font-family:Inter,system-ui,sans-serif;text-align:center}}
+main{{max-width:420px;display:flex;flex-direction:column;gap:16px;align-items:center}}
+h1{{margin:0;font-size:24px;font-weight:600;line-height:1.2}}
+p{{margin:0;font-size:16px;line-height:1.5;color:var(--muted)}}
+</style></head>
+<body><main><h1>{title}</h1><p>{line}</p></main></body></html>
+"""
+    # The address held a one-time code: no copy kept, and no address sent onwards.
+    return HTMLResponse(body, status_code=status, headers={
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+    })
+
+
+def _trade(url: str, code: str, verifier: str) -> tuple[int, dict]:
+    """(status, body) of the web edition's connect/token, or (0, {}) when it cannot be
+    reached. The standard library's client, as llm's Jev adapter uses (10)."""
+    request = urllib.request.Request(
+        f"{url}/api/session/connect/token",
+        data=json.dumps({"code": code, "verifier": verifier}).encode(),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status, raw = response.status, response.read()
+    except urllib.error.HTTPError as error:
+        status, raw = error.code, error.read()
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, {}
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        body = {}
+    return status, body if isinstance(body, dict) else {}
+
+
+@router.post("/connect/begin")
+def connect_begin(request: Request):
+    _local_only()
+    _same_origin(request)
+    held = remote()
+    if held and held["state"] == "on":
+        return JSONResponse({"error": "connected"}, status_code=409)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(24)
+    url = remote_url()
+    save_remote({"state": "pending", "url": url, "verifier": verifier, "pendingState": state})
+    port = request.scope.get("server", (None, None))[1]
+    query = urlencode({"challenge": challenge, "state": state, "port": port})
+    return {"url": f"{url}/workshop/apps/connect?{query}"}
+
+
+@router.get("/connect/finish")
+def connect_finish(state: str = "", code: str = "", error: str = ""):
+    # A top-level visit from Safari, so no Origin to check: only the state proves the
+    # visit answers this Mac's own begin.
+    _local_only()
+    held = remote()
+    if not held or held["state"] != "pending" or not hmac.compare_digest(state.encode(), held["pendingState"].encode()):
+        return _answer(_STALE, 400)
+    if error or not code:
+        clear_remote()
+        return _answer(_CANCELLED)
+    status, body = _trade(held["url"], code, held["verifier"])
+    if status == 0 or status >= 500:
+        # Kept pending: a reload of this tab tries the same code again.
+        return _answer(_OFFLINE, 502)
+    if status == 403 and body.get("error") == "sync-off":
+        clear_remote()
+        return _answer(_SYNC_OFF, 403)
+    token, user_id, name = body.get("token"), body.get("userId"), body.get("name")
+    if status != 200 or not isinstance(token, str) or not isinstance(user_id, str):
+        clear_remote()
+        return _answer(_STALE, 400)
+    save_remote({"state": "ready", "url": held["url"], "token": token, "userId": user_id,
+                 "name": name if isinstance(name, str) else ""})
+    return _answer(_DONE)
+
+
+@router.post("/connect/commit")
+def connect_commit(request: Request):
+    # Asked by the hand-over (12) once every outbox is empty: from now on the relay
+    # forwards to the account.
+    _local_only()
+    _same_origin(request)
+    held = remote()
+    if not held or held["state"] not in ("ready", "on"):
+        return JSONResponse({"error": "not-ready"}, status_code=409)
+    save_remote({**held, "state": "on"})
+    return _connection()
+
+
+@router.post("/connect/disconnect")
+def connect_disconnect(request: Request):
+    # The undo of connecting (3.4): the token is forgotten and the Mac's own copy is
+    # back. Harmless when there is nothing to forget.
+    _local_only()
+    _same_origin(request)
+    clear_remote()
+    return _connection()
 
 
 @router.post("/viewas")

@@ -9,8 +9,10 @@ construction.
 import hashlib
 import hmac
 import os
+import json
 import shutil
 import sqlite3
+import tempfile
 from pathlib import Path
 
 from fastapi import HTTPException, Request, Response
@@ -82,6 +84,48 @@ def local_user() -> str | None:
     """The one account of the local edition (3.4), or None on the web. Read per call,
     so the variable alone decides which edition a request meets."""
     return os.environ.get("UNBLENT_LOCAL_USER") or None
+
+
+# The connected local edition (3.4): where the account lives, and this Mac's device
+# sign-in to it, kept beside local.json in the data folder.
+REMOTE = DATA / "remote.json"
+
+
+def remote_url() -> str:
+    """The web edition a Mac connects to (3.4); UNBLENT_REMOTE points a test elsewhere."""
+    return (os.environ.get("UNBLENT_REMOTE") or "https://app.unblent.com").rstrip("/")
+
+
+def remote() -> dict | None:
+    """What remote.json holds, or None when this Mac is not connecting (3.4). Its
+    `state` is pending (Safari was opened: `verifier` and `state` wait for the code),
+    ready (a device sign-in waits for the hand-over: `token`, `userId`, `name`) or on
+    (the relay forwards to `url`). An unreadable file counts as none."""
+    try:
+        held = json.loads(REMOTE.read_text())
+    except (OSError, ValueError):
+        return None
+    return held if isinstance(held, dict) and held.get("state") in ("pending", "ready", "on") else None
+
+
+def save_remote(held: dict) -> None:
+    """Write remote.json readable by the owner alone, whole or not at all: a token half
+    written would sign the Mac out, so it goes to a temporary file that replaces the old."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    # mkstemp makes the file 0600; the leading dot keeps it apart from user directories.
+    fd, temporary = tempfile.mkstemp(dir=DATA, prefix=".remote-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as file:
+            json.dump(held, file)
+        os.replace(temporary, REMOTE)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def clear_remote() -> None:
+    """Forget the device sign-in: the Mac is back to its own copy (3.4)."""
+    REMOTE.unlink(missing_ok=True)
 
 
 def _secret() -> bytes:
