@@ -760,8 +760,7 @@ How results are measured:
 ### Due today, 2026-10-23
 
 - Release 0.1.2, which stops today's journal page jumping while the user types, and change "Unblent 0.1.1" on the landing page to 0.1.2.
-- Change the confirmation email of the landing page's sign-up form in Kit: sent from magic@unblent.com, and text about Unblent instead of the old project's (the owner, in Kit).
-- Update the X and Reddit profiles and the r/PracticePsychology description so each leads with unblent.com (the owner).
+- Change the text of the confirmation email of the landing page's sign-up form in Kit to text about Unblent instead of the old project's; it stays sent from hello@unblent.com (the owner, in Kit).
 
 ### Later
 
