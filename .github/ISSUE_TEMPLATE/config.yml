@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Suggest and vote on ideas
+    url: https://github.com/maciekkreft/unblent/discussions/categories/ideas
+    about: Share an idea, or vote for the ideas you would like most.
+  - name: Ask a question
+    url: https://github.com/maciekkreft/unblent/discussions/categories/q-a
+    about: Not sure how something works? Ask here.

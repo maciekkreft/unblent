@@ -1,0 +1,21 @@
+name: I wish Unblent could...
+description: Suggest something Unblent could do for you.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the idea. To see what others have asked for and vote on it, you can also visit [Discussions](https://github.com/maciekkreft/unblent/discussions/categories/ideas).
+  - type: textarea
+    id: wish
+    attributes:
+      label: What would you like Unblent to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: How would it help you?
+      description: What are you trying to do, and what makes it hard today?
+    validations:
+      required: true

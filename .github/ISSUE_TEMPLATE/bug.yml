@@ -1,0 +1,59 @@
+name: Something is not working
+description: Tell us about a problem you ran into in Unblent.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to tell us. A few short answers are enough.
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+      description: Describe what you saw. A screenshot helps if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we see it ourselves?
+      description: The steps that lead to the problem, one per line.
+      placeholder: |
+        1. Open a book
+        2. Select a sentence
+        3. ...
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Unblent version
+      description: In the menu bar, choose Unblent, then About Unblent.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: In the Apple menu, choose About This Mac.
+      placeholder: "macOS 15.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: vim
+    attributes:
+      label: Are Vim keys on?
+      description: You can see this in Settings.
+      options:
+        - "Off"
+        - "On"
+        - "I don't know"
+    validations:
+      required: true
