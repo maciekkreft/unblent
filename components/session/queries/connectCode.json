@@ -1,0 +1,35 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The PKCE challenge the Mac sent in the connect page's address (3.4): the unpadded base64url SHA-256 of the Mac's secret verifier. Asked when the user presses Connect.",
+    "type": "object",
+    "properties": {
+      "challenge": { "type": "string", "pattern": "^[A-Za-z0-9_~.-]{43,128}$" }
+    },
+    "required": ["challenge"],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "A one-time connect code bound to the challenge, good for one try within two minutes (3.4); or why there is none: signed-out, sync-off for an account whose Can sync is off or that is a guest, unavailable when the server cannot be reached.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string", "minLength": 1 }
+        },
+        "required": ["code"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": { "enum": ["signed-out", "sync-off", "unavailable"] }
+        },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["session.changed"]
+}

@@ -24,6 +24,7 @@ _ADDED = (
     ("system", "TEXT NOT NULL DEFAULT ''"),
     ("device", "TEXT NOT NULL DEFAULT 'desk'"),
     ("deleted_at", "INTEGER"),
+    ("sync", "INTEGER NOT NULL DEFAULT 0"),
 )
 _DETAILS = ("country", "city", "browser", "system", "device")
 
@@ -127,7 +128,7 @@ def people() -> list[dict]:
     with _connect() as connection:
         admin_id = _admin_id(connection)
         rows = connection.execute(
-            "SELECT id, guest, number, created_at, first_seen, last_seen, country, city, browser, system, device"
+            "SELECT id, guest, number, created_at, first_seen, last_seen, country, city, browser, system, device, sync"
             " FROM users WHERE deleted_at IS NULL ORDER BY guest, number DESC, created_at, rowid"
         ).fetchall()
     result = []
@@ -146,9 +147,63 @@ def people() -> list[dict]:
             "system": row["system"],
             "device": row["device"],
         }
+        # Can sync is a passkey account's only (3.4); a guest never carries it.
+        if not row["guest"]:
+            person["sync"] = bool(row["sync"])
         result.append(person)
     result.sort(key=lambda p: not p["admin"])
     return result
+
+
+def set_sync(user_id: str, allowed: bool) -> bool:
+    """Turn Can sync on or off for a live passkey account (3.4); False when there is
+    no such account, a guest included."""
+    with _connect() as connection:
+        changed = connection.execute(
+            "UPDATE users SET sync = ? WHERE id = ? AND guest = 0 AND deleted_at IS NULL",
+            (1 if allowed else 0, user_id),
+        ).rowcount
+        return changed == 1
+
+
+def can_sync(user_id: str) -> bool:
+    """Whether a live passkey account may connect a Mac (3.4)."""
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT sync FROM users WHERE id = ? AND guest = 0 AND deleted_at IS NULL", (user_id,)
+        ).fetchone()
+        return bool(row and row["sync"])
+
+
+def add_code(*, code_hash: str, user_id: str, challenge: str, expires_at: int) -> None:
+    with _connect() as connection:
+        connection.execute(
+            "INSERT INTO connect_codes (code_hash, user_id, challenge, expires_at) VALUES (?, ?, ?, ?)",
+            (code_hash, user_id, challenge, expires_at),
+        )
+
+
+def take_code(code_hash: str) -> dict | None:
+    """The code's {user_id, challenge} when it is unused and unexpired, else None (3.4).
+    Any try uses it up, in the same transaction, so a code is redeemed at most once and
+    a wrong verifier cannot be guessed again on the same code."""
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT user_id, challenge, expires_at, used FROM connect_codes WHERE code_hash = ?", (code_hash,)
+        ).fetchone()
+        if not row:
+            return None
+        connection.execute("UPDATE connect_codes SET used = 1 WHERE code_hash = ?", (code_hash,))
+        # Spent and expired codes are of no further use; they go as new ones are taken.
+        connection.execute("DELETE FROM connect_codes WHERE expires_at < ?", (_now() - 60 * 60 * 1000,))
+        if row["used"] or row["expires_at"] < _now():
+            return None
+        return {"user_id": row["user_id"], "challenge": row["challenge"]}
+
+
+def add_device(*, id: str, user_id: str) -> None:
+    with _connect() as connection:
+        connection.execute("INSERT INTO devices (id, user_id, created_at) VALUES (?, ?, ?)", (id, user_id, _now()))
 
 
 def delete_guest(user_id: str) -> bool:

@@ -12,7 +12,7 @@ const flush = async (n = 6) => {
 };
 
 function fakeApi(impl) {
-  const calls = { me: 0, register: 0, login: 0, logout: 0, guest: 0, people: 0, forget: 0 };
+  const calls = { me: 0, register: 0, login: 0, logout: 0, guest: 0, people: 0, forget: 0, allowSync: 0, connect: 0, connectCode: 0 };
   const api = {};
   for (const name of Object.keys(calls)) {
     api[name] = async () => {
@@ -213,8 +213,8 @@ test("session.rejected while already signed out needs no round trip", async () =
 });
 
 let asked = 0;
-const ask = (actor, type) =>
-  new Promise((resolve) => actor.send({ type, cid: "c" + (asked += 1), payload: {}, reply: resolve }));
+const ask = (actor, type, payload = {}) =>
+  new Promise((resolve) => actor.send({ type, cid: "c" + (asked += 1), payload, reply: resolve }));
 
 test("a fresh browser on a try page becomes Guest 1 at its first server need, once (3.4)", async () => {
   const guest = { userId: "g1", registrationOpen: true, guest: true, admin: false, name: "Guest 1" };
@@ -295,6 +295,46 @@ test("a guest's Delete, once its Undo window ended, reaches the server and annou
   await flush();
   assert.equal(calls.forget, 1);
   assert.deepEqual(changed, [{ type: "people.changed", ...left }]);
+});
+
+test("Can sync reaches the server from the admin only and announces the new list; a failure says so and reads the list again (3.4)", async () => {
+  const list = { people: [{ userId: "u1", name: "Admin", guest: false, admin: true, sync: true }] };
+  const ok = fakeApi({ allowSync: list });
+  const guest = start({ userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" }, ok.api);
+  guest.actor.send({ type: "sync.allowed", user: "u1", allowed: true });
+  await flush();
+  assert.equal(ok.calls.allowSync, 0);
+  const admin = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, ok.api);
+  const changed = [];
+  admin.actor.on("people.changed", (e) => changed.push(e));
+  admin.actor.send({ type: "sync.allowed", user: "u1", allowed: true });
+  await flush();
+  assert.equal(ok.calls.allowSync, 1);
+  // people.changed has no Can sync field, so the list travels without it.
+  assert.deepEqual(changed, [{ type: "people.changed", people: [{ userId: "u1", name: "Admin", guest: false, admin: true }] }]);
+
+  const down = fakeApi({ allowSync: { error: "unavailable" } });
+  const failing = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, down.api);
+  const seen = [];
+  failing.actor.on("people.changed", (e) => seen.push(e));
+  failing.actor.send({ type: "sync.allowed", user: "u1", allowed: false });
+  await flush();
+  assert.deepEqual(failing.events.at(-1), { type: "session.refused", reason: "unavailable" });
+  assert.deepEqual(seen, []);
+});
+
+test("connect? and connectCode? ask the server only for a signed-in account (3.4)", async () => {
+  const { api, calls } = fakeApi({ connect: { allowed: true }, connectCode: { code: "c0de" } });
+  const nobody = start(null, api);
+  assert.deepEqual(await ask(nobody.actor, "connect?"), { allowed: false });
+  assert.deepEqual(await ask(nobody.actor, "connectCode?", { challenge: "x".repeat(43) }), { error: "signed-out" });
+  const guest = start({ userId: "g1", registrationOpen: true, guest: true, name: "Guest 1" }, api);
+  assert.deepEqual(await ask(guest.actor, "connect?"), { allowed: false });
+  assert.equal(calls.connect + calls.connectCode, 0);
+  const own = start({ userId: "u1", registrationOpen: false, admin: true, name: "Admin" }, api);
+  assert.deepEqual(await ask(own.actor, "connect?"), { allowed: true });
+  assert.deepEqual(await ask(own.actor, "connectCode?", { challenge: "x".repeat(43) }), { code: "c0de" });
+  assert.deepEqual([calls.connect, calls.connectCode], [1, 1]);
 });
 
 test("revalidate announces the account becoming the admin (3.4)", async () => {

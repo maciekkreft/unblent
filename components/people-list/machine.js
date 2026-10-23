@@ -88,6 +88,9 @@ export const rowsOf = (people, spending, now) =>
       userId: p.userId,
       // Only a guest row offers View as, Reset use, and Block or Unblock (12).
       guest: Boolean(p.guest) && !p.admin,
+      // Every passkey account, the admin's own included, has a Can sync switch (3.4);
+      // a guest has none.
+      sync: p.guest ? null : Boolean(p.sync),
       blocked,
       who: p.admin ? "You · admin" : blocked ? `${p.name} · blocked` : p.name,
       look: p.admin ? "you" : blocked ? "blocked" : "plain",
@@ -125,7 +128,10 @@ export const machine = setup({
       "View as, Reset use, Block or Unblock, and Delete. Reset use and Block show an " +
       "Undo for the undo window; Delete hides the row at once and deletes the guest's " +
       "account, work and spending only when its Undo window ends; View as is reversed " +
-      "by Back to you. The table scrolls sideways " +
+      "by Back to you. Every account with a passkey, yours included, has a Can sync switch, " +
+      "off at first, which says whether that account may connect a Mac app to its work on " +
+      "the web; it moves at once when pressed, and pressing it again undoes it. Turning it " +
+      "off stops the account's connected Macs from syncing. The table scrolls sideways " +
       "on a narrow screen, and the Who column stays in view while it does.",
     kind: "view",
     emits: ["viewas.requested", "guest.blocked", "use.reset", "removal.started", "sync.allowed"],
@@ -163,6 +169,17 @@ export const machine = setup({
     _viewAs: { actions: emit(({ event }) => ({ type: "viewas.requested", user: event.user })) },
     _reset: { actions: emit(({ event }) => ({ type: "use.reset", user: event.user })) },
     _block: { actions: emit(({ event }) => ({ type: "guest.blocked", user: event.user, blocked: event.blocked })) },
+    // Can sync (3.4): the switch moves at once, and session's new list confirms it or,
+    // if the change could not be saved, puts it back. Pressing it again is the undo.
+    _sync: {
+      actions: [
+        assign({
+          people: ({ context, event }) =>
+            context.people && context.people.map((p) => (p.userId === event.user ? { ...p, sync: event.allowed } : p)),
+        }),
+        emit(({ event }) => ({ type: "sync.allowed", user: event.user, allowed: event.allowed })),
+      ],
+    },
     // Delete waits out the undo window in notice-stack like every delete; session and
     // llm act on removal.settled, and an Undo brings the row back.
     _delete: {
@@ -175,7 +192,20 @@ export const machine = setup({
       guard: ({ event }) => event.kind === "guest",
       actions: assign({ deleting: ({ context, event }) => context.deleting.filter((id) => id !== event.id) }),
     },
-    "people.changed": { actions: assign({ people: ({ event }) => event.people, failed: false }) },
+    // people.changed carries no Can sync (session leaves it out), so each passkey row
+    // keeps the switch it shows; session: people, read at each opening, is the truth.
+    "people.changed": {
+      actions: assign({
+        people: ({ context, event }) =>
+          event.people.map((p) =>
+            p.guest || "sync" in p ? p : { ...p, sync: context.people?.find((q) => q.userId === p.userId)?.sync },
+          ),
+        failed: false,
+      }),
+    },
+    // A gesture session could not honour, Can sync among them: read the list again, so
+    // the switches show what the registry holds.
+    "session.refused": { guard: ({ context }) => context.people !== null, target: ".reading" },
     "spending.changed": {
       actions: assign({
         spending: ({ event }) => ({

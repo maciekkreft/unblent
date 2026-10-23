@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import os
 import shutil
+import sqlite3
 from pathlib import Path
 
 from fastapi import HTTPException, Request, Response
@@ -107,6 +108,25 @@ def verify(token: str | None) -> str | None:
     return payload if hmac.compare_digest(mac, expected) else None
 
 
+def session_token(
+    user_id: str,
+    *,
+    guest: bool = False,
+    admin: bool = False,
+    viewer: str | None = None,
+    device: str | None = None,
+) -> str:
+    """The signed value of the session cookie (3.4). The cookie also says whether the
+    account is a guest or the admin, so a server module can tell without asking
+    session; a bare id is an ordinary account. While the admin views as someone it
+    also names the admin (12), so Back to you needs no passkey; the account it holds is
+    then never the admin. A device sign-in (3.4) carries `device:<id>`, the connected
+    Mac it was issued to, so session_of can refuse it once the account's Can sync is off."""
+    flags = (["guest"] if guest else []) + (["admin"] if admin and not viewer else [])
+    extra = ([f"by:{viewer}"] if viewer else []) + ([f"device:{device}"] if device else [])
+    return sign("|".join([user_id] + flags + extra))
+
+
 def set_session_cookie(
     response: Response,
     request: Request,
@@ -115,18 +135,13 @@ def set_session_cookie(
     guest: bool = False,
     admin: bool = False,
     viewer: str | None = None,
+    device: str | None = None,
 ) -> None:
     # Secure only under https, so the cookie still rides http://localhost in tests;
     # SameSite=strict because no cross-site flow ever needs it (3.4).
-    # The cookie also says whether the account is a guest or the admin (3.4), so a
-    # server module can tell without asking session; a bare id is an ordinary account.
-    # While the admin views as someone it also names the admin (12), so Back to you
-    # needs no passkey; the account it holds is then never the admin.
-    flags = (["guest"] if guest else []) + (["admin"] if admin and not viewer else [])
-    payload = "|".join([user_id] + flags + ([f"by:{viewer}"] if viewer else []))
     response.set_cookie(
         SESSION_COOKIE,
-        sign(payload),
+        session_token(user_id, guest=guest, admin=admin, viewer=viewer, device=device),
         max_age=SESSION_MAX_AGE,
         httponly=True,
         secure=request.url.scheme == "https",
@@ -139,21 +154,61 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
 
 
+def _flag(flags: list[str], name: str) -> str | None:
+    return next((f[len(name):] for f in flags if f.startswith(name) and len(f) > len(name)), None)
+
+
+def device_of(request: Request) -> str | None:
+    """The connected Mac a validly signed device sign-in names (3.4), whether or not its
+    account may still sync; None for any other cookie."""
+    payload = verify(request.cookies.get(SESSION_COOKIE))
+    return _flag((payload or "").split("|")[1:], "device:") if payload else None
+
+
+def _may_sync(user_id: str) -> bool:
+    # Read only for a device sign-in (3.4), so an ordinary request costs nothing more.
+    # session owns the registry; this is a read of its Can sync column and nothing
+    # else, and a registry without the column or the row refuses.
+    path = DATA / "session.db"
+    if not path.is_file():
+        return False
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT sync FROM users WHERE id = ? AND guest = 0 AND deleted_at IS NULL", (user_id,)
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return False
+    return bool(row and row[0])
+
+
 def session_of(request: Request) -> dict | None:
-    """Who the cookie names (3.4): {"userId", "guest", "admin", "viewer"}, or None
-    when anonymous or the account was deleted. viewer is the admin's id while the
-    admin views as someone (12), else None. Which flags a cookie carries is set by session's server module.
+    """Who the cookie names (3.4): {"userId", "guest", "admin", "viewer", "device"}, or
+    None when anonymous or the account was deleted. viewer is the admin's id while the
+    admin views as someone (12), else None; device is the connected Mac a device sign-in
+    was issued to, else None. Which flags a cookie carries is set by session's server
+    module. A device sign-in whose account's Can sync is off is no one (3.4).
     In the local edition a request without a valid cookie is the local account (3.4)."""
     payload = verify(request.cookies.get(SESSION_COOKIE))
     user_id, *flags = (payload or "").split("|")
+    device = _flag(flags, "device:") if payload else None
     # A deleted account's cookie is no one's (3.4): every module sees the browser signed out.
-    if not payload or removed(user_id):
+    if not payload or removed(user_id) or (device and not _may_sync(user_id)):
         # The local edition (3.4): a browser holding no valid cookie is the one
         # account, and that account is the admin, so no sign-in ever happens.
         local = local_user()
-        return {"userId": local, "guest": False, "admin": True, "viewer": None} if local else None
-    viewer = next((f[3:] for f in flags if f.startswith("by:") and len(f) > 3), None)
-    return {"userId": user_id, "guest": "guest" in flags, "admin": "admin" in flags and not viewer, "viewer": viewer}
+        return {"userId": local, "guest": False, "admin": True, "viewer": None, "device": None} if local else None
+    viewer = _flag(flags, "by:")
+    return {
+        "userId": user_id,
+        "guest": "guest" in flags,
+        "admin": "admin" in flags and not viewer,
+        "viewer": viewer,
+        "device": device,
+    }
 
 
 def current_user(request: Request) -> str | None:

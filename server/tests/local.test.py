@@ -112,7 +112,8 @@ class LocalEdition(unittest.TestCase):
         self.assertEqual([b["deleted"] for b in listed["books"]], [True])
 
     def test_passkeys_and_guests_do_not_exist(self):
-        for path in ("/register/begin", "/register/finish", "/login/begin", "/login/finish"):
+        for path in ("/register/begin", "/register/finish", "/login/begin", "/login/finish",
+                     "/connect/code", "/connect/token"):
             self.assertEqual(_call(self.port, "POST", f"/api/session{path}", {})[0], 404, path)
         # A try page's guest ask gets the one account back, never a new guest.
         status, picture = _call(self.port, "POST", "/api/session/guest")

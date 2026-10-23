@@ -130,3 +130,39 @@ test("Delete hides the guest at once and waits out its Undo; Undo brings the row
   actor.send({ type: "removal.undone", kind: "guest", id: "g14" });
   assert.equal(shownOf(actor.getSnapshot().context.people, actor.getSnapshot().context.deleting).length, 4);
 });
+
+test("Can sync is a switch on every passkey account, yours included, never a guest's; it moves at once and says so on the bus (3.4)", () => {
+  const people = [{ ...PEOPLE[0], sync: false }, { userId: "k", name: "Account", guest: false, admin: false, sync: true }, PEOPLE[1]];
+  assert.deepEqual(rowsOf(people, SPENDING, NOW).map((r) => r.sync), [false, true, null]);
+  assert.equal(rowsOf([PEOPLE[0]], SPENDING, NOW)[0].sync, false, "off when the server says nothing");
+  const emitted = [];
+  const actor = createActor(machine, { input: { ask: async () => ({ error: "no" }) } });
+  actor.on("sync.allowed", (e) => emitted.push(e));
+  actor.start();
+  actor.send({ type: "people.changed", people });
+  actor.send({ type: "_sync", user: "a", allowed: true });
+  assert.equal(actor.getSnapshot().context.people[0].sync, true);
+  actor.send({ type: "_sync", user: "a", allowed: false });
+  assert.equal(actor.getSnapshot().context.people[0].sync, false, "pressing it again undoes it");
+  assert.deepEqual(emitted, [
+    { type: "sync.allowed", user: "a", allowed: true },
+    { type: "sync.allowed", user: "a", allowed: false },
+  ]);
+  // session's news carries no Can sync, so each row keeps the switch it shows.
+  actor.send({ type: "people.changed", people: people.map(({ sync, ...p }) => p) });
+  assert.deepEqual(actor.getSnapshot().context.people.map((p) => p.sync), [false, true, undefined]);
+});
+
+test("a refused gesture reads the list again, so the switches show what the registry holds", async () => {
+  const asked = [];
+  const answers = { "session people": { people: PEOPLE }, "llm spending": SPENDING };
+  const actor = createActor(machine, { input: { ask: async (t, n) => (asked.push(t + " " + n), answers[t + " " + n]) } }).start();
+  actor.send({ type: "session.refused", reason: "unavailable" });
+  await flush();
+  assert.deepEqual(asked, [], "nothing to correct before the list was read");
+  actor.send({ type: "_shown" });
+  await flush();
+  actor.send({ type: "session.refused", reason: "unavailable" });
+  await flush();
+  assert.equal(asked.length, 4);
+});

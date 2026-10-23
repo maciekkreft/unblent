@@ -1,0 +1,32 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "connect takes nothing. Asked by the connect page of the web edition before it offers Connect (3.4).",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Whether the account this browser holds may connect a Mac: a passkey account whose Can sync is on (3.4); or unavailable when the server cannot be reached.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "allowed": { "type": "boolean" }
+        },
+        "required": ["allowed"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": { "enum": ["unavailable"] }
+        },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["session.changed"]
+}

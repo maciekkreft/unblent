@@ -138,7 +138,11 @@ export const machine = setup({
       "be done within a few seconds, for example offline, nothing changes and a notice says so. " +
       "The admin can also delete a guest: once its Undo window ends the account and everything " +
       "it saved are removed, its number is never given again, and its browser is signed out " +
-      "at its next visit.",
+      "at its next visit. The admin turns Can sync on or off for each account with a passkey, " +
+      "their own included; it is off at first. On the web, an account with Can sync on may " +
+      "connect a Mac: the connect page asks for a one-time code, good for one try within two " +
+      "minutes, which the Mac trades for a lasting sign-in of its own. While Can sync is off, " +
+      "the account gets no code and its connected Macs are treated as signed out.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
@@ -187,7 +191,47 @@ export const machine = setup({
           .then(() => context.api.forget(event.id))
           .then((reply) => reply && Array.isArray(reply.people) && self.send({ type: "_people", people: reply.people }), () => {}),
     },
-    _people: { actions: emit(({ event }) => ({ type: "people.changed", people: event.people })) },
+    // people.changed has no Can sync field (7.1: an event schema changes only with
+    // permission), so it travels without it; People keeps the switch it already shows.
+    _people: {
+      actions: emit(({ event }) => ({
+        type: "people.changed",
+        people: event.people.map(({ sync, ...person }) => person),
+      })),
+    },
+    // Can sync on a passkey account in People (3.4, 12): the server records it and the
+    // new list goes out. If it cannot, a notice says so, and People reads the list again.
+    "sync.allowed": {
+      guard: ({ context }) => Boolean(context.userId && context.admin),
+      actions: ({ context, event, self }) =>
+        Promise.resolve()
+          .then(() => context.api.allowSync(event.user, event.allowed))
+          .then((reply) =>
+            reply && Array.isArray(reply.people)
+              ? self.send({ type: "_people", people: reply.people })
+              : self.send({ type: "_refused", reason: "unavailable" }),
+          )
+          .catch(() => self.send({ type: "_refused", reason: "unavailable" })),
+    },
+    _refused: { actions: emit(({ event }) => ({ type: "session.refused", reason: event.reason })) },
+    // Connecting a Mac, asked by the connect page of the web edition (3.4). The server
+    // decides who may; signed out needs no round trip.
+    "connect?": {
+      actions: ({ context, event }) => {
+        if (!context.userId || context.guest) return event.reply({ allowed: false });
+        Promise.resolve()
+          .then(() => context.api.connect())
+          .then(event.reply, () => event.reply({ error: "unavailable" }));
+      },
+    },
+    "connectCode?": {
+      actions: ({ context, event }) => {
+        if (!context.userId) return event.reply({ error: "signed-out" });
+        Promise.resolve()
+          .then(() => context.api.connectCode(event.payload.challenge))
+          .then(event.reply, () => event.reply({ error: "unavailable" }));
+      },
+    },
     // Only the admin sees across accounts (12). The server decides; the cache only
     // spares everyone else a request that would be refused.
     "people?": {

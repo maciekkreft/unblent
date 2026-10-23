@@ -8,6 +8,8 @@ import read from "./queries/read.json" with { type: "json" };
 import peopleChanged from "./events/people.changed.json" with { type: "json" };
 import guest from "./queries/guest.json" with { type: "json" };
 import people from "./queries/people.json" with { type: "json" };
+import connect from "./queries/connect.json" with { type: "json" };
+import connectCode from "./queries/connectCode.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the localStorage
 // cache and the passkey `api` — and mounts it, so machine.js stays importable in
@@ -169,6 +171,39 @@ const api = {
       return { error: "unavailable" };
     }
   },
+  // Can sync in People (3.4, 12): the server answers with the new list.
+  async allowSync(user, allowed) {
+    try {
+      const res = await fetch(`/api/session/people/${encodeURIComponent(user)}/sync`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ allowed }),
+      });
+      return res.ok ? await res.json() : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
+  // Connecting a Mac, on the web (3.4): whether this account may, and a one-time code.
+  async connect() {
+    try {
+      const res = await fetch("/api/session/connect", { credentials: "same-origin", headers: { Accept: "application/json" } });
+      return res.ok ? { allowed: (await res.json()).allowed === true } : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
+  async connectCode(challenge) {
+    try {
+      const res = await post("/connect/code", { challenge });
+      if (res.status === 401) return { error: "signed-out" };
+      if (res.status === 403) return { error: "sync-off" };
+      return res.ok ? { code: (await res.json()).code } : { error: "unavailable" };
+    } catch {
+      return { error: "unavailable" };
+    }
+  },
   async logout() {
     try {
       const res = await post("/logout");
@@ -195,7 +230,7 @@ const actor = mount(machine, {
     go: (picture) => location.assign(picture.guest ? "/try/evaluators" : "/"),
   },
   events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged },
-  queries: { read, guest, people },
+  queries: { read, guest, people, connect, connectCode },
 });
 
 // On mount and whenever the tab regains focus, reconcile with the server (5): this

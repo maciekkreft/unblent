@@ -196,6 +196,18 @@ class PeopleList extends LitElement {
     .actions button.danger {
       color: var(--color-danger);
     }
+    input[type="checkbox"] {
+      width: calc(var(--space-md) + var(--space-2xs));
+      height: calc(var(--space-md) + var(--space-2xs));
+      margin: 0;
+      vertical-align: middle;
+      accent-color: var(--color-accent);
+      cursor: pointer;
+    }
+    input[type="checkbox"]:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
     .hint {
       margin: 0;
       color: var(--color-body-mid);
@@ -233,6 +245,19 @@ class PeopleList extends LitElement {
     </span>`;
   }
 
+  // Can sync (3.4): a switch on every passkey account's row, the admin's own included.
+  #sync(r) {
+    const who = r.look === "you" ? "you" : r.who.replace(/ · blocked$/, "");
+    return html`<input
+      type="checkbox"
+      role="switch"
+      .checked=${r.sync}
+      aria-checked=${r.sync ? "true" : "false"}
+      aria-label="Can sync, ${who}"
+      @change=${(e) => this.#actor.actor.send({ type: "_sync", user: r.userId, allowed: e.target.checked })}
+    />`;
+  }
+
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
@@ -261,13 +286,14 @@ class PeopleList extends LitElement {
       <div class="table">
         <table>
           <thead>
-            <tr><th>Who</th><th>First seen</th><th>Last seen</th><th>Where</th><th>Device</th><th>Used</th><th>Space</th><th aria-label="Actions"></th></tr>
+            <tr><th>Who</th><th>Can sync</th><th>First seen</th><th>Last seen</th><th>Where</th><th>Device</th><th>Used</th><th>Space</th><th aria-label="Actions"></th></tr>
           </thead>
           <tbody>
             ${rowsOf(people, spending, now).map(
               (r) => html`
                 <tr data-user=${r.userId}>
                   <td><span class="pill ${r.look}">${r.who}</span></td>
+                  <td>${r.sync === null ? nothing : this.#sync(r)}</td>
                   <td>${r.firstSeen}</td>
                   <td>${r.lastSeen}</td>
                   <td>${r.where}</td>
