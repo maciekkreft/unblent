@@ -99,6 +99,14 @@ class Affected(unittest.TestCase):
         self.assertEqual(check.affected_tests(["architecture.md", "CLAUDE.md"], self.manifests, self.tests),
                          (set(), set()))
 
+    def test_the_mac_app_github_and_root_text_files_reach_no_test(self):
+        changed = ["mac/serve.py", "mac/src-tauri/tauri.conf.json", ".github/ISSUE_TEMPLATE/bug.yml",
+                   ".github/workflows/mac.yml", "README.md", "CHANGELOG.md", "LICENSE"]
+        self.assertEqual(check.affected_tests(changed, self.manifests, self.tests), (set(), set()))
+
+    def test_the_mac_book_a_server_test_imports_runs_everything(self):
+        self.assertIsNone(check.classify_changes(["mac/books/meditations.epub"], self.manifests))
+
     def test_the_documentation_beside_a_component_adds_nothing(self):
         files, _ = check.affected_tests(["architecture.md", "components/settings-sheet/view.js"],
                                         self.manifests, self.tests)

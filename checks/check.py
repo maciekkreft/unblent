@@ -1549,6 +1549,12 @@ _INFRA_TESTS = {
     "store": ("store/tests/*.test.mjs",),
     "tokens": (),
 }
+# Section 11: what the running app never loads reaches no test. mac/books/ is the
+# exception inside mac/: the local edition's server test imports its ePub, so a change
+# there still runs everything.
+_UNLOADED_DIRS = {"mac", ".github"}
+_UNLOADED_FILES = {"LICENSE"}
+_LOADED_BY_TESTS = ("mac/books/",)
 _TAG = re.compile(r"<([a-z][\w]*-[\w-]*)[\s>]")
 _ENTRY = re.compile(r"/static/components/([\w-]+)/(?:view|fact)\.js")
 # Section 11: a test opens the product by naming `/` right after its base URL.
@@ -1618,7 +1624,7 @@ def classify_changes(changed_paths: list, manifests: dict):
     """The changed components, the edited page addresses and the narrow infrastructure
     parts that changed, or None when everything must run: other infrastructure, a
     structural or an unclassifiable change, or no change at all (7.3, 11). A change to
-    the documentation at the repository root reaches no test."""
+    a text file at the repository root, to the Mac app or to .github/ reaches no test."""
     known = {Path(p).parent.name for p in manifests}
     seeds = set()
     pages = set()
@@ -1631,7 +1637,9 @@ def classify_changes(changed_paths: list, manifests: dict):
         seen = True
         parts = Path(cp).parts
         top = parts[0]
-        if len(parts) == 1 and cp.endswith(".md"):
+        if len(parts) == 1 and (cp.endswith(".md") or cp in _UNLOADED_FILES):
+            continue
+        if top in _UNLOADED_DIRS and not cp.startswith(_LOADED_BY_TESTS):
             continue
         if top in _NARROW_INFRA:
             if top == "checks" and len(parts) == 2 and parts[1] in _CHECKS_LOADED_BY_TESTS:
