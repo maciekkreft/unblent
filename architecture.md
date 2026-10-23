@@ -742,3 +742,35 @@ Work that is decided but not done yet. Remove a line when its work is done.
   - 21. Do not evaluate lines that have no words, such as a line of only spaces or only "*", in the Towards field of a choice point or in an evaluator's text box. Which rule is recommended?
   - 22. Add the Highlights note in Notes to what Feature Flags can turn off: the flag decides whether that note is shown in the notes list.
   - 23. Undo is missing with Vim keys: after `dd` then `p` on a note in the notes list, `u` does not put the notes back where they were, and a book deleted with `dd` cannot be brought back with `u`. Undo would be useful and follows the design principles. Because the system is driven by events, one idea is an event undo, where each operation defines what to do when it is undone, unless there is a better idea. Propose, briefly, where else undo could be added, so the user has more control over their actions and can reverse them.
+
+---
+
+## 16. Launch tasks
+
+The work of launching Unblent for Mac (section 14, first line). When the owner asks what is to be done, answer from this section: first what is due today, then what comes later. Each task says how its result is measured. Remove a line when its work is done.
+
+How results are measured:
+
+- **Visits from each place.** Every post links to the landing page with its own `ref`, such as `https://unblent.com/?ref=hn`. The landing server writes every request to its log, so the visits from one place are the requests for `/?ref=<place>`.
+- **Downloads.** GitHub counts each download of `Unblent.dmg`, from Homebrew or the landing page, per release. It does not say where the person came from.
+- **Interest.** GitHub stars, and the people who leave an email address in the landing page's form, counted by Kit.
+- **Wishes and problems.** GitHub issues and Discussions › Ideas.
+- One short report puts these numbers side by side, before a post and again a day after it.
+
+### Due today, 2026-10-23
+
+- Release 0.1.2, which stops today's journal page jumping while the user types, and change "Unblent 0.1.1" on the landing page to 0.1.2.
+- Change the GitHub repository's description to "A free, open-source ePub reader for the Mac that keeps your notes with your books. Works offline, no account." (the owner, on GitHub).
+- Make the report of section 16's numbers, and take the first reading before any post.
+- Post on r/PracticePsychology, the owner's subreddit: what Unblent does today, the tools from psychology books it is growing towards, and how they connect to practising psychology, drawn from the owner's journal of 2026-10-23, with a short video of the app. Link `?ref=practicepsychology`.
+
+### Later
+
+- Show HN at https://news.ycombinator.com/submit, on a Tuesday, Wednesday or Thursday between 8 and 10 a.m. US Eastern time. Link `?ref=hn`.
+- Product Hunt, on a different weekday from Show HN, with a picture or a short clip. Link `?ref=producthunt`.
+- Reddit: r/macapps, r/ebooks, r/Zettelkasten, r/PKMS, r/vim, r/opensource and r/SideProject, a few days apart, each after reading its rules on posts about one's own work. Link `?ref=reddit-<subreddit>`.
+- Mastodon and Bluesky, with the README screenshot. Link `?ref=mastodon` or `?ref=bluesky`.
+- Lobsters, with the "show" tag, once a member invites the owner. Link `?ref=lobsters`.
+- AlternativeTo, as an alternative to Apple Books, Calibre, Readwise and Kindle; MacUpdate; and the lists jaywcjlove/awesome-mac, serhii-londar/open-source-mac-os-apps and iCHAIT/awesome-macOS on GitHub.
+- Indie Hackers, the story of building it (optional).
+- Paid ads in ChatGPT and on Reddit, each with a small fixed budget and its own `ref`, decided after the first posts show which audience responds.
