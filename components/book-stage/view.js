@@ -132,7 +132,12 @@ class BookStage extends LitElement {
     const follow = this.#shownWas !== undefined && shown !== this.#shownWas && this.#hadFocus;
     this.#shownWas = shown;
     const slot = this.renderRoot.querySelector("slot");
-    slot?.assign(...(child ? [child] : []));
+    // Only a change is assigned: WebKit lays a re-assigned child out anew and then scrolls
+    // the editor that holds the caret to its bottom edge, so the journal would jump while
+    // the user types.
+    const want = child ? [child] : [];
+    const held = slot?.assignedNodes() ?? [];
+    if (slot && (held.length !== want.length || held[0] !== want[0])) slot.assign(...want);
     // The keyboard follows a change made from the stage; one made elsewhere (a tile
     // clicked in Books) never takes the focus, and a child not shown never takes it.
     if (follow && slot) child?.focus();

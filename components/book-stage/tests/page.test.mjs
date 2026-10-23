@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 
 // The kit (10): the helpers every browser suite shares, reached by the path the check sets.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -174,6 +174,54 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await page.waitForFunction(() => document.querySelector("book-stage").shadowRoot.querySelector("slot")?.assignedElements()[0]?.localName === "book-reader");
       assert.notEqual(await stageText(page), "Sign in to read.");
       assert.deepEqual(await stageTabs(page), ["Sample Book*"], "the same tab is back in front");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+}
+
+for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
+  // Browser: rendering and layout. WebKit scrolls the caret's editor when the stage assigns
+  // its child again, and the journal's save makes the stage draw again.
+  test(`typing near the end of a long journal day leaves the page where it is in ${engine.name}`, async () => {
+    const cookie = forgeCookie("book-stage");
+    const now = new Date();
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const text = Array.from({ length: 40 }, (_, i) => `Line ${i + 1}`).join("\n\n");
+    const res = await fetch(`${BASE_URL}/api/journal/days`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", Cookie: `unblent_session=${cookie}` },
+      body: JSON.stringify({ record: { id: "01K0000000000000000000DAY1", day, text, editedAt: Date.now() } }),
+    });
+    assert.equal(res.status, 200, "seeding today's page");
+    const browser = await engine.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 700 } });
+    context.setDefaultTimeout(4000);
+    try {
+      await signedIn(context, cookie);
+      const page = await context.newPage();
+      const problems = watch(page);
+      let saved = 0;
+      page.on("console", (m) => {
+        if (m.text().includes("event day.saved")) saved++;
+      });
+      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() =>
+        [...(document.querySelector("book-shelf")?.shadowRoot?.querySelectorAll(".tile .title") ?? [])].some((t) => t.textContent.trim() === "Journal"),
+      );
+      assert.ok(await clickTile(page, "Journal"));
+      const last = page.locator("journal-entry .cm-line", { hasText: "Line 40" });
+      await last.click();
+      await page.keyboard.press("End");
+      const top = () => page.evaluate(() => document.querySelector("journal-entry").shadowRoot.querySelector(".scroll").scrollTop);
+      const before = await top();
+      assert.ok(before > 0, "the day is long enough to scroll");
+      await page.keyboard.type("x");
+      await until(() => saved > 0);
+      await page.evaluate(() => new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok))));
+      assert.equal(await top(), before, "the page did not scroll");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     } finally {
       await context.close();
