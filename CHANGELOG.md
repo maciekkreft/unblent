@@ -6,6 +6,14 @@ All notable changes to Unblent for Mac are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-23
+
+### Fixed
+
+- Today's journal page no longer jumps while you type in it.
+
+## [0.1.1] — 2026-10-23
+
 ### Changed
 
 - A new app icon.
@@ -52,5 +60,7 @@ The first release.
 - Everything is stored on your Mac, in `~/Library/Application Support/Unblent`. There is
   no account and no sync.
 
-[Unreleased]: https://github.com/maciekkreft/unblent/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/maciekkreft/unblent/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/maciekkreft/unblent/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/maciekkreft/unblent/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maciekkreft/unblent/releases/tag/v0.1.0
