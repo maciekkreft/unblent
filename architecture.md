@@ -739,7 +739,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 
 Work that is decided but not done yet. Remove a line when its work is done.
 
-- Clarify items 9–23 below before planning them. Analyze each item, ask the owner about everything that needs the owner's decision, and give a recommendation with every question. The goal is to settle every item, so that the next step can be a plan of several steps, carried out by several Opus agents coordinated from one session.
+- Clarify items 9–24 below before planning them. Analyze each item, ask the owner about everything that needs the owner's decision, and give a recommendation with every question. The goal is to settle every item, so that the next step can be a plan of several steps, carried out by several Opus agents coordinated from one session.
   - 9. Make the whole app navigable with Vim keys. Notes already are; Chats and Evaluators are not. What is recommended?
   - 10. A note can be sent to the stage. Could the journal be sent to the side dock in the same way, and how?
   - 11. The editor supports bullet lists. Add numbered lists, and keep two kinds of bullet list, those starting with "-" and those starting with "*". Which other formatting features of Notes.app on macOS could be added with them? The goal is to support more of Notes.app's formatting over time.
@@ -753,6 +753,7 @@ Work that is decided but not done yet. Remove a line when its work is done.
   - 21. Do not evaluate lines that have no words, such as a line of only spaces or only "*", in the Towards field of a choice point or in an evaluator's text box. Which rule is recommended?
   - 22. Add the Highlights note in Notes to what Feature Flags can turn off: the flag decides whether that note is shown in the notes list.
   - 23. Undo is missing with Vim keys: after `dd` then `p` on a note in the notes list, `u` does not put the notes back where they were, and a book deleted with `dd` cannot be brought back with `u`. Undo would be useful and follows the design principles. Because the system is driven by events, one idea is an event undo, where each operation defines what to do when it is undone, unless there is a better idea. Propose, briefly, where else undo could be added, so the user has more control over their actions and can reverse them.
+  - 24. A way for the owner and testers to get test versions (tags with a hyphen, such as `v0.1.3-rc1`) as updates in the Mac app, the same way as ordinary versions, while everyone else is never offered them. Today a test version can only be downloaded by hand. Recommended: a "Get test versions" switch in the Mac app's own menu, not in Settings, because the pages know nothing of the Mac app (10); each test build would also publish the file that tells the app a new version exists in a place that only the switched-on app reads. To decide: where that file lives, whether a tester goes back to the ordinary versions when the switch is turned off, and whether Settings should show the switch, which would need a new rule in section 10.
 
 ---
 
