@@ -121,6 +121,8 @@ On a Mac with Apple Silicon, run `bash mac/build-local.sh`. It installs what is
 missing with Homebrew, builds the app, and prints where `Unblent.dmg` is.
 [mac/RELEASING.md](mac/RELEASING.md) explains how releases are made.
 
+See also [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md) and [PRIVACY.md](PRIVACY.md).
+
 ## How it is built
 
 Unblent is built from many small, separate parts. Each part does one thing and is
