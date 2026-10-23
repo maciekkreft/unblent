@@ -740,15 +740,15 @@ class JournalEntry extends LitElement {
   #conflict(c) {
     return html`
       <section class="conflict" aria-label="Two copies of this entry">
-        <p>This entry was also written on another device. Keep one copy.</p>
+        <p>${c.twice ? "This day was written twice." : "This entry was also written on another device."} Keep one copy.</p>
         <div class="copies">
           <div class="copy mine">
-            <h3>Yours</h3>
+            <h3>${c.mineLabel}</h3>
             <pre>${c.mine}</pre>
             <button type="button" class="keep-mine" @click=${() => this.#keep("_keepMine")}>Keep this copy</button>
           </div>
           <div class="copy theirs">
-            <h3>The other device's</h3>
+            <h3>${c.theirsLabel}</h3>
             <pre>${c.theirs}</pre>
             <button type="button" class="keep-theirs" @click=${() => this.#keep("_keepTheirs")}>Keep this copy</button>
           </div>

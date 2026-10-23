@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, conflictOn, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown } from "../machine.js";
+import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
 // is saved when. Times are built with the local Date constructor, so the midnight cases
@@ -42,9 +42,21 @@ test("the entry shows the picked earlier day read only, else the open day, else 
 
 test("a conflict shows on the day it names, and on no other", () => {
   const c = { id: TODAY, mine: { text: "Mine.", baseVersion: 1 }, theirs: { text: "Theirs.", version: 2, editedAt: at(12, 9) } };
-  assert.deepEqual(conflictOn(c, day(TODAY, "2026-10-12", "Theirs.")), { mine: "Mine.", theirs: "Theirs." });
+  assert.deepEqual(conflictOn(c, day(TODAY, "2026-10-12", "Theirs.")), { mine: "Mine.", theirs: "Theirs.", twice: false, mineLabel: "Yours", theirsLabel: "The other device's" });
   assert.equal(conflictOn(c, day(SUNDAY, "2026-10-11", "Other.")), null);
   assert.equal(conflictOn(null, day(TODAY, "2026-10-12", "")), null);
+});
+
+test("two records of one date are labelled by when each was written, two devices' copies by whose", () => {
+  const theirs = { text: "B.", version: 1, editedAt: at(11, 18, 2) };
+  assert.deepEqual(labels({ mine: { text: "A.", baseVersion: 1, editedAt: at(11, 9, 14) }, theirs }), {
+    twice: true,
+    mineLabel: "Written at 09:14",
+    theirsLabel: "Written at 18:02",
+  });
+  const other = labels({ mine: { text: "A.", baseVersion: 1, editedAt: at(10, 23, 5) }, theirs });
+  assert.deepEqual([other.mineLabel, other.theirsLabel], ["Written on 10 October at 23:05", "Written on 11 October at 18:02"]);
+  assert.deepEqual(labels({ mine: { text: "A.", baseVersion: 1 }, theirs }), { twice: false, mineLabel: "Yours", theirsLabel: "The other device's" });
 });
 
 // --- The actor -------------------------------------------------------------------------

@@ -230,7 +230,8 @@ const arm = (enqueue, days, now) => {
 // Two records of the date the page shows are put to the user as a conflict, the way a
 // day saved on two devices is: the newest is the day the page shows, "theirs", and the
 // other is offered as "mine", on the newest's version, so keeping it is a save of its
-// text to the shown day (kept). It is told when the page shows that date and again only
+// text to the shown day (kept). Its time of last edit rides along, which is what tells
+// the page this is two records of one date and lets it label each copy by its time. It is told when the page shows that date and again only
 // when either copy changes, so typing elsewhere does not repeat it.
 const tell = (enqueue, c, again = false) => {
   const clash = c.shown && clashOn(c.days, c.shown.day);
@@ -241,7 +242,7 @@ const tell = (enqueue, c, again = false) => {
   if (!again && was?.other === other.id && same(was.copies, copies)) return;
   const told = {
     id: day.id,
-    mine: { text: other.text, baseVersion: day.version },
+    mine: { text: other.text, baseVersion: day.version, editedAt: other.editedAt },
     theirs: { text: day.text, version: day.version, editedAt: day.editedAt },
   };
   enqueue.assign({ pending: new Map(c.pending).set(day.id, { copies, other: other.id, told }) });

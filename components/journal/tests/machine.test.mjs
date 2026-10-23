@@ -387,7 +387,7 @@ test("the page showing a clashed date is told both copies, and keeping the older
   assert.equal(s.conflicted.length, 0, "nobody shows that date yet");
   shown(s, "2026-10-11");
   assert.deepEqual(s.conflicted.map(({ type, ...e }) => e), [
-    { id: D2, mine: { text: "From the Mac", baseVersion: 1 }, theirs: { text: "From the phone", version: 1, editedAt: at(11, 20) } },
+    { id: D2, mine: { text: "From the Mac", baseVersion: 1, editedAt: at(11, 9) }, theirs: { text: "From the phone", version: 1, editedAt: at(11, 20) } },
   ]);
   write(s, D2, "From the Mac");
   const [day] = s.read().days;
@@ -491,7 +491,7 @@ test("Undo after keeping the older copy of a date gives back both copies and the
   assert.deepEqual(s.conflicted.at(-1), {
     type: "journal.conflicted",
     id: D2,
-    mine: { text: "From the Mac", baseVersion: day.version },
+    mine: { text: "From the Mac", baseVersion: day.version, editedAt: at(11, 9) },
     theirs: { text: "From the phone", version: day.version, editedAt: at(11, 20) },
   });
   reopen(s, D2, "From the Mac", "From the phone");

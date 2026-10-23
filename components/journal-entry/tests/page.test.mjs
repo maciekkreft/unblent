@@ -97,7 +97,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: rendering and layout.
-    run("two records of one earlier date show both copies, keeping one leaves one day, and Undo brings both back", async (page) => {
+    run("two records of one earlier date show both copies by time, keeping one leaves one day, and Undo brings both back", async (page) => {
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
       await editor(page).waitFor();
       const at = (h) => new Date(2025, 2, 2, h).getTime();
@@ -112,6 +112,9 @@ for (const engine of ENGINES) {
       await conflict.waitFor();
       assert.equal(await conflict.locator(".mine pre").textContent(), "Written on the Mac.");
       assert.equal(await conflict.locator(".theirs pre").textContent(), "Written on the phone.");
+      // Each copy is labelled by when it was last written.
+      assert.equal(await conflict.locator(".mine h3").textContent(), "Written at 09:00");
+      assert.equal(await conflict.locator(".theirs h3").textContent(), "Written at 21:00");
       await conflict.locator(".keep-mine").click();
       await conflict.waitFor({ state: "detached" });
       await until(async () => (await times(page, "Written on the Mac.")) === 1);
