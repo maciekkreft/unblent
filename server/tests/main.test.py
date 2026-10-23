@@ -33,6 +33,18 @@ class ServerEntry(unittest.TestCase):
         self.assertTrue(res.headers.get("Content-Type", "").startswith("text/html"))
         self.assertEqual(res.headers.get("Cache-Control"), "no-cache")
 
+    def test_icons_are_served(self):
+        # Section 11.1: the addresses browsers request on their own carry the app's icon.
+        for path, kind in (
+            ("/favicon.ico", "image/x-icon"),
+            ("/apple-touch-icon.png", "image/png"),
+            ("/apple-touch-icon-precomposed.png", "image/png"),
+        ):
+            res = _request(path)
+            self.assertEqual(res.status, 200, path)
+            self.assertEqual(res.headers.get("Content-Type"), kind, path)
+            self.assertEqual(res.headers.get("Cache-Control"), "no-cache", path)
+
     def test_unknown_design_page_404s(self):
         self.assertEqual(_request("/workshop/design/does-not-exist").status, 404)
 

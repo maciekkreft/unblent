@@ -516,6 +516,7 @@ The components tree sits inside a small repository-wide layout:
 ```
 server/          FastAPI entry (named "server", not "app", so it never clashes with an app page)
   user.py        the entry's user infrastructure: who the request is from and where their files live (UNBLENT_DATA overriding data/); a server module may import it
+  icons/         favicon.ico and apple-touch-icon.png, the app's icon, which the entry serves at the addresses browsers request on their own
   tests/         HTTP tests for the entry; infrastructure like the bus, not a component. Never served
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
@@ -547,6 +548,7 @@ Static serving is namespaced so the future app can own `/`:
 | `/try/<name>` | `pages/try/<name>.html`, 404 if missing |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
 | `/` | `pages/index.html`, the product |
+| `/favicon.ico`, `/apple-touch-icon.png` | the app's icon, the same mark as the Mac app |
 
 A component's `server/` (its Python server module) and `tests/` are never served: the static mount for `components/` 404s any path that dips into them, so source and tests never reach the browser.
 

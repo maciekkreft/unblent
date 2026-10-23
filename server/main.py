@@ -26,6 +26,7 @@ INDEX = ROOT / "pages" / "index.html"
 PAGES_DESIGN = ROOT / "pages" / "workshop" / "design"
 PAGES_APPS = ROOT / "pages" / "workshop" / "apps"
 PAGES_TRY = ROOT / "pages" / "try"
+ICONS = Path(__file__).resolve().parent / "icons"
 
 # Section 11.1: source and tests never reach the browser.
 _BLOCKED_SEGMENTS = {"server", "tests"}
@@ -100,6 +101,21 @@ async def index() -> FileResponse:
     # The product (architecture.md 8, 11.1): the app page at /. The workshop lives
     # under /workshop/; everything else is the product.
     return FileResponse(INDEX, headers={"Cache-Control": "no-cache"})
+
+
+# Section 11.1: a page may not link an icon (8), so the entry answers the addresses
+# browsers ask for on their own with the app's icon, the same mark as the Mac app.
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+async def favicon() -> FileResponse:
+    return FileResponse(ICONS / "favicon.ico", media_type="image/x-icon",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.api_route("/apple-touch-icon.png", methods=["GET", "HEAD"])
+@app.api_route("/apple-touch-icon-precomposed.png", methods=["GET", "HEAD"])
+async def apple_touch_icon() -> FileResponse:
+    return FileResponse(ICONS / "apple-touch-icon.png", media_type="image/png",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.api_route("/workshop/design/{name}", methods=["GET", "HEAD"])
