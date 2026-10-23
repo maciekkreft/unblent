@@ -188,7 +188,8 @@ export const machine = setup({
       "the evaluator's own, chosen in the evaluator. Every change saves the whole box at once and Jev checks the day on screen again. " +
       "Choosing an evaluator ticks all its questions; choosing a box's " +
       "earlier evaluator again while the sheet is open brings back its settings. The part is " +
-      "hidden on a page without `choice-point-checks`. Remove on the API key or the Jev key " +
+      "hidden on a page without `choice-point-checks`. The Vim keys list names the chat box " +
+      "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +
       "bar, and the key is removed only when the window ends; leaving the page before then " +
       "keeps it.",
@@ -226,6 +227,9 @@ export const machine = setup({
     // false is off. `tools.changed` keeps the map current after the starting ask (4.3).
     toolList: [],
     tools: {},
+    // Whether this page has a chat: `conversations` answered its tools ask. The Vim keys
+    // list names the chat box only then, so it describes only what the page holds.
+    chat: false,
     // The choice point checks: the four boxes' settings, or null when no fact answers
     // (the part is then hidden); every book's evaluators to choose from; and, per box and
     // evaluator, the settings a box had before its evaluator was switched this session.
@@ -326,7 +330,10 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "loadingChecks" },
-          { target: "loadingChecks", actions: assign({ tools: ({ event }) => ({ ...event.output.tools }) }) },
+          {
+            target: "loadingChecks",
+            actions: assign({ tools: ({ event }) => ({ ...event.output.tools }), chat: true }),
+          },
         ],
         onError: { target: "loadingChecks" },
       },

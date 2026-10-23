@@ -317,6 +317,13 @@ test("without the account attribute the tools are never loaded", async () => {
   assert.deepEqual(snapshot.context.tools, {}, "and no tool preferences");
 });
 
+test("the Vim keys list names the chat box only where conversations answers", async () => {
+  assert.equal((await start(undefined, "/a", { account: true })).snapshot.context.chat, true);
+  const without = await start(undefined, "/a", { account: true, tools: { error: "no-answerer" } });
+  assert.equal(without.snapshot.context.chat, false, "a page without a chat, such as the Mac page");
+  assert.equal((await start()).snapshot.context.chat, false, "no account section, no chat asked");
+});
+
 test("with the account attribute the tools are listed and the off ones known (7.7)", async () => {
   const { snapshot } = await start(undefined, "/a", { account: true });
   assert.deepEqual(

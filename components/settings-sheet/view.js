@@ -480,24 +480,24 @@ class SettingsSheet extends LitElement {
   // words, written once here where the switch is, including where a key does not work.
   // It sits in a fold that starts closed, so the long list never crowds the switches,
   // and it is there with the switch off too, to read the keys before turning them on.
-  #vimSheet() {
+  #vimSheet(chat) {
     const group = (title, rows) => html`
       <p class="keys-title">${title}</p>
       <dl class="keys">${rows.map(([keys, what]) => html`<dt>${keys}</dt><dd>${what}</dd>`)}</dl>
     `;
     return html`
-      ${group("Anywhere on the desk, also while typing in a note or the chat box", [
+      ${group(`Anywhere on the desk, also while typing in a note${chat ? " or the chat box" : ""}`, [
         ["Ctrl+h, Ctrl+l", "go to the panel on the left or the right"],
         ["Ctrl+j, Ctrl+k", "go to the bottom panel, or back up to the middle"],
         ["Ctrl+. and Ctrl+,", "show the next or the previous tab of the panel you are in"],
         ["Ctrl+Shift+h, l, j", "fold or unfold the left, right or bottom panel"],
       ])}
-      ${group("In a list (books, contents, notes, chats)", [
+      ${group(`In a list (books, contents, notes${chat ? ", chats" : ""})`, [
         ["j, k", "next or previous row"],
         ["gg, G", "first or last row"],
         ["Enter", "open the row"],
-        ["Escape", "from a note or a chat, back to its list (while typing, the first Escape only stops the typing)"],
-        ["In the chat box", "Enter sends; while typing, press Escape first (Enter there makes a new line)"],
+        ["Escape", `from a note${chat ? " or a chat" : ""}, back to its list (while typing, the first Escape only stops the typing)`],
+        ...(chat ? [["In the chat box", "Enter sends; while typing, press Escape first (Enter there makes a new line)"]] : []),
       ])}
       ${group("In the Reader, a cursor shows on the text", [
         ["w, b", "next or previous word"],
@@ -603,7 +603,7 @@ class SettingsSheet extends LitElement {
         <p class="hint">Move around the desk, the lists and the Reader with the keyboard.</p>
         <details class="keys-fold">
           <summary>Show the keys</summary>
-          ${this.#vimSheet()}
+          ${this.#vimSheet(snapshot.context.chat)}
         </details>
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
