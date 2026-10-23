@@ -2,10 +2,7 @@
 
 A free ePub reader for the Mac, with notes, highlights and a journal.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="mac/readme/unblent-dark.png">
-  <img src="mac/readme/unblent-light.png" alt="Unblent with Meditations by Marcus Aurelius open in the middle, the book's contents on the left, and a note about a highlighted passage on the right">
-</picture>
+<img src="mac/readme/unblent.png" alt="Unblent with Meditations by Marcus Aurelius open in the middle, the book's contents on the left, and a note about a highlighted passage on the right">
 
 ## What Unblent is
 
