@@ -239,13 +239,13 @@ const tell = (enqueue, c, again = false) => {
   const copies = [day.text, other.text];
   const was = c.pending.get(day.id);
   if (!again && was?.other === other.id && same(was.copies, copies)) return;
-  enqueue.assign({ pending: new Map(c.pending).set(day.id, { copies, other: other.id }) });
-  enqueue.emit({
-    type: "journal.conflicted",
+  const told = {
     id: day.id,
     mine: { text: other.text, baseVersion: day.version },
     theirs: { text: day.text, version: day.version, editedAt: day.editedAt },
-  });
+  };
+  enqueue.assign({ pending: new Map(c.pending).set(day.id, { copies, other: other.id, told }) });
+  enqueue.emit({ type: "journal.conflicted", ...told });
 };
 
 const announce = (enqueue, c) => {
@@ -368,13 +368,13 @@ const applySync = (context, output, enqueue) => {
     const mine = context.outbox.get(row.key) ?? row;
     dropRow(row.key);
     keep(theirs);
-    pending.set(theirs.id, { copies: [mine.record.text, theirs.text], other: null });
-    enqueue.emit({
-      type: "journal.conflicted",
+    const told = {
       id: theirs.id,
       mine: { text: mine.record.text, baseVersion: mine.baseVersion },
       theirs: { text: theirs.text, version: theirs.version, editedAt: theirs.editedAt },
-    });
+    };
+    pending.set(theirs.id, { copies: [mine.record.text, theirs.text], other: null, told });
+    enqueue.emit({ type: "journal.conflicted", ...told });
   }
 
   for (const record of pulled.days ?? []) {
@@ -408,17 +408,55 @@ const applySync = (context, output, enqueue) => {
   }
 };
 
+// A choice is remembered, until the next change to that day, as the records it changed
+// and the conflict it settled, so conflict.reopened can put both back (reopened).
 const saved = enqueueActions(({ context, event, enqueue }) => {
   const choice = kept(context, event);
   if (choice) {
+    const settled = context.pending.get(event.id);
     const pending = new Map(context.pending);
     pending.delete(event.id);
-    enqueue.assign({ pending });
+    const before = context.days.filter((d) => d.id === event.id || d.id === settled.other);
+    const undo = new Map(context.undo).set(event.id, { before, text: event.text, other: settled.other, told: settled.told });
+    enqueue.assign({ pending, undo });
     update({ ...context, pending }, enqueue, choice);
     return;
   }
   const days = daySaved(context.days, event, context.now());
-  if (days) update(context, enqueue, days);
+  if (!days) return;
+  if (context.undo.has(event.id)) {
+    const undo = new Map(context.undo);
+    undo.delete(event.id);
+    enqueue.assign({ undo });
+  }
+  update(context, enqueue, days);
+});
+
+// The user took back a choice (conflict.reopened): the day the conflict named gets back
+// the text and time of last edit it had, and both copies are put to the page again. The
+// other record of a date was deleted, and on the server a delete always wins (5), so it
+// cannot come back under its own id: its text returns as a new record of the same date,
+// written at the same time, which the journal shows exactly as it showed the deleted one.
+// Taken back only while the day still holds the copy that was kept, and only for the
+// conflict the page names.
+const reopened = enqueueActions(({ context, event, enqueue }) => {
+  const choice = context.undo.get(event.id);
+  if (!choice || choice.told.mine.text !== event.mine || choice.told.theirs.text !== event.theirs) return;
+  const undo = new Map(context.undo);
+  undo.delete(event.id);
+  enqueue.assign({ undo });
+  const day = context.days.find((d) => d.id === event.id && !d.deleted);
+  const was = choice.before.find((d) => d.id === event.id);
+  if (!day || !was || day.text !== choice.text) return;
+  const gone = choice.before.find((d) => d.id === choice.other);
+  const next = context.days.map((d) => (d.id === event.id ? { ...d, text: was.text, editedAt: was.editedAt } : d));
+  if (gone) next.push({ id: context.mint(), day: gone.day, text: gone.text, editedAt: gone.editedAt, version: 1 });
+  // Two records of one date are told again by update, as any clash is (tell); a day
+  // saved on two devices is told again here, as the server's conflict was.
+  const pending = gone ? context.pending : new Map(context.pending).set(event.id, { copies: [event.mine, event.theirs], other: null, told: choice.told });
+  if (!gone) enqueue.assign({ pending });
+  update({ ...context, pending }, enqueue, mint(context.days, next));
+  if (!gone) enqueue.emit({ type: "journal.conflicted", ...choice.told });
 });
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -522,7 +560,9 @@ export const machine = setup({
       "or two records hold the same date (two devices each started it offline, or a journal was " +
       "added to an account that already had that date), the journal shows one day per date, the " +
       "newest, and puts both copies to the page showing that date; keeping one saves its text to " +
-      "that day, also once it has closed, and deletes the other record. A second record that is " +
+      "that day, also once it has closed, and deletes the other record; taking the choice " +
+      "back restores the day's text and the other copy, as a new record of that date, and " +
+      "puts both copies to the page again. A second record that is " +
       "empty or holds the same text is deleted without asking. When no day can be edited, the journal opens " +
       "an empty page for today. The chat may read it through two lookups: the day the journal " +
       "page shows, with its text and whether it can still be written, remembered from what the " +
@@ -542,6 +582,9 @@ export const machine = setup({
     // The conflicts announced and not yet settled, by the id they named: the two copies'
     // texts and, for two records of one date, the other record's id (kept).
     pending: new Map(),
+    // The choices that can still be taken back (conflict.reopened), by the day's id: the
+    // records as they were before, the kept text, the other record's id and the conflict.
+    undo: new Map(),
     userId: null,
     cursor: 0,
     outbox: new Map(),
@@ -554,6 +597,8 @@ export const machine = setup({
     pull: false,
     store: input.store,
     now: input.now,
+    // Mints the id of a record put back as a new one (reopened).
+    mint: input.mint,
     ask: input.ask,
     api: input.api,
   }),
@@ -608,6 +653,7 @@ export const machine = setup({
     ready: {
       on: {
         "day.saved": { actions: saved },
+        "conflict.reopened": { actions: reopened },
         // The outbox drains only while someone is signed in (5); signing out keeps it,
         // to go up at the next sign-in.
         "session.changed": {

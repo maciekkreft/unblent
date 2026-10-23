@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user took back Keep this copy, within its undo window: the day the conflict named and its two copies as the page showed them. The journal puts back what the choice replaced and shows both copies again.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "mine": {
+      "type": "string"
+    },
+    "theirs": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "mine",
+    "theirs"
+  ],
+  "additionalProperties": false
+}

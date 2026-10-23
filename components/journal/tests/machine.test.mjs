@@ -20,10 +20,12 @@ const CONFLICTED = json("events", "journal.conflicted.json");
 const SESSION_CHANGED = json("..", "session", "events", "session.changed.json");
 const READ = json("queries", "read.json").reply;
 const DAY_SAVED = json("..", "journal-entry", "events", "day.saved.json");
+const REOPENED = json("..", "journal-entry", "events", "conflict.reopened.json");
 const recorded = [];
 
 const D1 = "01K7TEST00000000000000DA01";
 const D2 = "01K7TEST00000000000000DA02";
+const D9 = "01K7TEST00000000000000DA09";
 
 const at = (d, h = 0, m = 0) => new Date(2026, 9, d, h, m).getTime();
 const MIN = 60 * 1000;
@@ -56,7 +58,7 @@ function fakeStore({ days = [], userId, outbox: rows = [] } = {}) {
 async function start({ store = fakeStore(), time = at(12, 10), ask, api } = {}) {
   let now = time;
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { store, now: () => now, ask, api }, clock });
+  const actor = createActor(machine, { input: { store, now: () => now, mint: () => D9, ask, api }, clock });
   const emitted = [];
   const conflicted = [];
   actor.on("journal.changed", (e) => {
@@ -471,6 +473,88 @@ test("a day saved on two devices can keep the user's copy after it has closed", 
   s.advance(IDLE);
   await flush();
   assert.equal(server.held("days", D1).text, "Evening, laptop");
+});
+
+const reopen = (s, id, mine, theirs) => s.send({ type: "conflict.reopened", id, mine, theirs }, REOPENED);
+
+test("Undo after keeping the older copy of a date gives back both copies and the clash", async () => {
+  const store = fakeStore({ days: [record(D1, "2026-10-11", "From the Mac", at(11, 9)), record(D2, "2026-10-11", "From the phone", at(11, 20))] });
+  const s = await start({ store, time: at(12, 10) });
+  shown(s, "2026-10-11");
+  write(s, D2, "From the Mac");
+  reopen(s, D2, "From the Mac", "From the phone");
+  const [day] = s.read().days;
+  assert.deepEqual([day.id, day.text, day.editedAt], [D2, "From the phone", at(11, 20)], "the shown day as it was");
+  const back = store.tables.days.get(D9);
+  assert.deepEqual([back.day, back.text, back.editedAt, back.deleted], ["2026-10-11", "From the Mac", at(11, 9), undefined], "the other copy, as a new record");
+  assert.equal(store.tables.days.get(D1).deleted, true, "the deleted record stays a tombstone (5)");
+  assert.deepEqual(s.conflicted.at(-1), {
+    type: "journal.conflicted",
+    id: D2,
+    mine: { text: "From the Mac", baseVersion: day.version },
+    theirs: { text: "From the phone", version: day.version, editedAt: at(11, 20) },
+  });
+  reopen(s, D2, "From the Mac", "From the phone");
+  assert.equal(s.conflicted.length, 2, "one Undo per choice");
+  write(s, D2, "From the phone");
+  assert.equal(store.tables.days.get(D9).deleted, true, "the clash can be settled again");
+});
+
+test("signed in, Undo after keeping the shown copy sends the other copy up as a new record", async () => {
+  const server = fakeServer();
+  server.other("days", record(D1, "2026-10-12", "Written on the Mac", at(12, 8)));
+  const store = fakeStore({ userId: "u1", days: [record(D2, "2026-10-12", "Written here", at(12, 9))] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api });
+  shown(s, "2026-10-12", true);
+  s.actor.send({ type: "_sync", pull: true });
+  await flush();
+  write(s, D2, "Written here");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.held("days", D1).deleted, true);
+  reopen(s, D2, "Written on the Mac", "Written here");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.held("days", D9).text, "Written on the Mac");
+  assert.equal(server.held("days", D9).deleted, false);
+  assert.equal(s.conflicted.at(-1).mine.text, "Written on the Mac");
+  assert.equal(store.outbox.size, 0);
+});
+
+test("Undo after keeping your copy of a day saved on two devices puts back theirs and the conflict", async () => {
+  const server = fakeServer();
+  server.other("days", record(D1, "2026-10-11", "Evening", at(11, 20)));
+  const store = fakeStore({ userId: "u1", days: [record(D1, "2026-10-11", "Evening", at(11, 20))] });
+  const s = await start({ store, ask: signedIn("u1"), api: server.api, time: at(11, 21) });
+  server.other("days", record(D1, "2026-10-11", "Evening, phone", at(11, 21)));
+  write(s, D1, "Evening, laptop");
+  s.advance(IDLE);
+  await flush();
+  const told = s.conflicted.at(-1);
+  write(s, D1, "Evening, laptop");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.held("days", D1).text, "Evening, laptop");
+  reopen(s, D1, "Evening, laptop", "Evening, phone");
+  assert.equal(s.read().days[0].text, "Evening, phone");
+  assert.deepEqual(s.conflicted.at(-1), told, "the same conflict, told again");
+  s.advance(IDLE);
+  await flush();
+  assert.equal(server.held("days", D1).text, "Evening, phone");
+  write(s, D1, "Evening, laptop");
+  assert.equal(s.read().days[0].text, "Evening, laptop", "and it can be settled again");
+});
+
+test("Undo is refused once the day has changed since the choice", async () => {
+  const today = "2026-10-12";
+  const store = fakeStore({ days: [record(D1, today, "Laptop", at(12, 8)), record(D2, today, "Phone", at(12, 9))] });
+  const s = await start({ store, time: at(12, 10) });
+  shown(s, today, true);
+  write(s, D2, "Laptop");
+  write(s, D2, "Laptop, more");
+  reopen(s, D2, "Laptop", "Phone");
+  assert.deepEqual(s.read().days.map((d) => [d.id, d.text]), [[D2, "Laptop, more"]]);
+  assert.equal(store.tables.days.has(D9), false);
 });
 
 test("every payload matches its schema", () => {

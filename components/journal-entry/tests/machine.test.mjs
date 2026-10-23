@@ -13,7 +13,7 @@ import { machine, conflictOn, shown, longDate, parseBody, serialize, selectedOf,
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["day.saved"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["day.saved", "conflict.reopened"].map((n) => [n, schema(n)]));
 
 const at = (d, h = 0, m = 0) => new Date(2026, 9, d, h, m).getTime();
 
@@ -68,6 +68,7 @@ async function start(p, { now = at(12, 21), books = {}, asked = [] } = {}) {
       mint: () => (n++ === 0 ? FRESH : id("F", n)),
       now: () => now,
       throttleMs: 200,
+      undoMs: 3000,
     },
     clock,
   });
@@ -160,6 +161,39 @@ test("on a closed day either copy can be kept, each as a save of its exact text"
   actor.send({ type: "_keepTheirs" });
   assert.equal(emitted.length, 2, "nothing to keep once settled");
   valid(emitted);
+});
+
+test("Keep this copy can be taken back in one step until the undo window ends", async () => {
+  const sunday = day(SUNDAY, "2026-10-11", "Theirs.");
+  const conflicted = { type: "journal.conflicted", id: SUNDAY, mine: { text: "Mine.", baseVersion: 1 }, theirs: { text: "Theirs.", version: 2, editedAt: at(11, 20) } };
+  const { actor, emitted, clock } = await start(picture({ days: [sunday], open: null }));
+  actor.send(conflicted);
+  actor.send({ type: "_keepMine" });
+  assert.deepEqual(actor.getSnapshot().context.kept, { id: SUNDAY, mine: "Mine.", theirs: "Theirs." });
+  clock.increment(2000);
+  actor.send({ type: "_undoKeep" });
+  assert.deepEqual(emitted.at(-1), { type: "conflict.reopened", id: SUNDAY, mine: "Mine.", theirs: "Theirs." });
+  assert.equal(actor.getSnapshot().context.kept, null);
+  actor.send({ type: "_undoKeep" });
+  assert.equal(emitted.length, 2, "one Undo per choice");
+  // The journal tells the conflict again; this time the window runs out.
+  actor.send(conflicted);
+  actor.send({ type: "_keepTheirs" });
+  clock.increment(3000);
+  assert.equal(actor.getSnapshot().context.kept, null);
+  actor.send({ type: "_undoKeep" });
+  assert.equal(emitted.at(-1).type, "day.saved", "too late to take back");
+  valid(emitted);
+});
+
+test("typing after keeping a copy makes the choice final", async () => {
+  const today = day(TODAY, "2026-10-12", "Theirs.", { version: 3 });
+  const { actor } = await start(picture({ days: [today], open: TODAY }));
+  actor.send({ type: "journal.conflicted", id: TODAY, mine: { text: "Mine.", baseVersion: 3 }, theirs: { text: "Theirs.", version: 3, editedAt: at(12, 20) } });
+  actor.send({ type: "_keepMine" });
+  assert.ok(actor.getSnapshot().context.kept);
+  actor.send({ type: "_edit", text: "Mine. More" });
+  assert.equal(actor.getSnapshot().context.kept, null);
 });
 
 test("Vim keys start from settings: read and follow settings.changed", async () => {

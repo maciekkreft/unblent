@@ -97,7 +97,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: rendering and layout.
-    run("two records of one earlier date show both copies, and keeping one leaves one day", async (page) => {
+    run("two records of one earlier date show both copies, keeping one leaves one day, and Undo brings both back", async (page) => {
       await page.goto(STEM, { waitUntil: "domcontentloaded" });
       await editor(page).waitFor();
       const at = (h) => new Date(2025, 2, 2, h).getTime();
@@ -117,6 +117,14 @@ for (const engine of ENGINES) {
       await until(async () => (await times(page, "Written on the Mac.")) === 1);
       assert.equal(await times(page, "Written on the phone."), 0, "the other copy is gone");
       assert.equal(await page.locator(`journal-days .row[data-day="${SUNDAY_PHONE}"]`).count(), 1, "still one day for the date");
+      // Undo takes the keyboard in place of the button pressed, and brings both copies back.
+      const undo = entry(page).locator(".kept button");
+      await until(() => undo.evaluate((b) => b.getRootNode().activeElement === b));
+      await undo.click();
+      await conflict.waitFor();
+      assert.equal(await conflict.locator(".mine pre").textContent(), "Written on the Mac.");
+      assert.equal(await conflict.locator(".theirs pre").textContent(), "Written on the phone.");
+      assert.equal(await entry(page).locator(".kept").count(), 0);
     });
 
     run("with Vim keys on, the editor shows Vim's block cursor", async (page) => {

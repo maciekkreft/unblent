@@ -145,7 +145,21 @@ const save = (left) =>
     enqueue.emit(left ? { type: "day.saved", id, text, left: true } : { type: "day.saved", id, text });
   });
 
-const edit = assign(({ context, event }) => ({ draft: { ...context.draft, text: event.text }, editing: true }));
+// Typing after a choice makes it final: the journal no longer takes it back once the day
+// has changed, so the Undo goes.
+const edit = assign(({ context, event }) => ({ draft: { ...context.draft, text: event.text }, editing: true, kept: null }));
+
+// A choice can be taken back in one step for the undo window (12, forgiveness): the
+// conflict as the page showed it is held, and Undo leaves as conflict.reopened, after
+// which the journal tells the conflict again.
+const keep = (side) =>
+  enqueueActions(({ context, enqueue }) => {
+    const { id, mine, theirs } = context.conflict;
+    enqueue.emit({ type: "day.saved", id, text: side === "mine" ? mine.text : theirs.text });
+    enqueue.assign({ kept: { id, mine: mine.text, theirs: theirs.text } });
+    enqueue.cancel("kept");
+    enqueue.raise({ type: "_keptElapsed" }, { id: "kept", delay: context.undoMs });
+  });
 
 const follow = (dirty) => [assign(({ context, event }) => settle(context, picture(event), dirty)), announce];
 
@@ -262,7 +276,8 @@ export const machine = setup({
       "day shows its levels but offers no buttons. The text is saved a short time into " +
       "typing and when the box loses focus. When a day was saved on two devices at once, or the " +
       "journal holds two records of the shown date, the entry shows both copies, also on an " +
-      "earlier day, and the user keeps one. It announces which day it shows and whether " +
+      "earlier day, and the user keeps one; for a few seconds after, Undo, with a bar " +
+      "showing the time left, brings both copies back. It announces which day it shows and whether " +
       "it can still be written, when the page has loaded and whenever either changes, also at " +
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
       "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
@@ -278,7 +293,7 @@ export const machine = setup({
       "the days stay kept in this browser and come back when the user signs in, without a " +
       "reload. On a try page a visitor not yet signed in still writes.",
     kind: "view",
-    emits: ["day.saved", "day.shown", "book.closed", "passage.selected"],
+    emits: ["day.saved", "day.shown", "book.closed", "passage.selected", "conflict.reopened"],
     attributes: ["height"],
     asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read"],
   },
@@ -306,6 +321,10 @@ export const machine = setup({
     draft: null,
     editing: false,
     conflict: null,
+    // The conflict just settled, while Keep this copy can be taken back: its day's id and
+    // the two copies' texts; null once the undo window ends.
+    kept: null,
+    undoMs: input.undoMs ?? 3000,
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
     // otherwise, and off on a page without it (the ask replies no-answerer).
     vimKeys: false,
@@ -396,7 +415,7 @@ export const machine = setup({
           guard: ({ context }) => Boolean(context.conflict),
           target: ".clean",
           actions: [
-            emit(({ context }) => ({ type: "day.saved", id: context.conflict.id, text: context.conflict.mine.text })),
+            keep("mine"),
             assign(({ context }) => ({
               ...(context.picture.open === context.conflict.id ? { draft: { id: context.conflict.id, text: context.conflict.mine.text } } : {}),
               conflict: null,
@@ -406,11 +425,17 @@ export const machine = setup({
         },
         _keepTheirs: {
           guard: ({ context }) => Boolean(context.conflict),
-          actions: [
-            emit(({ context }) => ({ type: "day.saved", id: context.conflict.id, text: context.conflict.theirs.text })),
-            assign({ conflict: null }),
-          ],
+          actions: [keep("theirs"), assign({ conflict: null })],
         },
+        _undoKeep: {
+          guard: ({ context }) => Boolean(context.kept),
+          actions: enqueueActions(({ context, enqueue }) => {
+            enqueue.cancel("kept");
+            enqueue.emit({ type: "conflict.reopened", ...context.kept });
+            enqueue.assign({ kept: null });
+          }),
+        },
+        _keptElapsed: { actions: assign({ kept: null }) },
         _midnight: { actions: [announce, atMidnight] },
       },
     },
@@ -420,7 +445,12 @@ export const machine = setup({
   // so none arrives before the starting picture it updates.
   on: {
     "journal.changed": { actions: assign(({ event }) => ({ picture: picture(event) })) },
-    "journal.conflicted": { actions: assign(({ event }) => ({ conflict: { id: event.id, mine: event.mine, theirs: event.theirs } })) },
+    "journal.conflicted": {
+      actions: assign(({ context, event }) => ({
+        conflict: { id: event.id, mine: event.mine, theirs: event.theirs },
+        kept: context.kept?.id === event.id ? null : context.kept,
+      })),
+    },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null })) },

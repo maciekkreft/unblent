@@ -11,6 +11,7 @@ import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
+import reopened from "./events/conflict.reopened.json" with { type: "json" };
 
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // The theme, Vim and the paragraphs come from the editor kit (architecture.md 10). The
@@ -164,6 +165,15 @@ const editability = (on) => [
   on ? placeholder("What is on your mind? Enter starts a new paragraph; Shift+Enter breaks the line.") : [],
 ];
 
+// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
+// the token is the one clock, shared with the bar's animation.
+const toMs = (text, fallback = 3000) => {
+  const t = (text || "").trim();
+  const n = parseFloat(t);
+  if (Number.isNaN(n)) return fallback;
+  return t.endsWith("ms") ? n : n * 1000;
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -180,8 +190,17 @@ class ActorController {
         // A try page (8) shows the journal signed out.
         tryPage: location.pathname.startsWith("/try/"),
         pushRegister: toRegister,
+        // The undo window comes from --duration-undo, read off the host so a stylesheet
+        // or a test can shorten it.
+        undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
       },
-      events: { "day.saved": saved, "day.shown": dayShown, "book.closed": closed, "passage.selected": passageSelected },
+      events: {
+        "day.saved": saved,
+        "day.shown": dayShown,
+        "book.closed": closed,
+        "passage.selected": passageSelected,
+        "conflict.reopened": reopened,
+      },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -339,6 +358,47 @@ class JournalEntry extends LitElement {
     .copy button {
       align-self: flex-start;
       font-size: var(--text-sm);
+    }
+    /* A choice waiting out the undo window: what was done, an Undo, and a bar draining
+       the window, as in the lists (note-list). Both read --duration-undo, so they cannot
+       disagree; the bar stays under reduced motion because it is the only sign of how
+       long is left. */
+    .kept {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-xs) var(--space-sm);
+      padding-bottom: var(--space-sm);
+      border-radius: var(--radius-md);
+      background: var(--color-surface-hover);
+      overflow: hidden;
+    }
+    .kept p {
+      margin: 0;
+      flex: 1;
+      color: var(--color-body-mid);
+      font-size: var(--text-sm);
+    }
+    .kept button {
+      font-size: var(--text-sm);
+    }
+    .bar {
+      position: absolute;
+      inset-inline: 0;
+      inset-block-end: 0;
+      height: var(--space-2xs);
+      background: var(--color-accent);
+      transform-origin: left;
+      animation: drain var(--duration-undo) linear forwards;
+    }
+    @keyframes drain {
+      from {
+        transform: scaleX(1);
+      }
+      to {
+        transform: scaleX(0);
+      }
     }
     /* On a stage that fills, the open day reaches the bottom, like a page, and a
        click anywhere in it lands in the text. A page that nests a view under the text
@@ -592,7 +652,7 @@ class JournalEntry extends LitElement {
             <header>
               <h2>${longDate(day.day)}</h2>
             </header>
-            ${conflict ? this.#conflict(conflict) : nothing}
+            ${conflict ? this.#conflict(conflict) : context.kept?.id === day.id ? this.#kept() : nothing}
             <div class="region ${editable && !conflict ? "open" : ""}"></div>
             <slot @slotchange=${this.#slotted}></slot>
           </div>
@@ -652,6 +712,30 @@ class JournalEntry extends LitElement {
     this.requestUpdate();
   };
 
+  // The keyboard stays where the user acted: Undo takes the place of the button pressed,
+  // and Keep this copy takes Undo's when both copies come back.
+  async #keep(type) {
+    this.#send({ type });
+    await this.updateComplete;
+    this.renderRoot.querySelector(".kept button")?.focus();
+  }
+
+  #undo = async () => {
+    this.#send({ type: "_undoKeep" });
+    await this.updateComplete;
+    this.renderRoot.querySelector(".conflict button")?.focus();
+  };
+
+  #kept() {
+    return html`
+      <div class="kept" role="status">
+        <p>One copy kept.</p>
+        <button type="button" @click=${this.#undo}>Undo</button>
+        <span class="bar" aria-hidden="true"></span>
+      </div>
+    `;
+  }
+
   // Both copies, each kept in one step, on any day.
   #conflict(c) {
     return html`
@@ -661,12 +745,12 @@ class JournalEntry extends LitElement {
           <div class="copy mine">
             <h3>Yours</h3>
             <pre>${c.mine}</pre>
-            <button type="button" class="keep-mine" @click=${() => this.#send({ type: "_keepMine" })}>Keep this copy</button>
+            <button type="button" class="keep-mine" @click=${() => this.#keep("_keepMine")}>Keep this copy</button>
           </div>
           <div class="copy theirs">
             <h3>The other device's</h3>
             <pre>${c.theirs}</pre>
-            <button type="button" class="keep-theirs" @click=${() => this.#send({ type: "_keepTheirs" })}>Keep this copy</button>
+            <button type="button" class="keep-theirs" @click=${() => this.#keep("_keepTheirs")}>Keep this copy</button>
           </div>
         </div>
       </section>

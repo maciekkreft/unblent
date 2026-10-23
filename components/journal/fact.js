@@ -1,4 +1,5 @@
 import { mount, ask } from "bus";
+import { ulid } from "ulid";
 import { machine } from "./machine.js";
 import { openJournal } from "./store.js";
 import changed from "./events/journal.changed.json" with { type: "json" };
@@ -42,7 +43,7 @@ const api = {
 };
 
 const actor = mount(machine, {
-  input: { store: openJournal(), now: () => Date.now(), api, ask: (target, name, payload) => ask(machine, target, name, payload) },
+  input: { store: openJournal(), now: () => Date.now(), mint: ulid, api, ask: (target, name, payload) => ask(machine, target, name, payload) },
   events: { "journal.changed": changed, "journal.conflicted": conflicted },
   queries: { read, open, days },
 });
