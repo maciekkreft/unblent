@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user pressed Disconnect in the Mac app (3.4): session uploads what is not yet sent to the account, removes the device sign-in and hands the browser back to the Mac's own copy (12).",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

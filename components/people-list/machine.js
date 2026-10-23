@@ -128,7 +128,7 @@ export const machine = setup({
       "by Back to you. The table scrolls sideways " +
       "on a narrow screen, and the Who column stays in view while it does.",
     kind: "view",
-    emits: ["viewas.requested", "guest.blocked", "use.reset", "removal.started"],
+    emits: ["viewas.requested", "guest.blocked", "use.reset", "removal.started", "sync.allowed"],
     attributes: [],
     asks: ["session: people", "llm: spending"],
   },

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin turned a passkey account's Can sync switch on or off in People (3.4, 12): session records it, and an account with it off cannot connect a Mac and its connected Macs stop syncing. Undo is the opposite.",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "string"
+    },
+    "allowed": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "user",
+    "allowed"
+  ],
+  "additionalProperties": false
+}

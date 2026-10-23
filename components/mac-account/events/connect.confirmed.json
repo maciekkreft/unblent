@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user chose how to connect, once the account's device sign-in was ready (3.4): keep true for Add them, which adds this Mac's copy to the account; false for Use only the account's. session then hands the browser to the account (12).",
+  "type": "object",
+  "properties": {
+    "keep": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "keep"
+  ],
+  "additionalProperties": false
+}

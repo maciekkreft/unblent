@@ -119,6 +119,10 @@ Some accounts are **guests**: accounts without a passkey. A guest is made the fi
 
 **The local edition.** The Mac app runs the same server on the user's own computer, for one person. When the server is started with `UNBLENT_LOCAL_USER` set to an account id in hex, every request without a valid cookie belongs to that one account, and that account is the admin. There is no registration, no passkey and no guest. The Mac launcher creates the id and `SESSION_SECRET` on its first run and keeps them in the data folder (5). Without `UNBLENT_LOCAL_USER` the server is the web edition, as described above.
 
+**The connected local edition.** A Mac app can be connected to an account on app.unblent.com, and while it is connected it shows that account, the same as the website and the phone, with Chats, Evaluators and Choice Points. The account is connected through a **device sign-in**, a long-lived sign-in the Mac's server keeps in `remote.json` in the data folder, readable only by the user. The **relay**, `server/relay.py`, is infrastructure of the server entry, like `server/user.py`: while `remote.json` holds a device sign-in that is on, it forwards every `/api/*` request except `/api/session/connect/*` to `UNBLENT_REMOTE` (by default `https://app.unblent.com`), with the device sign-in in place of the browser's cookie, and passes the answer back. When the remote cannot be reached it answers 503 at once, which every replicated fact already treats as offline (5). It keeps a copy on disk of every answer marked immutable, such as a book's chapters and images, and answers from that copy afterwards without asking the network. It refuses a request whose `Origin` or `Sec-Fetch-Site` shows it came from another site, connected or not, so no web page can make the Mac's server act. A request carrying the header `X-Unblent-Local: 1` goes to the Mac's own server module instead of the remote. Connecting and disconnecting are a change of who the browser belongs to (12). The browser code does not know the relay exists: it calls the same `/api/<component>` addresses either way.
+
+Connecting uses the loopback sign-in of native apps (RFC 8252, with PKCE). The Mac's server opens the connect page (8) of app.unblent.com in the user's browser; there the user signs in with their passkey and presses Connect; `session` on the web issues a one-time connect code, valid for two minutes and used once, and sends the browser back to the Mac's server on its loopback address; the Mac's server trades the code and its secret for a device sign-in. `session` on the web issues connect codes and device sign-ins only to a passkey account, never to a guest, and only to an account whose **Can sync** is on. Can sync is a yes or no kept per account in `session`'s registry, off by default, and set by the admin in Administration (12). A request made with the device sign-in of an account whose Can sync is off is treated as signed out, so that account's connected Macs stop syncing and keep their copy. `session` keeps the device sign-ins it issued, so they can be listed and revoked later (14). The web edition answers 404 to the connect routes only a Mac uses, and the local edition to those only the web uses.
+
 A request whose browser goes away before the whole request has arrived is dropped without a reply and without an error in the log. Nothing arrived, so there is nothing to save, and no one is waiting for an answer. This is how a save ends when its tab is closed while the save is still being sent. Every other error still prints.
 
 ### 3.5 Pages
@@ -198,7 +202,7 @@ On the server, each replicated fact component has **one SQLite file per user**: 
 
 `session` is the exception: it keeps one shared file `data/session.db`, the identity registry, because it defines users and so cannot be per-user. While no user is signed in a replicated fact's outbox does not drain; signing in starts draining, so what was written anonymously becomes the account's, and what was not acknowledged before sign-out uploads at the next sign-in.
 
-In the local edition (3.4) the data folder is `~/Library/Application Support/Unblent`, given to the server through `UNBLENT_DATA`. Its files are laid out as on the web, and Litestream does not run, so they stay on the user's computer only.
+In the local edition (3.4) the data folder is `~/Library/Application Support/Unblent`, given to the server through `UNBLENT_DATA`. Its files are laid out as on the web, and Litestream does not run, so they stay on the user's computer only. While the Mac is connected (3.4), the account's data lives in the account on app.unblent.com, in the browser copy of the app's window, and, for book files, in the relay's disk copy `data/remote-cache/`. The Mac's own files are not touched while it is connected, and they are what the app shows again after a disconnect. Litestream still does not run on the Mac.
 
 `llm` keeps, beside each user's own file, one shared file `data/llm.db` for what guests spend: the guest keys, encrypted like an account's own keys; the limits; every guest's running total for each provider; and which guests are blocked. It is shared because the limit for all guests adds up many accounts. `evaluators` keeps one shared file `data/evaluators.db` with a copy of the admin's evaluators ticked as starters, rewritten whenever the admin saves one, so a try page can show them to a visitor who has no account.
 
@@ -408,7 +412,7 @@ A page is an HTML file: an import map plus component tags with attributes. Nothi
 
 Pages are listed by the `pages` fact component, and `page-nav` is how a page links to the others: it groups its links by kind and shows none in the product profile (§12). A page declares its kind with `<meta name="kind" content="…">`, one of `tokens`, `contracts`, `components`, `stem`, `app`, `try`; `pages: list` returns pages in that order, then by path.
 
-The Mac page, `pages/workshop/apps/macapp.html`, is the app page the Mac app opens (3.4). It leaves out Chats, Evaluators, Choice Points, Generators, the language model (`llm`), Administration, sign-in and the workshop switch.
+The Mac page, `pages/workshop/apps/macapp.html`, is the app page the Mac app opens (3.4). It leaves out Chats, Evaluators, Choice Points, Generators, the language model (`llm`), Administration, sign-in and the workshop switch, and it holds the account control, `mac-account`, in the gear's sheet. The connected Mac page, `pages/workshop/apps/macsync.html`, is the app page a connected Mac app opens: the product page without passkey sign-in, Administration and what only a try page has, plus the account control. The Mac app opens `/mac`, which serves `macsync.html` while the Mac is connected and `macapp.html` otherwise. The connect page, `pages/workshop/apps/connect.html`, is the app page on app.unblent.com that the Mac app opens in the user's browser to connect (3.4).
 
 The contracts page and the components page show the same data in two arrangements. Neither is hand-written, so they cannot diverge.
 
@@ -447,7 +451,7 @@ Each block maps to one small, mature library, vendored under `/vendor` and loade
 | Store (browser) | Dexie | Apache-2 | Tables and transactions, one database per fact component | Live queries (the bus is the reactivity); a shared database |
 | Bus | native `EventTarget` | — | Delivery; everything else (routing, validation, correlation) is ours and small | — |
 | Ids | ULID | MIT | Client-generated, sortable ids | Server-assigned ids |
-| Server | FastAPI | MIT | One router per fact component, discovered by walking the components directory; `--reload` | A shared data layer |
+| Server | FastAPI, and `httpx` | MIT, BSD-3 | One router per fact component, discovered by walking the components directory; `--reload`; `httpx` in the relay (3.4) only, to forward a request and stream its answer asynchronously | A shared data layer; `httpx` anywhere but the relay |
 | Store (server) | SQLite | public domain | One file per user per fact component | A shared schema |
 | Backup | Litestream | Apache-2 | Continuous replication of every file | — |
 | Schema (browser) | @cfworker/json-schema | MIT | Validating payloads in the browser against draft 2020-12, the validator constructed with the draft given explicitly, behind our `validate()` wrapper | A draft chosen implicitly |
@@ -516,12 +520,13 @@ The components tree sits inside a small repository-wide layout:
 ```
 server/          FastAPI entry (named "server", not "app", so it never clashes with an app page)
   user.py        the entry's user infrastructure: who the request is from and where their files live (UNBLENT_DATA overriding data/); a server module may import it
+  relay.py       the relay of the connected local edition (3.4): forwards /api/* to the account on app.unblent.com while the Mac is connected; no server module imports it
   icons/         favicon.ico and apple-touch-icon.png, the app's icon, which the entry serves at the addresses browsers request on their own
   tests/         HTTP tests for the entry; infrastructure like the bus, not a component. Never served
 components/      one directory per component, as above
 vendor/          vendored libraries and vendor.json (the manifest and the import map)
 tokens/          tokens.css, base.css and icons.js, the document layer (7.4, 7.6)
-pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design/<name>.html, and pages/workshop/apps/<name>.html, such as macapp.html, the Mac page, and pages/try/<name>.html, the try pages
+pages/           the HTML pages (section 8): pages/index.html, the product, and pages/workshop/design/<name>.html, and pages/workshop/apps/<name>.html, such as macapp.html, the Mac page, macsync.html, the connected Mac page, and connect.html, the connect page, and pages/try/<name>.html, the try pages
 checks/          check.py, the one check command; show.py, prints the components, contracts and pages the server reports (7.1); tests/ its own unit tests, never served
 bus/             the bus (built once)
 composer/        the composer (3.6), loaded once per page; tests/ never served
@@ -530,7 +535,7 @@ store/           the store interface; tests/ never served
 deploy/          systemd unit, litestream.yml (section 5) and the rclone units that copy the files (section 5) and anything else the host needs; never served
 mac/             the Mac app (3.4): the Tauri shell, the script that packages the server, the Homebrew cask template, and the ePub opened on first run; never served
 .github/         the workflow that builds and publishes a Mac release from a version tag, and the forms people fill in to report a problem or suggest something (ISSUE_TEMPLATE/); never served
-data/            per-user SQLite files (section 5), the shared files `session.db`, `llm.db` and `evaluators.db`, and `books/`, the imported files, gitignored
+data/            per-user SQLite files (section 5), the shared files `session.db`, `llm.db` and `evaluators.db`, and `books/`, the imported files; on a Mac also `remote.json`, the device sign-in, and `remote-cache/`, the relay's copy of book files (3.4); gitignored
 .env             machine-specific settings and secrets (SESSION_SECRET, RP_ID, MAX_USERS), gitignored
 ```
 
@@ -546,6 +551,7 @@ Static serving is namespaced so the future app can own `/`:
 | `/workshop/design/<name>` | `pages/workshop/design/<name>.html`, 404 if missing |
 | `/workshop/apps/<name>` | `pages/workshop/apps/<name>.html`, 404 if missing |
 | `/try/<name>` | `pages/try/<name>.html`, 404 if missing |
+| `/mac` | `pages/workshop/apps/macsync.html` while the Mac is connected (3.4), otherwise `pages/workshop/apps/macapp.html` |
 | `/api/<component>/…` | that component's router (discovered by the walk) |
 | `/` | `pages/index.html`, the product |
 | `/favicon.ico`, `/apple-touch-icon.png` | the app's icon, the same mark as the Mac app |
@@ -608,9 +614,9 @@ The architecture document describes the rules; the checks are what make them rea
 
 - **One user per browser.** Signing in adopts everything cached anonymously in that browser, so `notes` enqueues its whole cache to the account; a second account on the same browser is not a goal.
 
-- **Changing who the browser belongs to.** View as and Back to you hand the browser to another account, always the same way. `session` announces `session.changed` with `leaving`; every replicated fact then uploads its outbox and, once it is empty, empties its own local copy. `session` waits until no outbox in the browser holds a row, then has its server change the cookie and reloads the page as the other account. If an outbox cannot be emptied within a few seconds, for example offline, nothing changes and a notice says the change could not be saved yet. Device preferences stay; pins are kept per account in the browser, so the account taken over sees its own; only the account's data is emptied. While the admin views as someone, a bar fixed above every page says whose account it is and offers Back to you; what the admin changes meanwhile is saved to that account.
+- **Changing who the browser belongs to.** View as and Back to you hand the browser to another account, always the same way. `session` announces `session.changed` with `leaving`; every replicated fact then uploads its outbox and, once it is empty, empties its own local copy. `session` waits until no outbox in the browser holds a row, then has its server change the cookie and reloads the page as the other account. If an outbox cannot be emptied within a few seconds, for example offline, nothing changes and a notice says the change could not be saved yet. Device preferences stay; pins are kept per account in the browser, so the account taken over sees its own; only the account's data is emptied. While the admin views as someone, a bar fixed above every page says whose account it is and offers Back to you; what the admin changes meanwhile is saved to that account. Connect and Disconnect in the Mac app (3.4) hand the browser over the same way: on Connect the outbox is uploaded to the Mac's own server, then the device sign-in is turned on and the page reloads as the account; on Disconnect the outbox is uploaded to the account, then the device sign-in is removed and the page reloads as the Mac's own account. Connect has one variant, chosen by the user as "Add this Mac's notes": `session.changed` carries `keep` beside `leaving`, and every replicated fact uploads its outbox but keeps its local copy, and after the reload sends all of it to the new account. Without `keep` the facts empty their copy as usual and download everything from the account. Disconnect is the way back from Connect.
 
-- **Administration lives in the gear's sheet.** The sheet the gear opens shows three tabs: Settings, then Generators, which asks a visitor who is signed out or a guest to sign in, then Administration, only to the admin; everyone sees the tab bar. Administration is not a workshop page, and it is hidden while the admin views as someone. Its actions on a guest (Reset use, Block, Delete, View as) each offer Undo, except View as, which Back to you reverses. Delete hides the guest at once and deletes it only when its Undo window ends, like every delete.
+- **Administration lives in the gear's sheet.** The sheet the gear opens shows three tabs: Settings, then Generators, which asks a visitor who is signed out or a guest to sign in, then Administration, only to the admin; everyone sees the tab bar. Administration is not a workshop page, and it is hidden while the admin views as someone. Its actions on a guest (Reset use, Block, Delete, View as) each offer Undo, except View as, which Back to you reverses. Delete hides the guest at once and deletes it only when its Undo window ends, like every delete. Every passkey account's row, the admin's own included, has a Can sync switch (3.4); a guest's row never has one. Turning it on lets the account connect a Mac; turning it off stops that account's connected Macs from syncing, and each says so with Disconnect; turning it on again is the undo.
 
 - **Tracing crosses tabs, not devices.** The trace bridges same-origin tabs in one browser; another device has its own.
 
@@ -668,6 +674,9 @@ The architecture document describes the rules; the checks are what make them rea
 - **Try page**: a page that shares one tool by a link, `/try/<name>`, with someone who has no account (8).
 - **Starter**: one of the admin's things (for now an evaluator) ticked to be copied to every new guest of a try page.
 - **Free use**: the share of a guest's own allowance that is left, shown as a bar.
+- **Connected**: said of a Mac app that shows an account of app.unblent.com instead of its own copy, through the relay (3.4).
+- **Device sign-in**: the long-lived sign-in of an account that a connected Mac keeps and the relay sends in place of a cookie; issued only to an account whose Can sync is on (3.4).
+- **Can sync**: a yes or no per passkey account, off by default and set by the admin, that says whether the account may connect a Mac (3.4).
 
 ---
 
@@ -680,6 +689,8 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Evaluators that trigger tools, where an evaluator notices something in what the user writes (a yes / no or pick-one judgment by Jev), a tool does something, and a tool can be set to run when an evaluator fires; these tools act, unlike the chat's tools of 7.7, which only look things up.
 - Try pages for Chats, Books and the Journal, each one more page under `/try/`, made as the try-page skill describes (sketch: `~/.claude/plans/try-links.md`).
 - Money limits for chats, so an account can cap what its own key spends.
+- Revoking a connected Mac from the web, from a list of the account's device sign-ins.
+- Paying for sync, so a client turns Can sync on for their own account.
 - A guest keeping their work by adding a passkey, which turns the guest into an ordinary account.
 - A record of every use and what it cost, for audit, beside the running totals.
 - Telegram notifications to the owner, for example when a new guest arrives or a limit is reached.

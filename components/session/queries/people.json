@@ -64,6 +64,10 @@
                   "type": "integer",
                   "minimum": 0,
                   "description": "Bytes the account's files take, for display only."
+                },
+                "sync": {
+                  "type": "boolean",
+                  "description": "Can sync (3.4): the account may connect a Mac. Only on passkey accounts; false when absent."
                 }
               },
               "required": [

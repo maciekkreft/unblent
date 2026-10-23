@@ -9,7 +9,10 @@
     "admin": { "type": "boolean", "description": "The account is the admin, the first registered with a passkey (3.4). False when absent, and false while the admin views as someone." },
     "name": { "type": "string", "description": "The account's name as people see it, such as \"Guest 14\"." },
     "viewingAs": { "type": "string", "description": "Only while the admin views as someone (12): the name of the account the browser holds." },
-    "leaving": { "type": "boolean", "description": "The browser is about to change account (12): every replicated fact uploads its outbox and then empties its local copy." }
+    "leaving": { "type": "boolean", "description": "The browser is about to change account (12): every replicated fact uploads its outbox and then empties its local copy." },
+    "keep": { "type": "boolean", "description": "Only with leaving, when the user chose to add this Mac's copy to the account (12): every replicated fact uploads its outbox but keeps its local copy, and after the reload sends all of it to the new account. False when absent." },
+    "connect": { "enum": ["off", "ready", "on"], "description": "Only in the local edition (3.4): off, not connected; ready, a device sign-in is waiting for the user to choose how to connect; on, the Mac shows the account through the relay." },
+    "remote": { "type": "string", "description": "Only in the local edition while connect is ready or on (3.4): the name of the account on app.unblent.com." }
   },
   "required": ["userId"],
   "additionalProperties": false

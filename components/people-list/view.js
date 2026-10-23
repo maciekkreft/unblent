@@ -5,6 +5,7 @@ import viewasRequested from "./events/viewas.requested.json" with { type: "json"
 import guestBlocked from "./events/guest.blocked.json" with { type: "json" };
 import useReset from "./events/use.reset.json" with { type: "json" };
 import removalStarted from "./events/removal.started.json" with { type: "json" };
+import syncAllowed from "./events/sync.allowed.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -16,7 +17,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
-      events: { "viewas.requested": viewasRequested, "guest.blocked": guestBlocked, "use.reset": useReset, "removal.started": removalStarted },
+      events: { "viewas.requested": viewasRequested, "guest.blocked": guestBlocked, "use.reset": useReset, "removal.started": removalStarted, "sync.allowed": syncAllowed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
     // The part reads its data each time it comes into view: the sheet shows it only to
