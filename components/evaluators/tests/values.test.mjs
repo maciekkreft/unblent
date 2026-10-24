@@ -90,6 +90,7 @@ test("Your values is kept with the Journal, one pick question per value, Serves 
     assert.equal(q.kind, "pick");
     assert.equal(q.expect, SERVES);
     assert.match(q.text, /“Being a present parent” \(Showing up for my kids\)\?$/);
+    assert.equal(q.name, "Being a present parent", "named after its value");
     assert.deepEqual(q.options.map((o) => [o.id, o.name, o.against === true]), [
       [SERVES, "Serves", false],
       [AGAINST, "Goes against", true],

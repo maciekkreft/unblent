@@ -231,9 +231,8 @@ function questionMarks(checker, evaluator, answer) {
   return out;
 }
 
-// The value a question of Your values asks about, read from its text, which names it
-// between curly quotes; the question carries no name of its own.
-export const valueName = (q) => /“(.*?)”(?: \(|\?$)/.exec(q?.text ?? "")?.[1] || "one of your values";
+// The value a question of Your values asks about is the question's name.
+export const valueName = (q) => (typeof q?.name === "string" && q.name.trim()) || "one of your values";
 
 // A combined evaluator (Your values) answers with one mark for the line, a compass:
 // green when any question got the answer it expects (the line serves a value), named
@@ -395,7 +394,7 @@ export const machine = setup({
       "any of the values, red when it serves none and goes against one, uncoloured when Jev " +
       "can't tell, solid or faded as the answer that decided it, or the least sure answer " +
       "for an uncoloured one; with no values written there is no compass at all. Its hint " +
-      "names the value: \"Serves Being a present parent\", \"Goes against Health\", or " +
+      "names the value, by its question's name: \"Serves Being a present parent\", \"Goes against Health\", or " +
       "\"Can't tell which of your values this serves\", the first value in the values' order " +
       "when several fit. An earlier day's marks name that day's values. A line edited since it was " +
       "checked has no mark until it is checked again. The marks are not text: they do not " +

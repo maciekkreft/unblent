@@ -181,7 +181,8 @@ const VALUE_OPTIONS = [
   { id: UNRELATED, name: "Unrelated", description: "Doing this neither serves the value nor goes against it; the value has nothing to do with it.", removing: false },
 ];
 
-// The question's id is the value's, so an answer stays with its value when others change.
+// The question's id is the value's, so an answer stays with its value when others change;
+// its name is the value's, so a mark can name the value without reading the text.
 const valueQuestion = (v) => {
   const meaning = v.meaning.trim().replace(/[.\s]+$/, "");
   return {
@@ -189,6 +190,7 @@ const valueQuestion = (v) => {
     on: true,
     kind: "pick",
     text: `How does this action relate to the value “${v.name.trim()}”${meaning ? ` (${meaning})` : ""}?`,
+    name: v.name.trim(),
     yes: "",
     no: "",
     options: VALUE_OPTIONS,
@@ -666,7 +668,7 @@ export const machine = setup({
       "lines, whether it is switched on or not. It also presents Your values, kept with the " +
       "Journal under a fixed id, built from the user's own values (`values: read`) the way books " +
       "presents the journal: one pick-one question per value, \"How does this action relate to the " +
-      "value …?\" with the value's sentence when it has one, answered Serves (expected), Goes " +
+      "value …?\" with the value's sentence when it has one, named after the value (`name`), answered Serves (expected), Goes " +
       "against or Unrelated, its answers shown as one mark (`combined`). With no values it has no " +
       "questions. `evaluators: list` with a day gives that day's values, without one today's, " +
       "and a change of the values (`values.changed`) announces it again. Only what the user sets " +

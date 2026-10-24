@@ -477,6 +477,7 @@ const valueQ = (id, name, meaning = "") => ({
   id,
   kind: "pick",
   text: `How does this action relate to the value “${name}”${meaning ? ` (${meaning})` : ""}?`,
+  name,
   options: OPTIONS,
   expect: SERVES,
 });
@@ -558,4 +559,15 @@ test("a copied text or link goes into Vim's register", () => {
   actor.send({ type: "link.copied", id: "01K7TEST0000000000000H0001", text: "[q](note:01K7TEST0000000000000H0001)" });
   assert.deepEqual(pushed, ["One.\n\nTwo.", "[q](note:01K7TEST0000000000000H0001)"]);
   actor.stop();
+});
+
+test("Your values' marks name the value by the question's name, and fall back when it has none", () => {
+  const named = yours([[V1, "Being a present parent"]]);
+  named.questions[0].text = "Does this serve what matters?";
+  const served = marksOf(BOTH, done("x", [ans(V1, SERVES, "Serves", 0.95)]), [...EVALUATORS, named]);
+  assert.equal(served.at(-1).name, "Serves Being a present parent", "the name, not the text");
+
+  delete named.questions[0].name;
+  const against = marksOf(BOTH, done("x", [ans(V1, AGAINST, "Goes against", 0.95)]), [...EVALUATORS, named]);
+  assert.equal(against.at(-1).name, "Goes against one of your values");
 });

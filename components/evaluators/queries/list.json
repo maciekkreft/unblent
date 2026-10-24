@@ -71,6 +71,10 @@
                     "type": "string",
                     "description": "The question."
                   },
+                  "name": {
+                    "type": "string",
+                    "description": "A short name of what the question is about, such as a value's name for a question of Your values; absent when the question has none."
+                  },
                   "yes": {
                     "type": "string",
                     "description": "What yes means, for a yesno question; empty for none."
