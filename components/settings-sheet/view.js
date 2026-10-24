@@ -808,7 +808,7 @@ class SettingsSheet extends LitElement {
             ${evaluators.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
           </select>
         </label>
-        ${evaluator ? questions.map((q, i) => this.#checkQuestion(field, q, i, shown.questions[i], questions)) : nothing}
+        ${evaluator && !evaluator.combined ? questions.map((q, i) => this.#checkQuestion(field, q, i, shown.questions[i], questions)) : nothing}
         ${evaluator ? this.#alsoChoice(field, label, shown.also[0]?.evaluator ?? null, evaluators.filter((e) => e.id !== current)) : nothing}
       </div>
     `;

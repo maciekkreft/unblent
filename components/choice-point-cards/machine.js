@@ -164,16 +164,18 @@ export const ERROR_SENTENCES = {
   unavailable: "Jev could not be reached. It tries again at your next change.",
 };
 
-// The box's evaluator's question as the evaluator has it now.
-const questionOf = (evaluators, box, questionId) => evaluators.find((e) => e.id === box.evaluator)?.questions?.find((x) => x.id === questionId);
+// An evaluator by id, as the shown day has it; undefined when it is not known.
+const evaluatorIn = (evaluators, id) => evaluators.find((e) => e.id === id);
 
-// A pick answer's option as the box's evaluator has it now; none for yes or no.
-const optionOf = (evaluators, box, questionId, option) => questionOf(evaluators, box, questionId)?.options?.find((o) => o.id === option);
+// One evaluator's question as the evaluator has it now.
+const questionOf = (evaluator, questionId) => evaluator?.questions?.find((x) => x.id === questionId);
+
+// A pick answer's option as the evaluator has it now; none for yes or no.
+const optionOf = (evaluator, questionId, option) => questionOf(evaluator, questionId)?.options?.find((o) => o.id === option);
 
 // The answer the evaluator's question expects, while it names one still offered: yes or
 // no, or an option not waiting out its undo window; null when none is expected.
-const expectOf = (evaluators, box, questionId) => {
-  const q = questionOf(evaluators, box, questionId);
+const expectOf = (q) => {
   const want = q?.expect;
   if (want === "yes" || want === "no") return q.kind === "pick" ? null : want;
   return q?.kind === "pick" && q.options?.some((o) => o.id === want && !o.removing) ? want : null;
@@ -181,29 +183,31 @@ const expectOf = (evaluators, box, questionId) => {
 
 // The name of the answer expected, for "You expect …": Yes or No, or the pick option's
 // name as the evaluator has it.
-const expectedName = (evaluators, box, questionId, option) => {
+const expectedName = (evaluator, questionId, option) => {
   if (option === "yes") return "Yes";
   if (option === "no") return "No";
-  return optionOf(evaluators, box, questionId, option)?.name || "another answer";
+  return optionOf(evaluator, questionId, option)?.name || "another answer";
 };
 
 // How sure Jev is, as the mark's opacity: solid from 90% up, fading to a third at an even
 // chance, so an unsure answer is seen as one without a number to read.
 export const sureOf = (p) => Math.round((1 / 3 + (2 / 3) * Math.min(1, Math.max(0, (p - 0.5) / 0.4))) * 100) / 100;
 
-// The marks one checked line gets in its box: a dot while Jev is checking, then one mark
-// per shown question whose "Only when" holds. The colour comes from the answer the
-// evaluator's question expects: right, wrong, or plain when none is expected. The glyph is the icon the evaluator gives
-// the option answered; a yes / no answer, or an option without one, gets a warning when it
-// is not the expected answer and a check otherwise, also when nothing is expected, so every
-// shown answer has a mark to point at.
-export function marksOf(box, line, evaluators = []) {
-  if (!box?.evaluator || !line) return [];
-  if (line.status === "pending") return [{ pending: true }];
-  if (line.status !== "done") return [];
-  const answer = (id) => line.answers.find((a) => a.question === id);
+// The evaluators that check a box, its own first and then the further ones in order,
+// each with the box's settings for its questions.
+const checkersOf = (box) =>
+  [{ evaluator: box?.evaluator, questions: box?.questions ?? [] }, ...(Array.isArray(box?.also) ? box.also : [])].filter(
+    (c) => typeof c?.evaluator === "string",
+  );
+
+// One mark per shown question whose "Only when" holds. The colour comes from the answer
+// the evaluator's question expects: right, wrong, or plain when none is expected. The
+// glyph is the icon the evaluator gives the option answered; a yes / no answer, or an
+// option without one, gets a warning when it is not the expected answer and a check
+// otherwise, also when nothing is expected, so every shown answer has a mark to point at.
+function questionMarks(checker, evaluator, answer) {
   const out = [];
-  for (const q of box.questions) {
+  for (const q of checker.questions) {
     if (!q.show) continue;
     const a = answer(q.id);
     if (!a) continue;
@@ -211,28 +215,69 @@ export function marksOf(box, line, evaluators = []) {
       const w = answer(q.when.question);
       if (!w || w.option !== q.when.option) continue;
     }
-    const expect = expectOf(evaluators, box, q.id);
+    const expect = expectOf(questionOf(evaluator, q.id));
     const tone = expect == null ? "plain" : a.option === expect ? "right" : "wrong";
-    const chosen = optionOf(evaluators, box, q.id, a.option)?.icon;
+    const chosen = optionOf(evaluator, q.id, a.option)?.icon;
     out.push({
       question: q.id,
       name: a.name,
       p: a.p,
       tone,
       icon: chosen || (tone === "wrong" ? "warning" : "check"),
-      expected: expect == null ? null : expectedName(evaluators, box, q.id, expect),
+      expected: expect == null ? null : expectedName(evaluator, q.id, expect),
       sure: sureOf(a.p),
     });
   }
   return out;
 }
 
+// The value a question of Your values asks about, read from its text, which names it
+// between curly quotes; the question carries no name of its own.
+export const valueName = (q) => /“(.*?)”(?: \(|\?$)/.exec(q?.text ?? "")?.[1] || "one of your values";
+
+// A combined evaluator (Your values) answers with one mark for the line, a compass:
+// green when any question got the answer it expects (the line serves a value), named
+// after the first such value in the evaluator's order; else red when any answer is an
+// option marked as going against, named the same way; else uncoloured, Jev not able to
+// tell. Its sureness is the deciding answer's, and for an uncoloured mark the least sure
+// answer's, since every one of them had to miss. With no question answered, such as Your
+// values with no values written, there is no mark at all: none would suggest Jev looked.
+function combinedMark(evaluator, answer) {
+  const answered = (evaluator.questions ?? [])
+    .filter((q) => !q.removing && q.on !== false)
+    .map((q) => ({ q, a: answer(q.id) }))
+    .filter((x) => x.a);
+  if (!answered.length) return [];
+  const mark = (tone, { q, a }, name) => ({ question: q.id, combined: true, name, p: a.p, tone, icon: "compass", expected: null, sure: sureOf(a.p) });
+  const served = answered.find(({ q, a }) => expectOf(q) != null && a.option === expectOf(q));
+  if (served) return [mark("right", served, `Serves ${valueName(served.q)}`)];
+  const against = answered.find(({ q, a }) => q.options?.some((o) => o.id === a.option && o.against));
+  if (against) return [mark("wrong", against, `Goes against ${valueName(against.q)}`)];
+  const least = answered.reduce((x, y) => (y.a.p < x.a.p ? y : x));
+  return [mark("plain", least, "Can't tell which of your values this serves")];
+}
+
+// The marks one checked line gets in its box: a dot while Jev is checking, then the marks
+// of each of the box's evaluators in turn, its own first.
+export function marksOf(box, line, evaluators = []) {
+  const checkers = checkersOf(box);
+  if (!checkers.length || !line) return [];
+  if (line.status === "pending") return [{ pending: true }];
+  if (line.status !== "done") return [];
+  const answer = (id) => line.answers.find((a) => a.question === id);
+  return checkers.flatMap((c) => {
+    const evaluator = evaluatorIn(evaluators, c.evaluator);
+    return evaluator?.combined ? combinedMark(evaluator, answer) : questionMarks(c, evaluator, answer);
+  });
+}
+
 // What the status line says about one line's marks, short: the name of each answer, and
-// for one that is not expected, the answer that is; both answers go on the one line.
+// for one that is not expected, the answer that is; both answers go on the one line. A
+// combined mark already says it in a sentence.
 export function sayMarks(marks) {
   if (!marks.length) return null;
   if (marks[0].pending) return "Jev is checking…";
-  return marks.map((m) => (m.tone === "wrong" ? `${m.name} · you expect ${m.expected}` : m.name)).join(" · ");
+  return marks.map((m) => (m.tone === "wrong" && !m.combined ? `${m.name} · you expect ${m.expected}` : m.name)).join(" · ");
 }
 
 const reportOf = (context, id) => context.checks.reports[id];
@@ -278,6 +323,14 @@ export function statusOf(context, id) {
   return ERROR_SENTENCES[reportOf(context, draft.id)?.error] ?? "";
 }
 
+// A derived evaluator is announced with today's questions (Your values after today's
+// values were edited); on an earlier day the questions it had that day are kept, so the
+// day's marks still name that day's values.
+const changedOn = (context, evaluator) => {
+  const was = context.evaluators.find((e) => e.id === evaluator.id);
+  return evaluator.derivedFrom && was && context.day !== dateOf(context.now()) ? { ...evaluator, questions: was.questions } : evaluator;
+};
+
 const POINTS = new Set(["hover", "tap", "cursor"]);
 
 const isDay = (v) => typeof v === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v);
@@ -291,8 +344,12 @@ export const machine = setup({
     checks: fromPromise(({ input }) =>
       input.ask("choice-point-checks", "read", { day: input.day }).then((reply) => ({ day: input.day, reply })),
     ),
-    // Each question's expected answer and its options' names and icons; every book's evaluators.
-    evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
+    // Each question's expected answer and its options' names and icons; every book's
+    // evaluators, a derived one (Your values) as it stood on the shown day. The day rides
+    // along so a reply for a day left meanwhile is dropped.
+    evaluators: fromPromise(({ input }) =>
+      input.ask("evaluators", "list", { day: input.day }).then((reply) => ({ day: input.day, reply })),
+    ),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -332,7 +389,15 @@ export const machine = setup({
       "expects none, solid when " +
       "Jev is sure and faded when it is not; the mark shows the icon the evaluator gives the " +
       "option answered, and a yes / no answer or an option with no icon gets a check, or a " +
-      "warning when it is not the expected one. A line edited since it was " +
+      "warning when it is not the expected one. Settings may name a further evaluator for a " +
+      "box (Also check with); its marks follow the box's own. Your values, as either one, " +
+      "draws one compass per line instead of a mark per value: green when the move serves " +
+      "any of the values, red when it serves none and goes against one, uncoloured when Jev " +
+      "can't tell, solid or faded as the answer that decided it, or the least sure answer " +
+      "for an uncoloured one; with no values written there is no compass at all. Its hint " +
+      "names the value: \"Serves Being a present parent\", \"Goes against Health\", or " +
+      "\"Can't tell which of your values this serves\", the first value in the values' order " +
+      "when several fit. An earlier day's marks name that day's values. A line edited since it was " +
       "checked has no mark until it is checked again. The marks are not text: they do not " +
       "move the cursor or count for Vim. The answer's name, and for a red mark the expected " +
       "answer (\"Emotional Goal · you expect Behavioral Goal\"), is the mark's hint and is said " +
@@ -340,7 +405,7 @@ export const machine = setup({
       "tapped until something else is pressed, or while the text cursor is on a checked line; " +
       "otherwise the status line says why Jev could not check when it could not, and is " +
       "empty. A folded card shows a red warning beside the situation, away or towards line " +
-      "when a line there is not the expected answer.",
+      "when a line there has a red mark, a red compass included.",
     kind: "view",
     emits: ["choice-point.saved"],
     asks: ["choice-points: list", "settings: read", "choice-point-checks: read", "evaluators: list"],
@@ -382,19 +447,13 @@ export const machine = setup({
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
       onError: { actions: [] },
     },
-    {
-      src: "evaluators",
-      input: ({ context }) => ({ ask: context.ask }),
-      onDone: {
-        guard: ({ event }) => Array.isArray(event.output?.evaluators),
-        actions: assign({ evaluators: ({ event }) => event.output.evaluators }),
-      },
-      onError: { actions: [] },
-    },
   ],
-  // The checks are asked per day, beside the states, so a reply is kept whatever the
-  // sheet is doing; asked again, by the same id, when the day changes.
-  entry: spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
+  // The checks and the evaluators are asked per day, beside the states, so a reply is kept
+  // whatever the sheet is doing; asked again, by the same ids, when the day changes.
+  entry: [
+    spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
+    spawnChild("evaluators", { id: "evaluators", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
+  ],
   initial: "loading",
   on: {
     // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
@@ -422,10 +481,12 @@ export const machine = setup({
         }),
       }),
     },
+    "xstate.done.actor.evaluators": {
+      guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.evaluators),
+      actions: assign({ evaluators: ({ event }) => event.output.reply.evaluators }),
+    },
     "evaluator.changed": {
-      actions: assign({
-        evaluators: ({ context, event }) => [...context.evaluators.filter((e) => e.id !== event.evaluator.id), event.evaluator],
-      }),
+      actions: assign({ evaluators: ({ context, event }) => [...context.evaluators.filter((e) => e.id !== event.evaluator.id), changedOn(context, event.evaluator)] }),
     },
     "evaluator.deleted": { actions: assign({ evaluators: ({ context, event }) => context.evaluators.filter((e) => e.id !== event.id) }) },
     // The view says which line the pointer is over, which mark was tapped, and which line
@@ -461,6 +522,8 @@ export const machine = setup({
           })),
           stopChild("checks"),
           spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
+          stopChild("evaluators"),
+          spawnChild("evaluators", { id: "evaluators", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
         ],
       },
       {

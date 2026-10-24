@@ -40,6 +40,7 @@ async function start(days = {}, vimKeys, { checks, evaluators, unfolded } = {}) 
   let n = 0;
   const asked = [];
   const checksAsked = [];
+  const evaluatorsAsked = [];
   const clock = new SimulatedClock();
   const actor = createActor(machine, {
     clock,
@@ -50,7 +51,11 @@ async function start(days = {}, vimKeys, { checks, evaluators, unfolded } = {}) 
           checksAsked.push(payload.day);
           return Promise.resolve(checks ? checks(payload.day) : { error: "no-answerer" });
         }
-        if (target === "evaluators") return Promise.resolve(evaluators ? { evaluators } : { error: "no-answerer" });
+        if (target === "evaluators") {
+          evaluatorsAsked.push(payload.day);
+          const listed = typeof evaluators === "function" ? evaluators(payload.day) : evaluators;
+          return Promise.resolve(listed ? { evaluators: listed } : { error: "no-answerer" });
+        }
         asked.push({ target, name, payload });
         return Promise.resolve({ choicePoints: days[payload.day] ?? [] });
       },
@@ -68,7 +73,7 @@ async function start(days = {}, vimKeys, { checks, evaluators, unfolded } = {}) 
     });
   actor.start();
   await flush();
-  return { actor, clock, emitted, asked, checksAsked, ctx: () => actor.getSnapshot().context, state: () => actor.getSnapshot().value };
+  return { actor, clock, emitted, asked, checksAsked, evaluatorsAsked, ctx: () => actor.getSnapshot().context, state: () => actor.getSnapshot().value };
 }
 
 const saves = (emitted) => emitted.filter((e) => e.type === "choice-point.saved");
@@ -453,6 +458,87 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
   assert.deepEqual(checksAsked, [TODAY, EARLIER]);
   assert.deepEqual(ctx().checks.reports, {});
   assert.equal(ctx().checks.settings, SETTINGS, "the settings are kept across days");
+});
+
+// Your values, as evaluators presents it: one pick question per value, Serves expected,
+// Goes against marked as against, its answers drawn as one mark.
+const YV = "0000000000000000000000YVAS";
+const SERVES = "0000000000000000000000SRVS";
+const AGAINST = "0000000000000000000000AGST";
+const UNRELATED = "0000000000000000000000NRTD";
+const V1 = "01K6TEST0000000000000000V1";
+const V2 = "01K6TEST0000000000000000V2";
+const OPTIONS = [
+  { id: SERVES, name: "Serves", description: "" },
+  { id: AGAINST, name: "Goes against", description: "", against: true },
+  { id: UNRELATED, name: "Unrelated", description: "" },
+];
+const valueQ = (id, name, meaning = "") => ({
+  id,
+  kind: "pick",
+  text: `How does this action relate to the value “${name}”${meaning ? ` (${meaning})` : ""}?`,
+  options: OPTIONS,
+  expect: SERVES,
+});
+const yours = (values) => ({ id: YV, combined: true, derivedFrom: "values", questions: values.map(([id, name, meaning]) => valueQ(id, name, meaning)) });
+const VALUES = yours([
+  [V1, "Being a present parent", "time with the kids, phone away"],
+  [V2, "Health"],
+]);
+const BOTH = { ...TOWARDS_BOX, also: [{ evaluator: YV, questions: [] }] };
+
+test("Your values draws one compass mark after the box's own marks: green, red or uncoloured, naming the value", () => {
+  const evaluators = [...EVALUATORS, VALUES];
+  const behaviour = [ans(Q1, BEH, "Behavioral Goal", 0.96)];
+  const line = (...values) => done("x", [...behaviour, ...values]);
+
+  const pool = marksOf(BOTH, line(ans(V1, SERVES, "Serves", 0.95), ans(V2, SERVES, "Serves", 0.6)), evaluators);
+  assert.deepEqual(pool.map((m) => [m.icon, m.tone]), [["person-simple-walk", "right"], ["compass", "right"]], "after the box's own mark");
+  assert.equal(pool[1].name, "Serves Being a present parent", "the first value served, in the values' order");
+  assert.equal(pool[1].sure, 1, "solid: Jev is sure of the deciding answer");
+
+  const email = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.7), ans(V2, UNRELATED, "Unrelated", 0.99)), evaluators);
+  assert.deepEqual([email[1].tone, email[1].name], ["wrong", "Goes against Being a present parent"]);
+  assert.ok(email[1].sure < 1, "faded: Jev is not sure the move goes against the value");
+  assert.equal(sayMarks(email), "Behavioral Goal · Goes against Being a present parent", "no 'you expect' for a values mark");
+
+  const healthWins = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.9), ans(V2, SERVES, "Serves", 0.9)), evaluators);
+  assert.deepEqual([healthWins[1].tone, healthWins[1].name], ["right", "Serves Health"], "serving any value wins over going against another");
+
+  const shoes = marksOf(BOTH, line(ans(V1, UNRELATED, "Unrelated", 0.97), ans(V2, UNRELATED, "Unrelated", 0.55)), evaluators);
+  assert.deepEqual([shoes[1].icon, shoes[1].tone, shoes[1].name], ["compass", "plain", "Can't tell which of your values this serves"]);
+  assert.equal(shoes[1].sure, sureOf(0.55), "the least sure answer, since every one had to miss");
+
+  assert.deepEqual(marksOf(BOTH, line(), [...EVALUATORS, yours([])]).map((m) => m.icon), ["person-simple-walk"], "no values: no compass at all");
+  assert.deepEqual(marksOf(BOTH, line(ans(V1, SERVES, "Serves", 0.9)), EVALUATORS).length, 1, "before the evaluators answer, no compass");
+
+  const alone = { evaluator: YV, questions: [{ id: V1, show: false, when: null, expect: null, icons: {} }] };
+  assert.deepEqual(
+    marksOf(alone, done("x", [ans(V1, UNRELATED, "Unrelated", 0.9), ans(V2, SERVES, "Serves", 0.9)]), evaluators).map((m) => [m.icon, m.name]),
+    [["compass", "Serves Health"]],
+    "as the box's own evaluator, one compass and no mark per question, every value counting",
+  );
+});
+
+test("a red values mark warns on the folded card; the shown day's values name the mark", async () => {
+  const record = cp(A, EARLIER, { situation: "Weekend", towards: "Answer every work email" });
+  const report = { choicePoint: A, day: EARLIER, lines: [done("Answer every work email", [ans(V1, AGAINST, "Goes against", 0.9)])] };
+  const then = yours([[V1, "Family first"]]);
+  const { actor, ctx, evaluatorsAsked } = await start({ [EARLIER]: [record] }, undefined, {
+    evaluators: (day) => [...EVALUATORS, day === EARLIER ? then : VALUES],
+    checks: () => ({ settings: { ...SETTINGS, towards: BOTH }, choicePoints: [] }),
+  });
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  await flush();
+  assert.deepEqual(evaluatorsAsked, [dateOf(NOW), EARLIER], "the evaluators are asked for the day shown");
+  actor.send({ type: "lines.checked", ...report });
+  assert.deepEqual(cardWarnings(ctx(), record), { situation: false, away: false, towards: true });
+
+  actor.send({ type: "evaluator.changed", evaluator: { ...VALUES, name: "Your values", on: false } });
+  actor.send({ type: "_open", id: A });
+  actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: "Answer every work email" });
+  assert.equal(statusOf(ctx(), A), "Goes against Family first", "an earlier day keeps that day's values when today's change");
+  assert.equal(ctx().evaluators.find((e) => e.id === YV).on, false, "while the rest of the change is taken");
 });
 
 test("the sheets left unfolded open again after a reload; one gone or of another day does not", async () => {

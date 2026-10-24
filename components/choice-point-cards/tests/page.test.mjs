@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 // Shift+Enter a line break, with Vim keys on the first Escape
 // only leaves insert mode, and on a narrow page the V stands above the boxes rather than
 // between them, and Jev's marks stand at the end of checked lines, coloured by the expected
-// answer, checked once the user moves on from a line, with the answer said in the status line, and an earlier day's choice point can
+// answer, checked once the user moves on from a line, with the answer said in the status line, Your values as one
+// compass per line, and an earlier day's choice point can
 // be read but not typed in. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
@@ -174,6 +175,67 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await cards.locator(".status").innerText(), "Behavioral Goal", "the line the cursor is on");
         await line("Feel calm").locator(".mark").hover();
         assert.equal(await cards.locator(".status").innerText(), "Emotional Goal · you expect Behavioral Goal", "the line the pointer is over");
+        await cards.locator(".done").click();
+        await cards.locator(".card .towards .flag").waitFor();
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // The values and the box arrive through the APIs under the test's own login; Jev is
+    // answered through page.route, each value's question by the line's text.
+    // Browser: rendering and layout.
+    test("Your values on Towards draws one compass per line, green or red, naming the value", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("values-mark"));
+        const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
+        const [parent, health] = [id("V1"), id("V2")];
+        const at = new Date();
+        const today = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+        const values = [
+          { id: parent, name: "Being a present parent", meaning: "" },
+          { id: health, name: "Health", meaning: "" },
+        ];
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${today}`, { data: { values, baseVersion: null } })).status(), 200);
+        const box = await context.request.put(`${BASE_URL}/api/choice-point-checks/boxes/towards`, {
+          data: { baseVersion: null, evaluator: "0000000000000000000000YVAS", questions: [] },
+        });
+        assert.equal(box.status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.route("**/api/llm", async (route) => {
+          const res = await route.fetch();
+          const json = await res.json();
+          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+        });
+        await page.route("**/api/llm/decide", (route) => {
+          const { state, questions } = route.request().postDataJSON();
+          const pool = /pool/.test(state.text);
+          const answers = questions.map((q) => ({
+            id: q.id,
+            p: 0.95,
+            choice: q.id === parent ? (pool ? "0000000000000000000000SRVS" : "0000000000000000000000AGST") : "0000000000000000000000NRTD",
+          }));
+          route.fulfill({ json: { answers, inputTokens: 1, ms: 1 } });
+        });
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const cards = page.locator("choice-point-cards");
+        await cards.locator(".new").click();
+        await cards.locator('.box[data-field="towards"] .cm-content').click();
+        const line = (text) => cards.locator(".cm-line", { hasText: text });
+        await page.keyboard.type("Take the kids to the pool");
+        await page.keyboard.press("Enter");
+        await line("pool").locator(".mark.right svg").waitFor();
+        assert.equal(await line("pool").locator(".mark").count(), 1, "one mark for all the values");
+        await page.keyboard.type("Answer every work email");
+        await page.keyboard.press("ArrowUp");
+        await line("work email").locator(".mark.wrong").waitFor();
+        assert.equal(await cards.locator(".status").innerText(), "Serves Being a present parent", "the line the cursor is on");
+        await line("work email").locator(".mark").hover();
+        assert.equal(await cards.locator(".status").innerText(), "Goes against Being a present parent", "the line the pointer is over");
         await cards.locator(".done").click();
         await cards.locator(".card .towards .flag").waitFor();
         assert.deepEqual(problems, []);

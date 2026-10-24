@@ -76,6 +76,7 @@ const MARK_ICONS = {
   "hand-palm": () => icon("hand-palm"),
   footprints: () => icon("footprints"),
   question: () => icon("question"),
+  compass: () => icon("compass"),
 };
 
 // A box on a day that cannot be written is shown, not edited (writable); it takes no

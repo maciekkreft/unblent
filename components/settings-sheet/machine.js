@@ -102,10 +102,12 @@ const unset = (id, show) => ({ id, show, expect: null, when: null, icons: {} });
 
 // One box as Settings shows and edits it: a setting for every live question of its
 // evaluator, in the evaluator's order. A question the box holds no setting for is not
-// shown (checks.edited), so a question added to the evaluator later starts unticked.
+// shown (checks.edited), so a question added to the evaluator later starts unticked. A
+// combined evaluator (Your values) has no question settings: every question counts
+// toward its one mark.
 export const boxView = (box, evaluator) => ({
   evaluator: box?.evaluator ?? null,
-  questions: live(evaluator?.questions).map((q) => {
+  questions: (evaluator?.combined ? [] : live(evaluator?.questions)).map((q) => {
     const s = (box?.questions ?? []).find((x) => x.id === q.id);
     return s ? { ...s, icons: { ...s.icons } } : unset(q.id, false);
   }),
@@ -149,7 +151,7 @@ const chosen = (context, event) => {
   const evaluator = evaluatorOf(context, event.evaluator);
   const b = past
     ? boxView(past, evaluator)
-    : { evaluator: event.evaluator, questions: live(evaluator?.questions).map((q) => unset(q.id, true)), also: [] };
+    : { evaluator: event.evaluator, questions: evaluator?.combined ? [] : live(evaluator?.questions).map((q) => unset(q.id, true)), also: [] };
   return { ...b, also: withoutMain(current.evaluator ? current.also : b.also, event.evaluator) };
 };
 
@@ -208,7 +210,8 @@ export const machine = setup({
       "has an evaluator, Also check with under its questions chooses one more evaluator, such " +
       "as Your values, whose questions Jev answers about the same lines in the same request; " +
       "it has no per-question settings, since every value of Your values counts toward its one " +
-      "mark, and None takes it away again. It stays when the box's evaluator is switched, and " +
+      "mark, and None takes it away again. Your values chosen as a box's own evaluator has no " +
+      "per-question settings either. It stays when the box's evaluator is switched, and " +
       "Not checked clears it with the rest. The part is " +
       "hidden on a page without `choice-point-checks`. The Vim keys list names the chat box " +
       "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +

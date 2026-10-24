@@ -484,6 +484,9 @@ test("Also check with emits the box with its further evaluator, and None takes i
 
   actor.send({ type: "_setAlso", field: "towards", evaluator: null });
   assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "towards", evaluator: E1, questions: own, also: [] }, "None takes it away");
+
+  actor.send({ type: "_setChecker", field: "towards", evaluator: YV });
+  assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "towards", evaluator: YV, questions: [], also: [] }, "as the box's own evaluator it has no question settings either");
 });
 
 test("evaluator.changed and evaluator.deleted keep the list to choose from (4.3)", async () => {
