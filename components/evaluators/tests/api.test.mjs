@@ -70,15 +70,14 @@ test("a place is saved without a new version, alone or with a write, and pulled 
   assert.deepEqual(after.evaluators.map((e) => [e.position, e.version]), [["a", 3]]);
 });
 
-test("Show in journal is set by a write that carries it and kept by one that leaves it out", async () => {
+test("an evaluator ticked Show in journal moves to the journal, pulled as a change", async () => {
   const cookie = freshCookie();
   await put(ID, body(), cookie);
-  const shown = await (await put(ID, body({ journal: true }), cookie)).json();
-  assert.deepEqual([shown.journal, shown.version], [true, 2]);
-  const kept = await (await put(ID, body({ name: "Renamed" }), cookie)).json();
-  assert.deepEqual([kept.journal, kept.version], [true, 3]);
-  const off = await (await put(ID, body({ name: "Renamed", journal: false }), cookie)).json();
-  assert.deepEqual([off.journal, off.version], [false, 4]);
+  await put(ID, body({ journal: true }), cookie);
+  const all = await (await pull(0, cookie)).json();
+  assert.deepEqual(all.evaluators.map((e) => [e.book, e.journal, e.version]), [["00000000000000000000000JRN", false, 3]]);
+  const again = await (await pull(all.cursor, cookie)).json();
+  assert.deepEqual(again.evaluators, [], "it moves once");
 });
 
 test("the browser's time of a change is kept, and a resend of the same content keeps the first", async () => {

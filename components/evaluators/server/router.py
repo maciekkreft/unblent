@@ -38,6 +38,8 @@ _POSITION = re.compile(r"[0-9A-Za-z]{0,199}[1-9A-Za-z]")
 # A body that is not what the route takes is refused with this fixed reply rather than
 # FastAPI's 422, which would echo the body back.
 _BAD = {"error": "bad-request"}
+# The id books presents the journal under (5).
+_JOURNAL = "00000000000000000000000JRN"
 
 
 # `with connection:` alone leaves the handle open until the cycle collector reaches it,
@@ -60,6 +62,14 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN starter_for TEXT NOT NULL DEFAULT '[]'")
     if "position" not in columns:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN position TEXT")
+    # "Show in journal" is gone and the journal lists only its own evaluators, so one
+    # still ticked moves to the journal, with a new version and seq so every device pulls it.
+    for (ticked,) in connection.execute("SELECT id FROM evaluators WHERE journal = 1").fetchall():
+        connection.execute(
+            "UPDATE evaluators SET book = ?, journal = 0, version = version + 1, seq = ? WHERE id = ?",
+            (_JOURNAL, _next_seq(connection), ticked),
+        )
+    connection.commit()
     try:
         with connection:
             yield connection
