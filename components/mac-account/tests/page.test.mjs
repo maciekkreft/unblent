@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 // what the Mac's server answers is tested in session's own tests. A forged cookie lets
 // the page's facts sync with the throwaway server meanwhile.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -27,7 +27,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 10000 });
 
     // Browser: rendering and layout.
-    test("not connected, waiting for Safari, then the choice with Use my account picked", async () => {
+    test("not connected, waiting for Safari, then one question with Connect and Cancel", async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
         context.setDefaultTimeout(4000);
@@ -59,14 +59,15 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         me = { ...LOCAL, connect: "ready", remote: "Maciek" };
         await page.bringToFront();
         await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-        await tab.getByText("Ready to connect to Maciek").waitFor();
-        const use = tab.getByRole("radio", { name: /Use my account/ });
-        const add = tab.getByRole("radio", { name: /Add this Mac's things/ });
-        assert.equal(await use.getAttribute("aria-checked"), "true", "Use my account is chosen at first");
-        await add.click();
-        await until(async () => (await add.getAttribute("aria-checked")) === "true");
-        assert.equal(await use.getAttribute("aria-checked"), "false");
+        await tab.getByText("Connect this Mac to Maciek?").waitFor();
+        assert.ok(
+          (await text(page)).includes(
+            "If your account already has notes, journal days or books, this Mac will show them. If it is empty, this Mac's are added to it.",
+          ),
+        );
+        assert.equal(await tab.getByRole("radio").count(), 0, "no choice to make");
         assert.ok(await tab.getByRole("button", { name: "Connect", exact: true }).isEnabled());
+        assert.ok(await tab.getByRole("button", { name: "Cancel" }).isEnabled());
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

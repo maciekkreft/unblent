@@ -223,10 +223,14 @@ const api = {
       return { error: "unavailable" };
     }
   },
+  // Refused with sync-off (409) while the account refuses the device sign-in, and with
+  // offline (503) while it cannot be reached; nothing changed on the Mac then (3.4).
   async disconnect() {
     try {
       const res = await post("/connect/disconnect");
-      return res.ok ? await res.json() : { error: "unavailable" };
+      if (res.ok) return await res.json();
+      const body = await res.json().catch(() => ({}));
+      return { error: ["sync-off", "offline"].includes(body?.error) ? body.error : "unavailable" };
     } catch {
       return { error: "unavailable" };
     }

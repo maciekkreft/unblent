@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { createActor } from "xstate";
 import { machine } from "../machine.js";
 
-// The keep variant of changing who the browser belongs to (12, the clients' path of the
-// connected Mac, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
-// outbox and keeps its copy, marked `adopt` with the account it came from; after the
-// reload as the account, the mark sends the copy on the versions it holds and the pull
-// starts again from 0, and the mark is cleared. Plain leaving still empties. The store,
+// The keep variant of changing who the browser belongs to (12, Connect and Disconnect of
+// the Mac app, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
+// outbox and keeps its copy, marked `adopt` with the account it came from. After the
+// reload the account is asked for everything first: when it holds nothing of this kind,
+// the mark sends the copy on the versions it holds; when it holds something, the copy is
+// emptied and the account's is taken; offline, the mark stays for the next load. Either
+// way the pull starts again from 0 and the mark is cleared. Plain leaving still empties. The store,
 // the api and the asks are fakes of the shapes fact.js builds; every unknown store read
 // answers empty.
 const LIVE = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", day: "2026-10-01", situation: "S", thoughts: "", away: "", towards: "", version: 3 };
@@ -109,7 +111,7 @@ test("plain leaving still empties the copy and leaves no mark", async () => {
   actor.stop();
 });
 
-test("after the reload the mark sends the copy from a cursor of 0, then clears", async () => {
+test("after the reload into an empty account the mark sends the copy from a cursor of 0, then clears", async () => {
   const { actor, meta, queued, log, calls } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1");
   await flush();
   assert.deepEqual(log, [], "the copy is kept, not emptied as another account's");
@@ -121,6 +123,36 @@ test("after the reload the mark sends the copy from a cursor of 0, then clears",
   assert.equal(meta.get("userId"), "u1");
   const pulls = calls.filter(([name]) => name === "pull");
   assert.ok(pulls.length > 0 && pulls.every(([, since]) => since === 0), `pulled from 0: ${JSON.stringify(pulls)}`);
+  actor.stop();
+});
+
+// The account's answer to a pull: `fields` hold what it has, every other list is empty.
+const holding = (fields) =>
+  new Proxy(fields, { get: (t, key) => (key in t ? t[key] : key === "cursor" ? 0 : key === "then" || key === "error" ? undefined : []) });
+
+test("after the reload into an account that has a choice point the copy is emptied and the account's is taken", async () => {
+  const answer = (name, row) => (name === "pull" ? holding({ choicePoints: [{ ...LIVE, id: "01ARZ3NDEKTSV4RRFFQ69G5FC1", situation: "Theirs" }] }) : acked(name, row));
+  const { actor, meta, queued, log, calls } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, ["empty"], "this copy, outbox included, is emptied");
+  assert.deepEqual(queued, [], "nothing of this copy is sent");
+  assert.equal(meta.get("adopt"), null);
+  assert.equal(meta.get("userId"), "u1");
+  assert.deepEqual(calls.filter(([name]) => name === "pull")[0], ["pull", 0], "the account is asked for everything first");
+  actor.stop();
+});
+
+test("offline after the reload the mark stays and nothing is emptied or sent", async () => {
+  const answer = (name, row) => {
+    if (name === "pull") throw new Error("offline");
+    return acked(name, row);
+  };
+  const { actor, meta, queued, log } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, []);
+  assert.deepEqual(queued, []);
+  assert.equal(meta.get("adopt"), "u0", "the next load decides");
+  assert.equal(meta.get("userId"), "u1", "the copy is not taken for another account's meanwhile");
   actor.stop();
 });
 

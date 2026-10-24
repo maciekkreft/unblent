@@ -58,14 +58,17 @@ const api = {
     }
   },
   // Adds a book of this browser's copy to the account the browser joined (12, keep): its
-  // file is read from the Mac's own server, which X-Unblent-Local asks for past the relay
-  // (3.4), and uploaded as an import; then its place and the user's title are sent. A file
-  // the Mac does not have (404) or that is not an epub (422) cannot be added; a 401 is the
-  // session; anything else throws, so the machine retries it at the next sync, as offline.
+  // file is read from where the row says (3.4), the Mac's own server past the relay
+  // (X-Unblent-Local) after a Connect, or the account with the kept device sign-in
+  // (X-Unblent-Remote) after a Disconnect, and uploaded as an import; then its place and
+  // the user's title are sent. A file that is not there (404) or that is not an epub (422)
+  // cannot be added; a 401 is the session; anything else throws, so the machine retries
+  // it at the next sync, as offline.
   async adopt(row) {
+    const side = row.from === "remote" ? { "X-Unblent-Remote": "1" } : { "X-Unblent-Local": "1" };
     const local = await fetch(`/api/books/${row.book}/source`, {
       credentials: "same-origin",
-      headers: { "X-Unblent-Local": "1", Accept: "application/epub+zip" },
+      headers: { ...side, Accept: "application/epub+zip" },
     });
     if (local.status === 404) return { error: "unreadable" };
     if (!local.ok) throw new Error(`books source ${local.status}`);

@@ -42,18 +42,18 @@ export const machine = setup({
       "Mac app. Not connected, it says everything is kept on this Mac only and offers Connect " +
       "account, which opens the connect page in Safari; it then says Waiting for you to finish " +
       "in Safari, with Open Safari again and Cancel, until the user comes back to the window. " +
-      "When the account's sign-in is ready, it asks what should happen to what is already on " +
-      "this Mac, with two choices: Use my account, chosen at first, which shows the account " +
-      "and keeps the Mac's own copy aside until Disconnect, or Add this Mac's things, which " +
-      "uploads them to the account; then Connect, or Cancel, which forgets the sign-in. " +
-      "Connected, it says Connected to and the account's name, with Disconnect, which goes " +
-      "back to the Mac's own copy. When the admin has turned sync off for the account, it says " +
-      "Sync was turned off for this account, with Disconnect. Disconnect is the undo of " +
-      "Connect; if what is not yet sent cannot be sent within a few seconds, nothing changes, " +
-      "the tab says changes are waiting on this Mac, and a notice says why. With sync off, " +
-      "nothing waiting is ever thrown away and there is no Disconnect anyway: the tab says to " +
-      "turn sync on again for this account in Administration on app.unblent.com, so the " +
-      "changes are sent, and then disconnect.",
+      "When the account's sign-in is ready, it asks Connect this Mac to and the account's " +
+      "name, saying that if the account already has notes, journal days or books the Mac will " +
+      "show them, and if it is empty the Mac's are added to it; there is no choice to make, " +
+      "only Connect, or Cancel, which forgets the sign-in. Connected, it says Connected to and " +
+      "the account's name, with Disconnect, which stops syncing while the Mac keeps what it " +
+      "shows. If what is not yet sent cannot be sent within a few seconds, nothing changes, " +
+      "the tab says changes are waiting on this Mac, and a notice says why. When the admin has " +
+      "turned sync off for the account, it says Sync was turned off for this account, and " +
+      "Disconnect is shown greyed out with the reason: the account's books could not be " +
+      "fetched, so sync must be turned on again for this account in Administration on " +
+      "app.unblent.com before this Mac can disconnect. Nothing waiting on the Mac is thrown " +
+      "away meanwhile.",
     kind: "view",
     attributes: [],
     emits: ["connect.requested", "connect.confirmed", "disconnect.requested"],
@@ -64,8 +64,6 @@ export const machine = setup({
     connect: null,
     remote: null,
     userId: null,
-    // The choice on the ready screen: Use my account unless the user picks the other.
-    keep: false,
     // A Disconnect that session refused because changes could not be sent (12).
     waiting: false,
     disconnecting: false,
@@ -135,10 +133,11 @@ export const machine = setup({
     choosing: {
       on: {
         ...follows,
-        _pick: { actions: assign({ keep: ({ event }) => event.keep === true }) },
+        // Always with keep (12): after the reload each kind of thing is taken from the
+        // account when it has some, and sent to it when it has none.
         _confirm: {
           target: "switching",
-          actions: [assign({ doing: "connect" }), emit(({ context }) => ({ type: "connect.confirmed", keep: context.keep }))],
+          actions: [assign({ doing: "connect" }), emit({ type: "connect.confirmed", keep: true })],
         },
         // Forgets the waiting sign-in; nothing on this Mac has changed yet.
         _cancel: { target: "switching", actions: [assign({ doing: "cancel" }), emit({ type: "disconnect.requested" })] },
@@ -153,15 +152,9 @@ export const machine = setup({
         },
       },
     },
-    syncOff: {
-      on: {
-        ...follows,
-        _disconnect: {
-          target: "switching",
-          actions: [assign({ waiting: false, disconnecting: true, doing: "disconnect" }), emit({ type: "disconnect.requested" })],
-        },
-      },
-    },
+    // No Disconnect (3.4): the Mac's server would refuse it, since the account's book
+    // files could not be fetched for the Mac to keep.
+    syncOff: { on: follows },
     // Until session reloads the page or says nothing changed.
     switching: {
       on: {

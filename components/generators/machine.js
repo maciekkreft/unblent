@@ -191,33 +191,47 @@ const ready = (context, enqueue) => {
 // none of it is shown to the account now signed in or uploaded as its own. A copy marked
 // to be added to the account (12, keep) is kept instead, and `keepFor` sends it.
 // The copy is marked with the account it now follows, so the next account change finds it.
-async function claim(store, ask) {
+async function claim(store, ask, api) {
   const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
   const userId = typeof session?.userId === "string" ? session.userId : null;
   if (!userId) return;
   const [kept, outbox, from] = await Promise.all([store.metaGet("userId"), store.outboxAll(), store.metaGet("adopt")]);
   if (kept && kept !== userId && outbox.length === 0 && !from) await store.empty();
   if (kept !== userId) await store.metaPut("userId", userId).catch(() => {});
-  await keepFor(store, from, userId);
+  await keepFor(store, from, userId, api);
 }
 
-// The browser joined an account keeping this copy (12, keep): every result is queued for
-// the account on the version it holds, and the cursor goes back to 0, so the pull then
-// brings the account's own. A generator is not sent: each has a fixed id the account
-// already knows, and its settings there are the account's, which a copy from this
-// browser would overwrite, since the last write wins (5). The mark is
-// cleared only once every row is stored in the outbox, so a reload midway sends the copy
-// again (coalesced by id) rather than losing it. A mark left by a change of account that
-// was called off names the account still signed in, and is only cleared.
-async function keepFor(store, from, userId) {
+// The browser joined an account keeping this copy (12, keep). The account is asked for
+// everything it holds first: when it already holds a result, this copy is emptied,
+// outbox included, and the pull from 0 brings the account's. When it holds none, every
+// result is queued for it on the version it holds, and the cursor goes back to 0. A
+// generator is not sent: each has a fixed id the account already knows, and its settings
+// there are the account's, which a copy from this browser would overwrite, since the last
+// write wins (5). The mark is cleared only once every row is stored in the outbox, so a reload midway
+// sends the copy again (coalesced by id) rather than losing it; when the account cannot
+// be asked (offline), the mark stays and the next load decides. A mark left by a change
+// of account that was called off names the account still signed in, and is only cleared.
+async function keepFor(store, from, userId, api) {
   if (!from) return;
   if (from !== userId) {
-    const [records, outbox] = await Promise.all([store.all(), store.outboxAll()]);
-    const queued = new Set(outbox.map((row) => row.id));
-    for (const r of records.filter(valid).map(record)) {
-      if (!isResultId(r.id) || queued.has(r.id)) continue;
-      const row = outboxRow(r, r.version);
-      await store.outboxPut(row);
+    let held;
+    try {
+      held = api ? await api.pull(0) : null;
+    } catch {
+      held = null;
+    }
+    if (!Array.isArray(held?.results)) return;
+    if (held.results.some(validResult)) {
+      await store.empty();
+      await store.metaPut("userId", userId);
+    } else {
+      const [records, outbox] = await Promise.all([store.all(), store.outboxAll()]);
+      const queued = new Set(outbox.map((row) => row.id));
+      for (const r of records.filter(valid).map(record)) {
+        if (!isResultId(r.id) || queued.has(r.id)) continue;
+        const row = outboxRow(r, r.version);
+        await store.outboxPut(row);
+      }
     }
     await store.metaPut("cursor", 0);
   }
@@ -360,8 +374,8 @@ export const machine = setup({
       input.ask ? input.ask("llm", "generate", input.payload) : Promise.resolve({ error: "unavailable" }),
     ),
     load: fromPromise(async ({ input }) => {
-      const { store, ask } = input;
-      await claim(store, ask);
+      const { store, ask, api } = input;
+      await claim(store, ask, api);
       const [records, outbox, cursor, userId] = await Promise.all([
         store.all(),
         store.outboxAll(),
@@ -489,7 +503,7 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ store: context.store, ask: context.ask }),
+        input: ({ context }) => ({ store: context.store, ask: context.ask, api: context.api }),
         onDone: {
           target: "checkingSession",
           actions: assign(({ event }) => {

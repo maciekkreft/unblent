@@ -169,13 +169,19 @@ test("a second import of the same id is idempotent, returning the row unchanged"
   assert.equal(again.updatedAt, first.updatedAt);
 });
 
-// The Mac's own file of a book is read only in the local edition (3.4); the web never
-// serves it, even for the account's own book.
-test("a book's source file is not served on the web", async () => {
+// A disconnecting Mac fetches the account's own book files (12); nobody else's, and
+// nothing for a missing book or an id that is not one.
+test("a book's source file is served to its own account only", async () => {
   const cookie = cookieFor(freshUser());
   await importBook(ID, SAMPLE, cookie);
-  const res = await fetch(`${BASE_URL}/api/books/${ID}/source`, { headers: { Cookie: cookie, "X-Unblent-Local": "1" } });
-  assert.equal(res.status, 404);
+  const res = await fetch(`${BASE_URL}/api/books/${ID}/source`, { headers: { Cookie: cookie } });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/epub+zip");
+  assert.equal(Buffer.compare(Buffer.from(await res.arrayBuffer()), SAMPLE), 0);
+  const other = cookieFor(freshUser());
+  assert.equal((await fetch(`${BASE_URL}/api/books/${ID}/source`, { headers: { Cookie: other } })).status, 404);
+  assert.equal((await fetch(`${BASE_URL}/api/books/not-an-id/source`, { headers: { Cookie: cookie } })).status, 404);
+  assert.equal((await fetch(`${BASE_URL}/api/books/${ID}/source`)).status, 401);
 });
 
 test("a chapter is served as immutable HTML with the whitelist applied", async () => {

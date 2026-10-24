@@ -448,36 +448,67 @@ const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 // The browser changed account while this fact was not on the page (12): a copy kept for
 // another account is emptied before it is read, outbox included, so none of it is shown
 // to the account now signed in or uploaded as its own. A copy marked to be added to the
-// account (12, keep) is kept instead, and `keepFor` sends it.
-async function claim(store, ask) {
+// account (12, keep) is kept instead, and `keepFor` sends it. Whether the Mac is now
+// connected says where the books' files are (3.4): connected, the change was Connect and
+// they are on the Mac's own server; otherwise it was Disconnect and they are on the account.
+async function claim(store, ask, api) {
   const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
   const userId = typeof session?.userId === "string" ? session.userId : null;
   if (!userId) return;
   const [kept, from] = await Promise.all([store.metaGet("userId"), store.metaGet("adopt")]);
   if (kept && kept !== userId && !from) await store.empty();
-  await keepFor(store, from, userId);
+  await keepFor(store, from, userId, api, session.connect === "on" ? "local" : "remote");
 }
 
-// The browser joined an account keeping this copy (12, keep): every book gets one outbox
-// row that adds it to the account (kind "adopt", synced first): its file is read from
-// this Mac's own server and imported, then its place and the user's title are sent. The
-// cursor goes back to 0 and the copy is marked as the account's, so the pull then brings
-// the account's own books and the sign-in path (switchAccount) does not empty the copy.
-// A tombstone is not sent: the account never had the book. The mark is cleared only once
-// every row is stored in the outbox, so a reload midway queues the books again (one row
-// per book) rather than losing them. A mark left by a change of account that was called
-// off names the account still signed in, and is only cleared.
-async function keepFor(store, from, userId) {
+// The first book the Mac app gives (3.4): sent with a kept copy only once it was read or
+// renamed, so an account never receives the sample unasked.
+const FIRST_BOOK = "0000000000000000000000MED1";
+const untouched = (book) =>
+  book.id === FIRST_BOOK &&
+  (book.position?.chapter ?? 0) === 0 &&
+  (book.position?.block ?? 0) === 0 &&
+  !(book.fileTitle && book.title !== book.fileTitle);
+
+// The browser joined an account keeping this copy (12, keep). The account is asked for
+// every book it holds first: when it already holds one that is not deleted, this copy is
+// emptied, outbox included, and the pull from 0 brings the account's books. When it holds
+// none, every book gets one outbox row that adds it to the account (kind "adopt", synced
+// first): its file is read from `source`, the Mac's own server ("local") or the account
+// ("remote"), and imported, then its place and the user's title are sent. Either way the
+// cursor goes back to 0 and the copy is marked as the account's, so the sign-in path
+// (switchAccount) does not empty it again. A tombstone is not sent: the account never had
+// the book. The mark is cleared only once every row is stored in the outbox, so a reload
+// midway queues the books again (one row per book) rather than losing them; when the
+// account cannot be asked (offline), the mark stays and the next load decides. A mark
+// left by a change of account that was called off names the account still signed in, and
+// is only cleared.
+async function keepFor(store, from, userId, api, source) {
   if (!from) return;
   if (from !== userId) {
-    for (const book of await store.all()) {
-      if (book.deleted || book.id === JOURNAL) continue;
-      const row = { id: `adopt:${book.id}`, kind: "adopt", book: book.id, position: book.position };
-      if (book.fileTitle && book.title !== book.fileTitle) row.title = book.title;
-      await store.outboxPut(row);
-      // No cover is shown until the account has the file, so its image is never asked of
-      // the account before it exists; the account's row brings it back.
-      if (book.cover) await store.put({ ...book, cover: null });
+    let held;
+    try {
+      held = api ? await api.pull(0) : null;
+    } catch {
+      held = null;
+    }
+    if (!Array.isArray(held?.books)) {
+      // Undecided: the copy follows the account now signed in, so the sign-in path does
+      // not take it for another account's, and the mark stays for the next load.
+      await store.metaPut("userId", userId);
+      return;
+    }
+    if (held.books.some((book) => book?.id !== JOURNAL && !book?.deleted)) {
+      await store.empty();
+    } else {
+      for (const book of await store.all()) {
+        if (book.deleted || book.id === JOURNAL || untouched(book)) continue;
+        const row = { id: `adopt:${book.id}`, kind: "adopt", book: book.id, position: book.position, from: source };
+        if (book.fileTitle && book.title !== book.fileTitle) row.title = book.title;
+        await store.outboxPut(row);
+        // No cover is shown until the account has the file, so its image is never asked of
+        // the account before it exists; the account's row brings it back.
+        if (book.cover) await store.put({ ...book, cover: null });
+      }
     }
     await store.metaPut("cursor", 0);
     await store.metaPut("userId", userId);
@@ -499,8 +530,8 @@ export const machine = setup({
   },
   actors: {
     load: fromPromise(async ({ input }) => {
-      const { store, ask } = input;
-      await claim(store, ask);
+      const { store, ask, api } = input;
+      await claim(store, ask, api);
       const [books, outbox, cursor, userId, open] = await Promise.all([
         store.all(),
         store.outboxAll(),
@@ -650,7 +681,7 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ store: context.store, ask: context.ask }),
+        input: ({ context }) => ({ store: context.store, ask: context.ask, api: context.api }),
         onDone: {
           target: "checkingSession",
           actions: assign({

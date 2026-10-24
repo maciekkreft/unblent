@@ -59,7 +59,8 @@ class Remote(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         Remote.seen.append({"method": self.command, "path": self.path, "cookie": self.headers.get("Cookie"),
-                            "origin": self.headers.get("Origin"), "local": self.headers.get("X-Unblent-Local")})
+                            "origin": self.headers.get("Origin"), "local": self.headers.get("X-Unblent-Local"),
+                            "remote": self.headers.get("X-Unblent-Remote")})
         path = self.path.split("?")[0]
         if path == "/api/session/me":
             return self._send(200, {"userId": "a" * 32 if Remote.signed_in else None, "name": "Admin"})
@@ -257,10 +258,37 @@ class Relay(unittest.TestCase):
         self.assertEqual((me["userId"], me["connect"], me["remote"]), (None, "on", "Admin"))
 
     def test_connecting_and_disconnecting_stay_on_the_mac(self):
-        status, _, _ = self.call("POST", "/api/session/connect/disconnect", {"Sec-Fetch-Site": "same-origin"})
-        self.assertEqual(status, 200)
+        # Disconnect asks the account only whether it still lets this Mac sync.
+        status, _, body = self.call("POST", "/api/session/connect/disconnect", {"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual((status, body), (200, {"connect": "off"}))
+        self.assertEqual([(s["method"], s["path"], s["cookie"]) for s in Remote.seen],
+                         [("GET", "/api/session/me", "unblent_session=tok1")])
+        self.assertEqual((self.held()["state"], self.held()["token"]), ("left", "tok1"))
+
+    def test_a_request_marked_for_the_account_is_forwarded_while_on_or_left(self):
+        for state in ("on", "left"):
+            Remote.seen.clear()
+            self.connect(state)
+            status, _, body = self.call("GET", "/api/books/b2/source", {"X-Unblent-Remote": "1"})
+            self.assertEqual((status, body["length"]), (200, 0), state)
+            [seen] = Remote.seen
+            self.assertEqual((seen["path"], seen["cookie"], seen["remote"]),
+                             ("/api/books/b2/source", "unblent_session=tok1", None), state)
+        # Left, an ordinary request is the Mac's own, and /me says off.
+        status, _, me = self.call("GET", "/api/session/me")
+        self.assertEqual((status, me["userId"], me["connect"]), (200, LOCAL, "off"))
+        self.assertEqual(len(Remote.seen), 1)
+
+    def test_a_request_marked_for_the_account_without_a_sign_in_is_404(self):
+        for state in (None, "pending", "ready"):
+            self.connect(state)
+            status, _, body = self.call("GET", "/api/books/b2/source", {"X-Unblent-Remote": "1"})
+            self.assertEqual((status, body), (404, {"detail": "Not Found"}), state)
+        self.connect("left")
+        status, _, body = self.call("GET", "/api/books/b2/source",
+                                    {"X-Unblent-Remote": "1", "Sec-Fetch-Site": "cross-site"})
+        self.assertEqual((status, body), (403, {"detail": "cross-site"}), "the site guard comes first")
         self.assertEqual(Remote.seen, [])
-        self.assertFalse((Path(self.data) / "remote.json").exists())
 
     def test_a_mac_not_connected_forwards_nothing(self):
         for state in (None, "pending", "ready"):
