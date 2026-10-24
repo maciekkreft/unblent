@@ -167,7 +167,9 @@ export const machine = setup({
       "names on one line; pressing it opens the sheet. Open, each value is a row of its name " +
       "and an optional sentence saying what it means, with a New value row after them; with " +
       "no values yet today's page shows a muted Write your values row, and an earlier day " +
-      "with none shows nothing. The boxes take Vim's keys when Vim keys is on; Enter or Tab " +
+      "with none shows nothing. The boxes take Vim's keys when Vim keys is on, where p pastes " +
+      "text or a link copied in the reader with Vim keys, its paragraphs joined into the " +
+      "box's one line; Enter or Tab " +
       "moves on to the next box. A day shows the values as they stood on that day. They are " +
       "written on today's page only, as the journal page says from day.shown; from midnight " +
       "yesterday's sheet is read only, even in the hour its text stays open. On an earlier " +
@@ -190,6 +192,8 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
+    pushRegister: input.pushRegister,
     mint: input.mint,
     now: input.now,
     throttleMs: input.throttleMs ?? 400,
@@ -225,6 +229,10 @@ export const machine = setup({
   },
   initial: "loading",
   on: {
+    // Text or a link copied in the reader: Vim's p reads Vim's own register, not the
+    // system clipboard, so it goes there too, as copied; the box makes it one line (edit).
+    "text.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
+    "link.copied": { actions: ({ context, event }) => context.pushRegister?.(event.text) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Moving to another day settles the sheet and asks for the new day's version. The
     // same day saying it can no longer be written saves what was typed while it could.

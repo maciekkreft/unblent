@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, Prec, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim } from "editor";
+import { baseExtensions, setVim, toRegister } from "editor";
 import { machine, writable, shownValues, earlierDays, changedLine, dayName, dateOf } from "./machine.js";
 import saved from "./events/values.saved.json" with { type: "json" };
 
@@ -55,6 +55,8 @@ class ActorController {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         mint: ulid,
         now: () => Date.now(),
+        // Vim's registers are one per page, so text put there is what any editor's p pastes.
+        pushRegister: toRegister,
         // Read off the host so a stylesheet or a test can shorten it.
         undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
       },
