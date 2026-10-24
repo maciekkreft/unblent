@@ -99,13 +99,24 @@ def remote_url() -> str:
 def remote() -> dict | None:
     """What remote.json holds, or None when this Mac is not connecting (3.4). Its
     `state` is pending (Safari was opened: `verifier` and `state` wait for the code),
-    ready (a device sign-in waits for the hand-over: `token`, `userId`, `name`) or on
-    (the relay forwards to `url`). An unreadable file counts as none."""
+    ready (a device sign-in waits for the hand-over: `token`, `userId`, `name`), on
+    (the relay forwards to `url`) or left (disconnected: the Mac is back to its own
+    server, and the device sign-in is kept only for requests marked X-Unblent-Remote,
+    which fetch the account's book files). An unreadable file counts as none."""
     try:
         held = json.loads(REMOTE.read_text())
     except (OSError, ValueError):
         return None
-    return held if isinstance(held, dict) and held.get("state") in ("pending", "ready", "on") else None
+    return held if isinstance(held, dict) and held.get("state") in ("pending", "ready", "on", "left") else None
+
+
+def device_sign_in() -> dict | None:
+    """remote.json while it holds a device sign-in the relay may send for a request
+    marked X-Unblent-Remote (3.4): state on or left, with a token. None otherwise."""
+    held = remote()
+    if held and held["state"] in ("on", "left") and isinstance(held.get("token"), str) and held.get("url"):
+        return held
+    return None
 
 
 def save_remote(held: dict) -> None:
@@ -133,7 +144,8 @@ def connection() -> dict:
     there is a device sign-in. A Mac waiting for Safari is still off. session's /me and
     the relay both answer with it, so the Mac sees one picture connected or not."""
     held = remote()
-    if not held or held["state"] == "pending":
+    # A Mac that disconnected is off: it shows its own copy, whatever token it keeps.
+    if not held or held["state"] in ("pending", "left"):
         return {"connect": "off"}
     return {"connect": held["state"], "remote": held.get("name") or ""}
 

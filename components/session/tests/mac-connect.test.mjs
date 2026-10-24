@@ -2,7 +2,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -66,6 +66,14 @@ const onMac = (method, path, headers = {}) =>
   fetch(`${mac}/api/session${path}`, { method, headers: { Origin: mac, "Sec-Fetch-Site": "same-origin", ...headers } });
 const me = async () => (await (await onMac("GET", "/me")).json());
 const held = () => JSON.parse(readFileSync(join(macData, "remote.json"), "utf8"));
+const shelf = async () =>
+  (await (await fetch(`${mac}/api/books?since=0`, { headers: { "Sec-Fetch-Site": "same-origin" } })).json()).books;
+const backups = () => (existsSync(join(macData, "backup")) ? readdirSync(join(macData, "backup")) : []);
+const connectOn = async () => {
+  const { state, code } = await begin();
+  assert.equal((await finish({ code, state })).status, 200);
+  assert.equal((await onMac("POST", "/connect/commit")).status, 200);
+};
 
 // begin, then what the web connect page does once the user presses Connect.
 const begin = async () => {
@@ -113,8 +121,9 @@ after(async () => {
   rmSync(macData, { recursive: true, force: true });
 });
 
-test("begin, Safari's code, commit: the Mac is ready, then on, with the account's name; disconnect forgets it", async () => {
+test("begin, Safari's code, commit: the Mac is ready, then on, with the account's name; disconnect backs up the Mac's files and leaves", async () => {
   assert.deepEqual([(await me()).connect, (await me()).remote], ["off", undefined]);
+  assert.deepEqual((await shelf()).map((b) => b.title), ["Meditations"], "the first book, given once");
   const { state, code } = await begin();
   assert.equal((await me()).connect, "off", "waiting for Safari is still off");
 
@@ -138,11 +147,19 @@ test("begin, Safari's code, commit: the Mac is ready, then on, with the account'
   assert.deepEqual([connected.userId, connected.connect, connected.remote], [ADMIN, "on", "Admin"]);
   assert.equal(statSync(join(macData, "remote.json")).mode & 0o777, 0o600);
   assert.equal((await onMac("POST", "/connect/begin")).status, 409, "a connected Mac disconnects first");
+  const { token } = held();
 
   assert.deepEqual(await (await onMac("POST", "/connect/disconnect")).json(), { connect: "off" });
-  assert.equal(existsSync(join(macData, "remote.json")), false);
-  assert.equal((await me()).connect, "off");
+  assert.deepEqual([held().state, held().token, held().url], ["left", token, web], "the sign-in is kept for book files");
+  const [backup] = backups();
+  assert.match(backup, /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ$/);
+  assert.ok(existsSync(join(macData, "backup", backup, LOCAL, "books.db")), "the Mac's own files are in the backup (5)");
+  const after = await me();
+  assert.deepEqual([after.userId, after.connect], [LOCAL, "off"]);
+  assert.deepEqual(await shelf(), [], "the first book is not given again after the move");
   assert.equal((await onMac("POST", "/connect/commit")).status, 409, "nothing to turn on");
+  assert.deepEqual(await (await onMac("POST", "/connect/disconnect")).json(), { connect: "off" }, "a second disconnect changes nothing");
+  assert.equal(backups().length, 1);
 });
 
 test("Cancel in Safari leaves the Mac off and stops it waiting", async () => {
@@ -200,6 +217,7 @@ test("another site cannot begin, commit or disconnect; the web edition has none 
 });
 
 test("/mac opens the connected Mac page while connected; disconnect also drops the disk copy of book files", async () => {
+  // A Mac that left an account before may connect again, from the start.
   const title = async () => (await (await fetch(`${mac}/mac`)).text()).match(/<title>(.*)<\/title>/)[1];
   assert.equal(await title(), "MacApp");
   const { state, code } = await begin();
@@ -227,11 +245,31 @@ test("Can sync turned off on the web: the connected Mac is signed out but still 
     assert.deepEqual([off.userId, off.connect, off.remote], [null, "on", "Admin"], "what mac-account shows as sync turned off");
     assert.equal((await notes()).status, 401, "a fact stops syncing and keeps its outbox (5)");
     assert.equal(held().state, "on", "the device sign-in is kept for when sync is back");
+    const refused = await onMac("POST", "/connect/disconnect");
+    assert.deepEqual([refused.status, await refused.json()], [409, { error: "sync-off" }],
+      "the account's book files could not be fetched, so the Mac stays connected");
+    assert.equal(held().state, "on");
     assert.equal((await onWeb("PUT", `/people/${ADMIN}/sync`, { allowed: true })).status, 200);
     assert.equal((await me()).userId, ADMIN);
     assert.equal((await notes()).status, 200);
   } finally {
     await onWeb("PUT", `/people/${ADMIN}/sync`, { allowed: true });
+    await onMac("POST", "/connect/disconnect");
+  }
+});
+
+test("with the account out of reach Disconnect is refused and nothing on the Mac moves", async () => {
+  await connectOn();
+  const real = held();
+  const before = backups().length;
+  writeFileSync(join(macData, "remote.json"), JSON.stringify({ ...real, url: `http://127.0.0.1:${await freePort()}` }));
+  try {
+    const refused = await onMac("POST", "/connect/disconnect");
+    assert.deepEqual([refused.status, await refused.json()], [503, { error: "offline" }]);
+    assert.equal(held().state, "on");
+    assert.equal(backups().length, before);
+  } finally {
+    writeFileSync(join(macData, "remote.json"), JSON.stringify(real));
     await onMac("POST", "/connect/disconnect");
   }
 });

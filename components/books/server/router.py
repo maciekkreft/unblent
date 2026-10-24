@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from server.user import local_user, require_user, user_dir
+from server.user import DATA, local_user, require_user, user_dir
 
 from .importer import import_book, purge
 
@@ -282,18 +282,25 @@ def _open(connection: sqlite3.Connection) -> dict:
 # fixed, so the import is idempotent; the lock keeps two first pulls from both importing.
 FIRST_BOOK = "0000000000000000000000MED1"
 _first_book_lock = threading.Lock()
+# The first book is given once per Mac (11.1): a disconnect moves the account's directory
+# to the backup (5), and the shelf found empty after it must not get the book again.
+FIRST_BOOK_GIVEN = DATA / "first-book"
 
 
 def _first_book(user_id: str) -> None:
     """Import the first book into the local account's empty shelf, before the first pull
     answers, so the browser sees it on first load. Only ever while the shelf has no row at
-    all: a deleted first book stays a tombstone and does not come back. On the web, or
-    without the variable, nothing happens."""
+    all and the Mac never had one: a deleted first book stays a tombstone and does not
+    come back, and a Mac that already had books is marked as given on its next pull. On
+    the web, or without the variable, nothing happens."""
     source = os.environ.get("UNBLENT_FIRST_BOOK")
-    if not source or user_id != local_user():
+    if not source or user_id != local_user() or FIRST_BOOK_GIVEN.exists():
         return
     with _first_book_lock, _connect(user_id) as connection:
+        if FIRST_BOOK_GIVEN.exists():
+            return
         if connection.execute("SELECT 1 FROM books LIMIT 1").fetchone() is not None:
+            FIRST_BOOK_GIVEN.touch()
             return
         book_dir = _book_dir(user_id, FIRST_BOOK)
         book_dir.mkdir(parents=True, exist_ok=True)
@@ -305,17 +312,19 @@ def _first_book(user_id: str) -> None:
             purge(book_dir)
             raise
         _insert(connection, FIRST_BOOK, fields)
+    FIRST_BOOK_GIVEN.touch()
 
 
-# The connected local edition (3.4): the Mac's own file of a book, which the browser asks
-# for past the relay with X-Unblent-Local to add the book to the account it joined (12,
-# keep). Only the local account's files, and only in the local edition; 404 on the web.
+# A book's own file, which a Mac fetches to add the book to the other side of a change
+# with keep (12): on Connect from the Mac's own server (X-Unblent-Local), on Disconnect
+# from the account (X-Unblent-Remote). Only the signed-in user's own files; in the local
+# edition only the local account's.
 @router.get("/{book_id}/source")
 def get_source(book_id: str, user_id: str = Depends(require_user)):
     local = local_user()
-    if not local or user_id != local or not _ID.match(book_id):
+    if (local and user_id != local) or not _ID.match(book_id):
         raise HTTPException(status_code=404)
-    path = _book_dir(local, book_id) / "source.epub"
+    path = _book_dir(user_id, book_id) / "source.epub"
     if not path.is_file():
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="application/epub+zip")

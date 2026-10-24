@@ -1,7 +1,9 @@
 """The relay of the connected local edition (architecture.md 3.4): while this Mac holds
 a device sign-in that is on, every /api/* request except /api/session/connect/* goes to
 the account's server with that sign-in in place of the browser's cookie, and its answer
-comes back streamed. The browser code calls the same addresses either way.
+comes back streamed. The browser code calls the same addresses either way. A request
+marked X-Unblent-Remote goes to the account with the kept sign-in also after a
+disconnect, so the Mac can fetch the account's book files it keeps as its own.
 
 It is plain ASGI rather than a FastAPI route, so a request body and an answer stream
 through without being held (a book upload, a model's answer arriving piece by piece).
@@ -17,7 +19,8 @@ from http.cookies import CookieError, SimpleCookie
 import httpx
 from starlette.datastructures import Headers
 
-from server.user import DATA, SESSION_COOKIE, connection, cross_site, local_user, remote, save_remote
+from server.user import (DATA, SESSION_COOKIE, connection, cross_site, device_sign_in, local_user, remote,
+                         save_remote)
 
 CACHE = DATA / "remote-cache"
 
@@ -28,7 +31,7 @@ _TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=None, pool=5.0)
 _HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
         "trailer", "transfer-encoding", "upgrade"}
 # The browser's cookie and its own address mean nothing to the account's server.
-_NOT_UPSTREAM = _HOP | {"host", "cookie", "origin", "referer", "x-unblent-local"}
+_NOT_UPSTREAM = _HOP | {"host", "cookie", "origin", "referer", "x-unblent-local", "x-unblent-remote"}
 # Set-Cookie is the account's sign-in for this Mac, kept by the relay, never the browser's.
 _NOT_BACK = _HOP | {"set-cookie"}
 
@@ -108,9 +111,17 @@ class Relay:
         reading = scope["method"] in ("GET", "HEAD") and headers.get("sec-fetch-mode") == "navigate"
         if not reading and cross_site(headers, port):
             return await _json(send, 403, {"detail": "cross-site"})
+        if not _relayed(scope["path"]) or headers.get("x-unblent-local") == "1":
+            return await self.app(scope, receive, send)
+        if headers.get("x-unblent-remote") == "1":
+            # Marked for the account (3.4): sent with the device sign-in while it is on or
+            # left, and answered 404 when this Mac keeps none, since no account holds it.
+            held = device_sign_in()
+            if not held:
+                return await _json(send, 404, {"detail": "Not Found"})
+            return await self._forward(scope, receive, send, headers, held)
         held = remote()
-        if (not held or held["state"] != "on" or not _relayed(scope["path"])
-                or headers.get("x-unblent-local") == "1"):
+        if not held or held["state"] != "on":
             return await self.app(scope, receive, send)
         await self._forward(scope, receive, send, headers, held)
 
@@ -162,7 +173,8 @@ class Relay:
             if token and token != held["token"]:
                 save_remote({**held, "token": token})
             back = [(k, v) for k, v in answer.headers.multi_items() if k.lower() not in _NOT_BACK]
-            if method == "GET" and path == "/api/session/me" and answer.status_code == 200:
+            if (method == "GET" and path == "/api/session/me" and answer.status_code == 200
+                    and held["state"] == "on"):
                 # The Mac's picture of the connection rides the account's own answer, also
                 # when the account says signed out: then sync was turned off (3.4).
                 try:

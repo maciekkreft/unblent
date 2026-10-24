@@ -337,7 +337,8 @@ async def connect_token(request: Request):
 # Connecting, on the Mac (3.4): the local edition's half of the same sign-in. begin
 # keeps the verifier and opens the web connect page in Safari; Safari comes back to
 # finish with the code, which is traded for a device sign-in kept as ready; commit
-# turns it on once the hand-over (12) has emptied the outboxes; disconnect forgets it.
+# turns it on once the hand-over (12) has emptied the outboxes; disconnect sets it to
+# left, after moving the Mac's own files to a backup, so the Mac takes the account's copy.
 _DONE = ("Done. Go back to Unblent.",
          "You can close this tab. The app on your Mac will ask one last question before it switches.")
 _CANCELLED = ("Not connected. Go back to Unblent.", "You can close this tab. Nothing changed on your Mac.")
@@ -411,6 +412,43 @@ def _trade(url: str, code: str, verifier: str) -> tuple[int, dict]:
     return status, body if isinstance(body, dict) else {}
 
 
+def _probe(url: str, token: str) -> tuple[int, dict]:
+    """(status, body) of the account's /me asked with the device sign-in, or (0, {}) when
+    it cannot be reached: whether the account still lets this Mac sync (3.4)."""
+    request = urllib.request.Request(
+        f"{url}/api/session/me",
+        headers={"Accept": "application/json", "User-Agent": "Unblent-Mac",
+                 "Cookie": f"{SESSION_COOKIE}={token}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            status, raw = response.status, response.read()
+    except urllib.error.HTTPError as error:
+        status, raw = error.code, error.read()
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0, {}
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        body = {}
+    return status, body if isinstance(body, dict) else {}
+
+
+def _back_up(user_id: str) -> None:
+    """Move the Mac's own files to data/backup/<UTC time>/<user>/ (5), so the Mac's
+    server is empty and the facts send it the account's copy after the reload (12)."""
+    own = DATA / user_id
+    if not own.is_dir():
+        return
+    stamp = time.strftime("%Y-%m-%dT%H-%M-%SZ", time.gmtime())
+    target, n = DATA / "backup" / stamp, 1
+    while target.exists():
+        n += 1
+        target = DATA / "backup" / f"{stamp}-{n}"
+    target.mkdir(parents=True)
+    own.rename(target / user_id)
+
+
 @router.post("/connect/begin")
 def connect_begin(request: Request):
     _local_only()
@@ -418,6 +456,9 @@ def connect_begin(request: Request):
     held = remote()
     if held and held["state"] == "on":
         return JSONResponse({"error": "connected"}, status_code=409)
+    if held and held["state"] == "left":
+        # The account's book files kept after a disconnect belong to that account only.
+        shutil.rmtree(DATA / "remote-cache", ignore_errors=True)
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(24)
@@ -470,12 +511,29 @@ def connect_commit(request: Request):
 
 @router.post("/connect/disconnect")
 def connect_disconnect(request: Request):
-    # The undo of connecting (3.4): the token is forgotten and the Mac's own copy is
-    # back. Harmless when there is nothing to forget. The relay's disk copy of the
-    # account's book files goes too: nothing of the account stays on the Mac (5).
+    # Disconnecting (3.4, 12): the Mac stops syncing and keeps the account's copy as its
+    # own. Asked once the outboxes are empty. Refused while the account refuses the
+    # device sign-in, because the account's book files could not be fetched then; and
+    # while the account cannot be reached, for the same reason. Before the hand-over a
+    # Mac waiting for Safari or for Connect only forgets the sign-in.
     _local_only()
     _same_origin(request)
-    clear_remote()
+    held = remote()
+    if held and held["state"] == "left":
+        return connection()
+    if not held or held["state"] != "on":
+        clear_remote()
+        shutil.rmtree(DATA / "remote-cache", ignore_errors=True)
+        return connection()
+    status, body = _probe(held["url"].rstrip("/"), held["token"])
+    if status == 401 or (status == 200 and not body.get("userId")):
+        return JSONResponse({"error": "sync-off"}, status_code=409)
+    if status != 200:
+        return JSONResponse({"error": "offline"}, status_code=503)
+    _back_up(local_user())
+    save_remote({**held, "state": "left"})
+    # Copies the relay kept while connected; book files are fetched again marked
+    # X-Unblent-Remote as the facts take them.
     shutil.rmtree(DATA / "remote-cache", ignore_errors=True)
     return connection()
 
