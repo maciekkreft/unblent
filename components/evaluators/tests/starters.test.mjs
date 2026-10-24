@@ -60,12 +60,14 @@ function fakeApi(served = []) {
   };
 }
 
-// session: read and books: list, answered as the given user and books.
+// session: read and books: list, answered as the given user and books; values: read by nobody.
 const askAs = (userId, books = [{ id: JOURNAL, title: "Journal", written: true }]) => {
   const asked = [];
   const ask = (target, name) => {
     asked.push(`${target}: ${name}`);
     if (target === "session") return Promise.resolve({ userId, registrationOpen: false });
+    // A try page holds no values fact, so the bus replies at once that nobody answers.
+    if (target === "values") return Promise.resolve({ error: "no-answerer" });
     return books === null ? new Promise(() => {}) : Promise.resolve({ books });
   };
   ask.asked = asked;

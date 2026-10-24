@@ -75,10 +75,13 @@ const known = (context, id) => context.evaluators.some((r) => r.id === id);
 
 // The empty rule holds for an evaluator the fact has never had; a kept evaluator the
 // user clears is still saved, so clearing it is kept.
-const savable = (context) => context.draft && !context.draft.removing && (known(context, context.draft.id) || !isEmpty(context.draft));
+// An evaluator built from another fact (Your values, from the values) is shown read only:
+// nothing of it is saved from here, and it cannot be deleted.
+const savable = (context) =>
+  context.draft && !context.draft.removing && !context.draft.derivedFrom && (known(context, context.draft.id) || !isEmpty(context.draft));
 
 const copy = (r) =>
-  structuredClone({ id: r.id, book: r.book, name: r.name, questions: r.questions, removing: r.removing });
+  structuredClone({ id: r.id, book: r.book, name: r.name, questions: r.questions, removing: r.removing, ...(r.derivedFrom ? { derivedFrom: r.derivedFrom } : {}) });
 
 const opened = (context, id, book) => {
   const found = context.evaluators.find((r) => r.id === id);
@@ -121,7 +124,7 @@ const followed = (context, evaluators, keepTyping) => {
   const { draft } = context;
   const record = evaluators.find((r) => r.id === draft.id);
   if (!record) return known(context, draft.id) || draft.removing ? { ...draft, removing: true } : draft;
-  return keepTyping && !draft.removing ? merged(draft, record) : copy(record);
+  return keepTyping && !draft.removing && !record.derivedFrom ? merged(draft, record) : copy(record);
 };
 
 const follow = (keepTyping) => ({
@@ -227,7 +230,7 @@ const edits = (target) => ({
 // evaluator that was never saved there is nothing to mark and nothing written to lose,
 // so the item just goes.
 const removal = (kind, find, flagged, dropped) => ({
-  guard: ({ context, event }) => !!find(context, event),
+  guard: ({ context, event }) => !context.draft.derivedFrom && !!find(context, event),
   target: ".clean",
   actions: enqueueActions(({ context, event, enqueue }) => {
     if (!savable(context)) {
@@ -384,7 +387,7 @@ export const machine = setup({
       "in its name. Whichever evaluator it opens, " +
       "picked or opened by itself, the list beside it marks. Signed out it shows no evaluator, " +
       "only \"Sign in to run evaluators.\", as the list beside it does, and signing in shows " +
-      "it again without a reload; on a try page a visitor not yet signed in edits the starters.",
+      "it again without a reload; on a try page a visitor not yet signed in edits the starters. Your values, which is built from the user's values, opens read only: its name, and each question with its answers and what each means, Serves marked expected, as words with nothing to type in, no Delete, and a line saying to change the values in the Values sheet, under the day's text in the Journal; with no values it says there is nothing to ask.",
     kind: "view",
     emits: ["evaluator.saved", "removal.started", "pin.toggled", "evaluator.opened"],
     attributes: ["subject"],
@@ -617,7 +620,7 @@ export const machine = setup({
             // Only an evaluator the fact holds can be deleted; a New evaluator with nothing
             // in it offers no Delete, because leaving it already keeps nothing.
             _delete: {
-              guard: ({ context }) => !context.draft.removing && known(context, context.draft.id),
+              guard: ({ context }) => !context.draft.removing && !context.draft.derivedFrom && known(context, context.draft.id),
               target: ".clean",
               actions: [
                 save,

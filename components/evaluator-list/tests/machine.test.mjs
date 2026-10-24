@@ -840,6 +840,14 @@ test("dd cuts a row and p puts it between neighbours; u puts a cut row back; New
   valid(emitted);
 });
 
+test("dd ignores a row built from another fact (Your values), which cannot be deleted", async () => {
+  const { actor, ctx } = await start({ kept: { [A]: [{ ...placed(1, "V"), derivedFrom: "values", combined: true }, placed(2, "a")] } });
+  actor.send({ type: "_cut", id: id(1) });
+  assert.equal(ctx().cut, null);
+  actor.send({ type: "_cut", id: id(2) });
+  assert.equal(ctx().cut?.id, id(2), "a row the user wrote is cut as before");
+});
+
 test("Escape on a cut row counts down on the row; u takes it back; its end deletes it, with no corner notice", async () => {
   const clock = new SimulatedClock();
   const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED }, clock, undoMs: 3000 });

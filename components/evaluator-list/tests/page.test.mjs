@@ -34,7 +34,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Two evaluators of the journal on the server, so the list holds New evaluator,
-    // Goals, Values.
+    // Goals, Values, and Your values, which the Journal always has, last.
     const open = async (vimKeys) => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
@@ -50,7 +50,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const problems = watch(page);
       await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
       await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
-      await until(async () => (await names(page)).join() === "New evaluator,Goals,Values");
+      await until(async () => (await names(page)).join() === "New evaluator,Goals,Values,Your values");
       await inList(page, (root) => root.querySelector('.open[tabindex="0"]').focus());
       return { context, page, problems };
     };
@@ -86,9 +86,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       try {
         assert.equal(await focusedName(page), "New evaluator");
         await page.keyboard.press("G");
-        await until(async () => (await focusedName(page)) === "Values");
+        await until(async () => (await focusedName(page)) === "Your values");
         await page.keyboard.press("k");
-        await until(async () => (await focusedName(page)) === "Goals");
+        await until(async () => (await focusedName(page)) === "Values");
         await page.keyboard.press("g");
         await page.keyboard.press("g");
         await until(async () => (await focusedName(page)) === "New evaluator");
@@ -117,7 +117,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("j");
         await until(async () => (await focusedName(page)) === "Values");
         await page.keyboard.press("p");
-        await until(async () => (await names(page)).join() === "New evaluator,Values,Goals");
+        await until(async () => (await names(page)).join() === "New evaluator,Values,Goals,Your values");
         await until(async () => (await focusedName(page)) === "Goals");
         assert.ok(!(await rowClass("Goals")).includes("cut"));
         // Cut again, then Escape: the delete counts down on the row and the list keeps the keyboard.

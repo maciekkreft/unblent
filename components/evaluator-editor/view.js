@@ -174,6 +174,54 @@ class EvaluatorEditor extends LitElement {
       gap: var(--space-md);
       color: var(--color-body);
     }
+    /* Your values, read only: the same column as the form, words in place of fields. */
+    .read {
+      box-sizing: border-box;
+      max-width: var(--width-form);
+      padding: var(--space-md);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-md);
+      color: var(--color-body);
+    }
+    .read .name {
+      margin: 0;
+      font-size: var(--text-subtitle);
+      font-weight: var(--weight-semibold);
+      line-height: var(--leading-tight);
+      color: var(--color-ink);
+    }
+    .read .where,
+    .read .text,
+    .read .empty {
+      margin: 0;
+    }
+    .read .where {
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+    }
+    .read .text {
+      color: var(--color-ink);
+    }
+    .answers {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-xs);
+    }
+    .answers li {
+      display: flex;
+      flex-direction: column;
+    }
+    .answer {
+      font-weight: var(--weight-semibold);
+    }
+    .means {
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+    }
     .note {
       margin: 0;
       padding: var(--space-md);
@@ -717,6 +765,7 @@ class EvaluatorEditor extends LitElement {
     if (snapshot.matches({ ready: "choosing" })) return html`<p class="note">Pick an evaluator, or New evaluator.</p>`;
     const { draft, evaluators } = snapshot.context;
     if (draft.removing) return html`<p class="note">This evaluator was deleted.</p>`;
+    if (draft.derivedFrom) return this.#derived(snapshot, draft);
     const stored = evaluators.some((r) => r.id === draft.id);
     const questions = draft.questions.filter((q) => !q.removing);
     this.#wanted.clear();
@@ -752,6 +801,52 @@ class EvaluatorEditor extends LitElement {
               </div>`
             : nothing}
         </form>
+      </div>
+    `;
+  }
+
+  // An evaluator built from another fact (Your values): its name and questions read only,
+  // with where they are changed, and no Delete, since it cannot be deleted.
+  #derived(snapshot, draft) {
+    const questions = draft.questions.filter((q) => !q.removing);
+    return html`
+      ${this.#header(snapshot)}
+      <div class="page">
+        <div class="read">
+          <div class="field">
+            <span class="caption">Name</span>
+            <h2 class="name">${draft.name}</h2>
+          </div>
+          <p class="where">
+            It asks one question for each of your values. Change your values in the Values sheet, under the day's text in the
+            Journal.
+          </p>
+          <section class="field" aria-label="Questions">
+            <span class="caption">Questions</span>
+            ${questions.length
+              ? html`<div class="questions">
+                  ${questions.map(
+                    (q, i) => html`
+                      <div class="question" data-id=${q.id}>
+                        <span class="caption">Question ${i + 1}</span>
+                        <p class="text">${q.text}</p>
+                        <ul class="answers">
+                          ${q.options.map(
+                            (o) => html`
+                              <li>
+                                <span class="answer">${o.name}${o.id === q.expect ? html` <span class="mute">(expected)</span>` : nothing}</span>
+                                ${o.description ? html`<span class="means">${o.description}</span>` : nothing}
+                              </li>
+                            `,
+                          )}
+                        </ul>
+                      </div>
+                    `,
+                  )}
+                </div>`
+              : html`<p class="mute empty">No values are written yet, so there is nothing to ask.</p>`}
+          </section>
+        </div>
       </div>
     `;
   }

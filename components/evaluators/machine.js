@@ -15,6 +15,8 @@ const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
 const EXPECT = /^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$/;
 const str = (v) => (typeof v === "string" ? v : "");
+// Your values' fixed id (see "Your values" below), needed here for its place in the list.
+const YOURS_ID = "0000000000000000000000YVAS";
 
 // --- Records --------------------------------------------------------------------------
 
@@ -118,7 +120,8 @@ export function between(after, before) {
 // first: its key is "z", its id and "V", so it sorts after every key `between` makes for
 // a new evaluator and among its kind by id, the same on every device. The key is written
 // down only when it is moved, so an edit never moves it.
-export const positionOf = (r) => (isPosition(r.position) ? r.position : `z${r.id}V`);
+// Your values, until it is moved, goes after them all: "zz" sorts after every such key.
+export const positionOf = (r) => (isPosition(r.position) ? r.position : r.id === YOURS_ID ? "zz" : `z${r.id}V`);
 
 // List order: by key, then by id where two keys are equal.
 const byPosition = (a, b) => {
@@ -159,19 +162,92 @@ const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b))
 // A tombstone is kept for the sync (5) but never listed or announced as a change.
 const visible = (r) => r && !r.deleted;
 
+// --- Your values ------------------------------------------------------------------------
+
+// Your values is presented here, built from the values fact, the way books presents the
+// journal (3.1, derived): one question per value, under fixed ids, kept with the Journal.
+// The Journal's id is books' own; components never import each other, so it is repeated.
+export const YOURS = YOURS_ID;
+const JOURNAL = "00000000000000000000000JRN";
+const YOURS_NAME = "Your values";
+const SERVES = "0000000000000000000000SRVS";
+const AGAINST = "0000000000000000000000AGST";
+const UNRELATED = "0000000000000000000000NRTD";
+
+// The same options on every value's question, so a mark means the same on every line.
+const VALUE_OPTIONS = [
+  { id: SERVES, name: "Serves", description: "Doing this lives out the value, builds it, or makes room for it.", removing: false },
+  { id: AGAINST, name: "Goes against", description: "Doing this neglects the value, works against it, or gives it up for something else.", removing: false, against: true },
+  { id: UNRELATED, name: "Unrelated", description: "Doing this neither serves the value nor goes against it; the value has nothing to do with it.", removing: false },
+];
+
+// The question's id is the value's, so an answer stays with its value when others change.
+const valueQuestion = (v) => {
+  const meaning = v.meaning.trim().replace(/[.\s]+$/, "");
+  return {
+    id: v.id,
+    on: true,
+    kind: "pick",
+    text: `How does this action relate to the value “${v.name.trim()}”${meaning ? ` (${meaning})` : ""}?`,
+    yes: "",
+    no: "",
+    options: VALUE_OPTIONS,
+    removing: false,
+    expect: SERVES,
+  };
+};
+
+// A values: read reply's values, or null when the values fact did not answer (a page
+// without it, such as a try page), so Your values is not shown there at all.
+const valuesOf = (reply) =>
+  Array.isArray(reply?.values)
+    ? reply.values.filter((v) => isId(v?.id) && typeof v.name === "string" && v.name.trim()).map((v) => ({ ...v, meaning: str(v.meaning) }))
+    : null;
+
+// What is stored of Your values is only what the user set on it: on or off and its place,
+// as an ordinary row whose questions are left empty. Until the user sets either it is not
+// stored at all, and is on and at the end of the list.
+const yours = (context) => {
+  const r = context.evaluators.get(YOURS);
+  return visible(r) ? r : record({ id: YOURS, book: JOURNAL, name: YOURS_NAME, on: true, questions: [] });
+};
+
 // starterFor rides only on an evaluator that is a starter somewhere, so everyone else's
-// evaluators are announced as before.
-const announce = (context, r) => {
+// evaluators are announced as before. Your values carries its questions from the values
+// given, the current ones when none are.
+const plain = (context, r) => {
   const { deleted, starterFor, ...rest } = r;
   return { ...rest, position: positionOf(r), ...(starterFor?.length ? { starterFor } : {}), pending: context.outbox.has(r.id) };
 };
+const announce = (context, r, values = context.values ?? []) =>
+  r.id === YOURS
+    ? { ...plain(context, r), book: JOURNAL, name: YOURS_NAME, questions: values.map(valueQuestion), derivedFrom: "values", combined: true }
+    : plain(context, r);
 
-function replyList(context, book, reply) {
-  const evaluators = [...context.evaluators.values()]
-    .filter((r) => visible(r) && (book === undefined || r.book === book))
-    .sort(byPosition)
-    .map((r) => announce(context, r));
-  reply({ evaluators });
+// Your values is news only where the values fact is known to be.
+function say(context, enqueue, r) {
+  if (r.id === YOURS && context.values === null) return;
+  const evaluator = announce(context, r);
+  enqueue.emit({ type: "evaluator.changed", evaluator });
+}
+
+// Your values joins the Journal's list (and the list of every book) only when the values
+// fact answers, with the values in force on the day asked for, or today's (list.json).
+function replyList(context, payload, reply) {
+  const { book, day } = payload ?? {};
+  const answer = (values) => {
+    const evaluators = [...context.evaluators.values()]
+      .filter((r) => visible(r) && r.id !== YOURS && (book === undefined || r.book === book))
+      .concat(values ? [yours(context)] : [])
+      .sort(byPosition)
+      .map((r) => announce(context, r, values ?? undefined));
+    reply({ evaluators });
+  };
+  if (!(book === undefined || book === JOURNAL) || typeof context.ask !== "function") return answer(null);
+  Promise.resolve()
+    .then(() => context.ask("values", "read", day ? { day } : {}))
+    .then(valuesOf, () => null)
+    .then(answer);
 }
 
 // The incoming list with every marked item of the old list that it left out put back
@@ -217,7 +293,7 @@ function commit(context, enqueue, given) {
   if (r.deleted) {
     if (visible(current)) enqueue.emit({ type: "evaluator.deleted", id: r.id, book: r.book });
   } else {
-    enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+    say(context, enqueue, r);
   }
   if (changed && context.userId != null) enqueue.raise({ type: "_drain" });
 }
@@ -230,7 +306,9 @@ const outboxRow = (r, baseVersion) => ({
   ...(r.deleted ? { deleted: true } : {}),
 });
 
+// Your values is always there to switch or move, stored or not.
 const live = (context, id) => {
+  if (id === YOURS) return yours(context);
   const r = context.evaluators.get(id);
   return visible(r) ? r : null;
 };
@@ -241,6 +319,8 @@ const live = (context, id) => {
 // A `journal` field in a save or a stored row is no longer read: the schemas keep it
 // because contracts only grow (7.1), and a write leaving it out keeps the server's.
 function applySave(context, event, enqueue) {
+  // Your values' name and questions come from the values; a save changes nothing of it.
+  if (event.id === YOURS) return;
   if (!isId(event.id) || context.evaluators.get(event.id)?.deleted) return;
   const was = live(context, event.id);
   if (!was) {
@@ -263,6 +343,8 @@ function applySave(context, event, enqueue) {
 // The admin ticked or unticked an evaluator as a starter for a try page (8). Only the
 // admin's sheet shows the ticks; the server keeps starterFor only from the admin (5).
 function applyTick(context, { evaluator, page, on }, enqueue) {
+  // Your values is built from each user's own values, so it is never a starter.
+  if (evaluator === YOURS) return;
   const was = live(context, evaluator);
   if (!was) return;
   const starterFor = pagesOf(on ? [...was.starterFor, page] : was.starterFor.filter((p) => p !== page));
@@ -318,6 +400,8 @@ function applyMove(context, event, enqueue) {
   };
   const position = between(neighbour(event.after), neighbour(event.before));
   if (position === current.position) return;
+  // Your values not yet stored is written whole, so the server has a row to place.
+  if (event.id === YOURS && !visible(context.evaluators.get(YOURS))) return commit(context, enqueue, { ...current, position });
   const r = { ...current, position };
   context.evaluators.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
@@ -327,7 +411,7 @@ function applyMove(context, event, enqueue) {
     context.outbox.set(r.id, row);
     enqueue(() => context.store.outboxPut(row).catch(() => {}));
   }
-  enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+  say(context, enqueue, r);
   if (context.userId != null) enqueue.raise({ type: "_drain" });
 }
 
@@ -341,7 +425,8 @@ function applySwitch(context, { id, on }, enqueue) {
 // is not one of the evaluators' own matches nothing, so other facts' removals pass by.
 function applyMark(context, { kind, id }, removing, enqueue) {
   const set = (x) => (x.id === id ? { ...x, removing } : x);
-  for (const r of [...context.evaluators.values()].filter(visible)) {
+  // Your values cannot be deleted, and its questions are its values'.
+  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS)) {
     let next = null;
     if (kind === "evaluator" && r.id === id) next = set(r);
     else if (kind === "question" && r.questions.some((q) => q.id === id)) next = { ...r, questions: r.questions.map(set) };
@@ -356,7 +441,7 @@ function applyMark(context, { kind, id }, removing, enqueue) {
 function applySettle(context, { kind, id }, enqueue) {
   const marked = (x) => x.id === id && x.removing;
   const keep = (x) => !marked(x);
-  for (const r of [...context.evaluators.values()].filter(visible)) {
+  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS)) {
     if (kind === "evaluator" && marked(r)) commit(context, enqueue, { ...r, removing: false, deleted: true });
     else if (kind === "question" && r.questions.some(marked)) commit(context, enqueue, { ...r, questions: r.questions.filter(keep) });
     else if (kind === "option" && r.questions.some((q) => q.options.some(marked)))
@@ -369,13 +454,14 @@ function applySettle(context, { kind, id }, enqueue) {
 // copies them in as on a first visit. Off a try page it means nothing.
 function startOver(context, enqueue) {
   if (!context.tryPage) return;
-  for (const r of [...context.evaluators.values()].filter(visible)) commit(context, enqueue, { ...r, removing: false, deleted: true });
+  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS)) commit(context, enqueue, { ...r, removing: false, deleted: true });
   enqueue.raise({ type: "_restart" });
 }
 
 // The undo window on a list row ran out (evaluator-list, 4.3 fifth rule): the evaluator
 // becomes a tombstone at once; it was never marked, since the list kept the window itself.
 function applyDiscard(context, { id }, enqueue) {
+  if (id === YOURS) return;
   const r = live(context, id);
   if (r) commit(context, enqueue, { ...r, removing: false, deleted: true });
 }
@@ -398,7 +484,7 @@ function settleAll(context, enqueue) {
 
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue) {
-  if (message.type === "list?") replyList(context, message.payload.book, message.reply);
+  if (message.type === "list?") replyList(context, message.payload, message.reply);
   else if (message.type === "evaluator.saved") applySave(context, message, enqueue);
   else if (message.type === "evaluator.switched") applySwitch(context, message, enqueue);
   else if (message.type === "evaluator.moved") applyMove(context, message, enqueue);
@@ -427,6 +513,7 @@ const seedable = (context, userId) =>
 // they were fetched, what waited is replayed in order, and a signed-in tab syncs.
 function settle(context, enqueue, seeding = false) {
   settleAll(context, enqueue);
+  learnValues(context, enqueue);
   if (seeding) {
     seed(context, enqueue);
     enqueue.assign({ seeds: null });
@@ -434,6 +521,18 @@ function settle(context, enqueue, seeding = false) {
   for (const message of context.queued) flush(context, message, enqueue);
   enqueue.assign({ queued: [] });
   if (context.userId) enqueue.raise({ type: "_sync", pull: true });
+}
+
+// The current values, so a switch or a move of Your values announces its questions; the
+// list asks for its own. A values.changed that came first is newer, so it is kept.
+function learnValues(context, enqueue) {
+  if (typeof context.ask !== "function") return;
+  enqueue(({ self }) =>
+    Promise.resolve()
+      .then(() => context.ask("values", "read", {}))
+      .then(valuesOf, () => null)
+      .then((values) => values && self.send({ type: "_values", values })),
+  );
 }
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
@@ -564,7 +663,17 @@ export const machine = setup({
       "row, and goes at once when that window ends. An evaluator reads what it is given: the " +
       "book's Run box asks the switched-on evaluators about a typed text, and " +
       "choice-point-checks asks the one chosen for a choice point box about each of its " +
-      "lines, whether it is switched on or not. The admin ticks evaluators as starters for a try " +
+      "lines, whether it is switched on or not. It also presents Your values, kept with the " +
+      "Journal under a fixed id, built from the user's own values (`values: read`) the way books " +
+      "presents the journal: one pick-one question per value, \"How does this action relate to the " +
+      "value …?\" with the value's sentence when it has one, answered Serves (expected), Goes " +
+      "against or Unrelated, its answers shown as one mark (`combined`). With no values it has no " +
+      "questions. `evaluators: list` with a day gives that day's values, without one today's, " +
+      "and a change of the values (`values.changed`) announces it again. Only what the user sets " +
+      "on it is stored, its switch and its place, as an ordinary row whose questions stay empty; " +
+      "until then it is on and at the end of the list. It cannot be deleted, a save over it " +
+      "changes nothing, and it is never a starter. On a page without the values fact, such as a " +
+      "try page, it is not listed. The admin ticks evaluators as starters for a try " +
       "page (`starterFor`, by the page's name); the server keeps a copy of the ticked ones for " +
       "visitors. On a try page, a visitor whose browser holds no evaluators yet gets a copy of " +
       "each of that page's starters before anything is listed, with new ids, switched on and " +
@@ -590,6 +699,8 @@ export const machine = setup({
     newId: input.newId,
     seeds: null,
     journal: null,
+    // The current values (Your values' questions), null until the values fact is heard from.
+    values: null,
     userId: null,
     cursor: 0,
     queued: [],
@@ -610,11 +721,9 @@ export const machine = setup({
     // The Journal's id matters only while a try page copies its starters (seeding).
     "book.changed": { actions: () => {} },
     "book.deleted": { actions: () => {} },
-    // Planned (plan step 5): Your values is built from values: read and follows
-    // values.changed (4.3, fourth rule); until then the news is not used. Every value
-    // counts toward its one mark, so a box's settings choose none of its questions;
-    // with no values it has no questions, so a line gets no values mark, not a grey one.
-    "values.changed": { actions: () => {} },
+    // Your values follows values.changed (4.3, fourth rule); before the store is loaded the
+    // values are only kept, and announced once something asks.
+    "values.changed": { actions: assign({ values: ({ event }) => valuesOf(event) ?? [] }) },
   },
   states: {
     loading: {
@@ -701,7 +810,7 @@ export const machine = setup({
     ready: {
       initial: "idle",
       on: {
-        "list?": { actions: ({ context, event }) => replyList(context, event.payload.book, event.reply) },
+        "list?": { actions: ({ context, event }) => replyList(context, event.payload, event.reply) },
         "evaluator.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "evaluator.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySwitch(context, event, enqueue)) },
         "evaluator.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
@@ -711,6 +820,16 @@ export const machine = setup({
         "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => settled(context, event, enqueue)) },
         "evaluator.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         _restart: { target: "#evaluators.seeding", actions: assign({ seeds: null }) },
+        // Every value counts toward its one mark, and with no values Your values has no
+        // questions, so a line gets no values mark rather than a grey one.
+        "values.changed": {
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            context.values = valuesOf(event) ?? [];
+            enqueue.assign({ values: context.values });
+            say(context, enqueue, yours(context));
+          }),
+        },
+        _values: { guard: ({ context }) => context.values === null, actions: assign({ values: ({ event }) => event.values }) },
         // Signing in enqueues the whole cache, tombstones included, so what was made
         // signed out becomes the account's (5); a different user resets the cursor.
         "session.changed": {
@@ -846,7 +965,7 @@ function adopt(context, server, enqueue) {
   if (r.deleted) {
     if (visible(held)) enqueue.emit({ type: "evaluator.deleted", id: r.id, book: r.book });
   } else {
-    enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+    say(context, enqueue, r);
   }
 }
 
@@ -885,7 +1004,7 @@ function applySync(context, output, enqueue) {
     const r = held ? { ...held, version: ack.version } : record(ack);
     context.evaluators.set(r.id, r);
     enqueue(() => context.store.put(r).catch(() => {}));
-    if (visible(r)) enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+    if (visible(r)) say(context, enqueue, r);
   }
 
   for (const server of pulled) {
@@ -898,7 +1017,7 @@ function applySync(context, output, enqueue) {
         const r = { ...current, position: server.position };
         context.evaluators.set(r.id, r);
         enqueue(() => context.store.put(r).catch(() => {}));
-        enqueue.emit({ type: "evaluator.changed", evaluator: announce(context, r) });
+        say(context, enqueue, r);
       }
       continue;
     }

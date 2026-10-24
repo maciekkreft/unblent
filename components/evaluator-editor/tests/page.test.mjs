@@ -91,6 +91,34 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: rendering and layout.
+    test("Your values opens read only: its name and its questions as words, where to change them, no Delete", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 700 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("evaluator-values"));
+      try {
+        const d = new Date();
+        const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const values = [{ id: "01ARZ3NDEKTSV4RRFFQ69G5VA1", name: "Being a present parent", meaning: "Showing up for my kids" }];
+        const put = await context.request.put(`${BASE_URL}/api/values/${today}`, { data: { values, baseVersion: null } });
+        assert.equal(put.status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
+        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await page.click(`evaluator-list .row[data-id="0000000000000000000000YVAS"] .open`);
+        const editor = page.locator("evaluator-editor");
+        await editor.locator(".read .name").getByText("Your values").waitFor();
+        await editor.getByText("Change your values in the Values sheet").waitFor();
+        assert.match(await editor.locator(".question .text").innerText(), /“Being a present parent” \(Showing up for my kids\)\?/);
+        assert.deepEqual(await editor.locator(".answer").allInnerTexts(), ["Serves (expected)", "Goes against", "Unrelated"]);
+        assert.equal(await editor.locator("input, select, .box, button:not(.pin)").count(), 0, "nothing to type in, choose or delete");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Where the keyboard is: the question's number and the field. The boxes are named
     // by data-field, the one-line fields by their kind.
     const focused = (page) =>
