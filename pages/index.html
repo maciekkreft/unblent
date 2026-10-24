@@ -76,6 +76,7 @@
     <script type="module" src="/static/components/book-reader/view.js"></script>
     <script type="module" src="/static/components/journal-entry/view.js"></script>
     <script type="module" src="/static/components/choice-point-cards/view.js"></script>
+    <script type="module" src="/static/components/values-sheet/view.js"></script>
     <script type="module" src="/static/components/book-stage/view.js"></script>
     <script type="module" src="/static/components/conversation-list/view.js"></script>
     <script type="module" src="/static/components/chat-thread/view.js"></script>
@@ -90,7 +91,7 @@
     <viewas-bar></viewas-bar>
     <page-nav></page-nav>
     <dock-desk>
-      <book-stage label="Reader" height="fill" shows-on="note.staged"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"><choice-point-cards></choice-point-cards></journal-entry><note-editor id="stage" stage height="fill"></note-editor></book-stage>
+      <book-stage label="Reader" height="fill" shows-on="note.staged"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"><values-sheet></values-sheet><choice-point-cards></choice-point-cards></journal-entry><note-editor id="stage" stage height="fill"></note-editor></book-stage>
       <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
         <book-shelf label="Books" renames></book-shelf>
         <book-toc shows-on="book.selected"></book-toc>
