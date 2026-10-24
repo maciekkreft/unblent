@@ -23,12 +23,14 @@ import {
   runsOf,
   pending,
   stoppable,
+  bookOf,
 } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 import moved from "./events/evaluator.moved.json" with { type: "json" };
 import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 import removalStarted from "./events/removal.started.json" with { type: "json" };
+import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
 // the token is the one clock, shared with the bar's animation.
@@ -68,6 +70,7 @@ class ActorController {
         "evaluator.moved": moved,
         "evaluator.discarded": discarded,
         "removal.started": removalStarted,
+        "pin.toggled": pinToggled,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -336,16 +339,59 @@ class EvaluatorList extends LitElement {
       min-height: 0;
       overflow-y: auto;
     }
-    /* The book the list shows, so a list kept on a pinned book says which one; the same
-       caption as the note editor's About line. */
-    .about {
-      margin: 0;
+    /* The book the list shows and the pin that holds it, as the editor's header: the
+       same caption as the note editor's About line, the pin on the right. */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      min-height: var(--space-lg);
       padding: var(--space-xs) var(--space-md) 0;
+    }
+    .about {
+      flex: 1;
+      min-width: 0;
+      margin: 0;
       font-size: var(--text-caption);
       color: var(--color-mute);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    /* Held on a book other than the stage's: a second line in the pin's color, so the
+       hold and the pin that releases it read as one thing. */
+    .held {
+      display: block;
+      color: var(--color-accent);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pin {
+      flex: none;
+      display: inline-flex;
+      appearance: none;
+      background: none;
+      border: var(--border-width) solid transparent;
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs);
+      margin: 0;
+      font: inherit;
+      font-size: var(--text-body);
+      cursor: pointer;
+      color: var(--color-body-mid);
+    }
+    .pin svg {
+      display: block;
+    }
+    .pin:hover:not([aria-pressed="true"]) {
+      color: var(--color-ink);
+    }
+    .pin[aria-pressed="true"] {
+      color: var(--color-accent);
+    }
+    .pin:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .list {
       list-style: none;
@@ -1107,11 +1153,31 @@ class EvaluatorList extends LitElement {
     `;
   }
 
-  // Only while following the stage: the book the list shows (12).
+  // Only while following the stage, where the pin means something: the book the list
+  // shows, and the pin that keeps it there when the stage moves (12).
   #header(snapshot) {
-    const { following, book, titles } = snapshot.context;
-    const title = following ? titles[book] : null;
-    return title ? html`<p class="about">About: ${title}</p>` : nothing;
+    const { following, book, pin, titles, subject } = snapshot.context;
+    if (!following) return nothing;
+    const title = titles[book];
+    const pinned = pin != null && pin === book;
+    const stage = bookOf(subject);
+    const open = pinned && stage != null && stage !== book ? (titles[stage] ?? subject?.title) : null;
+    return html`
+      <div class="header">
+        <p class="about">
+          ${title ? html`About: ${title}` : nothing}${open ? html`<span class="held">Pinned · ${open} is open</span>` : nothing}
+        </p>
+        <button
+          class="pin"
+          type="button"
+          aria-pressed=${pinned}
+          aria-label=${pinned ? "Unpin evaluators" : "Pin evaluators"}
+          @click=${() => this.#actor.send({ type: "_togglePin" })}
+        >
+          ${icon("push-pin")}
+        </button>
+      </div>
+    `;
   }
 
   // The editor is made into .box after render (#syncBox). A press on the caption puts the

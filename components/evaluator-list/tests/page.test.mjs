@@ -1,5 +1,8 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // The keys every list shares (12, "Vim keys"): arrows always; with Vim keys on, j, k, gg
 // and G too.
@@ -10,6 +13,9 @@ const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
 const JOURNAL = "00000000000000000000000JRN";
+// A second book for the pin to be held against; its ePub is the one books' own tests import.
+const SAMPLE_ID = "01K00000000000000000000SMP";
+const SAMPLE = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "books", "tests", "fixtures", "sample.epub");
 const settings = (vimKeys) => JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys });
 
 const inList = (page, fn, arg) =>
@@ -146,6 +152,44 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await focusedName(page)) === "Goals");
         await page.keyboard.press("j");
         assert.equal(await focusedName(page), "Goals");
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a gesture.
+    test("the pin on the About line starts off, holds the book when pressed and says which book is open, and lets go at once", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("evaluator-list"));
+        const put = await context.request.put(`${BASE_URL}/api/books/${SAMPLE_ID}`, {
+          headers: { "content-type": "application/epub+zip" },
+          data: readFileSync(SAMPLE),
+        });
+        assert.ok(put.ok(), "a second book is on the shelf");
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
+        const header = () =>
+          inList(page, (root) => {
+            const pin = root.querySelector(".header .pin");
+            return { about: root.querySelector(".about")?.textContent.replace(/\s+/g, " ").trim(), pressed: pin?.getAttribute("aria-pressed"), label: pin?.getAttribute("aria-label") };
+          });
+        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await until(async () => (await header()).about === "About: Journal");
+        assert.deepEqual(await header(), { about: "About: Journal", pressed: "false", label: "Pin evaluators" }, "off by default");
+
+        await inList(page, (root) => root.querySelector(".header .pin").click());
+        await until(async () => (await header()).pressed === "true");
+        assert.equal((await header()).label, "Unpin evaluators");
+        await page.click(`book-shelf .tile[data-id="${SAMPLE_ID}"]`);
+        await until(async () => (await header()).about === "About: JournalPinned · Sample Book is open");
+
+        await inList(page, (root) => root.querySelector(".header .pin").click());
+        await until(async () => (await header()).about === "About: Sample Book");
+        assert.deepEqual(await header(), { about: "About: Sample Book", pressed: "false", label: "Pin evaluators" });
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

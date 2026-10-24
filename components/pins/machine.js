@@ -8,12 +8,17 @@ import { setup, assign, enqueueActions, fromPromise } from "xstate";
 // in and follows session.changed. The store and the ask arrive through `input`, so the
 // machine is a pure definition importable in Node.
 //
-// A pin is on until the user turns it off, and an "off" is remembered. While a pin is on
-// it holds what its panel is showing, so pins learns that from the panels' own news
-// (note.opened, conversation.opened) and from the stage (the subject's book, for the
-// Evaluators tab).
+// The note's and the chat's pins are on until the user turns them off, and an "off" is
+// remembered. While on, each holds what its panel is showing, which the user opened
+// there, so pins learns that from the panels' own news (note.opened, conversation.opened).
+// The Evaluators tab's pin is off until the user presses it: a book taken from the stage
+// by itself would hold the list on a book the user may never have chosen, with nothing
+// in the list saying so.
 
 const WHATS = ["note", "chat", "evaluators"];
+// The pins that start on, so only these can be turned off and remembered as off; the
+// Evaluators tab's pin is on exactly while it holds a book.
+const OFFABLE = ["note", "chat"];
 const NONE = { note: null, chat: null, evaluators: null };
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 // The key of the pins kept while no one is signed in.
@@ -25,10 +30,9 @@ const idOrNull = (v) => (typeof v === "string" && ULID.test(v) ? v : null);
 const pinsOf = (v) => Object.fromEntries(WHATS.map((w) => [w, idOrNull(v?.[w])]));
 // The pins the user turned off, kept beside the ids and written only when there is one;
 // a value without it reads as every pin on.
-const offOf = (v) => (Array.isArray(v?.off) ? WHATS.filter((w) => v.off.includes(w)) : []);
+const offOf = (v) => (Array.isArray(v?.off) ? OFFABLE.filter((w) => v.off.includes(w)) : []);
 const recordOf = (v) => ({ ...pinsOf(v), off: offOf(v) });
 const storedOf = ({ off, ...pins }) => (off.length ? { ...pins, off } : pins);
-const bookOf = (subject) => (subject?.kind === "book" ? idOrNull(subject.id) : null);
 
 // The stored value, one set of pins per account. A flat value from before is kept under
 // EARLIER; one from an older or damaged page reads as nothing pinned rather than failing
@@ -75,18 +79,12 @@ function put(context, pins, off, enqueue) {
   if (changed) enqueue.emit({ type: "pins.changed", ...pins });
 }
 
-// The pin of the Evaluators tab holds a book; while it is on and holds none, it takes the
-// book on the stage, which is the book the tab is showing.
-const withBook = (pins, off, book) =>
-  !off.includes("evaluators") && pins.evaluators == null && book != null ? { ...pins, evaluators: book } : pins;
-
 // The user pressed a pin: an id turns it on there, null turns it off and is remembered.
 function toggle(context, event, enqueue) {
   if (!WHATS.includes(event.what)) return;
   const id = idOrNull(event.id);
-  const off = WHATS.filter((w) => (w === event.what ? id == null : context.off.includes(w)));
-  const pins = withBook({ ...context.pins, [event.what]: id }, off, context.book);
-  put(context, pins, off, enqueue);
+  const off = OFFABLE.filter((w) => (w === event.what ? id == null : context.off.includes(w)));
+  put(context, { ...context.pins, [event.what]: id }, off, enqueue);
 }
 
 // A panel now shows this note or chat, or nothing: an "on" pin follows it.
@@ -95,17 +93,11 @@ function shown(context, what, id, enqueue) {
   put(context, { ...context.pins, [what]: idOrNull(id) }, context.off, enqueue);
 }
 
-// What the pinned thing was is gone: the pin lets go of it, and stays on or off.
+// What the pinned thing was is gone: the pin lets go of it. The chat's stays on for the
+// next one; the Evaluators tab's is then off, so the tab follows the stage again.
 function gone(context, what, id, enqueue) {
   if (context.pins[what] == null || context.pins[what] !== id) return;
-  const pins = withBook({ ...context.pins, [what]: null }, context.off, context.book === id ? null : context.book);
-  put(context, pins, context.off, enqueue);
-}
-
-function onStage(context, subject, enqueue) {
-  const book = bookOf(subject);
-  enqueue.assign({ book });
-  put(context, withBook(context.pins, context.off, book), context.off, enqueue);
+  put(context, { ...context.pins, [what]: null }, context.off, enqueue);
 }
 
 // Another account now holds the browser; the news that it is about to (leaving) is not it.
@@ -117,7 +109,7 @@ function follow(context, event, enqueue) {
   enqueue.emit({ type: "pins.changed", ...pins });
 }
 
-const QUEUED = ["read?", "pin.toggled", "session.changed", "note.opened", "conversation.opened", "conversation.deleted", "subject.changed", "book.deleted"];
+const QUEUED = ["read?", "pin.toggled", "session.changed", "note.opened", "conversation.opened", "conversation.deleted", "book.deleted"];
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 
@@ -125,15 +117,7 @@ export const machine = setup({
   actors: {
     // Asked as this fact mounts, so a page loads session's fact.js before this one; a page
     // without session is answered no-answerer, and its pins are the signed-out ones.
-    // The subject is asked beside it, for the book the Evaluators tab shows;
-    // subject.changed is held for us until that reply lands (4.2).
-    session: fromPromise(async ({ input }) => {
-      const [session, subject] = await Promise.all([
-        input.ask("session", "read", {}),
-        input.ask("subject", "read", {}).catch(() => null),
-      ]);
-      return { ...session, subject: subject?.subject ?? null };
-    }),
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // conversation.opened and conversation.deleted are held for us until this reply lands (4.2).
     chat: fromPromise(({ input }) => input.ask("conversations", "open", {})),
   },
@@ -143,19 +127,21 @@ export const machine = setup({
     description:
       "Owns what is pinned on this device: the note the note editor stays on, the chat that " +
       "stays open, and the book the Evaluators tab stays on, each while the subject changes. " +
-      "Every pin is on until the user turns it off, and stays off until the user turns it on " +
-      "again: while on, it holds what its panel shows, the note the editor opened, the open " +
-      "chat, or the book on the stage when the Evaluators tab has none yet. A pin button " +
-      "sends which of the three it is and the id it now pins, or none to turn it off. " +
-      "A note or chat that is deleted, or a book removed, lets go of its pin, which stays on " +
-      "for the next one. The pins and which are off follow the device and the " +
+      "The note's and the chat's pins are on until the user turns them off, and stay off until " +
+      "the user turns them on again: while on, each holds what its panel shows, the note the " +
+      "editor opened or the open chat. The Evaluators tab's pin is off until the user presses " +
+      "it, so the tab follows the book on the stage; pressed, it holds the book the tab shows. " +
+      "A pin button sends which of the three it is and the id it now pins, or none to turn " +
+      "it off. A note or chat that is deleted lets go of its pin, which stays on for the next " +
+      "one; a book removed lets go of the Evaluators tab's pin, which is then off. The pins " +
+      "and which are off follow the device and the " +
       "account: each account signed in on this browser has its own, so while the admin views " +
       "as someone the pins are that account's, and Back to you brings the admin's back. They " +
       "survive a reload.",
     kind: "fact",
     shape: "local-only",
     emits: ["pins.changed"],
-    asks: ["session: read", "subject: read", "conversations: open"],
+    asks: ["session: read", "conversations: open"],
     owns: "what is pinned on this device: a note, a chat, and the book of the Evaluators tab",
   },
   context: ({ input }) => ({
@@ -163,8 +149,6 @@ export const machine = setup({
     account: SIGNED_OUT,
     pins: { ...NONE },
     off: [],
-    // The book on the stage, from subject: read and subject.changed.
-    book: null,
     save: input.save,
     ask: input.ask,
     queued: [],
@@ -180,7 +164,6 @@ export const machine = setup({
           target: "ready",
           actions: enqueueActions(({ context, event, enqueue }) => {
             become(context, accountOf(event.output), Boolean(event.output?.viewingAs), enqueue);
-            enqueue.assign({ book: bookOf(event.output.subject) });
           }),
         },
         onError: {
@@ -192,7 +175,6 @@ export const machine = setup({
     },
     ready: {
       entry: enqueueActions(({ context, enqueue }) => {
-        put(context, withBook(context.pins, context.off, context.book), context.off, enqueue);
         for (const message of context.queued) enqueue.raise(message);
         enqueue.assign({ queued: [] });
       }),
@@ -205,7 +187,6 @@ export const machine = setup({
         "conversation.opened": { actions: enqueueActions(({ context, event, enqueue }) => shown(context, "chat", event.id, enqueue)) },
         "conversation.deleted": { actions: enqueueActions(({ context, event, enqueue }) => gone(context, "chat", event.id, enqueue)) },
         "book.deleted": { actions: enqueueActions(({ context, event, enqueue }) => gone(context, "evaluators", event.id, enqueue)) },
-        "subject.changed": { actions: enqueueActions(({ context, event, enqueue }) => onStage(context, event.subject ?? null, enqueue)) },
       },
       // The chat open at the start, which `conversations` restores without announcing it.
       // A page mounts pins before `conversations`, which asks pins: read as it starts, so

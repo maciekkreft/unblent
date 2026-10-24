@@ -128,7 +128,7 @@ test("after a reload an evaluator of another book than the one it was opened in 
   }
 });
 
-test("pinned from the start, the list and the open evaluator stay on their book while the stage moves; unpinned, both follow it, and a reload keeps the pin", async () => {
+test("pinned from the list, the list and the open evaluator stay on their book while the stage moves; unpinned, both follow it, and a reload keeps the pin", async () => {
   const saved = [];
   const wiring = (stored) =>
     wire(["pins", "journal", "books", "subject", "evaluators", "evaluator-list", "evaluator-editor"], {
@@ -148,7 +148,10 @@ test("pinned from the start, the list and the open evaluator stay on their book 
     await until(() => list().evaluators.map((e) => e.name).join() === "Book's");
     actors["evaluator-list"].send({ type: "_pick", id: BOOK_EVAL });
     await until(() => draft()?.name === "Book's");
+    assert.equal(actors.pins.getSnapshot().context.pins.evaluators, null, "the pin starts off");
+    actors["evaluator-list"].send({ type: "_togglePin" });
     await until(() => actors.pins.getSnapshot().context.pins.evaluators === BOOK);
+    await until(() => actors["evaluator-editor"].getSnapshot().context.pin === BOOK);
 
     actors.books.send({ type: "book.selected", id: JOURNAL });
     await until(() => list().subject?.id === JOURNAL);

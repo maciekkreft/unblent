@@ -368,9 +368,10 @@ export const machine = setup({
       "evaluator open before a reload opens again while it is still kept. With `subject` it " +
       "follows the book open on the stage, as the list beside it does: when another book " +
       "comes on, what was typed is saved and that book's most recently edited evaluator opens, " +
-      "or a New evaluator when it has none; while the " +
-      "pin at the top right is on it stays on its book, and so does the list beside it; " +
-      "unpinning brings the stage's book back at once. After a reload an evaluator of another " +
+      "or a New evaluator when it has none. The pin at the top right, the same as the one " +
+      "in the list beside it, is off until the user presses it; while it is on the editor " +
+      "stays on its book, and so does the list; unpinning, here or in the list, brings the " +
+      "stage's book back at once. After a reload an evaluator of another " +
       "book than the one it was opened in stays open only while the pin is on; otherwise the " +
       "editor opens that book's own newest evaluator, or a New evaluator. The line beside the " +
       "pin names the book the evaluator is kept with, " +

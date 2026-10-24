@@ -9,7 +9,7 @@ import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sa
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started", "pin.toggled"].map((n) => [n, schema(n)]));
 
 const A = "01K7TEST000000000000000BA1";
 const B = "01K7TEST000000000000000BB1";
@@ -188,6 +188,32 @@ test("pins.changed unpinning elsewhere follows the stage; pinning the shown book
   actor.send({ type: "pins.changed", note: null, chat: null, evaluators: A });
   assert.equal(ctx().book, A);
   assert.ok(actor.getSnapshot().matches("ready"));
+});
+
+test("the list's pin holds the book shown and lets go of it, at once and through pin.toggled", async () => {
+  const { actor, ctx, emitted } = await start({ subject: book(A) });
+  actor.send({ type: "_togglePin" });
+  assert.equal(ctx().pin, A, "pinned at once");
+  actor.send({ type: "subject.changed", subject: book(B) });
+  await flush();
+  assert.equal(ctx().book, A, "held on A while B is on the stage");
+  actor.send({ type: "_togglePin" });
+  await flush();
+  await flush();
+  assert.equal(ctx().book, B, "unpinned: the stage's book at once");
+  assert.deepEqual(emitted.filter((e) => e.type === "pin.toggled").map(({ what, id }) => ({ what, id })), [
+    { what: "evaluators", id: A },
+    { what: "evaluators", id: null },
+  ]);
+  valid(emitted);
+});
+
+test("without `subject`, or with no book shown, the list's pin does nothing", async () => {
+  for (const options of [{ following: false }, { subject: null }]) {
+    const { actor, emitted } = await start(options);
+    actor.send({ type: "_togglePin" });
+    assert.equal(emitted.length, 0);
+  }
 });
 
 test("without `subject` nothing is asked and it says to open a book", async () => {
