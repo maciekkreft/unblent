@@ -142,6 +142,13 @@ class MacAccount extends LitElement {
     button:disabled {
       cursor: progress;
     }
+    /* A button that cannot be used now, as against one busy working. */
+    button.unavailable:disabled,
+    button.unavailable:disabled:hover {
+      cursor: not-allowed;
+      color: var(--color-body-mid);
+      background: var(--color-canvas);
+    }
     .primary {
       padding: var(--space-sm) calc(var(--space-md) + var(--space-xs));
       border: 0;
@@ -176,56 +183,12 @@ class MacAccount extends LitElement {
       color: var(--color-ink);
       background: var(--color-surface-hover);
     }
-    /* The two ways to connect, side by side where they fit and stacked where they do
-       not: the chosen one carries the accent border, as a picked tab its accent line. */
-    .choices {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--space-2xl) * 3)), 1fr));
-      gap: var(--space-sm);
-    }
-    .choice {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-xs);
-      padding: var(--space-md);
-      text-align: left;
-      border: var(--border-width) solid var(--color-border-strong);
-      border-radius: var(--radius-md);
-      background: var(--color-canvas);
-      color: var(--color-ink);
-    }
-    .choice:hover {
-      background: var(--color-surface-hover);
-    }
-    .choice[aria-checked="true"] {
-      border-color: var(--color-accent);
-      box-shadow: inset 0 0 0 var(--border-width) var(--color-accent);
-      background: var(--color-accent-subtle);
-    }
-    .choice .name {
-      font-size: var(--text-body);
-      font-weight: var(--weight-semibold);
-    }
-    .choice .what {
-      font-size: var(--text-caption);
-      line-height: var(--leading-normal);
-      color: var(--color-body-mid);
-    }
   `;
 
   #actor = new ActorController(this);
 
   #send(type, extra = {}) {
     return () => this.#actor.send({ type, ...extra });
-  }
-
-  // The arrow keys move the choice, as in any group of radio buttons.
-  #choiceKey(e) {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
-    e.preventDefault();
-    const keep = !this.#actor.snapshot.context.keep;
-    this.#actor.send({ type: "_pick", keep });
-    this.updateComplete.then(() => this.renderRoot.querySelector('[role="radio"][aria-checked="true"]')?.focus());
   }
 
   #notConnected() {
@@ -257,27 +220,13 @@ class MacAccount extends LitElement {
       </div>`;
   }
 
-  #choosing(remote, keep, doing) {
+  #choosing(remote, doing) {
     const busy = doing !== null;
-    const choice = (value, name, what) => html`<button
-      type="button"
-      class="choice"
-      role="radio"
-      aria-checked=${keep === value ? "true" : "false"}
-      tabindex=${keep === value ? "0" : "-1"}
-      ?disabled=${busy}
-      @click=${this.#send("_pick", { keep: value })}
-      @keydown=${(e) => this.#choiceKey(e)}
-    >
-      <span class="name">${name}</span>
-      <span class="what">${what}</span>
-    </button>`;
-    return html`<h2>Ready to connect to ${remote || "your account"}</h2>
-      <p class="more" id="question">What should happen to the notes, journal and books already on this Mac?</p>
-      <div class="choices" role="radiogroup" aria-labelledby="question">
-        ${choice(false, "Use my account", "Shows what is in your account. This Mac's own copy is kept aside and comes back if you disconnect.")}
-        ${choice(true, "Add this Mac's things", "Uploads this Mac's notes, journal and books into your account, next to what is already there.")}
-      </div>
+    return html`<h2>Connect this Mac to ${remote || "your account"}?</h2>
+      <p class="more">
+        If your account already has notes, journal days or books, this Mac will show them. If it is empty, this Mac's are
+        added to it.
+      </p>
       <div class="buttons apart">
         <button type="button" class="quiet" ?disabled=${busy} @click=${this.#send("_cancel")}>Cancel</button>
         <button type="button" class="primary" ?disabled=${busy} @click=${this.#send("_confirm")}>
@@ -291,7 +240,7 @@ class MacAccount extends LitElement {
       <button type="button" class="secondary" ?disabled=${doing !== null} @click=${this.#send("_disconnect")}>
         ${doing === "disconnect" ? "Disconnecting…" : "Disconnect"}
       </button>
-      <span class="small">Goes back to this Mac's own copy. Your account keeps everything.</span>
+      <span class="small">Disconnect stops syncing. This Mac keeps what it shows.</span>
     </div>`;
   }
 
@@ -309,34 +258,36 @@ class MacAccount extends LitElement {
       ${this.#disconnect(doing)}`;
   }
 
-  #syncOff(waiting, doing) {
+  // Disconnect stays in view, greyed out, with why it cannot be used (a constraint shown,
+  // not hidden), since the account's books could not be fetched for the Mac to keep.
+  #syncOff(waiting) {
     return html`<h2>Your account</h2>
       <div class="status off">
         ${icon("warning")}
         <p>Sync was turned off for this account</p>
       </div>
       <p class="more">Nothing is sent from this Mac until sync is turned on again.</p>
-      ${waiting
-        ? html`<p class="waiting-on" role="status">
-            Changes are waiting on this Mac. Turn sync on again for this account in Administration on app.unblent.com, then
-            disconnect.
-          </p>`
-        : nothing}
-      ${this.#disconnect(doing)}`;
+      ${waiting ? html`<p class="waiting-on" role="status">Changes are waiting on this Mac.</p>` : nothing}
+      <div class="action">
+        <button type="button" class="secondary unavailable" disabled aria-describedby="why">Disconnect</button>
+        <span class="small" id="why">
+          To disconnect this Mac, turn sync on again for this account in Administration on app.unblent.com.
+        </span>
+      </div>`;
   }
 
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { connect, remote, userId, keep, waiting, doing } = snapshot.context;
+    const { connect, remote, userId, waiting, doing } = snapshot.context;
     let body;
     if (snapshot.matches("notConnected")) body = this.#notConnected();
     else if (snapshot.matches("waiting")) body = this.#waiting();
-    else if (snapshot.matches("choosing")) body = this.#choosing(remote, keep, null);
+    else if (snapshot.matches("choosing")) body = this.#choosing(remote, null);
     else if (snapshot.matches("connected")) body = this.#connected(remote, waiting, null);
-    else if (snapshot.matches("syncOff")) body = this.#syncOff(waiting, null);
-    else if (snapshot.matches("switching") && connect === "ready") body = this.#choosing(remote, keep, doing);
-    else if (snapshot.matches("switching") && connect === "on" && !userId) body = this.#syncOff(waiting, doing);
+    else if (snapshot.matches("syncOff")) body = this.#syncOff(waiting);
+    else if (snapshot.matches("switching") && connect === "ready") body = this.#choosing(remote, doing);
+    else if (snapshot.matches("switching") && connect === "on" && !userId) body = this.#syncOff(waiting);
     else if (snapshot.matches("switching") && connect === "on") body = this.#connected(remote, waiting, doing);
     else return nothing;
     return html`<div class="card" aria-live="polite">${body}</div>`;

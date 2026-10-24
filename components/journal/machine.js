@@ -477,32 +477,50 @@ const SYNC_IDLE_MS = 2000;
 // another account, with nothing of it left to upload, is emptied before it is read, so
 // none of it is shown to the account now signed in or uploaded as its own. A copy marked
 // to be added to the account (12, keep) is kept instead, and `keepFor` sends it.
-async function claim(store, ask) {
+async function claim(store, ask, api) {
   const session = ask ? await ask("session", "read", {}).catch(() => null) : null;
   const userId = typeof session?.userId === "string" ? session.userId : null;
   if (!userId) return;
   const [kept, outbox, from] = await Promise.all([store.metaGet("userId"), store.outboxAll(), store.metaGet("adopt")]);
   if (kept && kept !== userId && outbox.length === 0 && !from) await store.empty();
-  await keepFor(store, from, userId);
+  await keepFor(store, from, userId, api);
 }
 
-// The browser joined an account keeping this copy (12, keep): every day is queued for the
-// account on the version it holds, which the server adopts on first insert; a date the
-// account also has meets the same-date rule once both are here. The cursor goes back to 0
-// and the copy is marked as the account's, so the pull then brings the account's own days
-// and the sign-in path (adopt) does not queue them again. A tombstone is not sent: the
-// account never had the day, so there is nothing to delete. The mark is cleared only once
-// every row is stored in the outbox, so a reload midway sends the copy again (one row per
-// day) rather than losing it. A mark left by a change of account that was called off names
-// the account still signed in, and is only cleared.
-async function keepFor(store, from, userId) {
+// The browser joined an account keeping this copy (12, keep). The account is asked for
+// every day it holds first: when it already holds a day with text that is not deleted,
+// this copy is emptied, outbox included, and the pull from 0 brings the account's days.
+// When it holds none, every day is queued for it on the version it holds, which the
+// server adopts on first insert. Either way the cursor goes back to 0 and the copy is
+// marked as the account's, so the sign-in path (adopt) does not queue the days again. A
+// tombstone is not sent: the account never had the day, so there is nothing to delete.
+// The mark is cleared only once every row is stored in the outbox, so a reload midway
+// sends the copy again (one row per day) rather than losing it; when the account cannot
+// be asked (offline), the mark stays and the next load decides. A mark left by a change
+// of account that was called off names the account still signed in, and is only cleared.
+async function keepFor(store, from, userId, api) {
   if (!from) return;
   if (from !== userId) {
-    const [stored, outbox] = await Promise.all([store.all(TABLE), store.outboxAll()]);
-    const queued = new Set(outbox.map((row) => row.key));
-    for (const r of stored.map(dayRecord).filter(Boolean)) {
-      if (r.deleted || queued.has(rowKey(r))) continue;
-      await store.outboxPut({ key: rowKey(r), table: TABLE, record: wire(r), baseVersion: r.version });
+    let held;
+    try {
+      held = api ? await api.pull(0) : null;
+    } catch {
+      held = null;
+    }
+    if (!Array.isArray(held?.days)) {
+      // Undecided: the copy follows the account now signed in, so the sign-in path does
+      // not take it for another account's, and the mark stays for the next load.
+      await store.metaPut("userId", userId);
+      return;
+    }
+    if (held.days.map(dayRecord).some((r) => r && !r.deleted && r.text.trim() !== "")) {
+      await store.empty();
+    } else {
+      const [stored, outbox] = await Promise.all([store.all(TABLE), store.outboxAll()]);
+      const queued = new Set(outbox.map((row) => row.key));
+      for (const r of stored.map(dayRecord).filter(Boolean)) {
+        if (r.deleted || queued.has(rowKey(r))) continue;
+        await store.outboxPut({ key: rowKey(r), table: TABLE, record: wire(r), baseVersion: r.version });
+      }
     }
     await store.metaPut("cursor", 0);
     await store.metaPut("userId", userId);
@@ -520,8 +538,8 @@ export const machine = setup({
     leftover: ({ context }) => context.leaving && context.outbox.size === 0,
   },
   actors: {
-    load: fromPromise(async ({ input: { store, ask } }) => {
-      await claim(store, ask);
+    load: fromPromise(async ({ input: { store, ask, api } }) => {
+      await claim(store, ask, api);
       const [days, outbox, cursor, userId, session] = await Promise.all([
         store.all("days"),
         store.outboxAll(),
@@ -638,7 +656,7 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ store: context.store, ask: context.ask }),
+        input: ({ context }) => ({ store: context.store, ask: context.ask, api: context.api }),
         onDone: {
           target: "ready",
           actions: enqueueActions(({ context, event, enqueue }) => {

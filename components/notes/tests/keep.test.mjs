@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { createActor } from "xstate";
 import { machine } from "../machine.js";
 
-// The keep variant of changing who the browser belongs to (12, the clients' path of the
-// connected Mac, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
-// outbox and keeps its copy, marked `adopt` with the account it came from; after the
-// reload as the account, the mark sends the copy on the versions it holds and the pull
-// starts again from 0, and the mark is cleared. Plain leaving still empties. The store,
+// The keep variant of changing who the browser belongs to (12, Connect and Disconnect of
+// the Mac app, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
+// outbox and keeps its copy, marked `adopt` with the account it came from. After the
+// reload the account is asked for everything first: when it holds nothing of this kind,
+// the mark sends the copy on the versions it holds; when it holds something, the copy is
+// emptied and the account's is taken; offline, the mark stays for the next load. Either
+// way the pull starts again from 0 and the mark is cleared. Plain leaving still empties. The store,
 // the api and the asks are fakes of the shapes fact.js builds; every unknown store read
 // answers empty.
 const LIVE = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", title: "Mac note", body: "Mac note", version: 3, updatedAt: 1, about: [] };
@@ -109,7 +111,7 @@ test("plain leaving still empties the copy and leaves no mark", async () => {
   actor.stop();
 });
 
-test("after the reload the mark sends the copy from a cursor of 0, then clears", async () => {
+test("after the reload into an empty account the mark sends the copy from a cursor of 0, then clears", async () => {
   const { actor, meta, queued, log, calls } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1");
   await flush();
   assert.deepEqual(log, [], "the copy is kept, not emptied as another account's");
@@ -121,6 +123,43 @@ test("after the reload the mark sends the copy from a cursor of 0, then clears",
   assert.equal(meta.get("userId"), "u1");
   const pulls = calls.filter(([name]) => name === "pull");
   assert.ok(pulls.length > 0 && pulls.every(([, since]) => since === 0), `pulled from 0: ${JSON.stringify(pulls)}`);
+  actor.stop();
+});
+
+test("after the reload into an account that has notes the copy is emptied and the account's is taken", async () => {
+  const theirs = { id: "01ARZ3NDEKTSV4RRFFQ69G5FC1", title: "Theirs", body: "Theirs", version: 4, updatedAt: 2, about: [] };
+  const answer = (name, row) => (name === "pull" ? { notes: [theirs], cursor: 4 } : acked(name, row));
+  const { actor, meta, queued, log, calls } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, ["empty"], "this copy, outbox included, is emptied");
+  assert.deepEqual(queued, [], "nothing of this copy is sent");
+  assert.equal(meta.get("adopt"), null);
+  assert.equal(meta.get("userId"), "u1");
+  assert.deepEqual(calls.filter(([name]) => name === "pull")[0], ["pull", 0], "the account is asked for everything first");
+  actor.stop();
+});
+
+test("an account that holds only deleted notes counts as empty", async () => {
+  const gone = { id: "01ARZ3NDEKTSV4RRFFQ69G5FC1", title: "x", body: "x", version: 4, updatedAt: 2, about: [], deleted: true };
+  const answer = (name, row) => (name === "pull" ? { notes: [gone], cursor: 4 } : acked(name, row));
+  const { actor, queued, log } = start({ userId: "u0", adopt: "u0" }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, []);
+  assert.ok(queued.some((r) => r.id === LIVE.id), "the copy is sent");
+  actor.stop();
+});
+
+test("offline after the reload the mark stays and nothing is emptied or sent", async () => {
+  const answer = (name, row) => {
+    if (name === "pull") throw new Error("offline");
+    return acked(name, row);
+  };
+  const { actor, meta, queued, log } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, []);
+  assert.deepEqual(queued, []);
+  assert.equal(meta.get("adopt"), "u0", "the next load decides");
+  assert.equal(meta.get("userId"), "u1", "the copy is not taken for another account's meanwhile");
   actor.stop();
 });
 

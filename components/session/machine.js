@@ -102,6 +102,11 @@ async function switchOf(api, change) {
   // shows. /me is asked after the switch, so the reloaded page starts as the account it
   // will show; offline, it starts signed out and the next revalidation says who.
   const done = change.type === "connect.confirmed" ? await api.connectCommit() : await api.disconnect();
+  // The Mac's server refuses Disconnect while the account cannot be reached, which is
+  // the notice of changes not sent (unsent), or while it refuses the device sign-in
+  // (sync-off), which the Account tab explains once session has looked again.
+  if (done?.error === "offline" && change.type === "disconnect.requested") return { error: "unsent" };
+  if (done?.error === "sync-off" && change.type === "disconnect.requested") return { error: "sync-off" };
   if (done?.error) return { error: "unavailable" };
   const me = await api.me();
   const picture = me?.error ? { userId: null, registrationOpen: false, ...done } : me;
@@ -179,11 +184,14 @@ export const machine = setup({
       "minutes, which the Mac trades for a lasting sign-in of its own. While Can sync is off, " +
       "the account gets no code and its connected Macs are treated as signed out. In the Mac " +
       "app it also knows whether the Mac is connected to an account, and that account's name. " +
-      "Connect account opens the connect page in the user's browser; once the user has chosen " +
-      "how to connect, what is not yet saved on the Mac is saved there, the local copies are " +
-      "emptied and the page reloads as the account. Disconnect does the same the other way, " +
-      "and like View as it changes nothing, with a notice, if that cannot be done within a few " +
-      "seconds.",
+      "Connect account opens the connect page in the user's browser; once the user confirms, " +
+      "what is not yet saved on the Mac is saved there and the page reloads as the account, " +
+      "each kind of thing taken from the account when it has some and sent to it when it has " +
+      "none. Disconnect sends what is not yet sent to the account and reloads as the Mac's own " +
+      "account, which keeps what the Mac showed. Like View as it changes nothing, with a " +
+      "notice, if that cannot be done within a few seconds; and nothing while the account has " +
+      "sync turned off, since the account's book files could not be fetched, so the Account " +
+      "tab then says to turn sync on again.",
     kind: "fact",
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
@@ -313,20 +321,22 @@ export const machine = setup({
               .then((reply) => (typeof reply?.url === "string" ? context.open(reply.url) : self.send({ type: "_refused", reason: "unavailable" })))
               .catch(() => self.send({ type: "_refused", reason: "unavailable" })),
         },
-        // The user chose how to connect (3.4): a change of who the browser belongs to
-        // (12). With keep the facts are to keep their copy and send it to the account;
-        // until they do (plan step 7), they empty it as on any change.
+        // The user confirmed Connect (3.4): a change of who the browser belongs to (12).
+        // With keep the facts keep their copy, and after the reload each takes the
+        // account's or sends its own.
         "connect.confirmed": {
           guard: ({ context }) => context.connect === "ready",
           target: "handing",
           actions: emit(({ context, event }) => ({ ...changed(context), leaving: true, keep: event.keep === true })),
         },
-        // Disconnect while connected is the same change back to the Mac's own copy (12).
+        // Disconnect while connected is the same change back to the Mac's own server
+        // (12), with keep: the Mac's server moves its old files aside, so the facts send
+        // it the copy they show.
         "disconnect.requested": [
           {
             guard: ({ context }) => context.connect === "on",
             target: "handing",
-            actions: emit(({ context }) => ({ ...changed(context), leaving: true, keep: false })),
+            actions: emit(({ context }) => ({ ...changed(context), leaving: true, keep: true })),
           },
           // Cancel before connecting: the browser never left the Mac's copy, so the
           // waiting sign-in is only forgotten, and nothing is uploaded or emptied.
@@ -461,6 +471,13 @@ export const machine = setup({
               persist,
               ({ context, event }) => context.go(event.output.path),
             ],
+          },
+          // Sync turned off on the account (3.4): nothing changes, the facts stop leaving,
+          // and a look at the server brings the picture the Account tab explains.
+          {
+            guard: ({ event }) => event.output?.error === "sync-off",
+            target: "ready",
+            actions: [emit(({ context }) => changed(context)), ({ self }) => self.send({ type: "_revalidate" })],
           },
           // Nothing changes (12): the facts stop leaving, and a notice says why.
           {

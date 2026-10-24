@@ -510,7 +510,7 @@ test("Connect is refused when nothing is ready, and offline after commit starts 
   await flush(6);
   assert.deepEqual(off.events, []);
   const h = handing(READY, { connectCommit: { connect: "on", remote: "Maciek" } });
-  h.actor.send({ type: "connect.confirmed", keep: false });
+  h.actor.send({ type: "connect.confirmed", keep: true });
   await flush(12);
   assert.deepEqual(h.went, ["/mac"]);
   assert.equal(h.saved.at(-1).userId, null);
@@ -521,7 +521,7 @@ test("Disconnect uploads to the account first, then turns the relay off and open
   const h = handing(ACCOUNT, { disconnect: { connect: "off" }, me: MAC }, [true, true, false]);
   h.actor.send({ type: "disconnect.requested" });
   await flush(12);
-  assert.deepEqual(h.events, [{ type: "session.changed", ...ACCOUNT, leaving: true, keep: false }]);
+  assert.deepEqual(h.events, [{ type: "session.changed", ...ACCOUNT, leaving: true, keep: true }], "the facts keep what they show");
   assert.equal(h.calls.disconnect, 1);
   assert.deepEqual(h.went, ["/mac"]);
   assert.equal(h.saved.at(-1).userId, "d1");
@@ -535,6 +535,30 @@ test("Disconnect with changes that cannot be sent changes nothing and says so (1
   assert.equal(h.calls.disconnect, 0, "the relay stays on");
   assert.deepEqual(h.went, []);
   assert.deepEqual(h.events.slice(1), [{ type: "session.changed", ...ACCOUNT }, { type: "session.refused", reason: "unsent" }]);
+});
+
+test("Disconnect while the account cannot be reached changes nothing and says changes are not sent", async () => {
+  const h = handing(ACCOUNT, { disconnect: { error: "offline" } });
+  h.actor.send({ type: "disconnect.requested" });
+  await flush(12);
+  assert.equal(h.calls.disconnect, 1);
+  assert.deepEqual(h.went, []);
+  assert.deepEqual(h.events.slice(1), [{ type: "session.changed", ...ACCOUNT }, { type: "session.refused", reason: "unsent" }]);
+  assert.equal(context(h.actor).connect, "on", "still connected");
+});
+
+test("Disconnect while sync is off changes nothing and looks again, so the tab can explain", async () => {
+  const off = { userId: null, registrationOpen: false, connect: "on", remote: "Maciek" };
+  const h = handing(ACCOUNT, { disconnect: { error: "sync-off" }, me: off });
+  h.actor.send({ type: "disconnect.requested" });
+  await flush(20);
+  assert.equal(h.calls.disconnect, 1);
+  assert.deepEqual(h.went, []);
+  assert.deepEqual(h.events[1], { type: "session.changed", ...ACCOUNT }, "the facts stop leaving and keep their copy");
+  assert.ok(!h.events.some((e) => e.type === "session.refused"), "no notice that would name another reason");
+  assert.ok(h.calls.me >= 1, "the server is asked again");
+  assert.equal(context(h.actor).connect, "on", "still connected");
+  assert.equal(context(h.actor).userId, null, "the account refuses this Mac: sync is off");
 });
 
 test("Cancel on the choice forgets the waiting sign-in without a change of account", async () => {

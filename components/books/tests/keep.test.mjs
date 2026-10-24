@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { createActor } from "xstate";
 import { machine } from "../machine.js";
 
-// The keep variant of changing who the browser belongs to (12, the clients' path of the
-// connected Mac, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
-// outbox and keeps its copy, marked `adopt` with the account it came from; after the
-// reload as the account, each book gets one row that adds it there (its file read from
-// the Mac's own server, imported, then its place and the user's title), the pull starts
+// The keep variant of changing who the browser belongs to (12, Connect and Disconnect of
+// the Mac app, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
+// outbox and keeps its copy, marked `adopt` with the account it came from. After the
+// reload the account is asked for its books first: when it holds one, the copy is
+// emptied and the account's are taken; when it holds none, each book gets one row that
+// adds it there (its file read from the Mac's own server after Connect, or from the
+// account after Disconnect, imported, then its place and the user's title), except the
+// first book while unread; offline, the mark stays for the next load. The pull starts
 // again from 0, and the mark is cleared. A book the account already has is not uploaded;
 // one whose file cannot be read goes from the copy with a notice. Plain leaving still
 // empties. The store, the api and the asks are fakes of the shapes fact.js builds.
@@ -31,18 +34,19 @@ const book = (id, extra = {}) => ({
 });
 const LIVE = book(A, { title: "My title", position: { chapter: 2, block: 3 } });
 const GONE = book(B, { deleted: true });
+const FIRST = "0000000000000000000000MED1";
 
 const flush = async (n = 40) => {
   for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0));
 };
 
-function fakeStore(meta0) {
+function fakeStore(meta0, books = [LIVE, GONE]) {
   const meta = new Map(Object.entries(meta0));
   const outbox = new Map();
   const queued = [];
   const log = [];
   const store = {
-    all: async () => [LIVE, GONE],
+    all: async () => books,
     put: async () => {},
     outboxAll: async () => [...outbox.values()],
     outboxPut: async (r) => {
@@ -62,11 +66,12 @@ function fakeStore(meta0) {
 }
 
 // `has` is what the account already holds; `adopt` answers an upload.
-function fakeApi({ has = [], adopt = (row) => ({ row: book(row.book, { title: row.title ?? "File title", position: row.position, version: 1 }) }) } = {}) {
+function fakeApi({ has = [], offline = false, adopt = (row) => ({ row: book(row.book, { title: row.title ?? "File title", position: row.position, version: 1 }) }) } = {}) {
   const calls = [];
   const api = {
     pull: async (since) => {
       calls.push(["pull", since]);
+      if (offline) throw new Error("offline");
       return { books: has, cursor: 0, open: { id: null, at: 0 } };
     },
     adopt: async (row) => {
@@ -77,10 +82,10 @@ function fakeApi({ has = [], adopt = (row) => ({ row: book(row.book, { title: ro
   return { api, calls };
 }
 
-function start(meta, userId = "u1", apiOptions) {
-  const { store, meta: held, queued, log } = fakeStore(meta);
+function start(meta, userId = "u1", apiOptions, connect = null, books) {
+  const { store, meta: held, queued, log } = fakeStore(meta, books);
   const { api, calls } = fakeApi(apiOptions);
-  const ask = async (target) => (target === "session" ? { userId, registrationOpen: false } : { error: "no-answerer" });
+  const ask = async (target) => (target === "session" ? { userId, registrationOpen: false, ...(connect ? { connect } : {}) } : { error: "no-answerer" });
   const actor = createActor(machine, { input: { store, api, ask, now: () => 1000, revoke: () => {} } });
   const emitted = [];
   actor.on("*", (e) => emitted.push(e));
@@ -119,7 +124,14 @@ test("after the reload each book is added with its place and title, from a curso
   await flush();
   assert.deepEqual(log, [], "the copy is kept, not emptied as another account's");
   assert.deepEqual(queued.map((r) => r.id), [`adopt:${A}`], "a tombstone is not sent");
-  assert.deepEqual(queued[0], { id: `adopt:${A}`, kind: "adopt", book: A, position: { chapter: 2, block: 3 }, title: "My title" });
+  assert.deepEqual(queued[0], {
+    id: `adopt:${A}`,
+    kind: "adopt",
+    book: A,
+    position: { chapter: 2, block: 3 },
+    title: "My title",
+    from: "remote",
+  }, "not connected now: the change was Disconnect, so the file is the account's");
   assert.equal(meta.get("adopt"), null);
   assert.equal(meta.get("userId"), "u1");
   assert.ok(calls.some(([name, row]) => name === "adopt" && row.book === A), "uploaded");
@@ -131,10 +143,21 @@ test("after the reload each book is added with its place and title, from a curso
   actor.stop();
 });
 
-test("a book the account already has is not uploaded; the account's copy replaces it", async () => {
-  const theirs = book(A, { title: "Theirs", version: 9, contentVersion: 2 });
-  const { actor, calls, emitted } = start(reloaded, "u1", { has: [theirs] });
+test("connected now, the change was Connect: the file is read from the Mac", async () => {
+  const { actor, queued } = start(reloaded, "u1", undefined, "on");
   await flush();
+  assert.equal(queued[0]?.from, "local");
+  actor.stop();
+});
+
+test("an account that has books: the copy is emptied and the account's are taken", async () => {
+  const theirs = book(A, { title: "Theirs", version: 9, contentVersion: 2 });
+  const { actor, calls, emitted, log, queued, meta } = start(reloaded, "u1", { has: [theirs] });
+  await flush();
+  assert.deepEqual(log, ["empty"], "this copy, outbox included, is emptied");
+  assert.deepEqual(queued, []);
+  assert.equal(meta.get("adopt"), null);
+  assert.equal(meta.get("userId"), "u1");
   assert.ok(!calls.some(([name]) => name === "adopt"));
   assert.equal(emitted.find((e) => e.type === "book.changed" && e.id === A)?.title, "Theirs");
   assert.equal(actor.getSnapshot().context.books.get(A).contentVersion, 2);
@@ -147,6 +170,39 @@ test("a book whose file cannot be read goes from the copy, and a notice says so"
   assert.ok(emitted.some((e) => e.type === "book.deleted" && e.id === A));
   assert.ok(emitted.some((e) => e.type === "book.refused" && e.id === A && e.reason === "unreadable"));
   assert.equal(actor.getSnapshot().context.outbox.size, 0);
+  actor.stop();
+});
+
+test("an account that holds only deleted books counts as empty", async () => {
+  const { actor, queued, log } = start(reloaded, "u1", { has: [book(B, { deleted: true })] });
+  await flush();
+  assert.deepEqual(log, []);
+  assert.deepEqual(queued.map((r) => r.id), [`adopt:${A}`]);
+  actor.stop();
+});
+
+test("the first book is sent only once it was read or renamed", async () => {
+  const unread = book(FIRST);
+  for (const [extra, sent] of [
+    [{}, false],
+    [{ position: { chapter: 1, block: 0 } }, true],
+    [{ position: { chapter: 0, block: 2 } }, true],
+    [{ title: "Mine" }, true],
+  ]) {
+    const { actor, queued } = start(reloaded, "u1", undefined, null, [{ ...unread, ...extra }]);
+    await flush();
+    assert.equal(queued.some((r) => r.book === FIRST), sent, JSON.stringify(extra));
+    actor.stop();
+  }
+});
+
+test("offline after the reload the mark stays and nothing is emptied or queued", async () => {
+  const { actor, meta, queued, log } = start(reloaded, "u1", { offline: true });
+  await flush();
+  assert.deepEqual(log, []);
+  assert.deepEqual(queued, []);
+  assert.equal(meta.get("adopt"), "u0", "the next load decides");
+  assert.equal(meta.get("userId"), "u1", "the copy is not taken for another account's meanwhile");
   actor.stop();
 });
 
