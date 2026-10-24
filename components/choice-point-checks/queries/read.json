@@ -108,6 +108,102 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "also": {
+                "type": "array",
+                "description": "Further evaluators that check each line of the box as well as evaluator, in order; empty or absent for none.",
+                "items": {
+                  "type": "object",
+                  "description": "One further evaluator of the box and how its answers are shown.",
+                  "properties": {
+                    "evaluator": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The further evaluator."
+                    },
+                    "questions": {
+                      "type": "array",
+                      "description": "How each of the further evaluator's questions is shown, in its order; a question left out is not shown. Empty for an evaluator shown as one mark (combined), whose every question counts.",
+                      "items": {
+                        "type": "object",
+                        "description": "How one of the evaluator's questions is shown.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                            "description": "The evaluator's question this setting is for."
+                          },
+                          "show": {
+                            "type": "boolean",
+                            "description": "Whether the question's answer is shown as a mark next to the line."
+                          },
+                          "expect": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                            "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                          },
+                          "when": {
+                            "description": "Show the mark only when another question of the box got this answer; null for always.",
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "question": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                                  },
+                                  "option": {
+                                    "type": "string",
+                                    "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                                    "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                                  }
+                                },
+                                "required": [
+                                  "question",
+                                  "option"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "icons": {
+                            "type": "object",
+                            "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                            "additionalProperties": {
+                              "enum": [
+                                "auto",
+                                "check",
+                                "warning",
+                                "person-simple-walk",
+                                "brain",
+                                "none"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "show",
+                          "expect",
+                          "when",
+                          "icons"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "evaluator",
+                    "questions"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -200,6 +296,102 @@
                     "expect",
                     "when",
                     "icons"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "also": {
+                "type": "array",
+                "description": "Further evaluators that check each line of the box as well as evaluator, in order; empty or absent for none.",
+                "items": {
+                  "type": "object",
+                  "description": "One further evaluator of the box and how its answers are shown.",
+                  "properties": {
+                    "evaluator": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The further evaluator."
+                    },
+                    "questions": {
+                      "type": "array",
+                      "description": "How each of the further evaluator's questions is shown, in its order; a question left out is not shown. Empty for an evaluator shown as one mark (combined), whose every question counts.",
+                      "items": {
+                        "type": "object",
+                        "description": "How one of the evaluator's questions is shown.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                            "description": "The evaluator's question this setting is for."
+                          },
+                          "show": {
+                            "type": "boolean",
+                            "description": "Whether the question's answer is shown as a mark next to the line."
+                          },
+                          "expect": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                            "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                          },
+                          "when": {
+                            "description": "Show the mark only when another question of the box got this answer; null for always.",
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "question": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                                  },
+                                  "option": {
+                                    "type": "string",
+                                    "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                                    "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                                  }
+                                },
+                                "required": [
+                                  "question",
+                                  "option"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "icons": {
+                            "type": "object",
+                            "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                            "additionalProperties": {
+                              "enum": [
+                                "auto",
+                                "check",
+                                "warning",
+                                "person-simple-walk",
+                                "brain",
+                                "none"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "show",
+                          "expect",
+                          "when",
+                          "icons"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "evaluator",
+                    "questions"
                   ],
                   "additionalProperties": false
                 }
@@ -298,6 +490,102 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "also": {
+                "type": "array",
+                "description": "Further evaluators that check each line of the box as well as evaluator, in order; empty or absent for none.",
+                "items": {
+                  "type": "object",
+                  "description": "One further evaluator of the box and how its answers are shown.",
+                  "properties": {
+                    "evaluator": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The further evaluator."
+                    },
+                    "questions": {
+                      "type": "array",
+                      "description": "How each of the further evaluator's questions is shown, in its order; a question left out is not shown. Empty for an evaluator shown as one mark (combined), whose every question counts.",
+                      "items": {
+                        "type": "object",
+                        "description": "How one of the evaluator's questions is shown.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                            "description": "The evaluator's question this setting is for."
+                          },
+                          "show": {
+                            "type": "boolean",
+                            "description": "Whether the question's answer is shown as a mark next to the line."
+                          },
+                          "expect": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                            "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                          },
+                          "when": {
+                            "description": "Show the mark only when another question of the box got this answer; null for always.",
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "question": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                                  },
+                                  "option": {
+                                    "type": "string",
+                                    "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                                    "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                                  }
+                                },
+                                "required": [
+                                  "question",
+                                  "option"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "icons": {
+                            "type": "object",
+                            "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                            "additionalProperties": {
+                              "enum": [
+                                "auto",
+                                "check",
+                                "warning",
+                                "person-simple-walk",
+                                "brain",
+                                "none"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "show",
+                          "expect",
+                          "when",
+                          "icons"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "evaluator",
+                    "questions"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -390,6 +678,102 @@
                     "expect",
                     "when",
                     "icons"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "also": {
+                "type": "array",
+                "description": "Further evaluators that check each line of the box as well as evaluator, in order; empty or absent for none.",
+                "items": {
+                  "type": "object",
+                  "description": "One further evaluator of the box and how its answers are shown.",
+                  "properties": {
+                    "evaluator": {
+                      "type": "string",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "The further evaluator."
+                    },
+                    "questions": {
+                      "type": "array",
+                      "description": "How each of the further evaluator's questions is shown, in its order; a question left out is not shown. Empty for an evaluator shown as one mark (combined), whose every question counts.",
+                      "items": {
+                        "type": "object",
+                        "description": "How one of the evaluator's questions is shown.",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                            "description": "The evaluator's question this setting is for."
+                          },
+                          "show": {
+                            "type": "boolean",
+                            "description": "Whether the question's answer is shown as a mark next to the line."
+                          },
+                          "expect": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                            "description": "The answer expected: green when Jev gives it, red when not; null when no answer is expected, so the mark has no colour. An option id, or yes or no for a yes / no question."
+                          },
+                          "when": {
+                            "description": "Show the mark only when another question of the box got this answer; null for always.",
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "question": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+                                  },
+                                  "option": {
+                                    "type": "string",
+                                    "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                                    "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                                  }
+                                },
+                                "required": [
+                                  "question",
+                                  "option"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "icons": {
+                            "type": "object",
+                            "description": "The icon each answer gets, by option id (or yes / no). auto: a check when the answer is the expected one and a warning when not; none: no icon. An answer left out is auto.",
+                            "additionalProperties": {
+                              "enum": [
+                                "auto",
+                                "check",
+                                "warning",
+                                "person-simple-walk",
+                                "brain",
+                                "none"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "show",
+                          "expect",
+                          "when",
+                          "icons"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "evaluator",
+                    "questions"
                   ],
                   "additionalProperties": false
                 }

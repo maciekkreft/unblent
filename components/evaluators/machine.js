@@ -576,7 +576,7 @@ export const machine = setup({
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
     owns: "the evaluators kept with each book",
-    asks: ["session: read", "books: list"],
+    asks: ["session: read", "books: list", "values: read"],
   },
   context: ({ input }) => ({
     evaluators: new Map(),
@@ -610,6 +610,11 @@ export const machine = setup({
     // The Journal's id matters only while a try page copies its starters (seeding).
     "book.changed": { actions: () => {} },
     "book.deleted": { actions: () => {} },
+    // Planned (plan step 5): Your values is built from values: read and follows
+    // values.changed (4.3, fourth rule); until then the news is not used. Every value
+    // counts toward its one mark, so a box's settings choose none of its questions;
+    // with no values it has no questions, so a line gets no values mark, not a grey one.
+    "values.changed": { actions: () => {} },
   },
   states: {
     loading: {

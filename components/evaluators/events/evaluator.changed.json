@@ -85,6 +85,10 @@
                     "icon": {
                       "type": "string",
                       "description": "The icon the option's mark gets on a choice point line, by its name in the icons (7.6); absent for none, so the mark is a check, or a warning when the option is not the one expected."
+                    },
+                    "against": {
+                      "type": "boolean",
+                      "description": "Picking this option counts against what the question asks about (Goes against), which makes a combined mark red. False when absent."
                     }
                   },
                   "required": [
@@ -143,6 +147,16 @@
             "type": "string"
           },
           "description": "The try pages (8) whose new guests get a copy of this evaluator, by name, such as \"evaluators\"; empty or absent for none. Only the admin's evaluators carry it."
+        },
+        "derivedFrom": {
+          "enum": [
+            "values"
+          ],
+          "description": "Built by this fact from another one rather than written by the user: values, the client's values (Your values, one question per value). Its questions cannot be changed in the evaluator editor, only where they come from, and it cannot be deleted; its on/off and its place in the list are the user's. Absent for an evaluator the user wrote."
+        },
+        "combined": {
+          "type": "boolean",
+          "description": "Its answers about a line are shown as one mark: green when any question got its expected answer; otherwise red when any question got an option marked against; otherwise grey. False when absent: a mark per shown answer."
         }
       },
       "required": [

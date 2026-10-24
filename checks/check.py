@@ -719,9 +719,10 @@ def _strip_comments(src: str) -> str:
 def kit_mentions(src: str, names: list) -> list:
     """The component names, and static component paths, a kit source names as whole
     words outside comments (11.2): a helper about one component belongs in that
-    component's tests, so deleting the component deletes the helper with it."""
+    component's tests, so deleting the component deletes the helper with it. A word
+    after a dot is a property, such as `Object.values`, not a component's name."""
     text = _strip_comments(src)
-    found = [n for n in sorted(names) if re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", text)]
+    found = [n for n in sorted(names) if re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", text)]
     if "/static/components/" in text:
         found.append("/static/components/")
     return found

@@ -1,0 +1,74 @@
+{
+  "tool": {
+    "description": "Returns the reader's own values: what matters to them, each a short name and an optional sentence saying what it means, as they wrote them for acceptance and commitment therapy. Give day (YYYY-MM-DD) for the values as they stood on that journal day, or nothing for the current ones. changedSince says whether the values changed after that day.",
+    "label": "Reading your values"
+  },
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The day whose values are wanted; the current ones when left out.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The version of the values in force on the day asked for: the latest one written on or before it.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "The day that version was written; null when no values were written on or before the day asked for."
+      },
+      "values": {
+        "type": "array",
+        "description": "The values, in the client's order.",
+        "items": {
+          "type": "object",
+          "description": "One value of the client's.",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+            },
+            "name": {
+              "type": "string",
+              "description": "The value's short name, such as Being a present parent."
+            },
+            "meaning": {
+              "type": "string",
+              "description": "One sentence saying what the value means; empty for none."
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "meaning"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "changedSince": {
+        "type": "boolean",
+        "description": "A later version exists: the values changed after the day asked for."
+      }
+    },
+    "required": [
+      "day",
+      "values",
+      "changedSince"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "values.changed"
+  ]
+}

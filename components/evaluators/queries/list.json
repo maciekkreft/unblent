@@ -1,12 +1,17 @@
 {
   "payload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The book whose evaluators are wanted; every book's evaluators when left out.",
+    "description": "The book whose evaluators are wanted, every book's when left out; and the day a derived evaluator's questions are for, today when left out.",
     "type": "object",
     "properties": {
       "book": {
         "type": "string",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "The journal day whose version of a derived evaluator's questions is wanted (Your values: the values in force that day); today's when left out. An evaluator the user wrote is the same on every day."
       }
     },
     "additionalProperties": false
@@ -100,6 +105,10 @@
                         "icon": {
                           "type": "string",
                           "description": "The icon the option's mark gets on a choice point line, by its name in the icons (7.6); absent for none, so the mark is a check, or a warning when the option is not the one expected."
+                        },
+                        "against": {
+                          "type": "boolean",
+                          "description": "Picking this option counts against what the question asks about (Goes against), which makes a combined mark red. False when absent."
                         }
                       },
                       "required": [
@@ -158,6 +167,16 @@
                 "type": "string"
               },
               "description": "The try pages (8) whose new guests get a copy of this evaluator, by name, such as \"evaluators\"; empty or absent for none. Only the admin's evaluators carry it."
+            },
+            "derivedFrom": {
+              "enum": [
+                "values"
+              ],
+              "description": "Built by this fact from another one rather than written by the user: values, the client's values (Your values, one question per value). Its questions cannot be changed in the evaluator editor, only where they come from, and it cannot be deleted; its on/off and its place in the list are the user's. Absent for an evaluator the user wrote."
+            },
+            "combined": {
+              "type": "boolean",
+              "description": "Its answers about a line are shown as one mark: green when any question got its expected answer; otherwise red when any question got an option marked against; otherwise grey. False when absent: a mark per shown answer."
             }
           },
           "required": [

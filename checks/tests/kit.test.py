@@ -22,6 +22,9 @@ class Kit(unittest.TestCase):
     def test_a_longer_word_containing_a_name_is_not(self):
         self.assertEqual(check.kit_mentions('name: "unblent_session", notes2, my-dock', NAMES), [])
 
+    def test_a_property_named_like_a_component_is_not(self):
+        self.assertEqual(check.kit_mentions("Object.values(actors)", NAMES + ["values"]), [])
+
     def test_a_static_component_path_is_found(self):
         self.assertEqual(check.kit_mentions('import("/static/components/x/view.js")', NAMES), ["/static/components/"])
 
