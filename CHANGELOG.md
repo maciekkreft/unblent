@@ -6,6 +6,24 @@ All notable changes to Unblent for Mac are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-10-24
+
+### Added
+
+- When the Mac is connected to an account: a Values sheet on every journal day, under
+  the day's text, where you write your own values. Each version is kept by day.
+- The evaluator Your values, in the Journal's Evaluators. It checks each Towards line of
+  a choice point against your values and shows one compass mark: green when the line
+  serves a value, red when it goes against one, grey when Jev can't tell.
+- In Settings, a choice point box can be checked by a second evaluator ("Also check
+  with").
+
+### Changed
+
+- The Evaluators pin is off at first, and the list shows when an evaluator is pinned.
+- An evaluator from another book that was ticked "Show in journal" now belongs to the
+  Journal, so it is listed there again.
+
 ## [0.1.2] — 2026-10-23
 
 ### Fixed
