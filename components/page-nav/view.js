@@ -97,7 +97,7 @@ class PageNav extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot || snapshot.matches("loadingPages") || snapshot.matches("loadingSettings")) return nothing;
-    if (snapshot.matches("failed")) return html`<p class="failed">pages unavailable</p>`;
+    if (snapshot.matches("failed")) return snapshot.context.profile === "product" ? nothing : html`<p class="failed">pages unavailable</p>`;
     const { pages, nav, current, profile } = snapshot.context;
     const groups = grouped(pages, nav, current, profile);
     // With no links (the product profile, §8/§12) and nothing slotted in, the bar

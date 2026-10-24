@@ -15,7 +15,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
 const SCHEMAS = Object.fromEntries(["day.saved", "conflict.reopened"].map((n) => [n, schema(n)]));
 
-const at = (d, h = 0, m = 0) => new Date(2026, 9, d, h, m).getTime();
+const at = (d, h = 0, m = 0, s = 0) => new Date(2026, 9, d, h, m, s).getTime();
 
 const id = (tag, n) => `01K7TEST0000000000000${tag}${String(n).padStart(4, "0")}`;
 const [TODAY, SUNDAY, FRESH] = [id("Y", 1), id("Y", 2), id("F", 1)];
@@ -56,6 +56,8 @@ test("two records of one date are labelled by when each was written, two devices
   });
   const other = labels({ mine: { text: "A.", baseVersion: 1, editedAt: at(10, 23, 5) }, theirs });
   assert.deepEqual([other.mineLabel, other.theirsLabel], ["Written on 10 October at 23:05", "Written on 11 October at 18:02"]);
+  const minute = labels({ mine: { text: "A.", baseVersion: 1, editedAt: at(11, 9, 14, 5) }, theirs: { ...theirs, editedAt: at(11, 9, 14, 41) } });
+  assert.deepEqual([minute.mineLabel, minute.theirsLabel], ["Written at 09:14:05", "Written at 09:14:41"], "one minute: the seconds tell them apart");
   assert.deepEqual(labels({ mine: { text: "A.", baseVersion: 1 }, theirs }), { twice: false, mineLabel: "Yours", theirsLabel: "The other device's" });
 });
 

@@ -172,6 +172,14 @@ test("a pages error fails the view and keeps the reason", async () => {
   assert.equal(s.context.error, "unavailable");
 });
 
+test("a pages error still reads the profile, so the product can show nothing", async () => {
+  const ask = (target) =>
+    target === "pages" ? Promise.resolve({ error: "unavailable" }) : Promise.resolve({ nav: [], profile: "product" });
+  const s = await settle(createActor(machine, { input: { ask, current: "/mac" } }));
+  assert.equal(s.value, "failed");
+  assert.equal(s.context.profile, "product");
+});
+
 test("settings.changed re-applies the order (4.3, fourth rule)", async () => {
   const actor = createActor(machine, { input: { ask: asker({}), current: "/workshop/design/tokens" } });
   await settle(actor);

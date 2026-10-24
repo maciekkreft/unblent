@@ -214,3 +214,24 @@ test("/mac opens the connected Mac page while connected; disconnect also drops t
   assert.equal(existsSync(cache), false, "nothing of the account stays on the Mac (5)");
   assert.equal(await title(), "MacApp");
 });
+
+test("Can sync turned off on the web: the connected Mac is signed out but still connected, and back on it is the account", async () => {
+  const { state, code } = await begin();
+  assert.equal((await finish({ code, state })).status, 200);
+  assert.equal((await onMac("POST", "/connect/commit")).status, 200);
+  const notes = () => fetch(`${mac}/api/notes?since=0`, { headers: { "Sec-Fetch-Site": "same-origin" } });
+  try {
+    // The admin's own switch, as Administration sends it: a wrong address would leave sync on.
+    assert.equal((await onWeb("PUT", `/people/${ADMIN}/sync`, { allowed: false })).status, 200);
+    const off = await me();
+    assert.deepEqual([off.userId, off.connect, off.remote], [null, "on", "Admin"], "what mac-account shows as sync turned off");
+    assert.equal((await notes()).status, 401, "a fact stops syncing and keeps its outbox (5)");
+    assert.equal(held().state, "on", "the device sign-in is kept for when sync is back");
+    assert.equal((await onWeb("PUT", `/people/${ADMIN}/sync`, { allowed: true })).status, 200);
+    assert.equal((await me()).userId, ADMIN);
+    assert.equal((await notes()).status, 200);
+  } finally {
+    await onWeb("PUT", `/people/${ADMIN}/sync`, { allowed: true });
+    await onMac("POST", "/connect/disconnect");
+  }
+});

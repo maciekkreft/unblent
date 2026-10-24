@@ -69,7 +69,8 @@ export const machine = setup({
     description:
       "The bar of links to the other pages, grouped by kind in the order of section 8, in the " +
       "order and with the visibility the user set in Settings. The page being shown is always " +
-      "listed, even when hidden. In the product profile it shows no page links.",
+      "listed, even when hidden. In the product profile it shows no page links, and nothing when " +
+      "the pages cannot be read; elsewhere it then says the pages are unavailable.",
     kind: "view", emits: [], attributes: [], asks: ["pages: list", "settings: read"],
   },
   context: ({ input }) => ({
@@ -88,15 +89,17 @@ export const machine = setup({
       invoke: {
         src: "list",
         input: ({ context }) => ({ ask: context.ask }),
+        // A failure still reads the profile: the product shows no links, so it shows no
+        // failure either (an offline Mac app, 3.4), while the workshop says the pages are missing.
         onDone: [
           {
             guard: ({ event }) => Boolean(event.output.error),
-            target: "failed",
+            target: "loadingSettings",
             actions: assign({ error: ({ event }) => event.output.error }),
           },
           { target: "loadingSettings", actions: assign({ pages: ({ event }) => event.output.pages }) },
         ],
-        onError: { target: "failed", actions: assign({ error: "unavailable" }) },
+        onError: { target: "loadingSettings", actions: assign({ error: "unavailable" }) },
       },
     },
     // Settings is optional: a page without it (the ask replies no-answerer) keeps
@@ -106,17 +109,20 @@ export const machine = setup({
         src: "settings",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
-          { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
+          { guard: ({ event }) => Boolean(event.output.error), target: "settled" },
           {
-            target: "ready",
+            target: "settled",
             actions: assign({
               nav: ({ event }) => event.output.nav,
               profile: ({ event, context }) => event.output.profile ?? context.profile,
             }),
           },
         ],
-        onError: { target: "ready" },
+        onError: { target: "settled" },
       },
+    },
+    settled: {
+      always: [{ guard: ({ context }) => Boolean(context.error), target: "failed" }, { target: "ready" }],
     },
     ready: {},
     failed: {},

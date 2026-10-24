@@ -90,21 +90,23 @@ const midnightAfter = (now) => {
 export const conflictOn = (conflict, day) =>
   conflict && conflict.id === day.id ? { mine: conflict.mine.text, theirs: conflict.theirs.text, ...labels(conflict) } : null;
 
-const clock = (ms) => {
+const clock = (ms, seconds = false) => {
   const d = new Date(ms);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}` + (seconds ? `:${pad(d.getSeconds())}` : "");
 };
 
 // What each copy is called. Two records of one date (the journal sends the other copy's
 // time of last edit) are told apart by when each was last written, with the date when
-// the two differ; a day saved on two devices by whose it is.
+// the two differ and the seconds when both fall in one minute, so the two never read the
+// same; a day saved on two devices by whose it is.
 export function labels({ mine, theirs }) {
   if (!Number.isInteger(mine.editedAt)) return { twice: false, mineLabel: "Yours", theirsLabel: "The other device's" };
   const dated = dateOf(mine.editedAt) !== dateOf(theirs.editedAt);
+  const seconds = Math.floor(mine.editedAt / 60000) === Math.floor(theirs.editedAt / 60000);
   const written = (ms) =>
     dated
       ? `Written on ${new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "long" })} at ${clock(ms)}`
-      : `Written at ${clock(ms)}`;
+      : `Written at ${clock(ms, seconds)}`;
   return { twice: true, mineLabel: written(mine.editedAt), theirsLabel: written(theirs.editedAt) };
 }
 
@@ -295,7 +297,7 @@ export const machine = setup({
       "typing and when the box loses focus. When a day was saved on two devices at once, or the " +
       "journal holds two records of the shown date, the entry shows both copies, also on an " +
       "earlier day, labelled Yours and The other device's, or for two records of a date by when " +
-      "each was last written (Written at 09:14, with the date when the two differ), and the user keeps one; for a few seconds after, Undo, with a bar " +
+      "each was last written (Written at 09:14, with the date when the two differ and the seconds when both fall in one minute), and the user keeps one; for a few seconds after, Undo, with a bar " +
       "showing the time left, brings both copies back. It announces which day it shows and whether " +
       "it can still be written, when the page has loaded and whenever either changes, also at " +
       "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +

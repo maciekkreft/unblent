@@ -494,6 +494,16 @@ for (const keep of [false, true]) {
   });
 }
 
+test("a reload that finds the account signed out while connected announces it, still connected (sync turned off)", async () => {
+  const off = { userId: null, registrationOpen: true, connect: "on", remote: "Maciek" };
+  const { api } = fakeApi({ me: off });
+  const { actor, events, saved } = start(ACCOUNT, api);
+  actor.send({ type: "_revalidate" });
+  await flush();
+  assert.deepEqual(events, [{ type: "session.changed", ...off }]);
+  assert.deepEqual([saved.at(-1).userId, saved.at(-1).connect, saved.at(-1).remote], [null, "on", "Maciek"]);
+});
+
 test("Connect is refused when nothing is ready, and offline after commit starts signed out", async () => {
   const off = handing(MAC, {});
   off.actor.send({ type: "connect.confirmed", keep: false });
