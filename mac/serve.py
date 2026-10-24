@@ -112,6 +112,11 @@ def main() -> None:
     os.environ["SESSION_SECRET"] = held["secret"]
     # The account a Mac connects to (3.4); kept when set, so a test points it at its own server.
     os.environ.setdefault("UNBLENT_REMOTE", "https://app.unblent.com")
+    # The frozen Python looks for trusted certificates where the build machine kept
+    # them, a folder a user's Mac lacks, so every HTTPS call through the standard
+    # library would fail; certifi's bundle travels inside the app (httpx needs it).
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
     os.environ["UNBLENT_FIRST_BOOK"] = str(root / "mac" / "books" / "meditations.epub")
     sys.path.insert(0, str(root))
 

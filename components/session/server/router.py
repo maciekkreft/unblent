@@ -392,7 +392,9 @@ def _trade(url: str, code: str, verifier: str) -> tuple[int, dict]:
     request = urllib.request.Request(
         f"{url}/api/session/connect/token",
         data=json.dumps({"code": code, "verifier": verifier}).encode(),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        # Cloudflare in front of app.unblent.com refuses Python-urllib's own agent (1010).
+        headers={"Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "Unblent-Mac"},
         method="POST",
     )
     try:
