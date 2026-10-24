@@ -367,6 +367,8 @@ const E2 = "01HZZZZZZZZZZZZZZZZZZZZZE2";
 const Q1 = "01HZZZZZZZZZZZZZZZZZZZZZQ1";
 const Q2 = "01HZZZZZZZZZZZZZZZZZZZZZQ2";
 const Q3 = "01HZZZZZZZZZZZZZZZZZZZZZQ3";
+const Q4 = "01HZZZZZZZZZZZZZZZZZZZZZQ4";
+const YV = "0000000000000000000000YVAS";
 const BEH = "01HZZZZZZZZZZZZZZZZZZZZZ0B";
 const EMO = "01HZZZZZZZZZZZZZZZZZZZZZ0E";
 const BOOK = "01HZZZZZZZZZZZZZZZZZZZZB00";
@@ -414,6 +416,7 @@ test("choosing an evaluator emits the box with every question shown", async () =
         { id: Q1, show: true, expect: null, when: null, icons: {} },
         { id: Q2, show: true, expect: null, when: null, icons: {} },
       ],
+      also: [],
     },
   ]);
   actor.send({ type: "_setChecker", field: "away", evaluator: null });
@@ -457,7 +460,30 @@ test("choosing a box's earlier evaluator again brings back its settings", async 
   actor.send({ type: "_setChecker", field: "away", evaluator: E2 });
   adoptBox(actor, "away", { evaluator: E2, questions: emittedChecks.at(-1).questions });
   actor.send({ type: "_setChecker", field: "away", evaluator: E1 });
-  assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "away", evaluator: E1, questions: tuned });
+  assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "away", evaluator: E1, questions: tuned, also: [] });
+});
+
+test("Also check with emits the box with its further evaluator, and None takes it away", async () => {
+  const yours = { id: YV, book: BOOK, name: "Your values", on: true, questions: [question(Q4, "pick", [{ id: BEH, name: "Serves", description: "" }, { id: EMO, name: "Goes against", description: "" }])], version: 1, pending: false, removing: false, derivedFrom: "values", combined: true };
+  const { actor, emittedChecks } = await start(undefined, "/a", { ...withChecks, evaluators: { evaluators: [...EVALUATORS, yours] } });
+  const own = [{ id: Q1, show: true, expect: null, when: null, icons: {} }, { id: Q2, show: false, expect: null, when: null, icons: {} }];
+  adoptBox(actor, "towards", { evaluator: E1, questions: own, also: [] });
+  actor.send({ type: "_setAlso", field: "towards", evaluator: YV });
+  assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "towards", evaluator: E1, questions: own, also: [{ evaluator: YV, questions: [] }] }, "a combined evaluator has no question settings");
+  adoptBox(actor, "towards", { evaluator: E1, questions: own, also: [{ evaluator: YV, questions: [] }] });
+  actor.send({ type: "_setAlso", field: "towards", evaluator: YV });
+  assert.equal(emittedChecks.length, 1, "choosing what the box already has emits nothing");
+  actor.send({ type: "_setAlso", field: "towards", evaluator: E2 });
+  assert.deepEqual(emittedChecks.at(-1).also, [{ evaluator: E2, questions: [{ id: Q3, show: true, expect: null, when: null, icons: {} }] }], "any other evaluator with every question shown");
+
+  // Switching the box's evaluator keeps it; Not checked clears it with the rest.
+  actor.send({ type: "_setChecker", field: "towards", evaluator: E2 });
+  assert.deepEqual(emittedChecks.at(-1).also, [{ evaluator: YV, questions: [] }]);
+  actor.send({ type: "_setChecker", field: "towards", evaluator: null });
+  assert.deepEqual(emittedChecks.at(-1).also, []);
+
+  actor.send({ type: "_setAlso", field: "towards", evaluator: null });
+  assert.deepEqual(emittedChecks.at(-1), { type: "checks.edited", field: "towards", evaluator: E1, questions: own, also: [] }, "None takes it away");
 });
 
 test("evaluator.changed and evaluator.deleted keep the list to choose from (4.3)", async () => {

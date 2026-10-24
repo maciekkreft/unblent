@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS boxes (
     field     TEXT PRIMARY KEY,
     evaluator TEXT,
     questions TEXT NOT NULL,
+    also      TEXT,
     version   INTEGER NOT NULL,
     seq       INTEGER NOT NULL
 );

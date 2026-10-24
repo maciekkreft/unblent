@@ -49,6 +49,11 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "choice-point-checks.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    # CREATE IF NOT EXISTS never adds a column to an existing table, so a file from before
+    # a box had further evaluators is migrated here (notes/server/router.py does the same).
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(boxes)")}
+    if "also" not in columns:
+        connection.executescript("ALTER TABLE boxes ADD COLUMN also TEXT")
     try:
         with connection:
             yield connection
@@ -61,6 +66,7 @@ def _box(row: sqlite3.Row) -> dict:
         "field": row["field"],
         "evaluator": row["evaluator"],
         "questions": json.loads(row["questions"]),
+        "also": json.loads(row["also"]) if row["also"] else [],
         "version": row["version"],
     }
 
@@ -91,24 +97,25 @@ async def put_box(field: str, request: Request, user_id: str = Depends(require_u
     if field not in _FIELDS or not isinstance(payload, dict):
         return JSONResponse(_BAD, status_code=400)
     base = payload.get("baseVersion")
-    box = {"evaluator": payload.get("evaluator"), "questions": payload.get("questions")}
+    box = {"evaluator": payload.get("evaluator"), "questions": payload.get("questions"), "also": payload.get("also", [])}
     valid = _BOX.is_valid(box) and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
     if not valid:
         return JSONResponse(_BAD, status_code=400)
     questions = json.dumps(box["questions"], separators=(",", ":"))
+    also = json.dumps(box["also"], separators=(",", ":"))
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM boxes WHERE field = ?", (field,)).fetchone()
         if row is None:
             # A first write continues from the base the client held, or 1, so settings
             # made signed out arrive with their history.
             connection.execute(
-                "INSERT INTO boxes (field, evaluator, questions, version, seq) VALUES (?, ?, ?, ?, ?)",
-                (field, box["evaluator"], questions, (base or 0) + 1, _next_seq(connection)),
+                "INSERT INTO boxes (field, evaluator, questions, also, version, seq) VALUES (?, ?, ?, ?, ?, ?)",
+                (field, box["evaluator"], questions, also, (base or 0) + 1, _next_seq(connection)),
             )
-        elif (row["evaluator"], row["questions"]) != (box["evaluator"], questions):
+        elif (row["evaluator"], row["questions"], row["also"] or "[]") != (box["evaluator"], questions, also):
             connection.execute(
-                "UPDATE boxes SET evaluator = ?, questions = ?, version = ?, seq = ? WHERE field = ?",
-                (box["evaluator"], questions, row["version"] + 1, _next_seq(connection), field),
+                "UPDATE boxes SET evaluator = ?, questions = ?, also = ?, version = ?, seq = ? WHERE field = ?",
+                (box["evaluator"], questions, also, row["version"] + 1, _next_seq(connection), field),
             )
         # What the server already holds is not a change: no new version and no new seq.
         return _box(connection.execute("SELECT * FROM boxes WHERE field = ?", (field,)).fetchone())

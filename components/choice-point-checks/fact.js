@@ -34,8 +34,8 @@ const send = async (url, payload) => {
 const api = {
   put(row) {
     if (row.kind === "answer") return send(`/api/choice-point-checks/answers/${row.key}`, { answers: row.answers });
-    const { evaluator, questions, baseVersion } = row;
-    return send(`/api/choice-point-checks/boxes/${row.field}`, { evaluator, questions, baseVersion });
+    const { evaluator, questions, also, baseVersion } = row;
+    return send(`/api/choice-point-checks/boxes/${row.field}`, { evaluator, questions, also, baseVersion });
   },
   async pull(since) {
     const res = await fetch(`/api/choice-point-checks?since=${since}`, {

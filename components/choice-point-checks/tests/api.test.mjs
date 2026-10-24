@@ -18,6 +18,7 @@ let counter = 0;
 const freshCookie = () => cookieFor(`choice-point-checks-test-${Date.now()}-${counter++}`);
 
 const EV = "01ARZ3NDEKTSV4RRFFQ69G5EV1";
+const EV2 = "0000000000000000000000YVAS";
 const Q1 = "01ARZ3NDEKTSV4RRFFQ69G5Q01";
 const O1 = "01ARZ3NDEKTSV4RRFFQ69G5PT1";
 const KEY = "0123456789abcdef0123456789ab";
@@ -43,11 +44,24 @@ test("every route needs a signed-in user", async () => {
 test("a box continues from the base the browser held, and any later write wins", async () => {
   const cookie = freshCookie();
   const created = await (await put("boxes/towards", boxBody({ baseVersion: 2 }), cookie)).json();
-  assert.deepEqual(created, { field: "towards", evaluator: EV, questions: [question], version: 3 });
+  assert.deepEqual(created, { field: "towards", evaluator: EV, questions: [question], also: [], version: 3 });
   const cleared = await (await put("boxes/towards", boxBody({ evaluator: null, questions: [], baseVersion: 1 }), cookie)).json();
   assert.deepEqual([cleared.evaluator, cleared.version], [null, 4], "a stale base is never refused");
   const again = await (await put("boxes/towards", boxBody({ evaluator: null, questions: [] }), cookie)).json();
   assert.equal(again.version, 4, "the same settings are not a new version");
+});
+
+test("a box keeps its further evaluators, and changing them is a new version", async () => {
+  const cookie = freshCookie();
+  const also = [{ evaluator: EV2, questions: [] }];
+  const first = await (await put("boxes/towards", boxBody({ also }), cookie)).json();
+  assert.deepEqual([first.also, first.version], [also, 1]);
+  const same = await (await put("boxes/towards", boxBody({ also }), cookie)).json();
+  assert.equal(same.version, 1, "the same further evaluators are not a new version");
+  const none = await (await put("boxes/towards", boxBody({ also: [] }), cookie)).json();
+  assert.deepEqual([none.also, none.version], [[], 2]);
+  const pulled = await (await pull(0, cookie)).json();
+  assert.deepEqual(pulled.boxes.map((b) => b.also), [[]]);
 });
 
 test("an answer is added once under its key and never changed; both are pulled by cursor", async () => {

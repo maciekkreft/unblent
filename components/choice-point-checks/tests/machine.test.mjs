@@ -109,18 +109,24 @@ function fakeStore() {
 
 // The asks, each answered from what the test set up; every decide waits for the test to
 // answer it, so how many are open at once is seen.
-function fakeAsk({ userId = null, evaluators = [evaluator()], choicePoints = [] } = {}) {
+// `listFor` answers evaluators: list for a day, the way evaluators gives a derived
+// evaluator's questions for that day; every list asked is kept in `lists`.
+function fakeAsk({ userId = null, evaluators = [evaluator()], choicePoints = [], listFor } = {}) {
   const decides = [];
+  const lists = [];
   const ask = (target, name, payload) => {
     if (target === "session") return Promise.resolve({ userId, registrationOpen: false });
-    if (target === "evaluators") return Promise.resolve({ evaluators });
+    if (target === "evaluators") {
+      lists.push(payload);
+      return Promise.resolve({ evaluators: listFor && payload?.day ? listFor(payload.day) : evaluators });
+    }
     if (target === "choice-points") return Promise.resolve({ choicePoints });
     if (target === "llm" && name === "decide") {
       return new Promise((resolve) => decides.push({ payload, answer: resolve }));
     }
     return Promise.resolve({ error: "no-answerer" });
   };
-  return { ask, decides };
+  return { ask, decides, lists };
 }
 
 function fakeApi() {
@@ -325,9 +331,9 @@ test("read answers the settings and the day's checked choice points", async () =
   const { actor, changed, decides } = await start({ asks });
   const empty = await read(actor);
   assert.deepEqual(empty.choicePoints, []);
-  assert.deepEqual(empty.settings.towards, { evaluator: null, questions: [] });
+  assert.deepEqual(empty.settings.towards, { evaluator: null, questions: [], also: [] });
   actor.send(edited());
-  assert.deepEqual(changed.at(-1).towards, { evaluator: EV, questions: edited().questions });
+  assert.deepEqual(changed.at(-1).towards, { evaluator: EV, questions: edited().questions, also: [] });
   actor.send({ type: "day.shown", day: DAY });
   await flush();
   decides[0].answer(reply());
@@ -449,4 +455,144 @@ test("an answer kept for the whole set of questions before is reused, never aske
   assert.equal(decides.length, 0, "and the question switched back on");
   assert.deepEqual(names(checked.at(-1)), ["Behavioral goal+No"]);
   assert.ok(store.answers.has(keyOf(EV, [askedOf(evaluator())[0]], "Call mum")), "kept under its own key too");
+});
+
+// --- Further evaluators, and Your values by day ------------------------------------------
+
+const YV = "0000000000000000000000YVAS";
+const JOURNAL = "00000000000000000000000JRN";
+const SERVES = "0000000000000000000000SRVS";
+const AGAINST = "0000000000000000000000AGST";
+const UNRELATED = "0000000000000000000000NRTD";
+const V1 = "01ARZ3NDEKTSV4RRFFQ69G5VA1";
+const V2 = "01ARZ3NDEKTSV4RRFFQ69G5VA2";
+const PAST = "2026-10-13";
+
+// Your values as evaluators announces it: one pick question per value, under the value's id.
+const valueQuestion = ([id, name]) => ({
+  id,
+  on: true,
+  kind: "pick",
+  text: `How does this action relate to the value “${name}”?`,
+  yes: "",
+  no: "",
+  options: [
+    { id: SERVES, name: "Serves", description: "", removing: false },
+    { id: AGAINST, name: "Goes against", description: "", removing: false, against: true },
+    { id: UNRELATED, name: "Unrelated", description: "", removing: false },
+  ],
+  removing: false,
+  expect: SERVES,
+});
+const yours = (values) => ({
+  id: YV,
+  book: JOURNAL,
+  name: "Your values",
+  on: true,
+  version: 1,
+  pending: false,
+  removing: false,
+  questions: values.map(valueQuestion),
+  derivedFrom: "values",
+  combined: true,
+});
+const withValues = (over = {}) => edited({ also: [{ evaluator: YV, questions: [] }], ...over });
+const valuesReply = (picks) => ({ answers: [...reply().answers, ...picks.map(([id, choice]) => ({ id, p: 0.9, choice }))], inputTokens: 10, ms: 5 });
+
+// Each day's values, as evaluators: list gives Your values for that day.
+const byDay = (days) => {
+  const asks = fakeAsk({ evaluators: [evaluator(), yours(days[DAY] ?? [])], listFor: (day) => [evaluator(), yours(days[day] ?? [])] });
+  return asks;
+};
+
+test("a box with a further evaluator asks both evaluators' questions about a line in one request", async () => {
+  const asks = byDay({ [DAY]: [[V1, "Family"], [V2, "Health"]] });
+  const { actor, checked, decides } = await start({ asks });
+  actor.send(withValues());
+  actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum" }) });
+  actor.send(finishAll(cp({ towards: "Call mum" })));
+  await flush();
+  assert.ok(asks.lists.some((p) => p?.day === DAY), "the day's own questions are asked for");
+  assert.equal(decides.length, 1, "one Jev request for the line");
+  assert.deepEqual(decides[0].payload, {
+    state: { text: "Call mum" },
+    questions: [...askedOf(evaluator()), ...askedOf(yours([[V1, "Family"], [V2, "Health"]]))],
+  });
+  decides[0].answer(valuesReply([[V1, SERVES], [V2, UNRELATED]]));
+  await flush();
+  assert.deepEqual(statuses(checked.at(-1)), ["Call mum:done"]);
+  assert.deepEqual(
+    checked.at(-1).lines[0].answers.map((a) => [a.question, a.option]),
+    [[Q1, O1], [Q2, "yes"], [V1, SERVES], [V2, UNRELATED]],
+    "the box's own evaluator first, then the further one's",
+  );
+  const r = await read(actor);
+  assert.deepEqual(r.settings.towards.also, [{ evaluator: YV, questions: [] }]);
+});
+
+test("a past day is asked that day's values, and keeps its answers when today's change", async () => {
+  const days = { [PAST]: [[V1, "Being a parent"]], [DAY]: [[V1, "Family"], [V2, "Health"]] };
+  const old = cp({ id: CP2, day: PAST, towards: "Call mum" });
+  const asks = byDay(days);
+  const { actor, clock, decides } = await start({ asks: { ...asks, ask: (t, n, p) => (t === "choice-points" ? Promise.resolve({ choicePoints: [old] }) : asks.ask(t, n, p)) } });
+  actor.send(withValues());
+  actor.send({ type: "day.shown", day: PAST });
+  await flush();
+  assert.equal(decides.length, 1);
+  assert.deepEqual(decides[0].payload.questions, [...askedOf(evaluator()), ...askedOf(yours(days[PAST]))], "that day's values, not today's");
+  decides[0].answer(valuesReply([[V1, SERVES]]));
+  await flush();
+  const before = await read(actor, { day: PAST });
+  assert.deepEqual(before.choicePoints[0].lines[0].answers.map((a) => a.question), [Q1, Q2, V1]);
+
+  // Today's values change; the past day's questions come back the same.
+  days[DAY] = [[V1, "Family"], [V2, "Health and rest"]];
+  actor.send({ type: "evaluator.changed", evaluator: yours(days[DAY]) });
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 1, "nothing on the past day is asked again");
+  assert.deepEqual(await read(actor, { day: PAST }), before, "its answers stay");
+});
+
+test("changing one value asks again only that value's question", async () => {
+  const days = { [DAY]: [[V1, "Family"], [V2, "Health"]] };
+  const asks = byDay(days);
+  const { actor, clock, checked, decides } = await start({ asks });
+  actor.send(withValues());
+  actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum" }) });
+  actor.send({ type: "day.shown", day: DAY });
+  await flush();
+  decides[0].answer(valuesReply([[V1, SERVES], [V2, UNRELATED]]));
+  await flush();
+
+  days[DAY] = [[V1, "Family"], [V2, "Health and rest"]];
+  actor.send({ type: "evaluator.changed", evaluator: yours(days[DAY]) });
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 2);
+  assert.deepEqual(decides[1].payload.questions, [askedOf(yours(days[DAY]))[1]], "only the changed value's question");
+  decides[1].answer({ answers: [{ id: V2, p: 0.8, choice: AGAINST }], inputTokens: 5, ms: 5 });
+  await flush();
+  assert.deepEqual(
+    checked.at(-1).lines[0].answers.map((a) => [a.question, a.option]),
+    [[Q1, O1], [Q2, "yes"], [V1, SERVES], [V2, AGAINST]],
+  );
+});
+
+test("with no values nothing extra is asked", async () => {
+  const asks = byDay({ [DAY]: [] });
+  const { actor, clock, decides } = await start({ asks });
+  actor.send(withValues());
+  actor.send({ type: "choice-point.changed", choicePoint: cp({ towards: "Call mum", away: "Stay in bed" }) });
+  actor.send({ type: "day.shown", day: DAY });
+  await flush();
+  assert.equal(decides.length, 1);
+  assert.deepEqual(decides[0].payload.questions, askedOf(evaluator()), "only the box's own evaluator");
+  decides[0].answer(reply());
+  await flush();
+  // A box checked only by Your values, with no values, asks nothing at all.
+  actor.send(withValues({ field: "away", evaluator: null, questions: [] }));
+  clock.increment(CHECK_PAUSE_MS);
+  await flush();
+  assert.equal(decides.length, 1);
 });

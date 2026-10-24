@@ -809,7 +809,27 @@ class SettingsSheet extends LitElement {
           </select>
         </label>
         ${evaluator ? questions.map((q, i) => this.#checkQuestion(field, q, i, shown.questions[i], questions)) : nothing}
+        ${evaluator ? this.#alsoChoice(field, label, shown.also[0]?.evaluator ?? null, evaluators.filter((e) => e.id !== current)) : nothing}
       </div>
+    `;
+  }
+
+  // A second evaluator that checks the same lines, in the same Jev request. It is offered
+  // only while the box has its own evaluator, so a box never looks unchecked while it is
+  // checked; None takes it away again. Its questions have no settings here: a combined
+  // evaluator (Your values) counts every question toward its one mark.
+  #alsoChoice(field, label, current, evaluators) {
+    return html`
+      <label class="field also">
+        <span>Also check with</span>
+        <select
+          aria-label="Also check ${label} with"
+          @change=${(e) => this.#actor.send({ type: "_setAlso", field, evaluator: e.target.value || null })}
+        >
+          <option value="" ?selected=${!current}>None</option>
+          ${evaluators.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
+        </select>
+      </label>
     `;
   }
 

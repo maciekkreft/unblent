@@ -126,11 +126,26 @@ const questionSetting = (q) =>
       }
     : null;
 
+const settingsOfQuestions = (qs) => (Array.isArray(qs) ? qs : []).map(questionSetting).filter(Boolean);
+
+// The further evaluators of a box, each once and never the box's own evaluator again, so
+// no question is asked twice about a line.
+const alsoOf = (b, main) => {
+  const seen = new Set([main]);
+  const out = [];
+  for (const a of Array.isArray(b?.also) ? b.also : []) {
+    if (!isId(a?.evaluator) || seen.has(a.evaluator)) continue;
+    seen.add(a.evaluator);
+    out.push({ evaluator: a.evaluator, questions: settingsOfQuestions(a.questions) });
+  }
+  return out;
+};
+
 // One box's settings in one fixed shape and key order, so two copies compare equal as text.
-const box = (b) => ({
-  evaluator: isId(b?.evaluator) ? b.evaluator : null,
-  questions: (Array.isArray(b?.questions) ? b.questions : []).map(questionSetting).filter(Boolean),
-});
+const box = (b) => {
+  const evaluator = isId(b?.evaluator) ? b.evaluator : null;
+  return { evaluator, questions: settingsOfQuestions(b?.questions), also: alsoOf(b, evaluator) };
+};
 const boxRecord = (field, b) => ({
   field,
   ...box(b),
@@ -150,31 +165,58 @@ const choicePoint = (c) => ({ id: c.id, day: c.day, ...Object.fromEntries(FIELDS
 
 // --- What a choice point's lines are ---------------------------------------------------
 
-// The evaluator that checks a box, with the questions it is asked, or null when the box
-// has none, its evaluator is gone or waiting out its undo window, or it has no question
-// to ask. Whether it is switched on is the book's Run box's business, not this.
-function checkerOf(context, field) {
-  const id = context.boxes.get(field)?.evaluator;
-  const evaluator = id ? context.evaluators.get(id) : null;
-  if (!evaluator || evaluator.removing) return null;
-  const questions = askedOf(evaluator);
-  return questions.length > 0 ? { evaluator: id, questions, whole: askedOf(evaluator, { all: true }) } : null;
+// An evaluator whose questions are built from another fact, such as Your values from the
+// values, has questions that depend on the day: a past day keeps the ones it had.
+const isDerived = (e) => typeof e?.derivedFrom === "string";
+
+// The evaluators of a box: its own first, then the further ones, in order.
+const idsOf = (b) => (b ? [b.evaluator, ...(b.also ?? []).map((a) => a.evaluator)].filter(isId) : []);
+
+// The evaluator as it stands on a day: an evaluator the user wrote is the same on every
+// day; a derived one is the day's own version, listed for that day (evaluators: list), and
+// undefined while that day has not been listed yet. Null when it is gone or waiting out
+// its undo window.
+function evaluatorOn(context, id, day) {
+  const e = context.evaluators.get(id);
+  if (!e || e.removing) return null;
+  if (!isDerived(e)) return e;
+  const daily = context.daily.get(day);
+  return daily ? (daily.get(id) ?? null) : undefined;
 }
 
-// Every non-empty line of every checked box, with each asked question and the key its
-// answer is kept under, and `legacy`, the key the whole set was kept under before answers
-// were kept per question. A line is keyed without the spaces around it, so adding one is
-// not a new check.
+// The evaluators that check a box on a day, each with the questions it is asked; one with
+// no question to ask (Your values with no values) is left out, so nothing is asked for it.
+// Whether an evaluator is switched on is the book's Run box's business, not this. Only the
+// box's own evaluator has `whole`, the set its answers were kept under before answers were
+// kept per question.
+function checkersOf(context, field, day) {
+  const out = [];
+  idsOf(context.boxes.get(field)).forEach((id, n) => {
+    const evaluator = evaluatorOn(context, id, day);
+    if (!evaluator) return;
+    const questions = askedOf(evaluator);
+    if (questions.length === 0) return;
+    out.push({ evaluator: id, questions, whole: n === 0 ? askedOf(evaluator, { all: true }) : null });
+  });
+  return out;
+}
+
+// Every non-empty line of every checked box, with each asked question of each of the box's
+// evaluators and the key its answer is kept under, and `legacy`, for the box's own
+// evaluator, the key the whole set was kept under before answers were kept per question.
+// A line is keyed without the spaces around it, so adding one is not a new check.
 function planOf(context, cp) {
   const out = [];
   for (const field of FIELDS) {
-    const checker = checkerOf(context, field);
-    if (!checker) continue;
+    const checkers = checkersOf(context, field, cp.day);
+    if (checkers.length === 0) continue;
     for (const text of cp[field].split("\n")) {
       if (text.trim() === "") continue;
       const t = text.trim();
-      const items = checker.questions.map((question) => ({ question, key: keyOf(checker.evaluator, [question], t) }));
-      out.push({ field, text, items, legacy: keyOf(checker.evaluator, checker.whole, t) });
+      const items = checkers.flatMap((c) =>
+        c.questions.map((question) => ({ question, key: keyOf(c.evaluator, [question], t), legacy: c.whole ? keyOf(c.evaluator, c.whole, t) : null })),
+      );
+      out.push({ field, text, items });
     }
   }
   return out;
@@ -183,14 +225,69 @@ function planOf(context, cp) {
 // One question's answer about a line: kept under its own key, or else taken from the whole
 // set's answer kept before, so a line checked then is not asked again. A whole-set answer
 // that leaves the question out still counts as asked.
-function answerOf(context, item, legacy) {
+function answerOf(context, item) {
   const own = context.answers.get(item.key);
   if (own) return own;
-  const whole = context.answers.get(legacy);
+  const whole = item.legacy ? context.answers.get(item.legacy) : null;
   return whole ? { key: item.key, answers: whole.answers.filter((a) => a.question === item.question.id) } : null;
 }
 
-const lineKeys = (line) => [...line.items.map((i) => i.key), line.legacy];
+const lineKeys = (line) => line.items.flatMap((i) => [i.key, i.legacy]).filter(Boolean);
+const lineOf = (line) => `${line.field}\n${line.text}`;
+
+// --- The day's own questions -----------------------------------------------------------
+
+// A box checked by a derived evaluator needs each day's questions before that day's lines
+// are asked or reported, so the box's evaluators are asked together and a line keeps one
+// Jev request. A day is known once evaluators: list answered for it and no newer list for
+// it is on its way.
+const usesDerived = (context) => FIELDS.some((f) => idsOf(context.boxes.get(f)).some((id) => isDerived(context.evaluators.get(id))));
+const known = (context, day) => !usesDerived(context) || (context.daily.has(day) && !context.fetching.has(day));
+
+function listDay(context, enqueue, day) {
+  context.fetching.add(day);
+  const ask = context.ask;
+  enqueue(({ self }) =>
+    Promise.resolve()
+      .then(() => (typeof ask === "function" ? ask("evaluators", "list", { day }) : null))
+      .catch(() => null)
+      .then((reply) => self.send({ type: "_daily", day, evaluators: listed(reply, "evaluators") })),
+  );
+}
+
+// Ask for a day's questions when they are needed and not known or on their way.
+function need(context, enqueue, day) {
+  if (!isDay(day) || !usesDerived(context) || context.daily.has(day) || context.fetching.has(day)) return;
+  listDay(context, enqueue, day);
+}
+
+// A derived evaluator changed (today's values were edited): every day listed is listed
+// again, since only evaluators knows which days the change reaches. A past day's
+// questions come back the same, so its keys, its answers and its marks stay.
+function relist(context, enqueue) {
+  for (const day of new Set([...context.daily.keys(), ...context.fetching])) {
+    if (context.fetching.has(day)) context.stale.add(day);
+    else listDay(context, enqueue, day);
+  }
+}
+
+// A day's questions arrived: the reads waiting for them are answered, and the day's choice
+// points are checked (the day on screen) or announced with what they have.
+function dayListed(context, enqueue, { day, evaluators }) {
+  context.fetching.delete(day);
+  context.daily.set(day, new Map(evaluators.filter((e) => isId(e?.id) && isDerived(e)).map((e) => [e.id, e])));
+  if (context.stale.delete(day)) listDay(context, enqueue, day);
+  if (!known(context, day)) return;
+  const waiting = context.waiting.get(day) ?? [];
+  context.waiting.delete(day);
+  for (const reply of waiting) replyRead(context, enqueue, day, reply);
+  for (const cp of context.choicePoints.values()) {
+    if (cp.day !== day) continue;
+    checkFinished(context, enqueue, cp);
+    if (day === context.day) check(context, enqueue, cp);
+    else announce(context, enqueue, cp);
+  }
+}
 
 // A line with every question answered is done; one with a question queued or being asked
 // is waiting for Jev; one whose last check failed is failed. A line with some answers and
@@ -200,7 +297,7 @@ function report(context, cp) {
   let error;
   const lines = [];
   for (const line of planOf(context, cp)) {
-    const answers = line.items.map((i) => answerOf(context, i, line.legacy));
+    const answers = line.items.map((i) => answerOf(context, i));
     const missing = line.items.filter((_, n) => !answers[n]);
     const failed = missing.map((i) => context.failures.get(i.key)).find(Boolean);
     const pending = missing.some((i) => queuedKey(context, i.key));
@@ -214,8 +311,10 @@ function report(context, cp) {
 }
 
 // Announce a choice point's lines when they differ from what was last announced for it; a
-// choice point that has never had a checked line is not announced until it has one.
+// choice point that has never had a checked line is not announced until it has one. A day
+// whose own questions are not known yet is announced once they are (dayListed).
 function announce(context, enqueue, cp) {
+  if (!known(context, cp.day)) return need(context, enqueue, cp.day);
   const r = report(context, cp);
   const text = JSON.stringify(r);
   const last = context.reported.get(cp.id);
@@ -238,15 +337,17 @@ const queuedKey = (context, key) => Boolean(context.asking?.keys.includes(key)) 
 // questions it has no answer to and that are not queued yet, as one Jev request per line;
 // then announce it, so its new lines show as waiting at once. An answer found only in the
 // whole set's old record is kept under its own key here, so it outlives a later edit of
-// another question.
+// another question. A day whose own questions are not known yet waits for them, so the
+// line is asked once with every evaluator's questions (dayListed).
 function check(context, enqueue, cp, only = () => true) {
+  if (!known(context, cp.day)) return need(context, enqueue, cp.day);
   let added = false;
   for (const line of planOf(context, cp)) {
     if (!only(line)) continue;
     const missing = [];
     for (const item of line.items) {
       if (context.answers.has(item.key)) continue;
-      const derived = answerOf(context, item, line.legacy);
+      const derived = answerOf(context, item);
       if (derived) storeAnswer(context, enqueue, derived);
       else if (!queuedKey(context, item.key)) missing.push(item);
     }
@@ -283,17 +384,19 @@ function wanted(context, job) {
 const markOf = (id, field, text) => `${id}\n${field}\n${text.trim()}`;
 
 function checkFinished(context, enqueue, cp) {
+  // The marks wait with the day for its own questions (dayListed).
+  if (!known(context, cp.day)) return need(context, enqueue, cp.day);
   const marked = planOf(context, cp).filter((l) => context.finished.has(markOf(cp.id, l.field, l.text)));
   if (marked.length === 0) return;
   for (const l of marked) context.finished.delete(markOf(cp.id, l.field, l.text));
-  const lines = new Set(marked.map((l) => l.legacy));
-  check(context, enqueue, cp, (l) => lines.has(l.legacy) || l.items.some((i) => context.failures.has(i.key)));
+  const lines = new Set(marked.map(lineOf));
+  check(context, enqueue, cp, (l) => lines.has(lineOf(l)) || l.items.some((i) => context.failures.has(i.key)));
 }
 
 function finish(context, enqueue, message) {
   if (!isId(message.id) || !Array.isArray(message.finished)) return;
   for (const line of message.finished) {
-    if (!FIELDS.includes(line?.field) || !filled(line.text) || !checkerOf(context, line.field)) continue;
+    if (!FIELDS.includes(line?.field) || !filled(line.text) || idsOf(context.boxes.get(line.field)).length === 0) continue;
     context.finished.add(markOf(message.id, line.field, line.text));
   }
   const cp = context.choicePoints.get(message.id);
@@ -305,7 +408,7 @@ const restartPause = (enqueue, id, event) => {
   enqueue.raise(event, { delay: CHECK_PAUSE_MS, id });
 };
 
-const usesEvaluator = (context, id) => FIELDS.some((f) => context.boxes.get(f)?.evaluator === id);
+const usesEvaluator = (context, id) => FIELDS.some((f) => idsOf(context.boxes.get(f)).includes(id));
 
 // --- Settings changes ------------------------------------------------------------------
 
@@ -353,7 +456,12 @@ function storeAnswer(context, enqueue, r) {
 
 // --- Messages --------------------------------------------------------------------------
 
-function replyRead(context, day, reply) {
+// A read of a day whose own questions are not known yet is answered once they are.
+function replyRead(context, enqueue, day, reply) {
+  if (isDay(day) && !known(context, day)) {
+    context.waiting.set(day, [...(context.waiting.get(day) ?? []), reply]);
+    return need(context, enqueue, day);
+  }
   const choicePoints = isDay(day)
     ? [...context.choicePoints.values()]
         .filter((cp) => cp.day === day)
@@ -368,7 +476,7 @@ function replyRead(context, day, reply) {
 function handle(context, message, enqueue) {
   switch (message.type) {
     case "read?":
-      return replyRead(context, message.payload?.day, message.reply);
+      return replyRead(context, enqueue, message.payload?.day, message.reply);
     case "checks.edited":
       if (FIELDS.includes(message.field)) commitBox(context, enqueue, message.field, message);
       return;
@@ -391,7 +499,9 @@ function handle(context, message, enqueue) {
       if (!isId(e?.id)) return;
       context.evaluators.set(e.id, e);
       // A changed question makes new keys; the day on screen is checked once editing pauses.
-      if (usesEvaluator(context, e.id)) restartPause(enqueue, "day", { type: "_dueDay" });
+      if (!usesEvaluator(context, e.id)) return;
+      if (isDerived(e)) relist(context, enqueue);
+      restartPause(enqueue, "day", { type: "_dueDay" });
       return;
     }
     case "evaluator.deleted":
@@ -571,7 +681,16 @@ export const machine = setup({
       "Owns which evaluator checks each box of a choice point (away, towards, situation, " +
       "thoughts and feelings), how its answers are shown, and what Jev answered about each " +
       "line written in a checked box. The settings are one row per box, chosen in Settings " +
-      "under Your account; the last write wins, so two devices never conflict. Each answer " +
+      "under Your account; the last write wins, so two devices never conflict. A box may also " +
+      "have further evaluators, chosen under Also check with, that check each of its lines as " +
+      "well; a line is still one Jev request, asking every evaluator's questions it has no " +
+      "answer to together, and its answers are announced together, the box's own evaluator's " +
+      "first. An evaluator built from another fact, Your values from the values, is asked the " +
+      "questions of the choice point's own day (`evaluators: list` with that day), and its lines " +
+      "are asked and reported only once that day's questions are known: a past day keeps the " +
+      "values it had, so its answers and marks never change, an edit of today's values asks " +
+      "again only the questions of the values that changed, and with no values nothing is " +
+      "asked for it. Each answer " +
       "is kept per question, under a key made of the evaluator's id, that question as it " +
       "stands, and the line's text, and never changes once written: editing a line hides its " +
       "old mark until the new text is answered, editing a question asks only that question " +
@@ -608,6 +727,10 @@ export const machine = setup({
     outbox: new Map(),
     evaluators: new Map(), // as evaluators announced them
     choicePoints: new Map(), // id -> { id, day, texts }, as choice-points announced them
+    daily: new Map(), // day -> Map of derived evaluator id -> that day's evaluator (evaluators: list)
+    fetching: new Set(), // days whose evaluators: list is on its way
+    stale: new Set(), // days to list again once the list on its way lands
+    waiting: new Map(), // day -> read replies waiting for the day's questions
     failures: new Map(), // key -> the error its last check ended with
     finished: new Set(), // lines the user finished that wait to be held here (markOf)
     reported: new Map(), // choice point id -> the lines.checked last announced, as text
@@ -666,6 +789,7 @@ export const machine = setup({
       type: "parallel",
       on: {
         ...HANDLED,
+        _daily: { actions: enqueueActions(({ context, event, enqueue }) => dayListed(context, enqueue, event)) },
         _dueDay: {
           actions: enqueueActions(({ context, enqueue }) => {
             checkDay(context, enqueue);

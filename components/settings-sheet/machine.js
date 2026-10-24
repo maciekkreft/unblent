@@ -83,7 +83,7 @@ export const BOXES = [
   { field: "situation", label: "Situation" },
   { field: "thoughts", label: "Thoughts & feelings" },
 ];
-const NO_BOX = { evaluator: null, questions: [] };
+const NO_BOX = { evaluator: null, questions: [], also: [] };
 const live = (items) => (Array.isArray(items) ? items : []).filter((x) => x && !x.removing);
 
 // The answers a question can get: a pick question's options, or Yes and No; the value is
@@ -109,14 +109,23 @@ export const boxView = (box, evaluator) => ({
     const s = (box?.questions ?? []).find((x) => x.id === q.id);
     return s ? { ...s, icons: { ...s.icons } } : unset(q.id, false);
   }),
+  also: (box?.also ?? []).map((a) => ({ evaluator: a.evaluator, questions: a.questions.map((q) => ({ ...q, icons: { ...q.icons } })) })),
 });
+
+// The further evaluator chosen under Also check with, as checks.edited carries it: a
+// combined evaluator (Your values) with no question settings, since every question counts
+// toward its one mark; any other with every question shown, since Settings offers one
+// further evaluator per box and no per-question choice for it.
+const alsoOf = (evaluator) =>
+  evaluator ? [{ evaluator: evaluator.id, questions: evaluator.combined ? [] : live(evaluator.questions).map((q) => unset(q.id, true)) }] : [];
+const withoutMain = (also, main) => also.filter((a) => a.evaluator !== main);
 
 const evaluatorOf = (context, id) => (id ? context.evaluators.find((e) => e.id === id) : undefined);
 const shownBox = (context, field) => {
   const b = context.checks?.[field] ?? NO_BOX;
   return boxView(b, evaluatorOf(context, b.evaluator));
 };
-const checksEdited = (field, b) => ({ type: "checks.edited", field, evaluator: b.evaluator, questions: b.questions });
+const checksEdited = (field, b) => ({ type: "checks.edited", field, evaluator: b.evaluator, questions: b.questions, also: b.also ?? [] });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // One question's setting changed: the whole box, as checks.edited carries it.
@@ -130,14 +139,22 @@ const patched = (context, event) => {
 
 // Choosing an evaluator for a box: every question shown; or, if this
 // box had that evaluator earlier while the sheet was open, its settings then, so choosing
-// the previous evaluator again undoes the switch in one step (forgiveness).
+// the previous evaluator again undoes the switch in one step (forgiveness). The further
+// evaluator stays across a switch; Not checked clears it with the rest, and choosing the
+// earlier evaluator again brings it back with the other settings.
 const chosen = (context, event) => {
   if (!event.evaluator) return { ...NO_BOX };
+  const current = shownBox(context, event.field);
   const past = context.past[`${event.field} ${event.evaluator}`];
   const evaluator = evaluatorOf(context, event.evaluator);
-  if (past) return boxView(past, evaluator);
-  return { evaluator: event.evaluator, questions: live(evaluator?.questions).map((q) => unset(q.id, true)) };
+  const b = past
+    ? boxView(past, evaluator)
+    : { evaluator: event.evaluator, questions: live(evaluator?.questions).map((q) => unset(q.id, true)), also: [] };
+  return { ...b, also: withoutMain(current.evaluator ? current.also : b.also, event.evaluator) };
 };
+
+// Choosing the further evaluator of a box, or None (null) to drop it again.
+const alsoChosen = (context, event) => ({ ...shownBox(context, event.field), also: alsoOf(evaluatorOf(context, event.evaluator)) });
 
 const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, editors: {} };
 
@@ -187,7 +204,12 @@ export const machine = setup({
       "earlier question got a given answer); the answer expected and the icon a mark shows are " +
       "the evaluator's own, chosen in the evaluator. Every change saves the whole box at once and Jev checks the day on screen again. " +
       "Choosing an evaluator ticks all its questions; choosing a box's " +
-      "earlier evaluator again while the sheet is open brings back its settings. The part is " +
+      "earlier evaluator again while the sheet is open brings back its settings. While a box " +
+      "has an evaluator, Also check with under its questions chooses one more evaluator, such " +
+      "as Your values, whose questions Jev answers about the same lines in the same request; " +
+      "it has no per-question settings, since every value of Your values counts toward its one " +
+      "mark, and None takes it away again. It stays when the box's evaluator is switched, and " +
+      "Not checked clears it with the rest. The part is " +
       "hidden on a page without `choice-point-checks`. The Vim keys list names the chat box " +
       "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +
@@ -448,6 +470,10 @@ export const machine = setup({
             }),
             emit(({ context, event }) => checksEdited(event.field, chosen(context, event))),
           ],
+        },
+        _setAlso: {
+          guard: ({ context, event }) => context.checks !== null && !same(alsoChosen(context, event), shownBox(context, event.field)),
+          actions: emit(({ context, event }) => checksEdited(event.field, alsoChosen(context, event))),
         },
         _setQuestion: {
           guard: ({ context, event }) => context.checks !== null && !same(patched(context, event), shownBox(context, event.field)),
