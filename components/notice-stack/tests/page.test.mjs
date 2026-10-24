@@ -155,7 +155,9 @@ for (const engine of ENGINES) {
           return real(url, init);
         };
       });
-      await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+      // The subject stem page, not the product: the clash needs only a session, the
+      // notes and the stack, and the product's load left this test no room in its budget.
+      await page.goto(`${BASE_URL}/workshop/design/subject`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("note-list")?.shadowRoot?.querySelector(".row.draft"));
       await page.locator("note-list").evaluate((el) => el.shadowRoot.querySelector(".row.draft").click());
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
