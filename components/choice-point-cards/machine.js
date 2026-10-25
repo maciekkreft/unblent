@@ -330,6 +330,50 @@ const changedOn = (context, evaluator) => {
   return evaluator.derivedFrom && was && context.day !== dateOf(context.now()) ? { ...evaluator, questions: was.questions } : evaluator;
 };
 
+// The keys of the list of cards (12, "Vim keys"): the arrows always, and with Vim keys on
+// j, k, gg, G, and o to add a choice point. `afterG` is whether a g was pressed just
+// before, which makes this g the second of gg; "g" alone waits for its second press.
+// Enter needs nothing here: a card and the New row are buttons.
+const plain = (e) => !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing;
+export function rowAction(e, vimKeys, afterG = false) {
+  if (!plain(e)) return null;
+  const arrow = { ArrowDown: "down", ArrowUp: "up" }[e.key];
+  if (arrow || !vimKeys) return arrow ?? null;
+  if (e.key === "g") return afterG ? "first" : "g";
+  return { j: "down", k: "up", G: "last", o: "add" }[e.key] ?? null;
+}
+
+// The row a move lands on, or "leave" past either end, where the key is left to what is
+// around the list (journal-entry moves on from there).
+export function rowTarget(action, at, count) {
+  const to = { down: at + 1, up: at - 1, first: 0, last: count - 1 }[action];
+  if (to === undefined) return null;
+  return to < 0 || to >= count ? "leave" : to;
+}
+
+// j in Vim's normal mode on a box's last line, or k on its first, moves to the next or
+// the previous box (12, "Vim keys"). A count, an operator or a half-typed command keeps
+// the key Vim's.
+export function boxEdge(e, vim, line, { first, last }) {
+  if (!vim || vim.insertMode || vim.visualMode || !plain(e)) return null;
+  const s = vim.inputState;
+  if (s && (s.operator || s.keyBuffer?.length || s.prefixRepeat?.length || s.motionRepeat?.length)) return null;
+  if (e.key === "j" && line >= last) return "down";
+  if (e.key === "k" && line <= first) return "up";
+  return null;
+}
+
+// The first and the last line a cursor can stand on, by the lines' lengths in order: a
+// blank line is a gap the cursor steps over (the editor kit, 10), so blank lines at either
+// end do not count, unless the cursor stands on one.
+export function edges(lengths, cursor) {
+  let first = 1;
+  let last = lengths.length;
+  while (first < cursor && lengths[first - 1] === 0) first += 1;
+  while (last > cursor && lengths[last - 1] === 0) last -= 1;
+  return { first, last };
+}
+
 const POINTS = new Set(["hover", "tap", "cursor"]);
 
 const isDay = (v) => typeof v === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v);
@@ -404,7 +448,16 @@ export const machine = setup({
       "tapped until something else is pressed, or while the text cursor is on a checked line; " +
       "otherwise the status line says why Jev could not check when it could not, and is " +
       "empty. A folded card shows a red warning beside the situation, away or towards line " +
-      "when a line there has a red mark, a red compass included.",
+      "when a line there has a red mark, a red compass included. The arrow keys, and with Vim " +
+      "keys on j, k, gg and G, step through the cards, the open sheets and the New choice " +
+      "point row; Enter opens a card, or adds a choice point on the New row, and o adds one. " +
+      "An open sheet takes the keyboard in its first box, in Vim's normal mode, or, on an " +
+      "earlier day, whose boxes take no keyboard, on Close. In a box, in Vim's normal mode, " +
+      "j on the last line goes to the first line of the next box and k on the first line to " +
+      "the last line of the box before, in the order the boxes are shown, and from the last " +
+      "or first box on to the row after or before the sheet. Escape folds the sheet and the " +
+      "keyboard stays on its card. A move past the first row or the last is left to the page " +
+      "around the list, so the journal page moves the keyboard on from there.",
     kind: "view",
     emits: ["choice-point.saved"],
     asks: ["choice-points: list", "settings: read", "choice-point-checks: read", "evaluators: list"],

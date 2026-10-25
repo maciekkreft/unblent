@@ -487,6 +487,18 @@ class ValuesSheet extends LitElement {
     this.#send({ type: "_done" }, ".card, .new");
   }
 
+  // A page that nests the sheet hands it the keyboard by its host (journal-entry, with
+  // Vim keys): folded, on the card or the Write your values row; open, on the first box,
+  // in Vim's normal mode, or on a button of a sheet that is only read.
+  focus(options) {
+    const first = this.renderRoot?.querySelector(".box[data-key]");
+    const box = first && this.#boxes.get(first.dataset.key);
+    if (box) return box.view.focus();
+    const button = this.renderRoot?.querySelector("section > .card, section > .new, .sheet button");
+    if (button) button.focus(options);
+    else super.focus(options);
+  }
+
   #add() {
     this.#actor.send({ type: "_add" });
     this.#focusNext = `.box[data-key="${this.#actor.snapshot?.context.drafts.at(-1)?.id}:name"]`;

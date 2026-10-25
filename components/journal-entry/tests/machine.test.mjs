@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown } from "../machine.js";
+import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown, textEdge, nestedStep, edges } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
 // is saved when. Times are built with the local Date constructor, so the midnight cases
@@ -567,4 +567,30 @@ test("a source link's text is kept raw through the levels", () => {
   const md = "# [q](note:01K7TEST0000000000000H0001) title\nsee [a \\[b\\]](note:01K7TEST0000000000000H0001)";
   const { doc, levels } = parseBody(md);
   assert.equal(serialize(doc, levels), md);
+});
+
+// --- The keys (12, "Vim keys") ------------------------------------------------------
+
+test("j in normal mode on the text's last line goes down onto the nested views", () => {
+  const normal = { insertMode: false, visualMode: false, inputState: { keyBuffer: [], prefixRepeat: [], motionRepeat: [], operator: null } };
+  assert.equal(textEdge({ key: "j" }, normal, 4, { last: 4 }), "down");
+  assert.equal(textEdge({ key: "j" }, normal, 3, { last: 4 }), null);
+  assert.equal(textEdge({ key: "k" }, normal, 4, { last: 4 }), null);
+  assert.equal(textEdge({ key: "j" }, { ...normal, insertMode: true }, 4, { last: 4 }), null);
+  assert.equal(textEdge({ key: "j" }, { ...normal, inputState: { ...normal.inputState, keyBuffer: ["g"] } }, 4, { last: 4 }), null);
+  assert.equal(textEdge({ key: "j", metaKey: true }, normal, 4, { last: 4 }), null);
+  assert.equal(textEdge({ key: "j" }, undefined, 4, { last: 4 }), null);
+});
+
+test("blank lines after the text's last words do not count as its last line", () => {
+  assert.deepEqual(edges([5, 0, 3, 0, 0], 3).last, 3);
+  assert.deepEqual(edges([5, 0, 0], 3).last, 3);
+});
+
+test("a j or k a nested view left unused moves on only with Vim keys on", () => {
+  assert.equal(nestedStep({ key: "j" }, true), "down");
+  assert.equal(nestedStep({ key: "k" }, true), "up");
+  assert.equal(nestedStep({ key: "k" }, false), null);
+  assert.equal(nestedStep({ key: "ArrowUp" }, true), null);
+  assert.equal(nestedStep({ key: "k", ctrlKey: true }, true), null);
 });

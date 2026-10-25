@@ -2,11 +2,11 @@ import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode } from "@codemirror/state";
+import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode, Prec } from "@codemirror/state";
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
-import { Vim } from "@replit/codemirror-vim";
+import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing } from "./machine.js";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, edges } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
@@ -511,21 +511,86 @@ class JournalEntry extends LitElement {
     this.#actor.send(event);
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this.addEventListener("keydown", this.#onNestedKey);
+  }
+
   disconnectedCallback() {
     super.disconnectedCallback();
+    this.removeEventListener("keydown", this.#onNestedKey);
     this.#view?.destroy();
     this.#view = null;
   }
 
   // dock-desk's Ctrl+h/j/k/l and list-then-item focus a panel by its host: land in the
-  // text when it can be typed in.
+  // text when it can be typed in, else on the first nested view that takes the keyboard
+  // (an earlier day), so its keys work at once.
   focus(options) {
     if (this.#view && this.#editableOn) this.#view.focus();
-    else super.focus(options);
+    else if (!this.#enter(0, 1)) super.focus(options);
   }
+
+  #nested() {
+    return this.renderRoot?.querySelector("slot")?.assignedElements() ?? [];
+  }
+
+  // The keyboard handed to a nested view the way a container hands it to its child
+  // (list-then-item): the view decides where in it the keyboard lands, and one that shows
+  // nothing to land on (an earlier day without values) is passed over.
+  #enter(from, dir) {
+    const nested = this.#nested();
+    for (let i = from; i >= 0 && i < nested.length; i += dir) {
+      nested[i].focus({ from: dir > 0 ? "above" : "below", preventScroll: false });
+      if (nested[i].matches(":focus-within")) return true;
+    }
+    return false;
+  }
+
+  // Back up to the start of the text's last line, in Vim's normal mode; an earlier day's
+  // text takes no keyboard.
+  #toText() {
+    if (!this.#view || !this.#editableOn) return false;
+    const { doc } = this.#view.state;
+    const last = doc.line(edges(Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).length), 1).last);
+    this.#view.focus();
+    this.#view.dispatch({ selection: { anchor: last.from }, scrollIntoView: true });
+    return true;
+  }
+
+  // A j or k a nested view did not use bubbles out of it to here (12, "Vim keys"). Never
+  // while typing in a box of it, where a letter is text.
+  #onNestedKey = (event) => {
+    if (event.defaultPrevented) return;
+    const step = nestedStep(event, this.#actor.snapshot?.context.vimKeys === true);
+    if (!step) return;
+    const path = event.composedPath();
+    const target = path[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
+    const at = this.#nested().findIndex((el) => path.includes(el));
+    if (at < 0) return;
+    const moved = step === "down" ? this.#enter(at + 1, 1) : this.#enter(at - 1, -1) || this.#toText();
+    if (moved) event.preventDefault();
+  };
 
   #extensions(editable, vimOn) {
     return [
+      // j on the last line goes down onto the nested views (12, "Vim keys"). A keydown
+      // handler at Prec.highest, because the Vim plugin's handler runs before every keymap.
+      Prec.highest(
+        EditorView.domEventHandlers({
+          keydown: (event, view) => {
+            if (this.#actor.snapshot?.context.vimKeys !== true) return false;
+            const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+            const { doc } = view.state;
+            const lengths = Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).length);
+            if (textEdge(event, getCM(view)?.state?.vim, line, edges(lengths, line)) !== "down") return false;
+            if (!this.#enter(0, 1)) return false;
+            event.preventDefault();
+            return true;
+          },
+        }),
+      ),
       ...baseExtensions({ vim: vimOn, quit: () => this.#send({ type: "_quit" }) }),
       paragraphs({ notList: leveled, box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       this.#editable.of(editability(editable)),

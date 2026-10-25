@@ -23,7 +23,7 @@ const inCards = (page, fn) =>
   page.evaluate((fn) => new Function("root", `return (${fn})(root)`)(document.querySelector("choice-point-cards").shadowRoot), fn.toString());
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
-  describe(`choice-point-cards in ${engine.name}`, { timeout: 20000 }, () => {
+  describe(`choice-point-cards in ${engine.name}`, { timeout: 30000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -336,6 +336,47 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       assert.ok(wide.away.x + wide.away.width <= wide.v.x && wide.v.x + wide.v.width <= wide.towards.x, "away, V, towards in one row");
       const narrow = await layout(390);
       assert.ok(narrow.v.y + narrow.v.height <= narrow.away.y && narrow.away.y < narrow.towards.y, "the V above away, away above towards");
+    });
+
+    // Browser: focus and keys.
+    test("with Vim keys on, j and k step through the cards and the boxes, Enter opens, Escape folds onto the card, o adds", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("choice-points"));
+      try {
+        const now = new Date();
+        const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
+        const put = await context.request.put(`${BASE_URL}/api/choice-points/01K7TEST00000000000000CPK1`, {
+          data: { day: today, situation: "Dinner", thoughts: "", away: "a1\na2", towards: "t1" },
+        });
+        assert.ok(put.ok());
+        await context.addInitScript((v) => localStorage.setItem("settings", v), VIM_ON);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await until(async () => (await inCards(page, (root) => root.querySelector(".card")?.innerText ?? "")).includes("Dinner"));
+        const at = () => inCards(page, (root) => root.activeElement?.closest(".box")?.dataset.field ?? root.activeElement?.className ?? null);
+        const press = async (key, want) => {
+          await page.keyboard.press(key);
+          await until(async () => (await at()) === want);
+        };
+        await page.evaluate(() => document.querySelector("choice-point-cards").focus());
+        await until(async () => (await at()) === "card");
+        await press("j", "new");
+        await press("k", "card");
+        await press("Enter", "situation");
+        await press("Escape", "situation");
+        await press("k", "towards");
+        // k from Towards' first line lands on the last line of Away, so j goes straight back.
+        await press("k", "away");
+        await press("j", "towards");
+        await press("Escape", "card");
+        await press("o", "situation");
+        assert.equal(await inCards(page, (root) => root.querySelectorAll(".sheet").length), 1, "o opened a new choice point");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
     });
   });
 }

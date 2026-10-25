@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } f
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable } from "./machine.js";
+import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable, rowAction, rowTarget, boxEdge, edges } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page
@@ -36,6 +36,9 @@ const boxTheme = (lines) =>
 const shortTheme = boxTheme(2);
 // The two moves stand beside the V, so they start as tall as it is.
 const tallTheme = boxTheme(4);
+
+// Each line's length, in order, for edges().
+const lengthsOf = (doc) => Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).length);
 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
@@ -644,6 +647,7 @@ class ChoicePointCards extends LitElement {
     return Prec.highest(
       EditorView.domEventHandlers({
         keydown: (event, view) => {
+          if (this.#boxEdge(event, view, id, field)) return true;
           if (event.key !== "Escape" || event.isComposing) return false;
           event.stopPropagation();
           const box = this.#boxes.get(`${id}:${field}`);
@@ -656,6 +660,93 @@ class ChoicePointCards extends LitElement {
       }),
     );
   }
+
+  // j on a box's last line or k on its first, in Vim's normal mode, moves on to the next
+  // or the previous box of the sheet in the order shown, and past its last or first box to
+  // the row after or before the sheet (12, "Vim keys").
+  #boxEdge(event, view, id, field) {
+    const box = this.#boxes.get(`${id}:${field}`);
+    if (!box?.vimOn) return false;
+    const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+    const step = boxEdge(event, getCM(view)?.state?.vim, line, edges(lengthsOf(view.state.doc), line));
+    if (!step) return false;
+    const sheet = box.region.closest(".sheet");
+    const regions = [...sheet.querySelectorAll(".box[data-key]")];
+    const next = regions[regions.indexOf(box.region) + (step === "down" ? 1 : -1)];
+    const to = next && this.#boxes.get(next.dataset.key);
+    if (to) this.#landIn(to, step === "down" ? "first" : "last");
+    else {
+      const rows = this.#rows();
+      const at = rows.indexOf(sheet) + (step === "down" ? 1 : -1);
+      if (at < 0 || at >= rows.length) return false;
+      this.#focusRow(rows[at], step === "down" ? "first" : "last");
+    }
+    event.preventDefault();
+    return true;
+  }
+
+  // A box takes the keyboard in Vim's normal mode, at the start of its first line or of
+  // its last.
+  #landIn(box, edge) {
+    const { doc } = box.view.state;
+    box.view.focus();
+    const lengths = lengthsOf(doc);
+    const n = edge === "first" ? edges(lengths, doc.lines).first : edges(lengths, 1).last;
+    box.view.dispatch({ selection: { anchor: doc.line(n).from }, scrollIntoView: true });
+  }
+
+  // The rows of the list, in the order shown: cards, open sheets and the New row.
+  #rows() {
+    return [...(this.renderRoot?.querySelectorAll(".list > *") ?? [])];
+  }
+
+  // A card or the New row takes the keyboard itself; an open sheet in its first box (its
+  // last, coming from below), or on Close when its boxes take no keyboard.
+  #focusRow(row, edge = "first") {
+    if (!row.classList.contains("sheet")) return row.focus();
+    const regions = [...row.querySelectorAll(".box[data-key]")];
+    const region = edge === "first" ? regions[0] : regions.at(-1);
+    const box = region && this.#boxes.get(region.dataset.key);
+    if (box && !box.readOn) this.#landIn(box, edge);
+    else row.querySelector(".close, .done")?.focus();
+  }
+
+  // A page that nests the cards hands them the keyboard by the host (journal-entry, with
+  // Vim keys): the first row, or the last when it comes from below.
+  focus(options) {
+    const rows = this.#rows();
+    const row = options?.from === "below" ? rows.at(-1) : rows[0];
+    if (row) this.#focusRow(row, options?.from === "below" ? "last" : "first");
+    else super.focus(options);
+  }
+
+  // The list's keys (12, "Vim keys"), on a card, the New row or a sheet's button; a box
+  // decides its own (#boxEdge). gg is two presses, so a first g waits a moment for the
+  // second, as in the other lists. A move past either end is not used here, so it
+  // bubbles on to the page around.
+  #gAt = 0;
+  #rowKey = (event) => {
+    if (event.defaultPrevented) return;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
+    const context = this.#actor.snapshot?.context;
+    const afterG = event.key === "g" && Date.now() - this.#gAt < 1000;
+    const action = rowAction(event, context?.vimKeys === true, afterG);
+    this.#gAt = action === "g" ? Date.now() : 0;
+    if (!action) return;
+    if (action === "g") return event.preventDefault();
+    if (action === "add") {
+      if (!writable(context) || !this.#actor.snapshot.matches("ready")) return;
+      event.preventDefault();
+      return this.#add();
+    }
+    const rows = this.#rows();
+    const at = rows.findIndex((r) => r.contains(target));
+    const to = rowTarget(action, at, rows.length);
+    if (to === null || to === "leave") return;
+    event.preventDefault();
+    this.#focusRow(rows[to], action === "up" ? "last" : "first");
+  };
 
   #extensions(key, spec, vimOn) {
     const { id, field } = spec;
@@ -862,7 +953,7 @@ class ChoicePointCards extends LitElement {
       <h3 id="heading">Choice points</h3>
       ${failed ? html`<p class="empty">Choice points are unavailable.</p>` : nothing}
       ${items.length || writable(context)
-        ? html`<div class="list">
+        ? html`<div class="list" @keydown=${this.#rowKey}>
             ${items.map((r) => (draftOf(r) ? this.#sheet(context, draftOf(r)) : this.#card(context, r)))}
             ${writable(context)
               ? html`<button type="button" class="new" ?disabled=${!ready} @click=${() => this.#add()}>

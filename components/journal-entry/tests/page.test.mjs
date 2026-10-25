@@ -291,5 +291,32 @@ for (const engine of ENGINES) {
       await page.keyboard.press("Enter");
       await until(async () => debug.some((l) => / event book\.closed journal-entry → /.test(l)));
     });
+
+    // Browser: focus and keys.
+    run("with Vim keys on, j from the text's last line steps onto the nested views in order, and k back to the text", async (page) => {
+      await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await until(async () => (await page.locator("choice-point-cards .new:not([disabled])").count()) === 1);
+      await write(page, "one\ntwo");
+      // Which nested view, or the text, holds the keyboard.
+      const at = () =>
+        page.evaluate(() => {
+          const host = ["values-sheet", "choice-point-cards"].find((n) => document.querySelector(n)?.matches(":focus-within"));
+          if (host) return host;
+          return document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") ? "text" : null;
+        });
+      const press = async (key, want) => {
+        await page.keyboard.press(key);
+        await until(async () => (await at()) === want);
+      };
+      await press("Escape", "text");
+      await press("j", "values-sheet");
+      await press("j", "choice-point-cards");
+      await press("k", "values-sheet");
+      await press("k", "text");
+      // A appends at the end of the cursor's line: back on the last line.
+      await page.keyboard.type("A!");
+      await until(async () => (await editor(page).innerText()).includes("two!"));
+    });
   });
 }

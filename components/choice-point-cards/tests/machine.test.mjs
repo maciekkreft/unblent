@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable } from "../machine.js";
+import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable, rowAction, rowTarget, boxEdge, edges } from "../machine.js";
 
 const json = (name) => JSON.parse(readFileSync(new URL(`../events/${name}.json`, import.meta.url), "utf8"));
 const SCHEMAS = { "choice-point.saved": json("choice-point.saved") };
@@ -570,4 +570,51 @@ test("Your values' marks name the value by the question's name, and fall back wh
   delete named.questions[0].name;
   const against = marksOf(BOTH, done("x", [ans(V1, AGAINST, "Goes against", 0.95)]), [...EVALUATORS, named]);
   assert.equal(against.at(-1).name, "Goes against one of your values");
+});
+
+// --- The keys (12, "Vim keys") ------------------------------------------------------
+
+test("the arrows always step through the rows, the Vim letters only with Vim keys on", () => {
+  const key = (k, more = {}) => ({ key: k, ...more });
+  assert.equal(rowAction(key("ArrowDown"), false), "down");
+  assert.equal(rowAction(key("ArrowUp"), false), "up");
+  assert.equal(rowAction(key("j"), false), null);
+  assert.equal(rowAction(key("j"), true), "down");
+  assert.equal(rowAction(key("k"), true), "up");
+  assert.equal(rowAction(key("G"), true), "last");
+  assert.equal(rowAction(key("o"), true), "add");
+  assert.equal(rowAction(key("g"), true), "g");
+  assert.equal(rowAction(key("g"), true, true), "first");
+  assert.equal(rowAction(key("j", { ctrlKey: true }), true), null);
+  assert.equal(rowAction(key("Enter"), true), null);
+});
+
+test("a move past the first row or the last is left to the page around the list", () => {
+  assert.equal(rowTarget("down", 0, 3), 1);
+  assert.equal(rowTarget("up", 2, 3), 1);
+  assert.equal(rowTarget("first", 2, 3), 0);
+  assert.equal(rowTarget("last", 0, 3), 2);
+  assert.equal(rowTarget("up", 0, 3), "leave");
+  assert.equal(rowTarget("down", 2, 3), "leave");
+  assert.equal(rowTarget("add", 0, 3), null);
+});
+
+test("j on a box's last line and k on its first move on, only in Vim's normal mode with nothing typed half", () => {
+  const normal = { insertMode: false, visualMode: false, inputState: { keyBuffer: [], prefixRepeat: [], motionRepeat: [], operator: null } };
+  assert.equal(boxEdge({ key: "j" }, normal, 3, { first: 1, last: 3 }), "down");
+  assert.equal(boxEdge({ key: "j" }, normal, 2, { first: 1, last: 3 }), null);
+  assert.equal(boxEdge({ key: "k" }, normal, 1, { first: 1, last: 3 }), "up");
+  assert.equal(boxEdge({ key: "k" }, normal, 2, { first: 1, last: 3 }), null);
+  assert.equal(boxEdge({ key: "j" }, { ...normal, insertMode: true }, 3, { first: 1, last: 3 }), null);
+  assert.equal(boxEdge({ key: "j" }, { ...normal, visualMode: true }, 3, { first: 1, last: 3 }), null);
+  assert.equal(boxEdge({ key: "j" }, { ...normal, inputState: { ...normal.inputState, prefixRepeat: ["2"] } }, 3, { first: 1, last: 3 }), null);
+  assert.equal(boxEdge({ key: "j" }, { ...normal, inputState: { ...normal.inputState, operator: "delete" } }, 3, { first: 1, last: 3 }), null);
+  assert.equal(boxEdge({ key: "j" }, null, 3, { first: 1, last: 3 }), null);
+});
+
+test("blank lines at a box's ends are gaps the cursor steps over, so they do not count as its edges", () => {
+  assert.deepEqual(edges([2, 0, 1, 0, 0], 3), { first: 1, last: 3 });
+  assert.deepEqual(edges([0, 0, 4], 3), { first: 3, last: 3 });
+  assert.deepEqual(edges([2, 0], 2), { first: 1, last: 2 });
+  assert.deepEqual(edges([0], 1), { first: 1, last: 1 });
 });

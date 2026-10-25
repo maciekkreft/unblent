@@ -258,6 +258,33 @@ export const linkMissing = ({ notes, removed }) => (id) => removed.includes(id) 
 
 const without = (list, id) => (list.includes(id) ? list.filter((x) => x !== id) : list);
 
+// Vim keys on a journal day (12, "Vim keys"): j in normal mode on the text's last line
+// moves the keyboard down onto the views nested under the text, and k on a nested view's
+// first row, which that view leaves unused, moves it back up. `vim` is the Vim plugin's
+// state of the editor; a count, an operator or a half-typed command keeps the key Vim's.
+const plain = (e) => !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing;
+export function textEdge(e, vim, line, { last }) {
+  if (!vim || vim.insertMode || vim.visualMode || !plain(e)) return null;
+  const s = vim.inputState;
+  if (s && (s.operator || s.keyBuffer?.length || s.prefixRepeat?.length || s.motionRepeat?.length)) return null;
+  return e.key === "j" && line >= last ? "down" : null;
+}
+
+// The first and the last line a cursor can stand on, by the lines' lengths in order: a
+// blank line is a gap the cursor steps over (the editor kit, 10), so blank lines at either
+// end do not count, unless the cursor stands on one.
+export function edges(lengths, cursor) {
+  let first = 1;
+  let last = lengths.length;
+  while (first < cursor && lengths[first - 1] === 0) first += 1;
+  while (last > cursor && lengths[last - 1] === 0) last -= 1;
+  return { first, last };
+}
+
+// A j or k a nested view let bubble out unused: the next or the previous stop in the
+// order shown, the text being the stop above the first nested view.
+export const nestedStep = (e, vimKeys) => (vimKeys && plain(e) ? { j: "down", k: "up" }[e.key] ?? null : null);
+
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
 export const machine = setup({
@@ -316,7 +343,12 @@ export const machine = setup({
       " A web address, bare or written as [label](https://…), is drawn as an underlined link in " +
       "the accent color, a markdown link showing only its label except on the line being " +
       "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab, on an " +
-      "earlier day too.",
+      "earlier day too. With Vim keys on, j in normal mode on the text's last line moves the " +
+      "keyboard down onto the views nested under the text, in the order they are shown, and " +
+      "j or k on one of them that it does not use itself (j on its last row, k on its first) " +
+      "moves to the next one or back up, the text being the stop above the first; the keyboard " +
+      "comes back to the start of the text's last line. On an earlier day, whose text takes no " +
+      "keyboard, the keyboard lands on the first nested view instead.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed", "passage.selected", "conflict.reopened"],
     attributes: ["height"],

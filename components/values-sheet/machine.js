@@ -193,7 +193,9 @@ export const machine = setup({
       "Which days are listed, and whether Changed since is offered, is the values fact's to " +
       "say, and is asked again after every change. " +
       "What is written is saved a short time into typing and at once when a box loses focus " +
-      "or the sheet folds.",
+      "or the sheet folds. When the page hands it the keyboard, it lands on the folded card " +
+      "or the Write your values row, or, open, on the first box, or on a button when the " +
+      "sheet is only read.",
     kind: "view",
     emits: ["values.saved"],
     asks: ["values: read", "values: versions", "settings: read"],
