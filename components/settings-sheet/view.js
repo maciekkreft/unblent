@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
@@ -776,9 +776,9 @@ class SettingsSheet extends LitElement {
   // The choice point checks: Jev answers an evaluator's questions about each line of a
   // box. The part folds the way the Vim keys list does (the user asked for the same fold):
   // the name and what it costs stay in view, the boxes are in a fold that starts closed.
-  // Hidden when the page has no `choice-point-checks` to keep the settings.
+  // Hidden when the page has no `choice-point-checks` to keep the settings, or a flag hides it (machine.js: checksShown).
   #checks(checks, evaluators) {
-    if (!checks) return nothing;
+    if (!checksShown({ checks, hidden: this.#actor.snapshot.context.hidden })) return nothing;
     const choosable = evaluators.filter((e) => !e.removing);
     return html`
       <div class="checks">

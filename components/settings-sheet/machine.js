@@ -179,8 +179,15 @@ const membersByRole = (components) => {
   return roles;
 };
 
+// Whether the choice point checks part is shown: a page whose `choice-point-checks`
+// answered, while `flags` reports neither choice points nor evaluators hidden. Until
+// `flags` answers (`hidden` is null) it is hidden, the same as `flags` itself (3.1).
+export const checksShown = ({ checks, hidden }) =>
+  checks !== null && hidden !== null && !hidden.includes("choice-points") && !hidden.includes("evaluators");
+
 export const machine = setup({
   actors: {
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     pages: fromPromise(({ input }) => input.ask("pages", "list", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     catalog: fromPromise(({ input }) => input.ask("catalog", "list", {})),
@@ -213,7 +220,8 @@ export const machine = setup({
       "mark, and None takes it away again. Your values chosen as a box's own evaluator has no " +
       "per-question settings either. It stays when the box's evaluator is switched, and " +
       "Not checked clears it with the rest. The part is " +
-      "hidden on a page without `choice-point-checks`. The Vim keys list names the chat box " +
+      "hidden on a page without `choice-point-checks`, and while `flags` reports choice " +
+      "points or evaluators hidden, or has not answered (a page without `flags` hides nothing). The Vim keys list names the chat box " +
       "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +
       "bar, and the key is removed only when the window ends; leaving the page before then " +
@@ -234,6 +242,7 @@ export const machine = setup({
       "conversations: tools",
       "choice-point-checks: read",
       "evaluators: list",
+      "flags: read",
     ],
   },
   // The active profile (§12), adopted from settings; a page without settings
@@ -270,7 +279,16 @@ export const machine = setup({
     undoMs: input.undoMs ?? 3000,
     removing: [],
     removed: [],
+    // The features `flags` reports hidden, for the choice point checks part (8); null
+    // until it answers.
+    hidden: null,
   }),
+  invoke: {
+    src: "flags",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
+    onError: { actions: assign({ hidden: [] }) },
+  },
   initial: "loadingPages",
   states: {
     loadingPages: {
@@ -487,6 +505,7 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     _undoRemove: {
       guard: ({ context, event }) => context.removing.includes(event.field),
       actions: enqueueActions(({ context, event, enqueue }) => {

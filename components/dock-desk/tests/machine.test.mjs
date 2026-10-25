@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove } from "../machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove, visible } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -847,4 +847,36 @@ test("on a narrow desk, a note opened on the stage brings the stage forward and 
   assert.deepEqual(emitted, [
     { type: "dock.arranged", stage: "book-stage", docks: { right: { open: false, views: ["notes"] } } },
   ]);
+});
+
+test("a child whose flag is hidden is drawn nowhere, and the stored layout keeps its place", async () => {
+  const views = [
+    { name: "book-stage", label: "Reader" },
+    { name: "notes", label: "Notes", side: "right" },
+    { name: "chats", label: "Chats", side: "right", flag: "chats" },
+  ];
+  const flags = { off: ["chats"], hidden: ["chats"] };
+  const ask = (target) =>
+    target === "flags"
+      ? Promise.resolve(flags)
+      : stored({ stage: "book-stage", docks: { right: { open: true, views: ["notes", "chats"], active: "chats" } } })(target);
+  const { actor, emitted } = await settle(ask, { views });
+  await new Promise((r) => setTimeout(r));
+  const drawn = visible(actor.getSnapshot().context);
+  assert.deepEqual(drawn.views.map((v) => v.name), ["book-stage", "notes"]);
+  assert.deepEqual(drawn.docks, { right: { open: true, views: ["notes"] } });
+  assert.equal(drawn.stage, "book-stage");
+  // A gesture announces the whole stored layout, the hidden view still in it.
+  actor.send({ type: "_fold", side: "right" });
+  assert.deepEqual(emitted.at(-1).docks.right.views, ["notes", "chats"]);
+  // Turned back on, it is drawn where it was.
+  actor.send({ type: "flags.changed", off: [], hidden: [] });
+  assert.deepEqual(visible(actor.getSnapshot().context).docks.right, { open: true, views: ["notes", "chats"], active: "chats" });
+});
+
+test("until flags answers every flagged child is hidden; with nothing hidden the layout is drawn as stored", () => {
+  const context = { views: [{ name: "a" }, { name: "b", flag: "chats" }], docks: {}, stage: "b", hidden: null };
+  assert.equal(visible(context).stage, "a");
+  const open = { ...context, hidden: [] };
+  assert.equal(visible(open), open);
 });

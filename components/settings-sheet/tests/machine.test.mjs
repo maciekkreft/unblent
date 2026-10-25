@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, merge } from "../machine.js";
+import { machine, merge, checksShown } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMAS = {
@@ -521,4 +521,14 @@ test("Remove on a key waits out the undo window; Undo keeps the key", async () =
   assert.deepEqual(actor.getSnapshot().context.removed, ["jevKey"]);
   actor.send({ type: "llm.changed", ...LLM_PICTURE, jev: { keySet: false } });
   assert.deepEqual(actor.getSnapshot().context.removed, [], "the new picture shows the key gone");
+});
+
+test("the choice point checks part is hidden while flags hides choice points or evaluators, or before it answers", () => {
+  const checks = {};
+  assert.equal(checksShown({ checks, hidden: [] }), true);
+  assert.equal(checksShown({ checks: null, hidden: [] }), false, "no choice-point-checks on the page");
+  assert.equal(checksShown({ checks, hidden: null }), false, "flags has not answered");
+  assert.equal(checksShown({ checks, hidden: ["choice-points"] }), false);
+  assert.equal(checksShown({ checks, hidden: ["evaluators"] }), false);
+  assert.equal(checksShown({ checks, hidden: ["chats", "highlights"] }), true);
 });

@@ -287,8 +287,18 @@ export const nestedStep = (e, vimKeys) => (vimKeys && plain(e) ? { j: "down", k:
 
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
+// Whether a nested view is shown (8): one with no `flag`, or whose feature `flags`
+// reports not hidden. Until `flags` answers (`hidden` is null) a flagged view is hidden,
+// the same as `flags` itself with no answer yet (3.1).
+export const flagShown = (flag, hidden) => !flag || (hidden !== null && !hidden.includes(flag));
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is
+// an error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
 export const machine = setup({
   actors: {
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
@@ -348,11 +358,13 @@ export const machine = setup({
       "j or k on one of them that it does not use itself (j on its last row, k on its first) " +
       "moves to the next one or back up, the text being the stop above the first; the keyboard " +
       "comes back to the start of the text's last line. On an earlier day, whose text takes no " +
-      "keyboard, the keyboard lands on the first nested view instead.",
+      "keyboard, the keyboard lands on the first nested view instead. A nested view the page " +
+      "gives `flag` naming a feature is not shown while `flags` reports the feature hidden, " +
+      "and until `flags` answers; a page without `flags` hides nothing.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed", "passage.selected", "conflict.reopened"],
     attributes: ["height"],
-    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read"],
+    asks: ["journal: read", "settings: read", "books: read", "session: read", "notes: list", "notes: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -395,10 +407,19 @@ export const machine = setup({
     removed: [],
     // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
+    // The features `flags` reports hidden, for the nested views' `flag` (8); null until it
+    // answers.
+    hidden: null,
   }),
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
   invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
     {
       src: "settings",
       input: ({ context }) => ({ ask: context.ask }),
@@ -509,6 +530,7 @@ export const machine = setup({
       })),
     },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null })) },
     _show: { actions: assign(({ event }) => ({ selected: null, chapter: event.chapter })) },

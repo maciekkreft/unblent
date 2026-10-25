@@ -142,6 +142,36 @@ const shown = (context, type) => {
   return { stage, docks };
 };
 
+// The views a flag hides (8): a child whose `flag` names a feature `flags` reports
+// hidden. Until `flags` answers (`hidden` is null) every flagged child is hidden, the
+// same as `flags` itself with no answer yet (3.1).
+const hiddenNames = (context) =>
+  new Set(context.views.filter((v) => v.flag && (context.hidden === null || context.hidden.includes(v.flag))).map((v) => v.name));
+
+// The layout as drawn: the stored one with the hidden views left out, a side left
+// empty dropped, a side whose shown tab is hidden showing its first remaining one, and
+// a hidden stage replaced by the first free view. Only the drawing changes; the stored
+// layout keeps every view where it was, so a feature turned back on comes back to its
+// place, and a gesture announces the whole stored layout.
+export const visible = (context) => {
+  const gone = hiddenNames(context);
+  if (!gone.size) return context;
+  const views = context.views.filter((v) => !gone.has(v.name));
+  const docks = {};
+  for (const s of SIDES) {
+    const dock = context.docks[s];
+    if (!dock) continue;
+    const kept = dock.views.filter((n) => !gone.has(n));
+    if (kept.length) docks[s] = side(dock.open, kept, dock.active);
+  }
+  const stage = context.stage && !gone.has(context.stage) ? context.stage : firstFree(views, docks);
+  return { ...context, views, docks, stage };
+};
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is
+// an error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
 // Already in view: nothing to announce, so `dock` stores nothing.
 const showsMore = ({ context, event }) => {
   const next = shown(context, event.type);
@@ -289,6 +319,7 @@ export const machine = setup({
   actors: {
     read: fromPromise(({ input }) => input.ask("dock", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
   },
 }).createMachine({
   id: "dock-desk",
@@ -306,7 +337,10 @@ export const machine = setup({
       "`note.selected`, `conversation.selected`, `evaluator.selected`, or `note.staged`, a note opened on the stage), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
-      "another device's change never moves a tab. These are read from each child and are not attributes of `dock-desk` itself. While " +
+      "another device's change never moves a tab; and `flag` naming a feature, which draws no " +
+      "tab and no panel for that child while `flags` reports the feature hidden, and until " +
+      "`flags` answers, while the stored layout keeps its place for when the feature comes " +
+      "back on (a page without `flags` hides nothing). These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. " +
       "A child that announces tabs of its own (`tabs.shown`) is drawn, wherever it sits and " +
@@ -340,7 +374,7 @@ export const machine = setup({
     kind: "view",
     emits: ["dock.arranged", "tab.picked", "tab.closed", "tab.moved"],
     attributes: [],
-    asks: ["dock: read", "settings: read"],
+    asks: ["dock: read", "settings: read", "flags: read"],
   },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
@@ -363,7 +397,17 @@ export const machine = setup({
     // Each child's own tabs, by its address, as its last tabs.shown announced them: the
     // child owns them, the desk only draws them.
     tabs: {},
+    // The features `flags` reports hidden (8), null until it answers.
+    hidden: null,
   }),
+  // Which children a flag hides is asked once at mount, beside the layout, and
+  // followed through flags.changed (4.3, fourth rule).
+  invoke: {
+    src: "flags",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
+    onError: { actions: assign({ hidden: [] }) },
+  },
   initial: "loading",
   states: {
     loading: {
@@ -526,6 +570,7 @@ export const machine = setup({
     "settings.changed": {
       actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
     },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     // A child announces its own tabs: kept by its address, for a child on this desk only.
     "tabs.shown": {
       guard: ({ context, event }) => names(context.views).includes(event.view),

@@ -93,7 +93,7 @@
     <viewas-bar></viewas-bar>
     <page-nav></page-nav>
     <dock-desk>
-      <book-stage label="Reader" height="fill" shows-on="note.staged"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"><values-sheet></values-sheet><choice-point-cards></choice-point-cards></journal-entry><note-editor id="stage" stage height="fill"></note-editor></book-stage>
+      <book-stage label="Reader" height="fill" shows-on="note.staged"><book-reader highlights height="fill"></book-reader><journal-entry height="fill"><values-sheet></values-sheet><choice-point-cards flag="choice-points"></choice-point-cards></journal-entry><note-editor id="stage" stage height="fill"></note-editor></book-stage>
       <list-then-item id="books" label="Books" side="left" height="fill" shows-on="book.selected">
         <book-shelf label="Books" renames></book-shelf>
         <book-toc shows-on="book.selected"></book-toc>
@@ -103,11 +103,11 @@
         <note-editor id="notes-editor" follows subject height="fill" shows-on="note.selected"></note-editor>
         <highlight-notes shows-on="highlights.selected" height="fill"></highlight-notes>
       </list-then-item>
-      <list-then-item id="chats" label="Chats" side="right" height="fill" shows-on="conversation.selected">
+      <list-then-item id="chats" flag="chats" label="Chats" side="right" height="fill" shows-on="conversation.selected">
         <conversation-list subject label="Chats"></conversation-list>
         <chat-thread shows-on="conversation.selected" height="fill" markdown><chat-input></chat-input></chat-thread>
       </list-then-item>
-      <list-then-item id="evaluators" label="Evaluators" side="right" height="fill" shows-on="evaluator.selected">
+      <list-then-item id="evaluators" flag="evaluators" label="Evaluators" side="right" height="fill" shows-on="evaluator.selected">
         <evaluator-list subject label="Evaluators"></evaluator-list>
         <evaluator-editor subject shows-on="evaluator.selected" height="fill"></evaluator-editor>
       </list-then-item>

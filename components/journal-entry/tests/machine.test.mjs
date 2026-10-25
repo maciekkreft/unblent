@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown, textEdge, nestedStep, edges } from "../machine.js";
+import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown, textEdge, nestedStep, edges, flagShown } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
 // is saved when. Times are built with the local Date constructor, so the midnight cases
@@ -593,4 +593,16 @@ test("a j or k a nested view left unused moves on only with Vim keys on", () => 
   assert.equal(nestedStep({ key: "k" }, false), null);
   assert.equal(nestedStep({ key: "ArrowUp" }, true), null);
   assert.equal(nestedStep({ key: "k", ctrlKey: true }, true), null);
+});
+
+test("a nested view's flag hides it while flags reports the feature hidden, and until flags answers", async () => {
+  assert.equal(flagShown(null, null), true, "a view without a flag is always shown");
+  assert.equal(flagShown("choice-points", null), false, "no answer yet");
+  assert.equal(flagShown("choice-points", ["choice-points"]), false);
+  assert.equal(flagShown("choice-points", ["chats"]), true);
+  // A reply that holds no picture, as on a page without flags, hides nothing.
+  const { actor } = await start(picture({ days: [day(TODAY, "2026-10-12", "First.")], open: TODAY }));
+  assert.deepEqual(actor.getSnapshot().context.hidden, []);
+  actor.send({ type: "flags.changed", off: ["choice-points"], hidden: ["choice-points"] });
+  assert.deepEqual(actor.getSnapshot().context.hidden, ["choice-points"]);
 });

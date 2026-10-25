@@ -70,8 +70,11 @@ const isHighlight = (note, subject) =>
 // The Highlights row (Decision 1, 5, 6), the Highlights note to the user (13): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
 // unless at least one note is a highlight of it. Its count and latest time come from the
 // notes the list already holds (no new query), so it is pure like `shown` and `apart`.
-export const highlights = ({ notes, following, subject }) => {
+// None while `flags` reports the highlights feature hidden, or has not answered yet
+// (`hidden` is null), the same as `flags` itself with no answer (3.1).
+export const highlights = ({ notes, following, subject, hidden }) => {
   if (!following || subject == null) return null;
+  if (hidden === null || hidden?.includes("highlights")) return null;
   const hs = notes.filter((n) => isHighlight(n, subject));
   return hs.length ? { count: hs.length, updatedAt: Math.max(...hs.map((n) => n.updatedAt)) } : null;
 };
@@ -186,6 +189,10 @@ export const machine = setup({
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
+    // Which features are hidden, for the Highlights row, which only a following list has;
+    // flags.changed is held for this ask until its reply lands.
+    flags: fromPromise(({ input }) =>
+      input.following ? input.ask("flags", "read", {}) : Promise.resolve({ hidden: [] })),
   },
 }).createMachine({
   id: "note-list",
@@ -215,7 +222,9 @@ export const machine = setup({
       "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
       "the Highlights are the open row is kept in this browser across a reload, as the panel " +
       "keeps showing them, so the row stays marked and the keyboard comes back to it. " +
-      "Highlights are never listed as separate notes. Signed out it shows only \"Sign in to " +
+      "Highlights are never listed as separate notes. There is no Highlights row while " +
+      "`flags` reports the highlights feature hidden, or until it answers; a page without " +
+      "`flags` hides nothing. Signed out it shows only \"Sign in to " +
       "see your notes.\": no New note, no Highlights row and no notes. The notes stay kept in " +
       "this browser and come back when the user signs in, without a reload; a delete still " +
       "in its undo window when the user signs out is taken back. On a try page a visitor not " +
@@ -227,7 +236,7 @@ export const machine = setup({
     // subject on the stage, with the Highlights row above them while the subject has
     // a highlight; there is no switch to all notes.
     attributes: ["subject"],
-    asks: ["notes: list", "subject: read", "settings: read", "session: read", "books: list"],
+    asks: ["notes: list", "subject: read", "settings: read", "session: read", "books: list", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -277,12 +286,20 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
+    // The features `flags` reports hidden, for the Highlights row (8); null until it answers.
+    hidden: null,
   }),
   // The subject read runs for the machine's whole life (3.5), so the notes-load
   // transition (loading → ready) never cancels it: its reply lands on its own and sets
   // the subject, and the notes reply never writes the subject, so a slow notes reply
   // cannot re-apply the read's stale null over a subject.changed that arrived first.
   invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
     {
       src: "readBooks",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
@@ -331,6 +348,7 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     // Who is signed in now (4.3). Signing out hides the rows and keeps them; a delete the
     // user can no longer see is taken back, so nothing goes without its Undo.
     "session.changed": [

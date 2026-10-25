@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry, canMove, offersMove } from "./machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry, canMove, offersMove, visible } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
 import tabPicked from "./events/tab.picked.json" with { type: "json" };
 import tabClosed from "./events/tab.closed.json" with { type: "json" };
@@ -91,6 +91,7 @@ class ActorController {
         label: child.getAttribute("label") ?? child.localName,
         side: child.getAttribute("side") ?? undefined,
         showsOn: child.getAttribute("shows-on") ?? undefined,
+        flag: child.getAttribute("flag") ?? undefined,
       }));
     // A remembered button the page no longer has is dropped.
     const recalled = memory.recall();
@@ -126,8 +127,12 @@ class ActorController {
     unmount(this.actor);
   }
 
+  // The view draws the layout without the children a flag hides (machine.js: visible).
   get snapshot() {
-    return this.actor?.getSnapshot();
+    const snapshot = this.actor?.getSnapshot();
+    if (!snapshot) return snapshot;
+    const context = visible(snapshot.context);
+    return context === snapshot.context ? snapshot : { matches: (state) => snapshot.matches(state), context };
   }
 
   send(event) {

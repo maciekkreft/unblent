@@ -414,6 +414,16 @@ test("highlights() counts the subject's highlights with the latest time", async 
   assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "one highlight (note C), its time");
 });
 
+test("there is no Highlights row while flags hides the feature, or before it answers", async () => {
+  const { actor } = list({ following: true, ask: withHighlight() });
+  await tick();
+  actor.send({ type: "flags.changed", off: ["highlights"], hidden: ["highlights"] });
+  assert.equal(hl(actor), null, "hidden");
+  actor.send({ type: "flags.changed", off: ["highlights"], hidden: [] });
+  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "the admin sees it");
+  assert.equal(highlights({ ...actor.getSnapshot().context, hidden: null }), null, "no answer yet");
+});
+
 test("highlights() is null when not following, or with no subject", async () => {
   const notFollowing = list({ following: false, ask: withHighlight() });
   await tick();

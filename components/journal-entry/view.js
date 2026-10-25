@@ -6,7 +6,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, edges } from "./machine.js";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, edges, flagShown } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
@@ -226,7 +226,9 @@ class JournalEntry extends LitElement {
 
   // A panel's focus lands in what it shows (dock-desk): delegating it puts the keyboard
   // in the writing box.
-  static shadowRootOptions = { ...LitElement.shadowRootOptions, delegatesFocus: true };
+  // Slotting is manual, so a nested view a flag hides (8) is left unassigned and not shown,
+  // while it stays connected and its actor mounted.
+  static shadowRootOptions = { ...LitElement.shadowRootOptions, delegatesFocus: true, slotAssignment: "manual" };
 
   static styles = css`
     :host {
@@ -640,6 +642,12 @@ class JournalEntry extends LitElement {
 
   updated() {
     const snapshot = this.#actor.snapshot;
+    const slot = this.renderRoot.querySelector("slot");
+    if (slot && snapshot) {
+      const want = [...this.children].filter((c) => flagShown(c.getAttribute("flag"), snapshot.context.hidden));
+      const have = slot.assignedElements();
+      if (want.length !== have.length || want.some((c, i) => c !== have[i])) slot.assign(...want);
+    }
     const region = this.renderRoot.querySelector(".region");
     // Signed out the region is gone; an editor kept detached would still be what focus()
     // lands in.
