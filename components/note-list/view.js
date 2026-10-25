@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, highlights, showing } from "./machine.js";
+import { machine, shown, apart, source, highlights, showing } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
@@ -419,7 +419,7 @@ class NoteList extends LitElement {
     // only while the subject has a highlight. It is not a note; the view sets it apart.
     const hs = highlights(snapshot.context);
     const lead = [
-      ...(kept ? [{ ...kept, apart: true }] : []),
+      ...(kept ? [{ ...kept, apart: source(kept, snapshot.context.books) }] : []),
       ...(draft ? [{ id: draft, draft: true }] : []),
       ...(hs ? [{ id: HIGHLIGHTS, highlights: true, count: hs.count, updatedAt: hs.updatedAt }] : []),
     ];
@@ -742,7 +742,7 @@ class NoteList extends LitElement {
         <span class="under">Delete</span>
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
-            ${r.apart ? html`<span class="tag">Open from elsewhere</span>` : nothing}
+            ${r.apart ? html`<span class="tag">${r.apart}</span>` : nothing}
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "Untitled" : r.title}</span>
             <span class="subtitle">${r.subtitle || " "}</span>
           </span>

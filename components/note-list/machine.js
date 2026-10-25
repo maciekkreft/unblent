@@ -107,6 +107,21 @@ const without = (set, id) => {
   return next;
 };
 
+// The book titles (12), as { id: title }, from books: list then book.changed and
+// book.deleted; null while they cannot be read (no `books` on the page, or no answer).
+export const titles = (reply) =>
+  Array.isArray(reply?.books) ? Object.fromEntries(reply.books.map((b) => [b.id, b.title])) : null;
+
+// The tag on the note listed apart (12): where it was opened from, the title of the first
+// book among its links ("From Journal"); "Not linked" when it links to no book; "Pinned"
+// while the titles cannot be read, or the book is not among them.
+export const source = (note, books) => {
+  const book = links(note).find((l) => l.kind === "book");
+  if (!book) return "Not linked";
+  const title = books?.[book.id];
+  return typeof title === "string" && title ? `From ${title}` : "Pinned";
+};
+
 // A session reply without a userId (no-answerer on a page or in a test without `session`)
 // counts as signed in, so a page that cannot tell never hides the notes.
 export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
@@ -156,6 +171,10 @@ export const machine = setup({
     // The notes starting picture (4.3): note.changed / note.deleted are held for this
     // ask until its reply lands, so a change that races the start is applied after it.
     load: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    // The book titles for the row listed apart, only while following, where that row can
+    // be shown; book.changed and book.deleted are held for this ask until its reply lands.
+    readBooks: fromPromise(({ input }) =>
+      input.following ? input.ask("books", "list", {}) : Promise.resolve({})),
     // The subject starting picture, asked as its own concern (3.5) so its reply — the
     // picture at read time — never overwrites a subject.changed that arrived first while
     // the notes list was still loading. On a reload the notes pull is slow and the book
@@ -187,7 +206,10 @@ export const machine = setup({
       "neighbours as the filtered list shows them. With `subject` it lists only the " +
       "notes about the subject, and a note open in the editor that is not about it, such as a " +
       "pinned note, is listed apart at the top so the open row is never missing; it learns " +
-      "which note is open from the editor. While the subject has at least one highlight, a " +
+      "which note is open from the editor. That row's tag says where the note is from: \"From \" " +
+      "and the title of the first book it is linked to, such as \"From Journal\", following a " +
+      "rename at once; \"Not linked\" when it is linked to no book; \"Pinned\" while the book " +
+      "titles cannot be read. While the subject has at least one highlight, a " +
       "fixed Highlights row under New note shows how many there are and the time of the latest, " +
       "and picking it shows the highlights editor in the note editor's place, under the same " +
       "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
@@ -205,7 +227,7 @@ export const machine = setup({
     // subject on the stage, with the Highlights row above them while the subject has
     // a highlight; there is no switch to all notes.
     attributes: ["subject"],
-    asks: ["notes: list", "subject: read", "settings: read", "session: read"],
+    asks: ["notes: list", "subject: read", "settings: read", "session: read", "books: list"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -225,6 +247,9 @@ export const machine = setup({
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
+    // The book titles, { id: title }, for the tag on the row listed apart; null until
+    // books answers, and while it cannot.
+    books: null,
     // How long a discarded row can be brought back (the --duration-undo token, read
     // in the view and passed in so the machine stays importable in Node). The delete
     // is not a fact until this window ends (delayed delete): stop it and nothing was
@@ -258,6 +283,12 @@ export const machine = setup({
   // the subject, and the notes reply never writes the subject, so a slow notes reply
   // cannot re-apply the read's stale null over a subject.changed that arrived first.
   invoke: [
+    {
+      src: "readBooks",
+      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      onDone: { actions: assign({ books: ({ event }) => titles(event.output) }) },
+      onError: { actions: [] },
+    },
     {
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
@@ -342,6 +373,21 @@ export const machine = setup({
           cut: ({ context }) => (context.cut === event.id ? null : context.cut),
         });
         if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
+      }),
+    },
+    // A book renamed or gone (4.3): the tag on the row listed apart follows at once. Only
+    // once the titles were read, so a partial map never stands in for them.
+    "book.changed": {
+      guard: ({ context }) => context.books != null,
+      actions: assign({ books: ({ context, event }) => ({ ...context.books, [event.id]: event.title }) }),
+    },
+    "book.deleted": {
+      guard: ({ context }) => context.books != null,
+      actions: assign({
+        books: ({ context, event }) => {
+          const { [event.id]: _, ...rest } = context.books;
+          return rest;
+        },
       }),
     },
     // The stage moved (4.3): the subject changed, so a different set of notes is about

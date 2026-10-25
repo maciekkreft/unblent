@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart } from "./machine.js";
+import { machine, shown, apart, source } from "./machine.js";
 import selected from "./events/conversation.selected.json" with { type: "json" };
 import discarded from "./events/conversation.discarded.json" with { type: "json" };
 import moved from "./events/conversation.moved.json" with { type: "json" };
@@ -393,7 +393,7 @@ class ConversationList extends LitElement {
     // its highlighted row is never missing; then the "New chat" row, the fresh chat to
     // start.
     const kept = apart(snapshot.context);
-    return [...(kept ? [{ ...kept, apart: true }] : []), ...(draft ? [{ id: draft, draft: true }] : []), ...chats];
+    return [...(kept ? [{ ...kept, apart: source(kept, snapshot.context.books) }] : []), ...(draft ? [{ id: draft, draft: true }] : []), ...chats];
   }
 
   #focusRow(rows, open) {
@@ -731,7 +731,7 @@ class ConversationList extends LitElement {
         <span class="under">Delete</span>
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
-            ${r.apart ? html`<span class="tag">Open from elsewhere</span>` : nothing}
+            ${r.apart ? html`<span class="tag">${r.apart}</span>` : nothing}
             ${this.#editingId === r.id
               ? html`<input
                   class="title-input"

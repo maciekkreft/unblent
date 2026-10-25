@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, apart, highlights, plain, showing } from "../machine.js";
+import { machine, shown, apart, source, highlights, plain, showing } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -769,4 +769,44 @@ test("dd does nothing on a row that is not a note (New note, Highlights)", async
   actor.send({ type: "_cut", id: MINTED });
   actor.send({ type: "_cut", id: "highlights" });
   assert.equal(actor.getSnapshot().context.cut, null);
+});
+
+// --- Where the row listed apart is from (12) --------------------------------------
+
+test("the row listed apart is tagged with its first book, Not linked, or Pinned", () => {
+  const row = (about) => ({ id: "x", about });
+  const books = { [A]: "Journal", [B]: "ACT made simple" };
+  assert.equal(source(row([{ kind: "book", id: B }, { kind: "book", id: A }]), books), "From ACT made simple", "the first book");
+  assert.equal(source(row([]), books), "Not linked", "no link");
+  assert.equal(source(row(undefined), books), "Not linked", "no links at all");
+  assert.equal(source(row([{ kind: "book", id: A }]), null), "Pinned", "titles not read");
+  assert.equal(source(row([{ kind: "book", id: C }]), books), "Pinned", "a book not among them");
+});
+
+test("the book titles come from books: list and follow a rename and a delete", async () => {
+  const asked = [];
+  const ask = (target, name) => {
+    asked.push(`${target}: ${name}`);
+    if (target === "books" && name === "list") return Promise.resolve({ books: [{ id: A, title: "Journal" }] });
+    if (name === "list") return Promise.resolve({ notes: [] });
+    return Promise.resolve({});
+  };
+  const { actor } = list({ ask, following: true });
+  await tick();
+  assert.ok(asked.includes("books: list"));
+  const tag = () => source({ about: [{ kind: "book", id: A }] }, actor.getSnapshot().context.books);
+  assert.equal(tag(), "From Journal");
+  actor.send({ type: "book.changed", id: A, title: "My journal" });
+  assert.equal(tag(), "From My journal", "a rename shows at once");
+  actor.send({ type: "book.deleted", id: A });
+  assert.equal(tag(), "Pinned", "a book gone");
+});
+
+test("without an answer from books the titles stay unread and events do not fill them", async () => {
+  const ask = (target, name) =>
+    Promise.resolve(target === "books" ? { error: "no-answerer" } : name === "list" ? { notes: [] } : {});
+  const { actor } = list({ ask, following: true });
+  await tick();
+  actor.send({ type: "book.changed", id: A, title: "Journal" });
+  assert.equal(actor.getSnapshot().context.books, null);
 });

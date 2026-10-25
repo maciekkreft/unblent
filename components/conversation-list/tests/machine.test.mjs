@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, shown, apart, signedIn } from "../machine.js";
+import { machine, shown, apart, source, signedIn } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -539,4 +539,44 @@ test("_rename emits conversation.renamed with the trimmed text, and only when it
   actor.send({ type: "_cut", id: C });
   actor.send({ type: "_rename", id: C, title: "x" });
   assert.equal(renamed.length, 2, "not New chat, not a cut row");
+});
+
+// --- Where the row listed apart is from (12) --------------------------------------
+
+test("the row listed apart is tagged with its first book, Not linked, or Pinned", () => {
+  const row = (about) => ({ id: "x", about });
+  const books = { [A]: "Journal", [B]: "ACT made simple" };
+  assert.equal(source(row([{ kind: "book", id: B }, { kind: "book", id: A }]), books), "From ACT made simple", "the first book");
+  assert.equal(source(row([]), books), "Not linked", "no link");
+  assert.equal(source(row(undefined), books), "Not linked", "no links at all");
+  assert.equal(source(row([{ kind: "book", id: A }]), null), "Pinned", "titles not read");
+  assert.equal(source(row([{ kind: "book", id: C }]), books), "Pinned", "a book not among them");
+});
+
+test("the book titles come from books: list and follow a rename and a delete", async () => {
+  const asked = [];
+  const ask = (target, name) => {
+    asked.push(`${target}: ${name}`);
+    if (target === "books" && name === "list") return Promise.resolve({ books: [{ id: A, title: "Journal" }] });
+    if (name === "list") return Promise.resolve({ conversations: [] });
+    return Promise.resolve({});
+  };
+  const { actor } = list({ ask, following: true });
+  await tick();
+  assert.ok(asked.includes("books: list"));
+  const tag = () => source({ about: [{ kind: "book", id: A }] }, actor.getSnapshot().context.books);
+  assert.equal(tag(), "From Journal");
+  actor.send({ type: "book.changed", id: A, title: "My journal" });
+  assert.equal(tag(), "From My journal", "a rename shows at once");
+  actor.send({ type: "book.deleted", id: A });
+  assert.equal(tag(), "Pinned", "a book gone");
+});
+
+test("without an answer from books the titles stay unread and events do not fill them", async () => {
+  const ask = (target, name) =>
+    Promise.resolve(target === "books" ? { error: "no-answerer" } : name === "list" ? { conversations: [] } : {});
+  const { actor } = list({ ask, following: true });
+  await tick();
+  actor.send({ type: "book.changed", id: A, title: "Journal" });
+  assert.equal(actor.getSnapshot().context.books, null);
 });
