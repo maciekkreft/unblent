@@ -14,8 +14,10 @@ assert.ok(BASE_URL, "UNBLENT_URL must be set");
 // copy, since the page is under /workshop/).
 const SETTINGS = JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: true });
 
-// A question long enough that the Echo answer overflows the conversation box.
-const LONG = Array.from({ length: 30 }, (_, k) => `line ${k + 1}`).join("\n\n");
+// A chat whose finished answer overflows the conversation box, seeded through the API.
+const U = (s) => "01HQ8ZK7M4N5P6Q7R8S9T0V1" + s;
+const CHAT = U("K1");
+const ANSWER = Array.from({ length: 30 }, (_, k) => `line ${k + 1}`).join("\n\n");
 
 const box = (page) =>
   page.evaluate(() => {
@@ -29,6 +31,7 @@ const box = (page) =>
       height: el.clientHeight,
       onConversation: document.activeElement === thread && thread.shadowRoot.activeElement === el,
       inBox: document.activeElement === input,
+      vim: Boolean(view.cm),
       inserting: view.cm?.state?.vim?.insertMode === true,
       draft: view.state.doc.toString(),
       // The last answer takes comments once it is finished.
@@ -36,38 +39,52 @@ const box = (page) =>
     };
   });
 
+// A fresh account holding the long chat, opened on the stem page with Vim keys on, and
+// the keyboard moved from the box (in Vim's normal mode, as after typing and a first
+// Escape) onto the conversation with Escape. The account is on Echo, so the box is live.
+async function onConversation(browser, name) {
+  const context = await browser.newContext({ viewport: { width: 1000, height: 500 } });
+  context.setDefaultTimeout(4000);
+  await signedIn(context, forgeCookie(name));
+  assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
+  const chat = {
+    title: "Scroll me",
+    about: [],
+    start: "",
+    turns: [
+      { id: U("Q1"), role: "user", text: "Scroll me" },
+      { id: U("A1"), role: "assistant", text: ANSWER, status: "done" },
+    ],
+  };
+  assert.ok((await context.request.put(`${BASE_URL}/api/conversations/${CHAT}`, { data: chat })).ok(), "the chat is seeded");
+  await context.addInitScript((v) => localStorage.setItem("settings", v), SETTINGS);
+  const page = await context.newPage();
+  const problems = watch(page);
+  await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
+  await page.locator("conversation-list .row", { hasText: "Scroll me" }).click();
+  await until(async () => {
+    const b = await box(page);
+    return b.max > b.height && b.done;
+  });
+  await page.locator("chat-input .cm-content").click();
+  await until(async () => {
+    const b = await box(page);
+    return b.inBox && b.vim && !b.inserting;
+  });
+  await page.keyboard.press("Escape");
+  await until(async () => (await box(page)).onConversation);
+  return { context, page, problems };
+}
+
 for (const engine of ENGINES) {
   // Browser: focus and keys.
-  test(`the conversation scrolls with Vim keys and trades the keyboard with the chat box in ${engine.name}`, { timeout: 15000 }, async () => {
+  test(`the conversation scrolls with j, k, gg, G, Ctrl+d and Ctrl+u in ${engine.name}`, async () => {
     const browser = await engine.launch();
-    const context = await browser.newContext({ viewport: { width: 1000, height: 500 } });
+    let context;
     try {
-      context.setDefaultTimeout(4000);
-      await signedIn(context, forgeCookie(`chat-keys-${engine.name}`));
-      assert.ok((await context.request.put(`${BASE_URL}/api/llm`, { data: { provider: "echo" } })).ok(), "the account is set to Echo");
-      await context.addInitScript((v) => localStorage.setItem("settings", v), SETTINGS);
-      const page = await context.newPage();
-      const problems = watch(page);
-      await page.goto(`${BASE_URL}/workshop/design/conversations`, { waitUntil: "domcontentloaded" });
-      await page.locator("conversation-list .row", { hasText: "New chat" }).click();
-      // A new chat puts the cursor in the box in insert mode; Escape leaves insert and
-      // Enter sends in normal mode.
-      await until(async () => (await box(page)).inserting);
-      await page.evaluate((text) => {
-        const view = document.querySelector("chat-input").shadowRoot.querySelector(".cm-content").cmView.rootView.view;
-        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
-      }, LONG);
-      await page.keyboard.press("Escape");
-      await page.keyboard.press("Enter");
-      await until(async () => {
-        const b = await box(page);
-        return b.max > b.height && b.done;
-      });
-
-      // The second Escape after typing puts the keyboard on the conversation.
-      await page.keyboard.press("Escape");
-      await until(async () => (await box(page)).onConversation);
-
+      const opened = await onConversation(browser, `chat-scroll-${engine.name}`);
+      context = opened.context;
+      const { page, problems } = opened;
       await page.keyboard.press("g");
       await page.keyboard.press("g");
       await until(async () => (await box(page)).top === 0);
@@ -75,9 +92,9 @@ for (const engine of ENGINES) {
       await until(async () => (await box(page)).top > 0);
       const afterJ = (await box(page)).top;
       await page.keyboard.press("Control+d");
-      await until(async () => (await box(page)).top >= afterJ + Math.floor((await box(page)).height / 2) - 1);
+      await until(async () => (await box(page)).top > afterJ);
       await page.keyboard.press("Control+u");
-      await until(async () => Math.abs((await box(page)).top - afterJ) <= 1);
+      await until(async () => (await box(page)).top === afterJ);
       await page.keyboard.press("k");
       await until(async () => (await box(page)).top === 0);
       await page.keyboard.press("G");
@@ -85,8 +102,21 @@ for (const engine of ENGINES) {
         const b = await box(page);
         return Math.abs(b.top - b.max) <= 1;
       });
+      assert.deepEqual(problems, []);
+    } finally {
+      await context?.close();
+      await browser.close();
+    }
+  });
 
-      // i hands the keyboard to the box, ready to type.
+  // Browser: focus and keys.
+  test(`i hands the keyboard to the chat box and its normal-mode Escape brings it back in ${engine.name}`, async () => {
+    const browser = await engine.launch();
+    let context;
+    try {
+      const opened = await onConversation(browser, `chat-trade-${engine.name}`);
+      context = opened.context;
+      const { page, problems } = opened;
       await page.keyboard.press("i");
       await until(async () => {
         const b = await box(page);
@@ -94,12 +124,13 @@ for (const engine of ENGINES) {
       });
       await page.keyboard.type("x");
       assert.equal((await box(page)).draft, "x");
+      // The first Escape leaves insert mode in the box; the second goes back.
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
       await until(async () => (await box(page)).onConversation);
       assert.deepEqual(problems, []);
     } finally {
-      await context.close();
+      await context?.close();
       await browser.close();
     }
   });

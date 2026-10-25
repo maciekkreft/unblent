@@ -483,13 +483,15 @@ export const vimAction = ({ key, ctrlKey, metaKey, altKey }, afterG = false) => 
 };
 
 // Where a scroll action leaves the conversation: a line's height for j and k, half the
-// box for Ctrl+d and Ctrl+u, never past either end.
+// box for Ctrl+d and Ctrl+u, never past either end. Half the box is whole pixels, so
+// Ctrl+u undoes Ctrl+d exactly where the browser snaps a scroll to the pixel grid.
 export const scrollFor = (action, { top, height, max, line }) => {
+  const half = Math.round(height / 2);
   const to = {
     down: top + line,
     up: top - line,
-    halfDown: top + height / 2,
-    halfUp: top - height / 2,
+    halfDown: top + half,
+    halfUp: top - half,
     top: 0,
     bottom: max,
   }[action];

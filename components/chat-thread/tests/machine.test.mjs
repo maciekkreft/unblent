@@ -112,6 +112,9 @@ test("a scroll never passes either end of the conversation", () => {
   assert.equal(scrollFor("bottom", box), 1000);
   assert.equal(scrollFor("down", { ...box, top: 990 }), 1000);
   assert.equal(scrollFor("type", box), null);
+  // Half an odd box is whole pixels, so Ctrl+u returns exactly to where Ctrl+d began.
+  const odd = { ...box, height: 171 };
+  assert.equal(scrollFor("halfUp", { ...odd, top: scrollFor("halfDown", odd) }), 100);
 });
 
 test("an open chat is read and shown", async () => {
