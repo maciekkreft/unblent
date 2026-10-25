@@ -797,5 +797,36 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
+
+    // Browser: a gesture.
+    test("a web link shows its label off the cursor's line, and a click opens it in a new tab", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      // The new tab gets an empty page, so the test never leaves this host.
+      await context.route("https://example.com/**", (route) => route.fulfill({ body: "ok", contentType: "text/plain" }));
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), NO_VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.insertText("Read [the site](https://example.com/a) now");
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.insertText("next");
+      const link = page.locator("note-editor .cm-web-link");
+      await until(async () => (await link.textContent()) === "the site");
+      assert.equal((await lines(page))[0].text, "Read the site now");
+      const opened = context.waitForEvent("page");
+      await link.click();
+      const tab = await opened;
+      await tab.waitForLoadState();
+      assert.equal(tab.url(), "https://example.com/a");
+      assert.equal(page.url(), `${BASE_URL}${STEM}`, "the app stays where it was");
+      assert.equal(await docText(page), "Read [the site](https://example.com/a) now\nnext", "the text stays as typed");
+      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
   });
 }

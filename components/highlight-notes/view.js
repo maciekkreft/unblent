@@ -4,7 +4,7 @@ import { icon } from "icons";
 import { EditorState, StateField, StateEffect, Annotation, Transaction } from "@codemirror/state";
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
 import { invertedEffects } from "@codemirror/commands";
-import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
+import { baseExtensions, setVim, paragraphs, webLinks, toRegister } from "editor";
 import { machine, ordered, compose, split, showing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
@@ -490,6 +490,8 @@ class HighlightNotes extends LitElement {
       refusedField,
       quoteFilter,
       paragraphs({ keepBlank, notList: (state, line) => isQuoteAt(state, line.from), box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
+      // A web address is drawn as a link that opens in a new tab (the editor kit, 10).
+      webLinks(),
       invertedEffects.of(invertDiscard),
       editorTheme,
       EditorView.decorations.compute([quoteField, discardField], (state) => this.#dimLines(state)),

@@ -209,7 +209,10 @@ export const machine = setup({
       "\"Sign in to see your notes.\" and no highlight, also when it was in front before a " +
       "reload; the highlights stay kept in this browser and come back when the user signs in, " +
       "without a reload, and a removal still in its undo window when the user signs out is " +
-      "taken back. On a try page a visitor not yet signed in still sees them.",
+      "taken back. On a try page a visitor not yet signed in still sees them." +
+      " A web address, bare or written as [label](https://…), is drawn as an underlined link in " +
+      "the accent color, a markdown link showing only its label except on the line being " +
+      "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab.",
     kind: "view",
     emits: ["note.saved", "note.discarded"],
     attributes: ["height"],

@@ -927,6 +927,133 @@ const linkTheme = EditorView.theme({
   },
 });
 
+// --- Web links ----------------------------------------------------------------------
+// A web address in the text, bare or as `[label](https://…)`, is drawn as a link and
+// opened in a new browser tab. The text stays as typed, so what an editor stores is
+// untouched. A markdown link shows only its label, except on the cursor's line while the
+// editor has the keyboard, where the whole markdown shows so it can be edited.
+
+const MD_LINK = /\[((?:[^\[\]\\\n]|\\[^\n])*)\]\((https?:\/\/[^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\)/g;
+const BARE_LINK = /https?:\/\/[^\s<>"`\[\]]+/g;
+
+// A sentence's punctuation after a bare address is not part of it; a ")" stays when it
+// closes a "(" inside the address, as in Wikipedia's addresses.
+function trimAddress(url) {
+  for (;;) {
+    const last = url[url.length - 1];
+    if (last === "." || last === "," || last === ":") url = url.slice(0, -1);
+    else if (last === ")" && url.split(")").length > url.split("(").length) url = url.slice(0, -1);
+    else return url;
+  }
+}
+
+// Every web link in `text`, in order: { from, to, url }, and for a markdown link also the
+// label's range and the label with the escapes off. An address inside a markdown link is
+// that link's, never a bare link of its own.
+export function webLinksIn(text) {
+  text = String(text);
+  const found = [];
+  for (const m of text.matchAll(MD_LINK)) {
+    const labelFrom = m.index + 1;
+    const labelTo = labelFrom + m[1].length;
+    found.push({ from: m.index, to: m.index + m[0].length, url: m[2], label: m[1].replace(/\\(.)/g, "$1"), labelFrom, labelTo });
+  }
+  const marked = found.slice();
+  for (const m of text.matchAll(BARE_LINK)) {
+    const url = trimAddress(m[0]);
+    const from = m.index;
+    const to = from + url.length;
+    if (/^https?:\/\/$/.test(url)) continue;
+    if (marked.some((l) => l.from < to && from < l.to)) continue;
+    found.push({ from, to, url });
+  }
+  return found.sort((a, b) => a.from - b.from);
+}
+
+// The link at `pos`, the cursor resting on it or just before its last character, or null.
+export function webLinkAt(text, pos) {
+  return webLinksIn(text).find((l) => l.from <= pos && pos < l.to) ?? null;
+}
+
+const hidden = Decoration.replace({});
+const linkMark = (url) => Decoration.mark({ class: "cm-web-link", attributes: { "data-href": url, title: url } });
+
+// The decorations of a state: `rawLine` is the line number whose markdown shows whole,
+// or 0 for none.
+export function webLinkDecorations(state, rawLine = 0) {
+  const builder = new RangeSetBuilder();
+  for (const l of webLinksIn(state.doc.toString())) {
+    const shown = l.label === undefined || state.doc.lineAt(l.from).number === rawLine;
+    if (shown) {
+      builder.add(l.from, l.to, linkMark(l.url));
+      continue;
+    }
+    builder.add(l.from, l.labelFrom, hidden);
+    if (l.labelTo > l.labelFrom) builder.add(l.labelFrom, l.labelTo, linkMark(l.url));
+    builder.add(l.labelTo, l.to, hidden);
+  }
+  return builder.finish();
+}
+
+// gx in Vim's normal mode opens the link under the cursor in an editor using webLinks(),
+// which says how through this facet; anywhere else it does nothing. Like o and O, the
+// map is one per page and asks the focused editor.
+const webLinkOpener = Facet.define();
+Vim.defineAction("openWebLink", (cm) => {
+  const view = cm.cm6;
+  const open = view?.state.facet(webLinkOpener)[0];
+  if (!open) return;
+  const link = webLinkAt(view.state.doc.toString(), view.state.selection.main.head);
+  if (link) open(link.url);
+});
+Vim.mapCommand("gx", "action", "openWebLink", {}, { context: "normal" });
+
+const openInTab = (url) => window.open(url, "_blank", "noopener");
+
+// One editor's web links. `open(url)` is how a link opens, a new tab by default. A plain
+// click on a link opens it, in a read-only editor too, and does not move the cursor.
+export function webLinks({ open = openInTab } = {}) {
+  const rawLine = (view) => (view.hasFocus ? view.state.doc.lineAt(view.state.selection.main.head).number : 0);
+  const drawn = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.line = rawLine(view);
+        this.decorations = webLinkDecorations(view.state, this.line);
+      }
+      update(update) {
+        const line = rawLine(update.view);
+        if (!update.docChanged && line === this.line) return;
+        this.line = line;
+        this.decorations = webLinkDecorations(update.state, line);
+      }
+    },
+    { decorations: (v) => v.decorations },
+  );
+  const hrefOf = (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return null;
+    return event.target.closest?.(".cm-web-link")?.getAttribute("data-href") ?? null;
+  };
+  const clicks = EditorView.domEventHandlers({
+    mousedown: (event) => {
+      if (!hrefOf(event)) return false;
+      event.preventDefault();
+      return true;
+    },
+    click: (event) => {
+      const url = hrefOf(event);
+      if (!url) return false;
+      event.preventDefault();
+      open(url);
+      return true;
+    },
+  });
+  return [drawn, clicks, webLinkOpener.of(open), webLinkTheme];
+}
+
+const webLinkTheme = EditorView.theme({
+  ".cm-web-link": { color: "var(--color-accent)", textDecoration: "underline", cursor: "pointer" },
+});
+
 // Vim's p reads Vim's own unnamed register, not the system clipboard, and the registers
 // are one per page, so a text put here is what p pastes in any editor.
 export function toRegister(text) {

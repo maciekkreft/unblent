@@ -5,7 +5,7 @@ import { icon } from "icons";
 import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, MapMode } from "@codemirror/state";
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, toRegister } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
 import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
@@ -538,6 +538,9 @@ class JournalEntry extends LitElement {
         icon: (into) => render(icon("link"), into),
         missing: this.#missing,
       }),
+      // A web address is drawn as a link that opens in a new tab (the editor kit, 10),
+      // also on an earlier day.
+      webLinks(),
       EditorView.updateListener.of((update) => {
         const leveled = update.transactions.some((t) => t.effects.some((e) => e.is(setLevel) || e.is(setAllLevels)));
         for (const t of update.transactions) {

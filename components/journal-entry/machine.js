@@ -312,7 +312,11 @@ export const machine = setup({
       "struck through and opens nothing. Signed out it shows no day, no level " +
       "buttons and nothing nested under the text, only \"Sign in to write in your journal.\"; " +
       "the days stay kept in this browser and come back when the user signs in, without a " +
-      "reload. On a try page a visitor not yet signed in still writes.",
+      "reload. On a try page a visitor not yet signed in still writes." +
+      " A web address, bare or written as [label](https://…), is drawn as an underlined link in " +
+      "the accent color, a markdown link showing only its label except on the line being " +
+      "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab, on an " +
+      "earlier day too.",
     kind: "view",
     emits: ["day.saved", "day.shown", "book.closed", "passage.selected", "conflict.reopened"],
     attributes: ["height"],

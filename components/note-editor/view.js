@@ -6,7 +6,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
-import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, toRegister } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
 import { machine, parseBody, serialize, aboutTitleOf, isStaged, showing, startsTyping, linkMissing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
@@ -505,6 +505,8 @@ class NoteEditor extends LitElement {
         icon: (into) => render(icon("link"), into),
         missing: (id) => this.#missing(id),
       }),
+      // A web address is drawn as a link that opens in a new tab (the editor kit, 10).
+      webLinks(),
       this.#history.of(history()),
       EditorView.updateListener.of(this.#onUpdate),
       EditorView.domEventHandlers({

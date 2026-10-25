@@ -371,7 +371,10 @@ export const machine = setup({
       "`:tabclose` closes the tab without changing the note. Signed out it shows only \"Sign " +
       "in to see your notes.\" and nothing of the note it holds, also when it was in front " +
       "before a reload; the note stays kept in this browser and comes back when the user signs " +
-      "in, without a reload. On a try page a visitor not yet signed in still sees the editor.",
+      "in, without a reload. On a try page a visitor not yet signed in still sees the editor." +
+      " A web address, bare or written as [label](https://…), is drawn as an underlined link in " +
+      "the accent color, a markdown link showing only its label except on the line being " +
+      "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab.",
     kind: "view",
     emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],

@@ -29,6 +29,9 @@ import {
   toRegister,
   tickAt,
   renumber,
+  webLinksIn,
+  webLinkAt,
+  webLinkDecorations,
 } from "../editor.js";
 
 // The kit can break every editor (architecture.md 10), so its rule is tested here
@@ -712,4 +715,51 @@ test("a cursor never rests inside a number, a box or a quote's marker", () => {
     move(t, 5);
     assert.equal(t.state.selection.main.head, textFrom, doc);
   }
+});
+
+
+// --- Web links -------------------------------------------------------------------------
+
+test("bare addresses are links without the punctuation after them", () => {
+  const urls = (text) => webLinksIn(text).map((l) => l.url);
+  assert.deepEqual(urls("see https://a.com/x. and http://b.org, then"), ["https://a.com/x", "http://b.org"]);
+  assert.deepEqual(urls("(at https://a.com/x) or https://a.com/y:"), ["https://a.com/x", "https://a.com/y"]);
+  assert.deepEqual(urls("https://en.wikipedia.org/wiki/Foo_(bar)."), ["https://en.wikipedia.org/wiki/Foo_(bar)"]);
+  assert.deepEqual(urls("https:// and ftp://a.com and a.com"), []);
+  assert.deepEqual(webLinksIn("go https://a.com now")[0], { from: 3, to: 16, url: "https://a.com" });
+});
+
+test("a markdown link is one link with its label; its address is never a bare link too", () => {
+  const text = "x [The \\] site](https://a.com/p_(1)) https://b.com";
+  const [md, bare] = webLinksIn(text);
+  assert.deepEqual(md, { from: 2, to: 36, url: "https://a.com/p_(1)", label: "The ] site", labelFrom: 3, labelTo: 14 });
+  assert.equal(bare.url, "https://b.com");
+  assert.equal(webLinksIn(`[a](note:01K7TEST0000000000000H0001)`).length, 0, "a source link is not a web link");
+  assert.equal(webLinkAt(text, 2)?.url, "https://a.com/p_(1)");
+  assert.equal(webLinkAt(text, 36), null);
+  assert.equal(webLinkAt(text, 40)?.url, "https://b.com");
+});
+
+// What the decorations draw: the marked text with its address, and the hidden ranges.
+const drawn = (state, rawLine) => {
+  const out = [];
+  webLinkDecorations(state, rawLine).between(0, state.doc.length, (from, to, deco) => {
+    const href = deco.spec.attributes?.["data-href"];
+    out.push(href ? [state.sliceDoc(from, to), href] : ["hidden", state.sliceDoc(from, to)]);
+  });
+  return out;
+};
+
+test("a markdown link shows only its label, except on the raw line; a bare one stays as typed", () => {
+  const state = EditorState.create({ doc: "[Site](https://a.com)\nhttps://b.com" });
+  assert.deepEqual(drawn(state, 0), [
+    ["hidden", "["],
+    ["Site", "https://a.com"],
+    ["hidden", "](https://a.com)"],
+    ["https://b.com", "https://b.com"],
+  ]);
+  assert.deepEqual(drawn(state, 1), [
+    ["[Site](https://a.com)", "https://a.com"],
+    ["https://b.com", "https://b.com"],
+  ]);
 });
