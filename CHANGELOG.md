@@ -6,6 +6,31 @@ All notable changes to Unblent for Mac are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-10-25
+
+### Added
+
+- Numbered lists that keep their own numbering, checklists you tick with a click or
+  Ctrl+Enter, and quotes drawn with a bar, in notes, the journal and every other place
+  you write. A line starting with "-" shows a dash, and one starting with "*" a dot.
+- Web addresses in notes, Highlights and the journal are links. A click opens one in your
+  browser, and so does gx with Vim keys.
+- With Vim keys on a journal day, j and k move from the day's text down to the values and
+  the choice points and back; Enter opens a card, o adds a choice point, and j and k move
+  between the boxes of an open one.
+- When the Mac is connected to an account: Vim keys in a chat's conversation (j, k, gg, G,
+  Ctrl+d, Ctrl+u to scroll, i to type), and a Feature flags tab for the admin.
+
+### Changed
+
+- A pinned note or chat shown at the top of the list says where it comes from, such as
+  "From Journal", instead of "Open from elsewhere".
+- The values' Earlier versions lists only days whose values differ, never an empty day.
+
+### Fixed
+
+- Jev no longer checks a line holding no letter or digit, such as "*" or "-".
+
 ## [0.2.3] — 2026-10-24
 
 ### Added
