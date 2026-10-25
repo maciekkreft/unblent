@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, canPin, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks } from "../machine.js";
+import { machine, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -35,7 +35,7 @@ const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
 function start(options = {}) {
-  const { openId = null, chatsById = {}, readError = {}, pinned = null } = options;
+  const { openId = null, chatsById = {}, readError = {}, pinned = null, vimKeys = false } = options;
   const input = {
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
@@ -50,6 +50,7 @@ function start(options = {}) {
         return Promise.resolve(conversation ? { conversation } : { error: "not-found" });
       }
       if (key === "pins: read") return Promise.resolve({ note: null, chat: pinned, evaluators: null });
+      if (key === "settings: read") return Promise.resolve({ vimKeys });
       throw new Error(`unexpected ask ${key}`);
     },
   };
@@ -75,6 +76,42 @@ test("no chat open lands on the empty page", async () => {
   const h = start({ openId: null });
   await until(() => state(h) === "empty", "empty");
   assert.equal(conv(h), null);
+});
+
+test("Vim keys follow the settings read and settings.changed after it", async () => {
+  const h = start({ vimKeys: true });
+  await until(() => h.actor.getSnapshot().context.vimKeys === true, "vim on");
+  h.actor.send({ type: "settings.changed", vimKeys: false });
+  assert.equal(h.actor.getSnapshot().context.vimKeys, false);
+});
+
+test("the conversation's keys: j k scroll, gg G jump, Ctrl+d Ctrl+u half, i types", () => {
+  const key = (k, mods = {}) => vimAction({ key: k, ctrlKey: false, metaKey: false, altKey: false, ...mods });
+  assert.equal(key("j"), "down");
+  assert.equal(key("k"), "up");
+  assert.equal(key("G"), "bottom");
+  assert.equal(key("g"), "g");
+  assert.equal(vimAction({ key: "g" }, true), "top");
+  assert.equal(key("i"), "type");
+  assert.equal(key("d", { ctrlKey: true }), "halfDown");
+  assert.equal(key("u", { ctrlKey: true }), "halfUp");
+  // A letter with a modifier belongs to the browser or the desk (Ctrl+j is dock-desk's).
+  assert.equal(key("j", { ctrlKey: true }), null);
+  assert.equal(key("j", { metaKey: true }), null);
+  assert.equal(key("d", { ctrlKey: true, altKey: true }), null);
+  assert.equal(key("x"), null);
+});
+
+test("a scroll never passes either end of the conversation", () => {
+  const box = { top: 100, height: 400, max: 1000, line: 24 };
+  assert.equal(scrollFor("down", box), 124);
+  assert.equal(scrollFor("up", box), 76);
+  assert.equal(scrollFor("halfDown", box), 300);
+  assert.equal(scrollFor("halfUp", box), 0);
+  assert.equal(scrollFor("top", box), 0);
+  assert.equal(scrollFor("bottom", box), 1000);
+  assert.equal(scrollFor("down", { ...box, top: 990 }), 1000);
+  assert.equal(scrollFor("type", box), null);
 });
 
 test("an open chat is read and shown", async () => {

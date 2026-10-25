@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, canPin, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
+import { machine, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 
@@ -157,6 +157,11 @@ class ChatThread extends LitElement {
       flex-direction: column;
       gap: var(--space-md);
       padding: var(--space-md);
+    }
+    /* Drawn inside the box: the panel around it clips anything outside, on the phone. */
+    .transcript:focus-visible {
+      outline: calc(2 * var(--border-width)) solid var(--color-accent);
+      outline-offset: calc(-2 * var(--border-width));
     }
     .composer {
       flex: none;
@@ -558,11 +563,13 @@ class ChatThread extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     document.addEventListener("selectionchange", this.#onSelectionChange);
+    this.addEventListener("keydown", this.#onBoxEscape);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener("selectionchange", this.#onSelectionChange);
+    this.removeEventListener("keydown", this.#onBoxEscape);
     clearTimeout(this.#settle);
   }
 
@@ -584,10 +591,53 @@ class ChatThread extends LitElement {
     this.requestUpdate();
   }
 
+  #box() {
+    return this.renderRoot?.querySelector("slot")?.assignedElements()[0] ?? null;
+  }
+
+  // Vim keys on the conversation (12, "Vim keys"): only while the preference is on and
+  // never in the comment box, where a letter is typed text. gg is two presses, so a first
+  // g waits a moment for the second, as in the lists.
+  #gAt = 0;
+  #transcriptKey(event) {
+    if (this.#actor.snapshot?.context.vimKeys !== true) return;
+    if (event.isComposing) return;
+    const target = event.composedPath()[0];
+    if (target?.isContentEditable || ["INPUT", "TEXTAREA"].includes(target?.tagName)) return;
+    const afterG = event.key === "g" && Date.now() - this.#gAt < 1000;
+    const action = vimAction(event, afterG);
+    this.#gAt = action === "g" ? Date.now() : 0;
+    if (!action) return;
+    event.preventDefault();
+    if (action === "g") return;
+    // i hands the keyboard to the box slotted below in Vim's insert mode, the way a
+    // container focuses its child (list-then-item); the box decides whether it can type.
+    if (action === "type") return this.#box()?.focus({ insert: true });
+    const el = event.currentTarget;
+    const style = getComputedStyle(el);
+    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+    const top = scrollFor(action, { top: el.scrollTop, height: el.clientHeight, max: el.scrollHeight - el.clientHeight, line });
+    if (top != null) el.scrollTop = top;
+  }
+
+  // An Escape the box left unhandled (Vim's normal mode: the first Escape after typing
+  // leaves insert mode and is used there) comes back to the conversation, and is used
+  // here so list-then-item does not take it as Back. Without Vim keys it stays Back.
+  #onBoxEscape = (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    if (this.#actor.snapshot?.context.vimKeys !== true) return;
+    const box = this.#box();
+    if (!box || !event.composedPath().includes(box)) return;
+    const transcript = this.renderRoot.querySelector(".transcript");
+    if (!transcript) return;
+    event.preventDefault();
+    transcript.focus({ preventScroll: true });
+  };
+
   // dock-desk's Ctrl+h/j/k/l (12) and list-then-item focus a panel by its host: land
   // in the box the page slotted below the transcript, where the next question is typed.
   focus(options) {
-    const box = this.renderRoot?.querySelector("slot")?.assignedElements()[0];
+    const box = this.#box();
     if (box) box.focus(options);
     else super.focus(options);
   }
@@ -598,6 +648,10 @@ class ChatThread extends LitElement {
       ${this.#header(snapshot)}
       <div
         class="transcript"
+        tabindex="0"
+        role="region"
+        aria-label="Conversation"
+        @keydown=${(e) => this.#transcriptKey(e)}
         @scroll=${(e) => this.#onScroll(e)}
         @pointerdown=${(e) => this.#pointerdown(e)}
         @pointerup=${(e) => this.#pointerup(e)}

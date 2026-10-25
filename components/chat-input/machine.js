@@ -214,7 +214,9 @@ export const machine = setup({
       "chat with no messages yet, such as the New chat row or a new chat made with o or O in " +
       "the chat list, the box takes focus, in Vim's " +
       "insert mode when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; it follows the user's pick and not which chat is open, " +
-      "so a change of subject or a reload never moves the cursor. Unsent text is kept in this " +
+      "so a change of subject or a reload never moves the cursor. With Vim keys on, i on the " +
+      "conversation above puts the cursor here in insert mode, and Escape in normal mode " +
+      "goes back to the conversation; while an answer is arriving that Escape stops it. Unsent text is kept in this " +
       "browser for each chat, and for a new chat about each open item, so it is still there " +
       "after a reload or on coming back, and never shows up in another chat; sending clears " +
       "it, and deleting a chat drops its text. When the user has commented on the last answer, " +

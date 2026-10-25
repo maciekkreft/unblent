@@ -407,9 +407,11 @@ class ChatInput extends LitElement {
   }
 
   // dock-desk's Ctrl+h/j/k/l (12) and list-then-item focus a panel by its host: land
-  // in the editor, where the typing goes.
+  // in the editor, where the typing goes. With `insert` (i on the conversation above, 12
+  // "Vim keys") the cursor lands as for a new chat, in insert mode under Vim.
   focus(options) {
-    if (this.#view) this.#view.focus();
+    if (this.#view && options?.insert) this.#focusToType();
+    else if (this.#view) this.#view.focus();
     else super.focus(options);
   }
 

@@ -471,6 +471,31 @@ const settle = enqueueActions(({ context, enqueue }) => {
 export const canPin = (context) =>
   context.openId != null && context.conversation?.id === context.openId && (context.conversation.turns?.length ?? 0) > 0;
 
+// The conversation's Vim keys (12, "Vim keys"): what a key pressed on the conversation
+// asks for. Ctrl+d and Ctrl+u are the only ones with a modifier; a letter with Ctrl, Alt
+// or Cmd belongs to the browser and the desk. `afterG` is whether a g was pressed just
+// before, which makes this g the second of gg. "g" alone waits for its second press.
+export const vimAction = ({ key, ctrlKey, metaKey, altKey }, afterG = false) => {
+  if (metaKey || altKey) return null;
+  if (ctrlKey) return { d: "halfDown", u: "halfUp" }[key] ?? null;
+  if (key === "g") return afterG ? "top" : "g";
+  return { j: "down", k: "up", G: "bottom", i: "type" }[key] ?? null;
+};
+
+// Where a scroll action leaves the conversation: a line's height for j and k, half the
+// box for Ctrl+d and Ctrl+u, never past either end.
+export const scrollFor = (action, { top, height, max, line }) => {
+  const to = {
+    down: top + line,
+    up: top - line,
+    halfDown: top + height / 2,
+    halfUp: top - height / 2,
+    top: 0,
+    bottom: max,
+  }[action];
+  return to === undefined ? null : Math.max(0, Math.min(max, to));
+};
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): which chat is open, then that chat. conversation.opened
@@ -481,6 +506,9 @@ export const machine = setup({
     read: fromPromise(({ input }) => input.ask("conversations", "read", { id: input.id })),
     // pins.changed is held for us until this reply lands (pins: read supersededBy).
     pins: fromPromise(({ input }) => input.ask("pins", "read", {})),
+    // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
+    // races it is held for us until the reply lands (settings: read supersededBy).
+    settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -503,11 +531,17 @@ export const machine = setup({
       "answer the user selects a passage and writes a comment on it, as in Redline: the " +
       "passage is highlighted with a number and the comments are listed under the answer, " +
       "kept with the chat by `conversations` and sent with the next message, after which they " +
-      "show read only. The answer's text never changes; removing a comment waits out the undo window.",
+      "show read only. The answer's text never changes; removing a comment waits out the undo window. " +
+      "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
+      "while it does, j and k scroll it a line, gg and G go to the top and the bottom, Ctrl+d " +
+      "and Ctrl+u scroll half the box, and i moves the keyboard into the chat box under it in " +
+      "insert mode; Escape in the chat box's normal mode, the second Escape after typing, puts " +
+      "the keyboard back on the conversation. These keys never act while the user types in the " +
+      "comment box.",
     kind: "view",
     attributes: ["height", "markdown"],
     emits: ["pin.toggled", "marks.edited"],
-    asks: ["conversations: open", "conversations: read", "pins: read"],
+    asks: ["conversations: open", "conversations: read", "pins: read", "settings: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -520,21 +554,33 @@ export const machine = setup({
     // The chat `pins` holds pinned; the open chat is pinned while the two are the same.
     pin: null,
     pinsObserved: false,
+    // The "Vim keys" preference (12): off until settings says otherwise, and off on a
+    // page without a settings fact.
+    vimKeys: false,
     // The comment being written on the last answer, and the comments in their undo window.
     draft: null,
     discarding: new Map(),
   }),
   initial: "starting",
-  invoke: {
-    src: "pins",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: {
-      guard: ({ context }) => !context.pinsObserved,
-      actions: assign({ pin: ({ event }) => (typeof event.output?.chat === "string" ? event.output.chat : null) }),
+  invoke: [
+    {
+      src: "pins",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: {
+        guard: ({ context }) => !context.pinsObserved,
+        actions: assign({ pin: ({ event }) => (typeof event.output?.chat === "string" ? event.output.chat : null) }),
+      },
+      onError: { actions: [] },
     },
-    onError: { actions: [] },
-  },
+    {
+      src: "settings",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
+      onError: { actions: [] },
+    },
+  ],
   on: {
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "pins.changed": { actions: assign({ pin: ({ event }) => event.chat ?? null, pinsObserved: true }) },
     // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the
     // button turns at once. Nothing to pin until the open chat has its first message.
