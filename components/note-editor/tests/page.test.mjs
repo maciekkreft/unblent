@@ -250,7 +250,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: rendering and layout.
-    test("a list item is drawn as a dot with a hanging indent, its marker kept in the text", async () => {
+    test("a \"- \" item is drawn as a dash with a hanging indent, its marker kept in the text", async () => {
       const context = await browser.newContext({ viewport: { width: 700, height: 600 } });
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -275,10 +275,10 @@ for (const engine of ENGINES) {
         const rows = [...range.getClientRects()].map((r) => Math.round(r.left));
         return { dot: dot.textContent, dotRight: dot.getBoundingClientRect().right, rows, text: text.textContent.slice(0, 3) };
       });
-      assert.equal(shape.dot, "•", "the marker is drawn as a dot");
-      assert.equal(shape.text, "one", "the dot stands in for the marker; the text follows it");
+      assert.equal(shape.dot, "\u2013", "the marker is drawn as a dash");
+      assert.equal(shape.text, "one", "the dash stands in for the marker; the text follows it");
       assert.ok(shape.rows.length >= 2, `the item wraps, saw ${shape.rows.length} rows`);
-      assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dot stands left of the text");
+      assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dash stands left of the text");
       assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
 
       // The text keeps the markdown marker, Enter putting a gap between the items.
@@ -672,9 +672,9 @@ for (const engine of ENGINES) {
         ["", false, true, false],
         ["One", false, false, false],
         ["", false, true, false],
-        ["•a", false, false, true],
+        ["\u2013a", false, false, true],
         ["", false, true, false],
-        ["•b", false, false, true],
+        ["\u2013b", false, false, true],
       ];
       await until(async () => (await shown()).length === want.length);
       assert.deepEqual(await shown(), want);

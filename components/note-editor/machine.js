@@ -31,10 +31,11 @@ const THROTTLE_MS = 200;
 const PREFIX = { title: "# ", heading: "## ", subheading: "### ", body: "" };
 
 // The note's title is its first line that says anything, with its level marker or its
-// bullet off so a list row and note.saved.title never show a "#" or a "- ".
+// list marker off so a list row and note.saved.title never show a "#", a "- ", a
+// "1. ", a box or a quote's "> ".
 export function titleOf(body) {
   const line = body.split("\n").find((l) => l.trim() !== "");
-  return line ? line.trim().replace(/^#{1,3} /, "").replace(/^[-*] /, "").trim() : "";
+  return line ? line.trim().replace(/^#{1,3} /, "").replace(/^(?:[-*] (?:\[[ xX]\] )?|\d{1,9}\. |> )/, "").trim() : "";
 }
 
 // markdown -> { doc: marker-free text, levels: one level per line }. An empty note

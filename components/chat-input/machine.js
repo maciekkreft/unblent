@@ -120,11 +120,12 @@ const focusIfNew = (context, conversation) => ({
   focusRequest: turns(conversation).length === 0 ? context.focusRequest + 1 : context.focusRequest,
 });
 
-// A list ended by sending leaves an empty item behind ("- "), which is not part of the
-// question.
+// A list ended by sending leaves an empty item behind ("- ", "2. ", "- [ ] ", "> "),
+// which is not part of the question.
+const EMPTY_ITEM = / *(?:[-*](?: \[[ xX]\])?|\d{1,9}\.|>)$/;
 export const sendable = (text) => {
   let body = text.trim();
-  while (/(^|\n) *[-*]$/.test(body)) body = body.replace(/ *[-*]$/, "").trim();
+  while (new RegExp("(^|\n)" + EMPTY_ITEM.source).test(body)) body = body.replace(EMPTY_ITEM, "").trim();
   return body;
 };
 

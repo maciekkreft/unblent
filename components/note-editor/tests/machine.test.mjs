@@ -892,6 +892,9 @@ test("the title is the first line, with its level marker stripped", () => {
   assert.equal(titleOf("## Section\nbody"), "Section");
   assert.equal(titleOf("### Small\nbody"), "Small");
   assert.equal(titleOf("plain\nworld"), "plain");
+  assert.equal(titleOf("1. First\n2. Second"), "First");
+  assert.equal(titleOf("- [x] Done"), "Done");
+  assert.equal(titleOf("> Quoted"), "Quoted");
   assert.equal(titleOf("\n\n  # Second  \nmore"), "Second");
   assert.equal(titleOf("#no-space stays"), "#no-space stays"); // a hashtag is not a marker
   assert.equal(titleOf(""), "");

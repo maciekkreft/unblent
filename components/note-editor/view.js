@@ -496,7 +496,7 @@ class NoteEditor extends LitElement {
         history: false,
         quit: this.stage ? () => this.#actor.send({ type: "_quit" }) : null,
       }),
-      paragraphs({ notList: leveled }),
+      paragraphs({ notList: leveled, box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       levelField,
       levelTheme,
       // A source link is drawn as a tag (the editor kit, 10); following one asks the actor.

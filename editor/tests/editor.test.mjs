@@ -27,6 +27,8 @@ import {
   sourceLinks,
   missingLinks,
   toRegister,
+  tickAt,
+  renumber,
 } from "../editor.js";
 
 // The kit can break every editor (architecture.md 10), so its rule is tested here
@@ -82,7 +84,7 @@ test("a move landing on a gap carries on to text, or stops at the first or last 
 });
 
 test("a line beginning with \"- \" or \"* \" is an item; its text starts after the marker", () => {
-  assert.deepEqual(itemAt("One\n- two", 6), { from: 4, to: 9, indent: 0, marker: "-", textFrom: 6 });
+  assert.deepEqual(itemAt("One\n- two", 6), { from: 4, to: 9, kind: "bullet", indent: 0, marker: "-", next: "-", textFrom: 6 });
   assert.equal(itemAt("  * a", 0).textFrom, 4);
   assert.equal(itemAt("-no space", 0), null);
   assert.equal(itemAt("text - not", 6), null);
@@ -593,3 +595,121 @@ test("toRegister puts a text in Vim's unnamed register, which p pastes", () => {
   assert.equal(Vim.getRegisterController().getRegister('"').toString(), LINK);
 });
 
+
+// --- Numbered lists, checklists and quotes ---------------------------------------------
+
+test("numbers, checklist items and quotes are items too, each with the marker that follows it", () => {
+  assert.deepEqual(itemAt("12. a", 0), { from: 0, to: 5, kind: "number", indent: 0, marker: "12.", next: "13.", number: 12, textFrom: 4 });
+  const box = itemAt("  * [x] done", 0);
+  assert.deepEqual([box.kind, box.ticked, box.next, box.textFrom], ["check", true, "* [ ]", 8]);
+  assert.equal(itemAt("- [ ] todo", 0).ticked, false);
+  assert.deepEqual([itemAt("> said", 0).kind, itemAt("> said", 0).textFrom], ["quote", 2]);
+  // Without the space after the marker, plain text or a plain bullet.
+  assert.equal(itemAt("1.a", 0), null);
+  assert.equal(itemAt(">a", 0), null);
+  assert.equal(itemAt("- [ ]x", 0).kind, "bullet");
+});
+
+test("Enter on a numbered item, a checklist item or a quote continues it; on an empty one it ends", () => {
+  assert.equal(run("1. a", nextItemAt("1. a", 4, 4, true)), "1. a\n\n2. ");
+  assert.equal(run("- [x] a", nextItemAt("- [x] a", 7)), "- [x] a\n- [ ] ");
+  assert.equal(run("> a", nextItemAt("> a", 3, 3, true)), "> a\n\n> ");
+  assert.equal(run("> a\n> ", nextItemAt("> a\n> ", 6, 6, true)), "> a\n\n");
+  assert.equal(run("- [ ] ", nextItemAt("- [ ] ", 6, 6, true)), "");
+  // Backspace at the start of the text takes the whole marker.
+  assert.equal(run("3. a", unbulletAt("3. a", 3)), "a");
+  assert.equal(run("- [ ] a", unbulletAt("- [ ] a", 6)), "a");
+  assert.equal(run("> a", unbulletAt("> a", 2)), "a");
+  // A quote never moves with Tab.
+  assert.equal(indentAt("> a\n> b", 6), null);
+  assert.equal(indentAt("- a\n> b", 6), null);
+});
+
+test("a box is ticked and emptied; anything but a checklist item is left alone", () => {
+  assert.equal(run("- [ ] a", tickAt("- [ ] a", 6)), "- [x] a");
+  assert.equal(run("  * [X] a", tickAt("  * [X] a", 0)), "  * [ ] a");
+  assert.equal(tickAt("- a", 2), null);
+});
+
+const renumbered = (text, from, to, notList) => {
+  let out = text;
+  for (const c of renumber(text, from, to, notList).reverse()) out = out.slice(0, c.from) + c.insert + out.slice(c.to);
+  return out;
+};
+
+test("a list is renumbered 1, 2, 3 at each level, across gaps, and only the list touched", () => {
+  assert.equal(renumbered("1. a\n1. b\n7. c"), "1. a\n2. b\n3. c");
+  // An indented level counts from 1 under each item.
+  assert.equal(renumbered("1. a\n  4. x\n  9. y\n2. b\n  5. z"), "1. a\n  1. x\n  2. y\n2. b\n  1. z");
+  // A gap keeps one list; a paragraph or a bullet at the level starts again.
+  assert.equal(renumbered("1. a\n\n5. b\n\ntext\n\n4. c\n- d\n8. e"), "1. a\n\n2. b\n\ntext\n\n1. c\n- d\n1. e");
+  // Only the list holding the lines from..to: here the second.
+  const two = "3. a\n\ntext\n\n5. b\n6. c";
+  assert.equal(renumbered(two, two.indexOf("5."), two.indexOf("5.")), "3. a\n\ntext\n\n1. b\n2. c");
+  // From a paragraph typed between two lists, both are reached past the gaps.
+  const mid = "1. a\n\nx\n\n3. b";
+  assert.equal(renumbered(mid, 6, 7), "1. a\n\nx\n\n1. b");
+  // A named line is never an item.
+  assert.equal(renumbered("1. a\n5. b", 0, 0, (n) => n === 1), "1. a\n5. b");
+  assert.equal(renumbered("9. a\n10. b"), "1. a\n2. b");
+});
+
+const marks = (state) => {
+  const found = [];
+  for (const source of state.facet(EditorView.decorations)) {
+    if (typeof source === "function") continue;
+    source.between(0, state.doc.length, (from, _to, deco) => {
+      const w = deco.spec.widget;
+      if (w && "ticked" in w) found.push(w.kind === "check" ? (w.ticked ? "[x]" : "[ ]") : w.label);
+      if (deco.spec.class === "cm-quote") found.push("bar " + state.doc.lineAt(from).number);
+    });
+  }
+  return found;
+};
+
+test("a dash, a dot, a number, a box and a quote's bar are drawn, the bar across a gap in the quote", () => {
+  const t = target("- a\n* b\n1. c\n- [x] d\n\n> e\n\n> f", 0, [paragraphs()]);
+  assert.deepEqual(marks(t.state), ["\u2013", "\u2022", "1.", "[x]", "bar 6", "bar 7", "bar 8"]);
+  assert.equal(t.state.doc.toString(), "- a\n* b\n1. c\n- [x] d\n\n> e\n\n> f", "drawing never changes the text");
+});
+
+test("Enter, o and Tab on a numbered list renumber it in the same undo step; a load is left as it is", () => {
+  const t = target("1. a\n2. b", 4, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(t, "Shift-Enter"));
+  assert.equal(t.state.doc.toString(), "1. a\n2. \n3. b");
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "1. a\n2. b");
+  // Tab makes the second item the first of its own level.
+  const tab = target("1. a\n2. b\n3. c", 9, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(tab, "Tab"));
+  assert.equal(tab.state.doc.toString(), "1. a\n  1. b\n2. c");
+  // O above an item.
+  const o = target("1. a", 3, [paragraphs()]);
+  vimOpen(o, false);
+  assert.equal(o.state.doc.toString(), "1. \n\n2. a");
+  // The editor's own change, as a load, keeps its numbers.
+  const load = target("", 0, [paragraphs()]);
+  load.dispatch(load.state.update({ changes: { from: 0, insert: "4. a\n4. b" } }));
+  assert.equal(load.state.doc.toString(), "4. a\n4. b");
+});
+
+test("Ctrl+Enter ticks a checklist item in one undo step, never in an editor that takes no typing", () => {
+  const t = target("x\n\n- [ ] a", 9, [...baseExtensions(), paragraphs()]);
+  assert.ok(press(t, "Ctrl-Enter"));
+  assert.equal(t.state.doc.toString(), "x\n\n- [x] a");
+  assert.equal(t.state.selection.main.head, 9, "a tick is not a move");
+  assert.ok(undo(t));
+  assert.equal(t.state.doc.toString(), "x\n\n- [ ] a");
+  const read = target("- [ ] a", 6, [paragraphs(), EditorState.readOnly.of(true)]);
+  assert.equal(press(read, "Ctrl-Enter"), false);
+  assert.equal(read.state.doc.toString(), "- [ ] a");
+  assert.equal(press(target("text", 2, [paragraphs()]), "Ctrl-Enter"), false);
+});
+
+test("a cursor never rests inside a number, a box or a quote's marker", () => {
+  for (const [doc, textFrom] of [["One\n12. two", 8], ["One\n- [ ] two", 10], ["One\n> two", 6]]) {
+    const t = target(doc, 1, [paragraphs()]);
+    move(t, 5);
+    assert.equal(t.state.selection.main.head, textFrom, doc);
+  }
+});

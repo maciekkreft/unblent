@@ -662,7 +662,7 @@ class ChoicePointCards extends LitElement {
     return [
       this.#keys(id, field),
       ...baseExtensions({ vim: vimOn }),
-      paragraphs(),
+      paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       field === "away" || field === "towards" ? tallTheme : shortTheme,
       this.#boxes.get(key).read.of(readOnly(spec)),
       EditorView.contentAttributes.of({ "aria-label": spec.label }),

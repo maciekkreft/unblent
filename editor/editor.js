@@ -57,32 +57,116 @@ export function pastGap(blank, count, n, dir) {
 // Vim's o and O: a new paragraph below or above the line holding pos, the same gap as
 // Enter makes, so o at a line's end and Enter there leave the same text. On an item
 // (`item`, what itemAt found there, or null) the new line is the next or the previous
-// item, at its indent and with its marker, a gap apart from it.
+// item, at its indent and with the marker of the item after it (a numbered list is
+// renumbered after), a gap apart from it.
 export function openAt(text, pos, below, item = null) {
   const from = pos === 0 ? 0 : text.lastIndexOf("\n", pos - 1) + 1;
   let to = text.indexOf("\n", pos);
   if (to < 0) to = text.length;
-  const lead = item ? " ".repeat(item.indent) + item.marker + " " : "";
+  const lead = item ? " ".repeat(item.indent) + item.next + " " : "";
   if (below) return { from: to, to, insert: "\n\n" + lead, cursor: to + 2 + lead.length };
   return { from, to: from, insert: lead + "\n\n", cursor: from + lead.length };
 }
 
 // --- Lists ------------------------------------------------------------------------
-// A line that begins with "- " or "* ", after any spaces, is a list item (10). The
-// marker stays in the text, so it stays markdown. Items of one list are a gap apart
-// ("\n\n") when made with Enter and one "\n" apart when made with Shift+Enter.
+// A line that begins, after any spaces, with "- " or "* " is a bullet item, with "1. "
+// (any number) a numbered item, with "- [ ] " or "- [x] " (or "*") a checklist item,
+// and a line that begins with "> " is a quote line (10). The marker stays in the text,
+// so it stays markdown. Items of one list are a gap apart ("\n\n") when made with Enter
+// and one "\n" apart when made with Shift+Enter.
 
-const ITEM = /^( *)([-*]) /;
+const never = () => false;
 
-// The list item on the line holding pos: where the line starts and ends, its indent,
-// its marker and where its text starts. Null when that line is not an item.
+const ITEM = /^( *)(?:([-*])(?: \[([ xX])\])?|(\d{1,9})\.|(>)) /;
+
+// What the start of a line says it is, from ITEM's match. A quote has no indent of its
+// own: one that begins with spaces is still a quote but never moves with Tab.
+function itemOf(m) {
+  const indent = m[1].length;
+  if (m[5]) return { kind: "quote", indent, marker: ">", next: ">" };
+  if (m[4]) return { kind: "number", indent, marker: m[4] + ".", next: Number(m[4]) + 1 + ".", number: Number(m[4]) };
+  if (m[3]) return { kind: "check", indent, marker: m[2] + " [" + m[3] + "]", next: m[2] + " [ ]", ticked: m[3] !== " " };
+  return { kind: "bullet", indent, marker: m[2], next: m[2] };
+}
+
+// The list item on the line holding pos: where the line starts and ends, its kind, its
+// indent, its marker, the marker the item after it starts with (`next`) and where its
+// text starts. Null when that line is not an item.
 export function itemAt(text, pos) {
   const from = pos === 0 ? 0 : text.lastIndexOf("\n", pos - 1) + 1;
   let to = text.indexOf("\n", pos);
   if (to < 0) to = text.length;
   const m = ITEM.exec(text.slice(from, to));
   if (!m) return null;
-  return { from, to, indent: m[1].length, marker: m[2], textFrom: from + m[0].length };
+  return { from, to, ...itemOf(m), textFrom: from + m[0].length };
+}
+
+// A click on a checklist item's box, or Ctrl+Enter on its line: the box ticked or
+// emptied. Null when the line holding pos is not a checklist item.
+export function tickAt(text, pos) {
+  const item = itemAt(text, pos);
+  if (!item || item.kind !== "check") return null;
+  const at = item.from + item.indent + 3;
+  return { from: at, to: at + 1, insert: item.ticked ? " " : "x", cursor: pos };
+}
+
+// The numbers of the lists that the lines from..to touch, made 1, 2, 3 at each level,
+// as changes to the text; an indented level counts from 1 again under each item, and
+// a bullet or checklist item at a level ends its numbering. A list runs over items and
+// the gaps between them, the same as for Tab (aboveText), so the lines looked at reach
+// past any blank lines to the nearest text above and below. `notList(n)` names a
+// 0-based line that is never an item.
+export function renumber(text, from = 0, to = text.length, notList = never) {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
+  const count = starts.length;
+  const lineOf = (pos) => {
+    let lo = 0;
+    let hi = count - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= pos) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  const lineText = (n) => text.slice(starts[n], n + 1 < count ? starts[n + 1] - 1 : text.length);
+  const blank = (n) => lineText(n) === "";
+  const listed = (n) => {
+    const m = ITEM.exec(lineText(n));
+    return m && !m[5] && !notList(n) ? m : null;
+  };
+  let a = lineOf(from);
+  let b = lineOf(to);
+  while (a > 0 && blank(a - 1)) a--;
+  if (a > 0) a--;
+  while (b < count - 1 && blank(b + 1)) b++;
+  if (b < count - 1) b++;
+  const inList = (n) => listed(n) || blank(n);
+  while (a > 0 && inList(a) && inList(a - 1)) a--;
+  while (b < count - 1 && inList(b) && inList(b + 1)) b++;
+  const changes = [];
+  let levels = [];
+  for (let n = a; n <= b; n++) {
+    if (blank(n)) continue;
+    const m = listed(n);
+    if (!m) {
+      levels = [];
+      continue;
+    }
+    const indent = m[1].length;
+    levels = levels.filter((l) => l.indent < indent || (l.indent === indent && m[4]));
+    if (!m[4]) continue;
+    const last = levels.find((l) => l.indent === indent);
+    const want = (last ? last.n : 0) + 1;
+    if (last) last.n = want;
+    else levels.push({ indent, n: want });
+    if (Number(m[4]) !== want || m[4] !== String(want)) {
+      const at = starts[n] + indent;
+      changes.push({ from: at, to: at + m[4].length, insert: String(want) });
+    }
+  }
+  return changes;
 }
 
 // Enter (gap) or the line-break key on an item: the next item, at the same indent, a
@@ -94,7 +178,7 @@ export function nextItemAt(text, from, to = from, gap = false) {
   if (!item || from < item.textFrom || to > item.to) return null;
   const empty = from === to && text.slice(item.textFrom, item.to).trim() === "";
   if (!empty) {
-    const insert = (gap ? "\n\n" : "\n") + " ".repeat(item.indent) + item.marker + " ";
+    const insert = (gap ? "\n\n" : "\n") + " ".repeat(item.indent) + item.next + " ";
     return { from, to, insert, cursor: from + insert.length };
   }
   if (item.indent > 0) {
@@ -170,17 +254,17 @@ function aboveText(text, lineFrom) {
 // Null when it cannot, so Tab is left to the browser.
 export function indentAt(text, from, to = from) {
   const first = itemAt(text, from);
-  if (!first || first.from === 0) return null;
+  if (!first || first.kind === "quote" || first.from === 0) return null;
   const above = itemAt(text, aboveText(text, first.from));
-  if (!above || above.indent < first.indent) return null;
-  return reindent(text, from, to, () => 2);
+  if (!above || above.kind === "quote" || above.indent < first.indent) return null;
+  return reindent(text, from, to, (item) => (item.kind === "quote" ? 0 : 2));
 }
 
 // Shift+Tab: every item the selection touches moves one level out. Null when none is
 // indented.
 export function outdentAt(text, from, to = from) {
   if (!itemAt(text, from)) return null;
-  return reindent(text, from, to, (item) => -Math.min(2, item.indent));
+  return reindent(text, from, to, (item) => (item.kind === "quote" ? 0 : -Math.min(2, item.indent)));
 }
 
 // Where a bare cursor that lands inside an item's marker (or before it) should rest
@@ -338,8 +422,6 @@ const gapTheme = EditorView.theme({
   ".cm-line.cm-gap": { height: "calc((var(--space-sm) + var(--space-md)) / 2)", overflow: "hidden" },
 });
 
-const never = () => false;
-
 // With Vim on, an insert run (i, o, O … Escape) is one change, as in Vim, so one u
 // takes back the new paragraph and everything typed into it, Enters and joins included.
 // CodeMirror's history joins two changes only when they come quickly and side by side,
@@ -415,29 +497,79 @@ const keyWatch = Prec.highest(
 );
 const vimBack = () => keyNow === "b" || keyNow === "B" || ((keyNow === "e" || keyNow === "E") && keyBefore === "g");
 
-// The dot an item's marker is drawn as. Every dot is alike, so one is as good as another.
-class Dot extends WidgetType {
-  eq() {
-    return true;
+// What an item's marker is drawn as: a dash for "- ", a dot for "* ", the number for
+// "1. ", and for a checklist item the box, which `box(element, ticked)` draws, because
+// the kit knows no icons (11.2). A click on the box ticks it, except in an editor that
+// takes no typing.
+class Mark extends WidgetType {
+  constructor(item, box) {
+    super();
+    this.kind = item.kind;
+    this.label = item.kind === "number" ? item.marker : item.marker === "*" ? "\u2022" : "\u2013";
+    this.ticked = Boolean(item.ticked);
+    this.box = box;
   }
-  toDOM() {
-    const dot = document.createElement("span");
-    dot.className = "cm-item-dot";
-    dot.textContent = "\u2022";
-    return dot;
+  eq(other) {
+    return other.kind === this.kind && other.label === this.label && other.ticked === this.ticked;
+  }
+  toDOM(view) {
+    const mark = document.createElement("span");
+    mark.className = "cm-item-dot";
+    if (this.kind !== "check") {
+      mark.textContent = this.label;
+      return mark;
+    }
+    mark.className = this.ticked ? "cm-item-dot cm-item-box ticked" : "cm-item-dot cm-item-box";
+    if (this.box) this.box(mark, this.ticked);
+    else mark.textContent = this.ticked ? "\u2611" : "\u2610";
+    // The cursor stays where it was: a tick is not a move.
+    mark.addEventListener("mousedown", (event) => event.preventDefault());
+    mark.addEventListener("click", () => tick(view, view.posAtDOM(mark)));
+    return mark;
   }
 }
-const dot = Decoration.replace({ widget: new Dot() });
 
-// An item hangs: its first line starts one dot column left of the rest, so the dot sits
-// in the column and the text of every line of the item lines up. Margin, not padding,
-// so an editor's own side padding stays; the depth is a unitless factor in the line's
-// style (11.2).
-const itemLine = (depth) =>
-  Decoration.line({ class: "cm-item", attributes: { style: `margin-left: calc(var(--space-lg) * ${depth + 1})` } });
+// A quote's "> " is hidden like a bullet's marker; the bar on its line says what it is.
+const quoteMark = Decoration.replace({});
+
+const takesTyping = (state) => !state.readOnly && state.facet(EditorView.editable);
+
+// The box on the line holding pos ticked or emptied, in one undo step of its own.
+function tick(view, pos) {
+  if (!takesTyping(view.state)) return false;
+  const edit = tickAt(view.state.doc.toString(), pos);
+  if (!edit) return false;
+  view.dispatch({
+    changes: { from: edit.from, to: edit.to, insert: edit.insert },
+    userEvent: "input.tick",
+    annotations: isolateHistory.of("full"),
+  });
+  return true;
+}
+
+// An item hangs: its first line starts one mark column left of the rest, so the mark
+// sits in the column and the text of every line of the item lines up. Margin, not
+// padding, so an editor's own side padding stays; the depth is a unitless factor in the
+// line's style (11.2). A ticked item's text is muted, so what is left to do stands out.
+const itemLine = (depth, ticked) =>
+  Decoration.line({
+    class: ticked ? "cm-item cm-ticked" : "cm-item",
+    attributes: { style: `margin-left: calc(var(--space-lg) * ${depth + 1})` },
+  });
+const quoteLine = Decoration.line({ class: "cm-quote" });
 const itemTheme = EditorView.theme({
   ".cm-line.cm-item": { textIndent: "calc(-1 * var(--space-lg))" },
+  ".cm-line.cm-ticked": { color: "var(--color-body-mid)" },
   ".cm-item-dot": { display: "inline-block", width: "var(--space-lg)", textIndent: "0", textAlign: "center", color: "var(--color-body-mid)" },
+  ".cm-item-box": { cursor: "pointer" },
+  ".cm-item-box svg": { verticalAlign: "middle" },
+  ".cm-item-box.ticked": { color: "var(--color-accent)" },
+  ".cm-content[contenteditable=false] .cm-item-box": { cursor: "default" },
+  ".cm-line.cm-quote": {
+    marginLeft: "var(--space-2xs)",
+    paddingLeft: "var(--space-sm)",
+    borderLeft: "calc(var(--border-width) * 3) solid var(--color-mute)",
+  },
 });
 
 // Enter makes a paragraph, Shift+Enter a line break, the cursor steps over gaps, and
@@ -448,10 +580,12 @@ const itemTheme = EditorView.theme({
 // removed by a join. With Vim on, o and O open a paragraph with the same gap as Enter,
 // and an insert run is one undo step (insertRun).
 //
-// Lines that begin with "- " or "* " are list items (see Lists above). `notList(state,
-// line)` names a line that is never one (a heading, a fixed quote); `lists: false`
-// leaves lists off.
-export function paragraphs({ enter = true, keepBlank = never, lists = true, notList = never } = {}) {
+// Lines that begin with a list marker are list items and quote lines (see Lists above).
+// `notList(state, line)` names a line that is never one (a heading, a fixed quote);
+// `lists: false` leaves lists off. `box(element, ticked)` draws a checklist item's box
+// into the element (Mark). A numbered list is renumbered after every edit the user
+// makes to it, in the same undo step.
+export function paragraphs({ enter = true, keepBlank = never, lists = true, notList = never, box = null } = {}) {
   const gapAt = (state, line) => line.length === 0 && !keepBlank(state, line);
 
   // A field rather than a computed facet, so a keepBlank reading another field of the
@@ -556,12 +690,21 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
 
   const buildItems = (state) => {
     const found = [];
+    const quoteAt = (n) => n >= 1 && n <= state.doc.lines && itemLineAt(state, state.doc.line(n).from) && /^ *> /.test(state.doc.line(n).text);
     for (let n = 1; n <= state.doc.lines; n++) {
       const line = state.doc.line(n);
+      // A gap inside a quote keeps the bar, so the quote reads as one.
+      if (line.length === 0 && quoteAt(n - 1) && quoteAt(n + 1)) found.push(quoteLine.range(line.from));
       const m = ITEM.exec(line.text);
       if (!m || notList(state, line)) continue;
-      found.push(itemLine(Math.floor(m[1].length / 2)).range(line.from));
-      found.push(dot.range(line.from, line.from + m[0].length));
+      const item = itemOf(m);
+      if (item.kind === "quote") {
+        found.push(quoteLine.range(line.from));
+        found.push(quoteMark.range(line.from, line.from + m[0].length));
+        continue;
+      }
+      found.push(itemLine(Math.floor(item.indent / 2), item.ticked).range(line.from));
+      found.push(Decoration.replace({ widget: new Mark(item, box) }).range(line.from, line.from + m[0].length));
     }
     return Decoration.set(found, true);
   };
@@ -569,6 +712,23 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     create: buildItems,
     update: (value, tr) => (tr.docChanged || tr.effects.length || tr.reconfigured ? buildItems(tr.state) : value),
     provide: (f) => EditorView.decorations.from(f),
+  });
+
+  // Every edit the user makes renumbers the lists it touches (renumber), as part of the
+  // same transaction, so one Undo takes back both. A change the editor makes itself (a
+  // load) is left as it is.
+  const numbering = EditorState.transactionFilter.of((tr) => {
+    if (!tr.docChanged || !(tr.isUserEvent("input") || tr.isUserEvent("delete") || tr.isUserEvent("move"))) return tr;
+    let from = Infinity;
+    let to = -1;
+    tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+      from = Math.min(from, fromB);
+      to = Math.max(to, toB);
+    });
+    const text = tr.newDoc.toString();
+    if (!/^ *\d/m.test(text)) return tr;
+    const changes = renumber(text, from, to, (n) => notList(tr.state, tr.state.doc.line(n + 1)));
+    return changes.length ? [tr, { changes, sequential: true }] : tr;
   });
 
   // A bare cursor never rests inside a marker (markerStop). Listed before overGaps so it
@@ -595,9 +755,10 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     { key: "Backspace", run: onItem(collapsed(unbulletAt), "delete.backward", true) },
     { key: "Tab", run: onItem(indentAt, "input.indent") },
     { key: "Shift-Tab", run: onItem(outdentAt, "delete.dedent") },
+    { key: "Ctrl-Enter", run: (view) => itemLineAt(view.state, view.state.selection.main.head) !== null && tick(view, view.state.selection.main.head) },
   ];
 
-  return [keyWatch, items, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, insertRuns, keymap.of([...listKeys, ...keys])];
+  return [keyWatch, items, numbering, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, insertRuns, keymap.of([...listKeys, ...keys])];
 }
 
 // --- Source links -------------------------------------------------------------------

@@ -203,6 +203,10 @@ test("an empty list item left at the end is not sent", async () => {
   assert.equal(sendable("Buy:\n- milk\n  - "), "Buy:\n- milk");
   assert.equal(sendable("- "), "");
   assert.equal(sendable("a - b"), "a - b");
+  assert.equal(sendable("1. milk\n2. "), "1. milk");
+  assert.equal(sendable("- [x] milk\n- [ ] "), "- [x] milk");
+  assert.equal(sendable("> quoted\n> "), "> quoted");
+  assert.equal(sendable("in 2026."), "in 2026.");
   const h = start();
   await ready(h);
   h.actor.send({ type: "_send", text: "- " });

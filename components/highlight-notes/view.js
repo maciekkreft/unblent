@@ -489,7 +489,7 @@ class HighlightNotes extends LitElement {
       discardField,
       refusedField,
       quoteFilter,
-      paragraphs({ keepBlank, notList: (state, line) => isQuoteAt(state, line.from) }),
+      paragraphs({ keepBlank, notList: (state, line) => isQuoteAt(state, line.from), box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       invertedEffects.of(invertDiscard),
       editorTheme,
       EditorView.decorations.compute([quoteField, discardField], (state) => this.#dimLines(state)),

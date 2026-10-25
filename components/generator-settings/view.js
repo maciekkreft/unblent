@@ -1,4 +1,5 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, render } from "lit";
+import { icon } from "icons";
 import { mount, unmount, ask } from "bus";
 import { EditorState, Annotation } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -317,7 +318,7 @@ class GeneratorSettings extends LitElement {
   #extensions(key, name, vimOn) {
     return [
       baseExtensions({ vim: vimOn }),
-      paragraphs(),
+      paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       boxTheme,
       EditorView.contentAttributes.of({ "aria-label": `Ask the model, ${name}` }),
       EditorView.updateListener.of((update) => {

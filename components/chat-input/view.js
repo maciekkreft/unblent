@@ -1,4 +1,4 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { monotonicFactory } from "ulid";
 import { icon } from "icons";
@@ -257,7 +257,7 @@ class ChatInput extends LitElement {
       this.#keys(),
       // Enter stays a send (#keys); in Vim insert mode #keys leaves it here, where it
       // makes a paragraph like Enter in every other editor (10).
-      paragraphs(),
+      paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       this.#editable.of(EditorView.editable.of(this.#editableOn)),
       editorTheme,
       placeholder("Ask about your library…"),

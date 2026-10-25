@@ -1,4 +1,4 @@
-import { LitElement, html, css, nothing } from "lit";
+import { LitElement, html, css, nothing, render } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
@@ -691,7 +691,7 @@ class EvaluatorEditor extends LitElement {
   #extensions(key, spec, vimOn, labelled) {
     return [
       baseExtensions({ vim: vimOn }),
-      paragraphs(),
+      paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       spec.small ? smallTheme : bodyTheme,
       spec.hint ? placeholder(spec.hint) : [],
       labelled.of(EditorView.contentAttributes.of({ "aria-label": spec.label })),
