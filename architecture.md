@@ -739,6 +739,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Copying a choice point, or any later kind of sheet, from an earlier day to today as the next version of the original, which stays unchanged, with a link in the bottom left corner of the copy that opens the version it continues.
 - `gt` and `gT` with Vim keys on, showing the next and previous tab of the group that has the keyboard, the same as Ctrl+. and Ctrl+, do today, from the book reader, the journal and the note editors as well.
 - Pipes, where a line in a journal day or a note names steps after it with `|` (an evaluator, a hint, later any step that turns text into text with a model), the line runs through them in order when the user presses Run, and each step's result is kept and shown under the line, never written into the text unless the user inserts it (sketch: `~/.claude/plans/line-pipes.md`).
+- A weekly series of eight posts in the owner's community r/PracticePsychology, teaching the Choice Point and Values from *ACT Made Simple* to people practicing on their own, each ending with how Unblent's free journal holds the practice (section 17; the plan and the first post: https://claude.ai/artifact/Uozrxwx742EPpQEXuXbAUo).
 
 ---
 
@@ -769,10 +770,6 @@ How results are measured:
 - **Wishes and problems.** GitHub issues and Discussions › Ideas.
 - One short report puts these numbers side by side, before a post and again a day after it.
 
-### Due today, 2026-10-23
-
-- Change the text of the confirmation email of the landing page's sign-up form in Kit to text about Unblent instead of the old project's; it stays sent from hello@unblent.com (the owner, in Kit).
-
 ### Later
 
 - Show HN at https://news.ycombinator.com/submit, on a Tuesday, Wednesday or Thursday between 8 and 10 a.m. US Eastern time. Link `?ref=hn`.
@@ -783,3 +780,18 @@ How results are measured:
 - AlternativeTo, as an alternative to Apple Books, Calibre, Readwise and Kindle; MacUpdate; and the lists jaywcjlove/awesome-mac, serhii-londar/open-source-mac-os-apps and iCHAIT/awesome-macOS on GitHub.
 - Indie Hackers, the story of building it (optional).
 - Paid ads in ChatGPT and on Reddit, each with a small fixed budget and its own `ref`, decided after the first posts show which audience responds.
+
+---
+
+## 17. Community posts
+
+Series of posts written for one online community, planned after the launch posts (16). A series is not posted until what it describes is in the free Mac app. Remove a line when its work is done. The plan of the posts, what each covers and how each links to Unblent: https://claude.ai/artifact/Uozrxwx742EPpQEXuXbAUo.
+
+### r/PracticePsychology: the Choice Point series
+
+- Who it is for: people who have heard of acceptance and commitment therapy (ACT) and want to practice the Choice Point and the Values exercises every day on their own, without a therapist.
+- What it teaches: the theory a reader needs to do the two exercises, as Russ Harris explains it in *ACT Made Simple*, in the posts' own words and with the book named as the source. No text or diagram is copied from the book. Each post ends with one exercise to try that day, which works on paper as well as in Unblent.
+- When it is posted: only once the free Mac app has the Choice Point sheet and the Values list, which section 14 leaves out today. The posts describe neither evaluators nor Jev's marks, because those are not free; everything a post shows can be done for free.
+- How the posts are written: an AI writes each draft, and the owner rewrites it in their own voice before posting. The community is the owner's own, so the owner sets its rules.
+- How each post mentions Unblent: one short paragraph at the end, after the exercise, saying the owner keeps their own daily practice in Unblent's journal, that it is free and open source forever (MIT license), that it works offline on a Mac, and which part of the post it holds (the sheet, the values, the day's page). It links the GitHub repository, https://github.com/maciekkreft/unblent, and the landing page with `?ref=reddit-practicepsychology`, so visits are counted as section 16 says.
+- How often: one post a week, eight posts, each linking to the ones before it.
