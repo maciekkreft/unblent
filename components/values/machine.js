@@ -47,13 +47,34 @@ const inForce = (context, day) => {
   return list.at(-1) ?? null;
 };
 
+// What a version says to the reader: the names and meanings in order, trimmed at both
+// ends; ids do not count, so a value typed again reads as the same.
+const content = (values) => JSON.stringify(values.map((v) => [v.name.trim(), v.meaning.trim()]));
+const currentContent = (context) => content(inForce(context)?.values ?? []);
+
+// "Changed since" is offered only when today's values read differently from the shown
+// day's, so following it never leads to the same list.
 function replyRead(context, day, reply) {
   const found = inForce(context, day);
-  const changedSince = day !== undefined && [...context.versions.values()].some((r) => r.day > day);
+  const changedSince = day !== undefined && content(found ? found.values : []) !== currentContent(context);
   reply({ day: found ? found.day : null, values: found ? found.values : [], changedSince });
 }
 
-const replyVersions = (context, reply) => reply({ days: sorted(context).map((r) => r.day) });
+// Only the past days worth looking at: an empty version, a repeat of the version before
+// it, and one that reads as the current version would each lead to nothing new.
+function replyVersions(context, reply) {
+  const current = currentContent(context);
+  const days = [];
+  let last = null;
+  for (const r of sorted(context)) {
+    if (r.values.length === 0) continue;
+    const c = content(r.values);
+    if (c === last) continue;
+    last = c;
+    if (c !== current) days.push(r.day);
+  }
+  reply({ days });
+}
 
 const announce = (r) => ({ type: "values.changed", day: r.day, values: r.values });
 
@@ -213,8 +234,12 @@ export const machine = setup({
       "earlier days keep theirs, so their marks stay as they were checked. " +
       "`values: read` answers the version in force on a day, the latest one on or before it, " +
       "or the current one when no day is given, and says whether the values changed after " +
-      "it; the chat may use it as a lookup, Reading your values. `values: versions` answers " +
-      "the days on which the values changed, oldest first. `values.changed` announces each " +
+      "it, which is true only when the current values read differently from that day's; the " +
+      "chat may use it as a lookup, Reading your values. `values: versions` answers, oldest " +
+      "first, only the past days worth looking at: it leaves out every empty version, every " +
+      "version that reads the same as the one before it, and every one that reads the same " +
+      "as the current version, where reading the same means the same names and meanings in " +
+      "the same order, spaces at either end aside. `values.changed` announces each " +
       "version written here or arriving from another device, with its day. It works signed " +
       "out, numbering versions itself, and syncs to the account when signed in (section 5); " +
       "signing in uploads every version. The last write wins, so two devices never conflict. " +

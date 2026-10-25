@@ -56,7 +56,7 @@ test("the sheet's save reaches values, and read and versions answer what was sav
     assert.deepEqual(heard[0].values, [parent]);
     assert.deepEqual(await sheet.read({}), { day: TODAY, values: [parent], changedSince: false });
     assert.deepEqual(await sheet.read({ day: "2000-01-01" }), { day: null, values: [], changedSince: true });
-    assert.deepEqual(await sheet.versions(), { days: [TODAY] });
+    assert.deepEqual(await sheet.versions(), { days: [] }, "today's is the current version, not an earlier one");
   } finally {
     unmount(sheet.actor);
     unwire();

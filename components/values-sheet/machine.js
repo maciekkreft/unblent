@@ -86,18 +86,16 @@ function merged(drafts, values) {
   return [...kept, ...copy(values.filter((v) => !ids.has(v.id)))];
 }
 
-// A version written for a later day than the shown one means the values changed since;
-// one for the shown day, or an earlier one newer than what is held, is the shown day's.
+// A version for the shown day, or an earlier one newer than what is held, is the shown
+// day's. Which days are worth listing, and whether the values changed since, only the fact
+// can say, since a change can make an earlier version read as today's: they are asked
+// again (recount).
 const follow = enqueueActions(({ context, event, enqueue }) => {
   if (!isDay(event.day) || !Array.isArray(event.values)) return;
-  const days = context.days.includes(event.day) ? context.days : [...context.days, event.day].sort();
-  enqueue.assign({ days });
+  enqueue.stopChild("recount");
+  enqueue.spawnChild("recount", { id: "recount", input: { ask: context.ask, day: context.day } });
   const version = context.version;
-  if (!version) return;
-  if (event.day > context.day) {
-    enqueue.assign({ version: { ...version, changedSince: true } });
-    return;
-  }
+  if (!version || event.day > context.day) return;
   if (version.day && event.day < version.day) return;
   enqueue.assign({ version: { day: event.day, values: copy(event.values), changedSince: version.changedSince } });
   if (context.open && !context.dirty && !context.removing.length) enqueue.assign({ drafts: merged(context.drafts, event.values) });
@@ -146,6 +144,15 @@ export const machine = setup({
       ]);
       return { read, versions };
     }),
+    // After a change: the days worth listing and whether the shown day's values changed
+    // since, for the day asked about.
+    recount: fromPromise(async ({ input }) => {
+      const [read, versions] = await Promise.all([
+        input.ask("values", "read", { day: input.day }),
+        input.ask("values", "versions", {}),
+      ]);
+      return { day: input.day, read, versions };
+    }),
     // On a page without a settings fact the ask replies no-answerer and Vim stays off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Another version looked at in place: the current one, or an earlier day's.
@@ -183,6 +190,8 @@ export const machine = setup({
       "both empty is not saved. The footer says Changed today when today's version was " +
       "written today, or when the shown version was written, and Earlier versions with how " +
       "many there are, which lists their days; picking one shows that version, read only. " +
+      "Which days are listed, and whether Changed since is offered, is the values fact's to " +
+      "say, and is asked again after every change. " +
       "What is written is saved a short time into typing and at once when a box loses focus " +
       "or the sheet folds.",
     kind: "view",
@@ -244,6 +253,7 @@ export const machine = setup({
           saveWaiting,
           finishRemovals,
           stopChild("lookup"),
+          stopChild("recount"),
           assign(({ event }) => ({
             day: event.day,
             dayWritable: typeof event.writable === "boolean" ? event.writable : null,
@@ -262,6 +272,16 @@ export const machine = setup({
         actions: [saveWaiting, assign({ dayWritable: ({ event }) => (typeof event.writable === "boolean" ? event.writable : null) })],
       },
     ],
+    "xstate.done.actor.recount": {
+      guard: ({ context, event }) => event.output?.day === context.day && context.version != null,
+      actions: assign(({ context, event }) => {
+        const { read, versions } = event.output;
+        return {
+          days: Array.isArray(versions?.days) ? [...versions.days].sort() : context.days,
+          version: typeof read?.changedSince === "boolean" ? { ...context.version, changedSince: read.changedSince } : context.version,
+        };
+      }),
+    },
     "xstate.done.actor.lookup": {
       guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.values),
       actions: assign({

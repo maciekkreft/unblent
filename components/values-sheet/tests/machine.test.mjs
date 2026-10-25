@@ -23,13 +23,15 @@ async function start(versions = {}, { vimKeys, undoMs = 3000 } = {}) {
   let n = 0;
   const asked = [];
   const clock = new SimulatedClock();
-  const days = Object.keys(versions).sort();
+  // Read at each ask, so a test can change what the fact holds.
+  const daysOf = () => Object.keys(versions).sort();
   const actor = createActor(machine, {
     clock,
     input: {
       ask: (target, name, payload) => {
         asked.push({ target, name, payload });
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
+        const days = daysOf();
         if (name === "versions") return Promise.resolve({ days });
         const on = days.filter((d) => payload.day === undefined || d <= payload.day).at(-1) ?? null;
         return Promise.resolve({ day: on, values: on ? versions[on] : [], changedSince: payload.day !== undefined && days.some((d) => d > payload.day) });
@@ -197,7 +199,22 @@ test("values.changed is followed, also by an open sheet with nothing waiting, an
   actor.send({ type: "day.shown", day: YESTERDAY });
   await flush();
   actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Later")] });
+  await flush();
   assert.equal(ctx().version.changedSince, true);
+});
+
+test("after a change the days listed and Changed since are asked again, as the fact says them", async () => {
+  const versions = { [EARLIER]: [v(1, "Honest")], [TODAY]: [v(2, "Kind")] };
+  const { actor, ctx, asked } = await start(versions);
+  assert.deepEqual(earlierDays(ctx()), [EARLIER]);
+  // Today's edit made the earlier version read as today's, so the fact no longer lists it.
+  delete versions[EARLIER];
+  const before = asked.length;
+  actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest")] });
+  await flush();
+  assert.deepEqual(asked.slice(before).map((a) => a.name).sort(), ["read", "versions"]);
+  assert.deepEqual(earlierDays(ctx()), []);
+  assert.deepEqual(ctx().version.values, [v(1, "Honest")], "the shown day's version follows the event at once");
 });
 
 test("the footer names a day of another year with its year", () => {

@@ -150,7 +150,7 @@ test("an edit today replaces today's version, minting the next version, and the 
   actor.send(saved("2026-10-14", [parent, health]));
   actor.send(saved("2026-10-14", [parent, health]));
   assert.equal(changed.length, 2);
-  assert.deepEqual(await versions(actor), ["2026-10-14"], "one version per day");
+  assert.deepEqual(await versions(actor), [], "one version per day, and the current one is not an earlier one");
   assert.equal(store.rows.get("2026-10-14").version, 2);
 });
 
@@ -191,7 +191,46 @@ test("read answers the latest version on or before a day, and whether the values
   assert.deepEqual(await read(actor, { day: "2026-10-04" }), { day: "2026-10-01", values: [parent], changedSince: true });
   assert.deepEqual(await read(actor, { day: "2026-10-05" }), { day: "2026-10-05", values: [parent, health], changedSince: false });
   assert.deepEqual(await read(actor), { day: "2026-10-05", values: [parent, health], changedSince: false });
-  assert.deepEqual(await versions(actor), ["2026-10-01", "2026-10-05"]);
+  assert.deepEqual(await versions(actor), ["2026-10-01"]);
+});
+
+test("versions leaves out empty days, repeats, and days that read as the current values", async () => {
+  const kept = [
+    { day: "2026-10-01", values: [], version: 1 },
+    { day: "2026-10-02", values: [parent], version: 1 },
+    { day: "2026-10-03", values: [{ ...parent, id: B, name: " Being a present parent " }], version: 1 },
+    { day: "2026-10-04", values: [health], version: 1 },
+    { day: "2026-10-05", values: [], version: 1 },
+    { day: "2026-10-06", values: [parent, health], version: 1 },
+    { day: "2026-10-14", values: [{ ...health, meaning: "Moving every day " }], version: 1 },
+  ];
+  const { actor } = start(fakeStore(kept));
+  await ready(actor);
+  assert.deepEqual(await versions(actor), ["2026-10-02", "2026-10-06"], "the 3rd repeats the 2nd, the 4th reads as today's");
+});
+
+test("with only an empty past day and one that reads as today's, there are no earlier versions", async () => {
+  const kept = [
+    { day: "2026-10-12", values: [], version: 1 },
+    { day: "2026-10-13", values: [parent], version: 1 },
+    { day: "2026-10-14", values: [parent], version: 1 },
+  ];
+  const { actor } = start(fakeStore(kept));
+  await ready(actor);
+  assert.deepEqual(await versions(actor), []);
+});
+
+test("changed since is true only when the current values read differently from the shown day's", async () => {
+  const kept = [
+    { day: "2026-10-10", values: [parent], version: 1 },
+    { day: "2026-10-12", values: [health], version: 1 },
+    { day: "2026-10-14", values: [{ ...parent, id: B, meaning: " " }], version: 1 },
+  ];
+  const { actor } = start(fakeStore(kept));
+  await ready(actor);
+  assert.equal((await read(actor, { day: "2026-10-10" })).changedSince, false, "today reads as the 10th");
+  assert.equal((await read(actor, { day: "2026-10-12" })).changedSince, true);
+  assert.equal((await read(actor, { day: "2026-10-01" })).changedSince, true, "nothing then, values now");
 });
 
 test("an earlier day's version never changes when today's is written", async () => {
@@ -298,7 +337,7 @@ test("signed in: a pull adopts newer versions from another device, announces the
   await ready(actor);
   assert.deepEqual(api.pulls, [0]);
   assert.deepEqual(changed.map((c) => [c.day, c.values.length]), [["2026-10-13", 2], ["2026-10-12", 1]]);
-  assert.deepEqual(await versions(actor), ["2026-10-12", "2026-10-13"]);
+  assert.deepEqual(await versions(actor), ["2026-10-12"]);
   assert.equal(store.meta.get("cursor"), 9);
 });
 
