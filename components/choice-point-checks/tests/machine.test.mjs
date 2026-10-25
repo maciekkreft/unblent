@@ -241,6 +241,17 @@ test("a line already answered is never asked again, in any choice point", async 
   assert.deepEqual(statuses(checked.find((e) => e.choicePoint === CP2)), ["Call mum:done"]);
 });
 
+test("a line without a letter or digit is never asked and gets no mark; a list marker stays in the text", async () => {
+  const { actor, checked, decides } = await start();
+  actor.send(edited());
+  const c = cp({ towards: "*\n - \n>\n…\n* Call mum" });
+  actor.send({ type: "choice-point.changed", choicePoint: c });
+  actor.send(finishAll(c));
+  await flush();
+  assert.deepEqual(decides.map((d) => d.payload.state.text), ["* Call mum"]);
+  assert.deepEqual(statuses(checked.at(-1)), ["* Call mum:pending"]);
+});
+
 test("a line edited again while it waited in the queue is not asked about", async () => {
   const { actor, clock, decides } = await start();
   actor.send(edited());

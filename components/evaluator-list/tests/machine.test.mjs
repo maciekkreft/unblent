@@ -492,6 +492,23 @@ test("a text is judged line by line: blank lines are skipped and each keeps its 
   assert.deepEqual(lines(" \n "), []);
 });
 
+test("a line without a letter or digit is not judged; a list marker stays in the text", () => {
+  assert.deepEqual(lines("*\n - \n>\n…\n--?!\n* Call mum\n- 2\n日本"), [
+    { at: 6, line: "* Call mum" },
+    { at: 7, line: "- 2" },
+    { at: 8, line: "日本" },
+  ]);
+});
+
+test("finishing a line without words asks nothing", async () => {
+  const { actor, ctx, decided } = await runner();
+  actor.send({ type: "_type", text: "*\n - \n..." });
+  actor.send({ type: "_finish", all: true });
+  actor.send({ type: "_finish", lines: ["*", " - ", "..."] });
+  assert.equal(decided.length, 0);
+  assert.deepEqual(runsOf(ctx()), [], "no mark and no pulsing dot");
+});
+
 const statuses = (ctx) => runsOf(ctx()).map((r) => r.status);
 
 test("a finished line is asked once, one at a time, and remembered; a line not finished is not asked", async () => {

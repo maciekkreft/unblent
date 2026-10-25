@@ -201,7 +201,7 @@ function checkersOf(context, field, day) {
   return out;
 }
 
-// Every non-empty line of every checked box, with each asked question of each of the box's
+// Every line with words (a letter or a digit, in any script) of every checked box, with each asked question of each of the box's
 // evaluators and the key its answer is kept under, and `legacy`, for the box's own
 // evaluator, the key the whole set was kept under before answers were kept per question.
 // A line is keyed without the spaces around it, so adding one is not a new check.
@@ -211,7 +211,7 @@ function planOf(context, cp) {
     const checkers = checkersOf(context, field, cp.day);
     if (checkers.length === 0) continue;
     for (const text of cp[field].split("\n")) {
-      if (text.trim() === "") continue;
+      if (!/[\p{L}\p{N}]/u.test(text)) continue;
       const t = text.trim();
       const items = checkers.flatMap((c) =>
         c.questions.map((question) => ({ question, key: keyOf(c.evaluator, [question], t), legacy: c.whole ? keyOf(c.evaluator, c.whole, t) : null })),
@@ -698,7 +698,8 @@ export const machine = setup({
     description:
       "Owns which evaluator checks each box of a choice point (away, towards, situation, " +
       "thoughts and feelings), how its answers are shown, and what Jev answered about each " +
-      "line written in a checked box. The settings are one row per box, chosen in Settings " +
+      "line written in a checked box. A line without words (no letter or digit in any script, " +
+      "such as one of only spaces, \"*\" or \"-\") is never asked and gets no mark. The settings are one row per box, chosen in Settings " +
       "under Your account; the last write wins, so two devices never conflict. A box may also " +
       "have further evaluators, chosen under Also check with, that check each of its lines as " +
       "well; a line is still one Jev request, asking every evaluator's questions it has no " +
