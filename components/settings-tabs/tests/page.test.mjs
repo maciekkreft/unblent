@@ -2,7 +2,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // The gear's sheet on the product page (12): everyone sees Settings and Generators, and
-// the admin sees Administration last, which shows People, Limits and Guest keys;
+// the admin sees Administration, which shows People, Limits and Guest keys;
 // Administration never asks the server for anyone else.
 // Who is the admin, who came and what they spent are answered by request routing, so
 // nothing here makes an admin in the throwaway registry or spends anything; what the
@@ -74,8 +74,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
-        await until(async () => (await tabs(page)).length === 3);
-        assert.deepEqual(await tabs(page), ["Settings", "Generators", "Administration"]);
+        await until(async () => (await tabs(page)).length === 4);
+        assert.deepEqual(await tabs(page), ["Settings", "Generators", "Administration", "Feature flags"]);
         assert.deepEqual(await slotted(page), ["settings-sheet"], "Settings is shown first");
 
         await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();

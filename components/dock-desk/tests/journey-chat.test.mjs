@@ -312,7 +312,9 @@ for (const engine of ENGINES) {
         await v.page.keyboard.type("hello", { delay: 30 });
         await press(v.page, "Escape", "Enter");
         await v.see(asked("hello"));
-        await press(v.page, "Escape");
+        // The box is in normal mode after sending: Escape puts the keyboard on the
+        // conversation, and Escape there on the chat's row.
+        await press(v.page, "Escape", "Escape");
         await v.see((s) => all(want(s.chats === "conversation-list" && s.chatOpen, `Chats shows ${s.chats}, ${s.chatOpen} open`), onRow(s, chatRow(s))));
       },
     },

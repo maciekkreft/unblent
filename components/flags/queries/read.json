@@ -1,0 +1,27 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "read takes nothing.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which features are off, as flags.changed carries it: the last answer of the server kept on this device, or every feature off and hidden while there has been none.",
+    "type": "object",
+    "properties": {
+      "off": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "hidden": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["off", "hidden"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["flags.changed"]
+}

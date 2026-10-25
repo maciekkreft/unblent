@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The admin turned a feature on or off for everyone in the Feature flags tab (3.1, 12).",
+  "type": "object",
+  "properties": {
+    "feature": { "type": "string" },
+    "on": { "type": "boolean" }
+  },
+  "required": ["feature", "on"],
+  "additionalProperties": false
+}
