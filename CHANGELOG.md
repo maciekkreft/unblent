@@ -24,6 +24,10 @@ All notable changes to Unblent for Mac are listed here. The format follows
 - An evaluator from another book that was ticked "Show in journal" now belongs to the
   Journal, so it is listed there again.
 
+### Fixed
+
+- A choice point whose boxes hold only spaces or blank lines is no longer kept.
+
 ## [0.1.2] — 2026-10-23
 
 ### Fixed

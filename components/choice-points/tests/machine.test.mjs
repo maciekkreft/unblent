@@ -162,6 +162,8 @@ test("a new choice point with all four boxes empty, or without a day, is not kep
   actor.send(saved({ situation: "" }));
   actor.send(saved({ day: "today" }));
   assert.equal(changed.length, 0);
+  actor.send(saved({ situation: " ", towards: "\n\n" }));
+  assert.equal(changed.length, 0, "only spaces and blank lines count as empty");
   actor.send(saved({ situation: "", towards: "Breathe" }));
   assert.equal(changed.length, 1);
 });
@@ -188,6 +190,15 @@ test("a save that empties all four boxes of a kept one removes it, and its tombs
   assert.deepEqual(await list(actor), []);
   const tomb = store.rows.get(ID);
   assert.deepEqual([tomb.deleted, tomb.situation, tomb.away, tomb.version], [true, "Meeting ran late", "Snapped", 2]);
+});
+
+test("a save that leaves only spaces and blank lines in a kept one removes it", async () => {
+  const { actor, deleted } = start(fakeStore());
+  await ready(actor);
+  actor.send(saved());
+  actor.send(saved({ situation: "  ", thoughts: "", away: "\n", towards: "\n\n" }));
+  assert.deepEqual(deleted, [{ type: "choice-point.deleted", id: ID, day: DAY }]);
+  assert.deepEqual(await list(actor), []);
 });
 
 test("a gesture or query that lands while the store loads waits for it", async () => {
