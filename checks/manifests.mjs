@@ -6,9 +6,13 @@
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
+// Imported together, so one machine's file reads overlap another's compiling; the
+// output keeps the order of the arguments.
+const files = process.argv.slice(2);
+const mods = await Promise.all(files.map((file) => import(pathToFileURL(resolve(file)).href)));
 const out = {};
-for (const file of process.argv.slice(2)) {
-  const mod = await import(pathToFileURL(resolve(file)).href);
+for (const [i, file] of files.entries()) {
+  const mod = mods[i];
   const machine = mod.machine;
   if (!machine || typeof machine.config !== "object") {
     out[file] = { error: "no exported `machine`" };

@@ -4,6 +4,7 @@
 import ast
 import contextlib
 import fnmatch
+import functools
 import fcntl
 import glob
 import hashlib
@@ -88,12 +89,13 @@ def check_vendor() -> None:
         fail(f"vendor/{rel}", "vendor check (10)", "listed in vendor/vendor.json but missing")
     for rel, digest in sorted(listed.items()):
         file = ROOT / "vendor" / rel
-        actual = hashlib.sha256(file.read_bytes()).hexdigest()
+        data = file.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
         if actual != digest:
             fail(f"vendor/{rel}", "vendor check (10)",
                  f"sha256 {actual} does not match vendor.json ({digest}); re-vendor from the recorded source")
         if file.suffix in (".js", ".css"):
-            for ref in _SOURCEMAP.findall(file.read_text(errors="replace")):
+            for ref in _SOURCEMAP.findall(data.decode(errors="replace")):
                 if not (file.parent / ref).is_file():
                     fail(f"vendor/{rel}", "vendor check (10)",
                          f"sourceMappingURL={ref} does not resolve; vendor the map beside the file")
@@ -238,9 +240,9 @@ def check_composer_imports() -> None:
     """Section 11.2: the composer imports bus, store or icons and vendored names,
     stays inside composer/ for relative paths, and reaches across a component
     boundary only through a dynamic import of a role member's view.js URL."""
-    for path in sorted(glob.glob("composer/*.js", root_dir=ROOT)):
+    for path in _files("composer/*.js"):
         file = ROOT / path
-        src = _strip_comments(file.read_text())
+        src = _code(path)
         dynamic = {m.group(2) for m in _COMPOSER_DYNAMIC.finditer(src)}
         statics = set(_STATIC_IMPORT.findall(src))
         for spec in sorted(statics | dynamic):
@@ -266,8 +268,8 @@ def check_composer_imports() -> None:
 def check_composer() -> None:
     """Section 11.2, the composer stays in its lane: it changes only role-bearing
     elements, in place, and never writes the document root, body, head or title."""
-    for path in sorted(glob.glob("composer/*.js", root_dir=ROOT)):
-        src = _strip_comments((ROOT / path).read_text())
+    for path in _files("composer/*.js"):
+        src = _code(path)
         for m in _DOC_OTHER.finditer(src):
             fail(path, "composer check (11.2)",
                  f"writes to document.{m.group(1)}; the composer never touches the document (3.6)")
@@ -704,10 +706,13 @@ def check_schema_compat(manifests: dict) -> None:
 
 # --- Import check (architecture.md 11.2) -----------------------------------------
 
+# The word boundary sits in a lookbehind after the keyword, not before it, so the
+# pattern starts with a literal that the regex engine can scan for; a leading \b
+# makes it try every position of every source (11, the fast phase's budget).
 _STATIC_IMPORT = re.compile(
-    r"""(?:\bimport\b|\bexport\b)\s+(?:[^'";]*?\sfrom\s+)?['"]([^'"]+)['"]"""
+    r"""(?:import|export)(?<=\bimport|\bexport)\b\s+(?:[^'";]*?\sfrom\s+)?['"]([^'"]+)['"]"""
 )
-_DYNAMIC_IMPORT = re.compile(r"""\bimport\s*\(\s*['"]([^'"]+)['"]""")
+_DYNAMIC_IMPORT = re.compile(r"""import(?<=\bimport)\s*\(\s*['"]([^'"]+)['"]""")
 _LINE_COMMENT = re.compile(r"//[^\n]*")
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
@@ -716,13 +721,45 @@ def _strip_comments(src: str) -> str:
     return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", src))
 
 
+# Several fast-phase rules read the same files; each is read, stripped and scanned
+# once per run, so a new rule over them adds its own work and not another pass (11).
+@functools.cache
+def _files(pattern: str) -> tuple:
+    return tuple(sorted(glob.glob(pattern, root_dir=ROOT, recursive=True)))
+
+
+@functools.cache
+def _source(path: str) -> str:
+    return (ROOT / path).read_text()
+
+
+@functools.cache
+def _code(path: str) -> str:
+    return _strip_comments(_source(path))
+
+
+@functools.cache
+def _specifiers(path: str) -> tuple:
+    src = _code(path)
+    return tuple(_STATIC_IMPORT.findall(src) + _DYNAMIC_IMPORT.findall(src))
+
+
+_WORD_RUN = re.compile(r"(?<![\w.-])[\w-]+")
+_WORD_NAME = re.compile(r"[\w-]+")
+
+
 def kit_mentions(src: str, names: list) -> list:
     """The component names, and static component paths, a kit source names as whole
     words outside comments (11.2): a helper about one component belongs in that
     component's tests, so deleting the component deletes the helper with it. A word
     after a dot is a property, such as `Object.values`, not a component's name."""
     text = _strip_comments(src)
-    found = [n for n in sorted(names) if re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", text)]
+    # A name of word characters and hyphens matches exactly where a whole run of them
+    # does, so one scan of the runs answers for every such name at once.
+    words = set(_WORD_RUN.findall(text))
+    found = [n for n in sorted(names)
+             if (n in words if _WORD_NAME.fullmatch(n)
+                 else re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", text))]
     if "/static/components/" in text:
         found.append("/static/components/")
     return found
@@ -742,7 +779,9 @@ def check_kit(manifests: dict) -> None:
 
 # A step is a subtest, `t.test("…")`, or a step list handed to the kit's journey().
 # `pattern.test(text)` never takes a literal, so a regular expression is not a step.
-_STEP = re.compile(r"""\b\w+\.test\(\s*[`'"]|\bjourney\(""")
+# Two patterns, each starting with a literal the regex engine scans for, rather than
+# one alternation that begins with \b and so is tried at every position (11).
+_STEPS = (re.compile(r"""\.test(?<=\w\.test)\(\s*[`'"]"""), re.compile(r"journey(?<=\bjourney)\("))
 
 
 def journey_problems(files: dict, approved: list) -> list:
@@ -754,7 +793,7 @@ def journey_problems(files: dict, approved: list) -> list:
     out = []
     for path, src in sorted(files.items()):
         text = _strip_comments(src)
-        if ".launch(" in text and _STEP.search(text) and path not in listed:
+        if ".launch(" in text and any(p.search(text) for p in _STEPS) and path not in listed:
             out.append(path)
     return out
 
@@ -766,7 +805,7 @@ def check_journeys() -> None:
         fail("checks/journeys.json", "journey check (11.2)", f"is not JSON: {error}")
     if not isinstance(approved, list) or not all(isinstance(p, str) for p in approved):
         fail("checks/journeys.json", "journey check (11.2)", "must be a JSON list of test file paths")
-    files = {f: (ROOT / f).read_text() for f in glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)}
+    files = {f: _source(f) for f in _files("components/*/tests/*.test.mjs")}
     for path in journey_problems(files, approved):
         fail(path, "journey check (11.2)",
              "this browser test has steps, so it keeps one page across them: a journey (9). "
@@ -807,7 +846,7 @@ def reason_problems(files: dict) -> list:
 
 
 def check_reasons() -> None:
-    files = {f: (ROOT / f).read_text() for f in glob.glob("components/*/tests/*.test.mjs", root_dir=ROOT)}
+    files = {f: _source(f) for f in _files("components/*/tests/*.test.mjs")}
     for path, line, name in reason_problems(files):
         fail(f"{path}:{line}", "reason check (11.2)",
              f"the browser test {name!r} names no reason it needs the browser (9). Put a "
@@ -833,8 +872,8 @@ def editor_import_problems(src: str) -> list:
 
 def check_editor(manifests: dict) -> None:
     names = [Path(m).parent.name for m in manifests]
-    for path in sorted(glob.glob("editor/*.js", root_dir=ROOT)):
-        src = (ROOT / path).read_text()
+    for path in _files("editor/*.js"):
+        src = _source(path)
         for problem in editor_import_problems(src):
             fail(path, "editor kit check (10)", problem)
         for name in kit_mentions(src, names):
@@ -843,13 +882,11 @@ def check_editor(manifests: dict) -> None:
 
 
 def check_imports() -> None:
-    paths = glob.glob("components/*/*.js", root_dir=ROOT) + glob.glob("components/*/strategies/*.js", root_dir=ROOT)
+    paths = _files("components/*/*.js") + _files("components/*/strategies/*.js")
     for path in sorted(paths):
         file = ROOT / path
         component_dir = file.parent
-        src = _strip_comments(file.read_text())
-        specifiers = _STATIC_IMPORT.findall(src) + _DYNAMIC_IMPORT.findall(src)
-        for spec in specifiers:
+        for spec in _specifiers(path):
             if spec.startswith("."):
                 if ".." in spec.split("/"):
                     fail(path, "import check (11.2)",
@@ -882,11 +919,25 @@ def _requirements() -> set:
     return names | {"starlette", "pydantic"}
 
 
+def _statements(tree: ast.AST):
+    """Every statement in the tree, at any depth. An import is a statement, and no
+    expression holds a statement, so this finds every import while skipping the
+    expressions, most of the tree."""
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        yield node
+        for field in node._fields:
+            value = getattr(node, field, None)
+            if isinstance(value, list):
+                stack.extend(v for v in value if isinstance(v, (ast.stmt, ast.excepthandler, ast.match_case)))
+
+
 def check_python_imports() -> None:
     allowed = sys.stdlib_module_names | _requirements()
     for path in sorted(glob.glob("components/*/server/*.py", root_dir=ROOT)):
         tree = ast.parse((ROOT / path).read_text(), filename=path)
-        for node in ast.walk(tree):
+        for node in _statements(tree):
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
@@ -910,7 +961,7 @@ def check_python_imports() -> None:
 
 # A call, not the definition: `function openStore(` is excluded so a store.js may
 # still name its own wrapper (viewport's does).
-_OPENSTORE_CALL = re.compile(r"(?<!function )openStore\(")
+_OPENSTORE_CALL = re.compile(r"openStore(?<!function openStore)\(")
 _OPENSTORE_LITERAL = re.compile(r"""openStore\(\s*(['"])([^'"]*)\1""")
 
 
@@ -919,10 +970,10 @@ def check_store(manifests: dict) -> None:
     the bare `store` module, only from a fact's store.js or fact.js (views open
     none), and every openStore() opens the database bearing the component's own name."""
     kinds = {Path(p).parent.name: m["meta"].get("kind") for p, m in manifests.items()}
-    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
+    for path in _files("components/*/*.js"):
         _, comp, file = Path(path).parts
-        src = _strip_comments((ROOT / path).read_text())
-        if "store" in (_STATIC_IMPORT.findall(src) + _DYNAMIC_IMPORT.findall(src)):
+        src = _code(path)
+        if "store" in _specifiers(path):
             if file not in ("store.js", "fact.js"):
                 fail(path, "store check (11.2)",
                      "only a fact component's store.js or fact.js may import the store")
@@ -1147,8 +1198,8 @@ def _camel(name: str) -> str:
 
 def check_document_writes() -> None:
     facts = _document_facts()
-    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
-        src = _strip_comments((ROOT / path).read_text())
+    for path in _files("components/*/*.js"):
+        src = _code(path)
         for m in _DOC_OTHER.finditer(src):
             fail(path, "document check (7.5)",
                  f"writes to document.{m.group(1)}; only a document fact touches the document (7.5)")
@@ -1227,14 +1278,14 @@ def theme_declarations(src: str) -> list:
 
 def check_styles() -> None:
     # The editor kit themes every editor (10), so it is held to the same tokens.
-    for path in sorted(glob.glob("editor/*.js", root_dir=ROOT)):
-        src = (ROOT / path).read_text()
+    for path in _files("editor/*.js"):
+        src = _source(path)
         for css in _CSS_TEMPLATE.findall(src):
             _scan_css(css, path, "css template")
         for prop, value in theme_declarations(src):
             _check_declaration(prop, value, path, "editor theme")
-    for path in sorted(glob.glob("components/*/*.js", root_dir=ROOT)):
-        src = (ROOT / path).read_text()
+    for path in _files("components/*/*.js"):
+        src = _source(path)
         for css in _CSS_TEMPLATE.findall(src):
             _scan_css(css, path, "css template")
         for tpl in _HTML_TEMPLATE.findall(src):
@@ -1246,7 +1297,7 @@ def check_styles() -> None:
 
 # A view names an icon as a literal, so the vocabulary is checked without running
 # anything: every glyph in tokens/icons.js has a user, every use has a glyph.
-_ICON_CALL = re.compile(r'\bicon\("([a-z0-9-]+)"\)')
+_ICON_CALL = re.compile(r'icon(?<=\bicon)\("([a-z0-9-]+)"\)')
 _ICON_NAME = re.compile(r'^\s*"?([a-z0-9-]+)"?:', re.M)
 
 
@@ -1256,8 +1307,8 @@ def check_icons() -> None:
     body = body[: body.index("\n};")]
     known = set(_ICON_NAME.findall(body))
     used = {}
-    for path in sorted(glob.glob("components/*/view.js", root_dir=ROOT)):
-        for name in _ICON_CALL.findall(_strip_comments((ROOT / path).read_text())):
+    for path in _files("components/*/view.js"):
+        for name in _ICON_CALL.findall(_code(path)):
             used.setdefault(name, path)
     for name, path in sorted(used.items()):
         if name not in known:
