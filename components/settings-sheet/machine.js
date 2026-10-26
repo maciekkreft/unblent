@@ -194,6 +194,10 @@ export const VALUE_LINES = ["values", "examples"];
 export const valueChecksShown = ({ valueChecks, hidden, llm }) =>
   valueChecks !== null && llm?.jev?.keySet === true && hidden !== null && !hidden.includes("evaluators");
 
+// The evaluators a values check can use: not a derived one (Your values), since a value
+// cannot be checked against the values themselves.
+export const valueCheckers = (evaluators) => evaluators.filter((e) => !e.removing && !e.derivedFrom);
+
 export const machine = setup({
   actors: {
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
@@ -232,7 +236,9 @@ export const machine = setup({
       "Not checked clears it with the rest. Once a Jev key is saved, the Evaluating group " +
       "also holds the values checks, which `value-checks` keeps, in a fold that starts closed: " +
       "Check values with and Check examples with each choose the evaluator Jev uses for the " +
-      "value lines and for the examples of the Your values sheet, or Not checked; choosing the " +
+      "value lines and for the examples of the Your values sheet, or Not checked, from the " +
+      "evaluators the user wrote (not Your values, since a value cannot be checked against the " +
+      "values themselves); choosing the " +
       "previous one again undoes a change. It is hidden on a page without `value-checks` and " +
       "while `flags` reports evaluators hidden or has not answered. The choice point checks part is " +
       "hidden on a page without `choice-point-checks`, and while `flags` reports choice " +

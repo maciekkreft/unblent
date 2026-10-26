@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, dayName, writable, shownValues, earlierDays, changedLine } from "../machine.js";
+import { machine, dateOf, dayName, writable, shownValues, earlierDays, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/values.saved.json", import.meta.url), "utf8"));
 const recorded = [];
@@ -19,7 +19,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 // `versions` maps a day a version was written to its values; the fake answers read as the
 // values fact does, the latest version on or before the day asked.
-async function start(versions = {}, { vimKeys, undoMs = 3000 } = {}) {
+async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators } = {}) {
   let n = 0;
   const asked = [];
   const clock = new SimulatedClock();
@@ -31,6 +31,8 @@ async function start(versions = {}, { vimKeys, undoMs = 3000 } = {}) {
       ask: (target, name, payload) => {
         asked.push({ target, name, payload });
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
+        if (target === "value-checks") return Promise.resolve(checks ?? { error: "no-answerer" });
+        if (target === "evaluators") return Promise.resolve(evaluators ? { evaluators } : { error: "no-answerer" });
         const days = daysOf();
         if (name === "versions") return Promise.resolve({ days });
         const on = days.filter((d) => payload.day === undefined || d <= payload.day).at(-1) ?? null;
@@ -261,4 +263,202 @@ test("a save names the rows the user has just left as finished, once each", asyn
   actor.send({ type: "_done" });
   assert.deepEqual(emitted.at(-1).finished, [id(2)], "Done finishes every row typed in");
   assert.equal(ctx().edited.length, 0);
+});
+
+// --- Jev's marks ----------------------------------------------------------------------
+
+const EV = "01K6TEST0000000000000EVAL1";
+const EX = "01K6TEST0000000000000EVAL2";
+const Q = "01K6TEST0000000000000QUES1";
+const QX = "01K6TEST0000000000000QUES2";
+const GOAL = "01K6TEST0000000000000OPTG1";
+const ACT = "01K6TEST0000000000000OPTA1";
+const EVALUATORS = [
+  {
+    id: EV,
+    name: "Is it a value?",
+    questions: [
+      {
+        id: Q,
+        kind: "pick",
+        text: "What is it?",
+        expect: ACT,
+        options: [
+          { id: ACT, name: "A way of acting", icon: "compass" },
+          { id: GOAL, name: "A goal" },
+        ],
+      },
+    ],
+  },
+  { id: EX, name: "Does the example fit?", questions: [{ id: QX, kind: "yes-no", text: "Does it fit?" }] },
+];
+const line = (kind, text, answers, status = "done") => ({ line: kind, text, status, answers, unexpected: [] });
+const answer = (question, option, name, p = 0.95) => ({ question, option, name, p });
+
+test("marks show for the line as written, green or red by the expected answer, plain when none is expected", async () => {
+  const checks = {
+    keySet: true,
+    settings: { values: EV, examples: EX },
+    values: [
+      { id: id(1), lines: [line("value", "Honest", [answer(Q, ACT, "A way of acting")]), line("example", "Say it", [answer(QX, "yes", "Yes", 0.6)])] },
+      { id: id(2), lines: [line("value", "Get rich", [answer(Q, GOAL, "A goal")])] },
+    ],
+  };
+  const { actor, ctx, asked } = await start({ [TODAY]: [v(1, "Honest", "Say it"), v(2, "Get rich")] }, { checks, evaluators: EVALUATORS });
+  assert.deepEqual(
+    asked.filter((a) => a.target !== "values" && a.target !== "settings").map((a) => [a.target, a.name, a.payload]),
+    [["value-checks", "read", { day: TODAY }], ["evaluators", "list", { day: TODAY }]],
+  );
+  assert.deepEqual(marksFor(ctx(), v(1, "Honest"), "name"), [
+    { question: Q, name: "A way of acting", tone: "right", icon: "compass", expected: "A way of acting", sure: 1 },
+  ]);
+  assert.deepEqual(marksFor(ctx(), v(1, "Honest", "Say it"), "meaning"), [
+    { question: QX, name: "Yes", tone: "plain", icon: "check", expected: null, sure: sureOf(0.6) },
+  ]);
+  const red = marksFor(ctx(), v(2, "Get rich"), "name");
+  assert.equal(red[0].tone, "wrong");
+  assert.equal(red[0].icon, "warning", "an option without an icon gets a warning when red");
+  assert.equal(red[0].expected, "A way of acting");
+  assert.equal(marksFor(ctx(), v(2, "Get richer"), "name").length, 0, "a line edited since it was checked has no mark");
+  assert.equal(warned(ctx(), v(2, "Get rich")), true);
+  assert.equal(warned(ctx(), v(1, "Honest", "Say it")), false);
+
+  actor.send({ type: "_open" });
+  assert.equal(statusOf(ctx()), "");
+  actor.send({ type: "_point", source: "cursor", id: id(2), field: "name", text: "Get rich" });
+  assert.equal(statusOf(ctx()), "A goal · you expect A way of acting");
+  actor.send({ type: "_point", source: "hover", id: id(1), field: "meaning", text: "Say it" });
+  assert.equal(statusOf(ctx()), "Yes", "the pointer comes before the cursor");
+  actor.send({ type: "_point", source: "hover", field: null });
+  assert.equal(statusOf(ctx()), "A goal · you expect A way of acting");
+
+  // Settings no longer naming the examples' evaluator takes those marks away.
+  actor.send({ type: "value-checks.changed", settings: { values: EV, examples: null } });
+  assert.deepEqual(boxMarks(ctx(), id(1), "meaning"), []);
+});
+
+test("a pending line shows a dot, a failure says why, and another day's checks are ignored", async () => {
+  const checks = { keySet: true, settings: { values: EV, examples: null }, values: [] };
+  const { actor, ctx } = await start({ [TODAY]: [v(1, "Honest")] }, { checks, evaluators: EVALUATORS });
+  actor.send({ type: "values.checked", day: TODAY, values: [{ id: id(1), lines: [line("value", "Honest", [], "pending")] }] });
+  assert.deepEqual(marksFor(ctx(), v(1, "Honest"), "name"), [{ pending: true }]);
+  actor.send({ type: "values.checked", day: TODAY, values: [{ id: id(1), lines: [line("value", "Honest", [], "failed")] }], error: "rate-limited" });
+  assert.deepEqual(marksFor(ctx(), v(1, "Honest"), "name"), []);
+  actor.send({ type: "_open" });
+  assert.match(statusOf(ctx()), /too many requests/);
+  actor.send({ type: "values.checked", day: YESTERDAY, values: [{ id: id(1), lines: [line("value", "Honest", [answer(Q, GOAL, "A goal")])] }] });
+  assert.deepEqual(marksFor(ctx(), v(1, "Honest"), "name"), []);
+});
+
+test("without value-checks on the page no line has a mark", async () => {
+  const { ctx } = await start({ [TODAY]: [v(1, "Honest")] });
+  assert.deepEqual(boxMarks(ctx(), id(1), "name"), []);
+  assert.equal(statusOf(ctx()), "");
+});
+
+// --- Reordering -----------------------------------------------------------------------
+
+const order = (ctx) => ctx().drafts.map((d) => d.name);
+
+test("a row moved up or down is saved in its new order without finishing any row", async () => {
+  const { actor, emitted, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B"), v(3, "C")] });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_move", id: id(3), to: 1 });
+  assert.deepEqual(order(ctx), ["A", "C", "B"]);
+  assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(1, "A"), v(3, "C"), v(2, "B")] });
+  actor.send({ type: "_move", id: id(3), to: 2 });
+  assert.deepEqual(order(ctx), ["A", "B", "C"], "the opposite move undoes it");
+  actor.send({ type: "_move", id: id(1), to: 0 });
+  assert.equal(emitted.length, 2, "a move to where it is saves nothing");
+
+  actor.send({ type: "_edit", id: id(2), field: "name", value: "Bee" });
+  actor.send({ type: "_move", id: id(2), to: 0 });
+  assert.equal(emitted.at(-1).finished, undefined, "a move finishes no row, even one typed in");
+  assert.deepEqual(emitted.at(-1).values.map((x) => x.name), ["Bee", "A", "C"]);
+  actor.send({ type: "_blur", id: id(2), to: null });
+  assert.deepEqual(emitted.at(-1).finished, [id(2)], "leaving it afterwards still finishes it");
+});
+
+test("dd cuts a row, p or P places it, u puts the cut back or takes a paste back", async () => {
+  const { actor, emitted, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B"), v(3, "C")] });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_cut", id: id(1) });
+  assert.equal(ctx().cut, id(1));
+  assert.equal(emitted.length, 0, "cutting moves nothing yet");
+  actor.send({ type: "_uncut" });
+  assert.equal(ctx().cut, null);
+  assert.deepEqual(order(ctx), ["A", "B", "C"]);
+
+  actor.send({ type: "_cut", id: id(1) });
+  actor.send({ type: "_paste", at: id(3), below: true });
+  assert.deepEqual(order(ctx), ["B", "C", "A"]);
+  assert.deepEqual(emitted.at(-1).values.map((x) => x.name), ["B", "C", "A"]);
+  actor.send({ type: "_unpaste" });
+  assert.deepEqual(order(ctx), ["A", "B", "C"], "u takes the paste back");
+  assert.deepEqual(emitted.at(-1).values.map((x) => x.name), ["A", "B", "C"]);
+
+  actor.send({ type: "_cut", id: id(3) });
+  actor.send({ type: "_paste", at: id(1), below: false });
+  assert.deepEqual(order(ctx), ["C", "A", "B"], "P places it above");
+  const saves = emitted.length;
+  actor.send({ type: "_cut", id: id(2) });
+  actor.send({ type: "_paste", at: id(2), below: true });
+  assert.equal(emitted.length, saves, "pasting a row onto itself leaves it where it was");
+  assert.equal(ctx().cut, null);
+});
+
+test("Escape while a row is cut removes it with its undo window", async () => {
+  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B")] });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_cut", id: id(1) });
+  actor.send({ type: "_remove", id: id(1) });
+  assert.equal(ctx().cut, null);
+  assert.deepEqual(ctx().removing, [id(1)]);
+  actor.send({ type: "_cut", id: id(1) });
+  assert.equal(ctx().cut, null, "a row waiting to be removed cannot be cut");
+  clock.increment(3000);
+  assert.deepEqual(emitted.at(-1).values, [v(2, "B")]);
+});
+
+test("an earlier day's rows do not move", async () => {
+  const { actor, emitted, ctx } = await start({ [EARLIER]: [v(1, "A"), v(2, "B")] });
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
+  await flush();
+  actor.send({ type: "_open" });
+  actor.send({ type: "_move", id: id(2), to: 0 });
+  actor.send({ type: "_cut", id: id(2) });
+  assert.deepEqual(order(ctx), ["A", "B"]);
+  assert.equal(ctx().cut, null);
+  assert.equal(emitted.length, 0);
+});
+
+test("a row's keys with Vim keys on", () => {
+  const k = (key, mods = {}) => ({ key, ctrlKey: false, metaKey: false, altKey: false, isComposing: false, ...mods });
+  assert.equal(rowKey(k("j")), "down");
+  assert.equal(rowKey(k("ArrowUp")), "up");
+  assert.equal(rowKey(k("g")), "g");
+  assert.equal(rowKey(k("g"), { afterG: true }), "first");
+  assert.equal(rowKey(k("G")), "last");
+  assert.equal(rowKey(k("d")), "d");
+  assert.equal(rowKey(k("d"), { afterD: true }), "cut");
+  assert.equal(rowKey(k("p")), "below");
+  assert.equal(rowKey(k("P")), "above");
+  assert.equal(rowKey(k("u")), "undo");
+  assert.equal(rowKey(k("o")), "add-below");
+  assert.equal(rowKey(k("O")), "add-above");
+  assert.equal(rowKey(k("i")), "edit");
+  assert.equal(rowKey(k("Enter")), "edit");
+  assert.equal(rowKey(k("Escape")), "escape");
+  assert.equal(rowKey(k("j", { ctrlKey: true })), null);
+});
+
+test("o and O add a value below or above a row", async () => {
+  const { actor, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B")] });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_add", at: 1 });
+  actor.send({ type: "_add", at: 0 });
+  assert.deepEqual(order(ctx), ["", "A", "", "B"]);
+  actor.send({ type: "_add" });
+  assert.equal(ctx().drafts.length, 5);
+  assert.equal(ctx().drafts.at(-1).name, "");
 });

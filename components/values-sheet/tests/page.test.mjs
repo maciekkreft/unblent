@@ -2,8 +2,10 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // What only a browser shows: Write your values opens the sheet with the keyboard in the
-// first name, Enter moves on, Escape folds it into a card that a reload keeps; with Vim
-// keys on the first Escape only leaves insert mode; removing a value strikes it through
+// first name, Enter moves on, Escape folds it into a card that a reload keeps; Alt+Up
+// moves a row with the cursor, and with Vim keys on Escape steps onto the row where dd and
+// p move it; Jev's marks, their status line and the card's warning, on the desk and the
+// phone; removing a value strikes it through
 // with Undo until its window ends; and an earlier day's values are read only and say when
 // they changed since. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -71,23 +73,56 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // The values arrive through the API under the test's own login.
     // Browser: focus and keys.
-    test("with Vim keys on, the first Escape in a box leaves insert mode and the second folds the sheet", async () => {
+    test("Alt+Up moves a row and keeps the cursor; with Vim keys on Escape steps onto the row, dd and p move it", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
-      await signedIn(context, forgeCookie("values"));
+      await signedIn(context, forgeCookie("values-order"));
       try {
         await context.addInitScript((v) => localStorage.setItem("settings", v), VIM_ON);
+        const values = [
+          { id: ID(1), name: "Calm", meaning: "" },
+          { id: ID(2), name: "Bee", meaning: "" },
+          { id: ID(3), name: "Kind", meaning: "" },
+        ];
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${dayOf(Date.now())}`, { data: { values, baseVersion: null } })).status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.locator("values-sheet .new").click();
+        const sheet = page.locator("values-sheet");
+        const order = () => inSheet(page, (root) => [...root.querySelectorAll(".rows > .row")].map((r) => r.dataset.id));
+        const focusedRow = () => inSheet(page, (root) => root.activeElement?.closest(".row")?.dataset.id ?? null);
+        const onRow = () => inSheet(page, (root) => (root.activeElement?.matches(".row") ? root.activeElement.dataset.id : null));
+        await sheet.locator(".card").click();
         await until(async () => (await focusedField(page)) === "name");
-        await page.keyboard.type("Kind");
+        await page.keyboard.press("Enter");
+        await page.keyboard.press("Enter");
+        await until(async () => (await focusedRow()) === ID(2));
+        await page.keyboard.press("Home");
+        await page.keyboard.press("ArrowRight");
+        await page.keyboard.press("Alt+ArrowUp");
+        await until(async () => (await order()).join() === [ID(2), ID(1), ID(3)].join());
+        assert.equal(await focusedRow(), ID(2), "the keyboard moved with the row");
+        assert.equal(await focusedField(page), "name");
+        await page.keyboard.type("x");
+        await until(async () => (await sheet.locator(`.row[data-id="${ID(2)}"] .box[data-field="name"] .cm-content`).innerText()) === "Bxee");
+
         await page.keyboard.press("Escape");
-        assert.equal(await page.locator("values-sheet .sheet").count(), 1, "the first Escape left insert mode only");
         await page.keyboard.press("Escape");
-        await until(async () => (await card(page)) === "Kind");
+        await until(async () => (await onRow()) === ID(2));
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await sheet.locator(`.row.cut[data-id="${ID(2)}"]`).waitFor();
+        await page.keyboard.press("j");
+        await page.keyboard.press("j");
+        await until(async () => (await onRow()) === ID(3));
+        await page.keyboard.press("p");
+        await until(async () => (await order()).join() === [ID(1), ID(3), ID(2)].join());
+        assert.equal(await sheet.locator(".row.cut").count(), 0);
+        await until(async () => (await onRow()) === ID(2));
+        await page.keyboard.press("Escape");
+        await until(async () => (await card(page)) === "Calm · Kind · Bxee");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -126,6 +161,68 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await context.close();
       }
     });
+
+    // The evaluators, the values checks and the values arrive through the APIs under the
+    // test's own login; Jev is answered here through page.route, so no real request is
+    // made, and the account is told it has a key.
+    for (const where of ["desk", "phone"]) {
+      // Browser: rendering and layout.
+      test(`on the ${where}, checked lines show Jev's marks, the status line says the answer, and the card warns`, async () => {
+        const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
+        context.setDefaultTimeout(4000);
+        await signedIn(context, forgeCookie(`values-marks-${where}`));
+        try {
+          if (where === "phone") await context.addInitScript(() => localStorage.setItem("viewport", "phone"));
+          const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
+          const [EV, EX, Q, QX, ACT, GOAL] = [id("E1"), id("E2"), id("Q1"), id("Q2"), id("A0"), id("A1")];
+          const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
+          const options = [
+            { id: ACT, name: "A way of acting", description: "", icon: "compass" },
+            { id: GOAL, name: "A goal", description: "" },
+          ];
+          const pick = { id: Q, kind: "pick", text: "What is it?", yes: "", no: "", options, expect: ACT };
+          assert.equal((await put(`evaluators/${EV}`, { book: id("B1"), name: "Is it a value?", on: true, baseVersion: null, questions: [pick] })).status(), 200);
+          const fits = { id: QX, kind: "yesno", text: "Does it fit?", yes: "", no: "", options: [] };
+          assert.equal((await put(`evaluators/${EX}`, { book: id("B1"), name: "Does the example fit?", on: true, baseVersion: null, questions: [fits] })).status(), 200);
+          assert.equal((await put("value-checks/settings", { values: EV, examples: EX, baseVersion: null })).status(), 200);
+          const values = [
+            { id: ID(1), name: "Honest", meaning: "Tell the truth" },
+            { id: ID(2), name: "Get rich", meaning: "" },
+          ];
+          assert.equal((await put(`values/${dayOf(Date.now())}`, { values, baseVersion: null })).status(), 200);
+          const page = await context.newPage();
+          const problems = watch(page);
+          await page.route("**/api/llm", async (route) => {
+            const res = await route.fetch();
+            const json = await res.json();
+            await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+          });
+          await page.route("**/api/llm/decide", (route) => {
+            const { state, questions } = route.request().postDataJSON();
+            const answers = questions.map((q) => (q.id === Q ? { id: q.id, p: 0.95, choice: /rich/.test(state.text) ? GOAL : ACT } : { id: q.id, p: 0.9 }));
+            route.fulfill({ json: { answers, inputTokens: 1, ms: 1 } });
+          });
+          await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+          if (where === "phone") await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
+          const sheet = page.locator("values-sheet");
+          await sheet.locator(".card .flag").waitFor();
+          assert.equal(await inSheet(page, (root) => root.querySelector(".card .flag").previousElementSibling.textContent), "Get rich", "the warning stands beside the value");
+          await sheet.locator(".card").click();
+          const box = (n, field) => sheet.locator(`.row[data-id="${ID(n)}"] .box[data-field="${field}"]`);
+          await box(1, "name").locator(".mark.right svg").waitFor();
+          await box(1, "meaning").locator(".mark.plain").waitFor();
+          await box(2, "name").locator(".mark.wrong").waitFor();
+          assert.equal(await box(2, "meaning").locator(".mark").count(), 0, "an empty example is not checked");
+          await box(2, "name").locator(".mark").hover();
+          assert.equal(await sheet.locator(".status").innerText(), "A goal · you expect A way of acting");
+          const orderShown = () => inSheet(page, (root) => getComputedStyle(root.querySelector(".row .order")).opacity);
+          if (where === "phone") assert.equal(await orderShown(), "1", "the move buttons always show on a phone");
+          assert.deepEqual(problems, []);
+        } finally {
+          await context.close();
+        }
+      });
+    }
 
     // An earlier day and two versions of the values arrive through the APIs under the
     // test's own login.

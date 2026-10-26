@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, valueChecksShown } from "../machine.js";
+import { machine, valueChecksShown, valueCheckers } from "../machine.js";
 
 // The values checks rows: asked from `value-checks: read`, followed through
 // value-checks.changed, and each select emitting value-checks.edited with both lines.
@@ -86,4 +86,9 @@ test("the part shows only once a Jev key is saved, on a page with value-checks, 
   assert.equal(valueChecksShown({ valueChecks: null, hidden: [], llm }), false, "no value-checks on the page");
   assert.equal(valueChecksShown({ valueChecks, hidden: null, llm }), false, "flags has not answered");
   assert.equal(valueChecksShown({ valueChecks, hidden: ["evaluators"], llm }), false);
+});
+
+test("the values checks offer only the evaluators the user wrote", () => {
+  const list = [{ id: "a", name: "Is it a value?" }, { id: "b", name: "Your values", derivedFrom: "values" }, { id: "c", name: "Gone", removing: true }];
+  assert.deepEqual(valueCheckers(list).map((e) => e.id), ["a"]);
 });

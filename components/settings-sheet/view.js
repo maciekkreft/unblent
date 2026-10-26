@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, valueCheckers } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
@@ -800,7 +800,7 @@ class SettingsSheet extends LitElement {
   #valueChecks(llm, evaluators) {
     const { valueChecks, hidden } = this.#actor.snapshot.context;
     if (!valueChecksShown({ valueChecks, hidden, llm })) return nothing;
-    const choosable = evaluators.filter((e) => !e.removing);
+    const choosable = valueCheckers(evaluators);
     const row = (line, label) => {
       const current = choosable.some((e) => e.id === valueChecks[line]) ? valueChecks[line] : null;
       return html`
