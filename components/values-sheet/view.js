@@ -421,7 +421,10 @@ class ValuesSheet extends LitElement {
         if (!update.docChanged || update.transactions.every((t) => t.annotation(fromDraft))) return;
         this.#actor.send({ type: "_edit", id: spec.id, field: spec.field, value: update.state.doc.toString() });
       }),
-      EditorView.domEventHandlers({ blur: () => this.#actor.send({ type: "_blur" }) }),
+      // Which row the keyboard went to tells the machine whether this row was left.
+      EditorView.domEventHandlers({
+        blur: (event) => this.#actor.send({ type: "_blur", id: spec.id, to: event.relatedTarget?.closest?.(".row")?.dataset.id ?? null }),
+      }),
     ];
   }
 

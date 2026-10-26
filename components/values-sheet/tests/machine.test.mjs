@@ -241,3 +241,24 @@ test("a copied text or link goes into Vim's register", () => {
   assert.deepEqual(pushed, ["One.\n\nTwo.", "[q](note:01K7TEST0000000000000H0001)"]);
   actor.stop();
 });
+
+test("a save names the rows the user has just left as finished, once each", async () => {
+  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [v(1, "Honest", "Say it"), v(2, "Kind")] });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_edit", id: id(1), field: "name", value: "Honest always" });
+  clock.increment(400);
+  assert.equal(emitted.at(-1).finished, undefined, "typing saves without finishing the row");
+  actor.send({ type: "_blur", id: id(1), to: id(1) });
+  assert.equal(emitted.length, 1, "moving to the other box of the same row leaves nothing");
+  actor.send({ type: "_blur", id: id(1), to: id(2) });
+  assert.deepEqual(emitted.at(-1).finished, [id(1)], "moving on to the next row finishes the row, even after the throttle saved it");
+  actor.send({ type: "_blur", id: id(2), to: null });
+  assert.equal(emitted.length, 2, "a row not typed in is not finished");
+  actor.send({ type: "_blur", id: id(1), to: null });
+  assert.equal(emitted.length, 2, "a row already finished is not finished again");
+
+  actor.send({ type: "_edit", id: id(2), field: "meaning", value: "Hold the door" });
+  actor.send({ type: "_done" });
+  assert.deepEqual(emitted.at(-1).finished, [id(2)], "Done finishes every row typed in");
+  assert.equal(ctx().edited.length, 0);
+});

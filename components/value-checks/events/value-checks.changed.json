@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The values checks settings now look like this, whole (4, third rule).",
+  "type": "object",
+  "properties": {
+    "settings": {
+      "type": "object",
+      "description": "Which evaluator checks the value lines and which checks the examples.",
+      "properties": {
+        "values": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "The evaluator that checks each value line, read alone; null for none, so value lines are not checked."
+        },
+        "examples": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "The evaluator that checks each example, read with its value; null for none, so examples are not checked."
+        }
+      },
+      "required": [
+        "values",
+        "examples"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "settings"
+  ],
+  "additionalProperties": false
+}

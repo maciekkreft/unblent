@@ -185,6 +185,15 @@ const membersByRole = (components) => {
 export const checksShown = ({ checks, hidden }) =>
   checks !== null && hidden !== null && !hidden.includes("choice-points") && !hidden.includes("evaluators");
 
+// The two lines of a value the values checks name, as value-checks.edited carries them.
+export const VALUE_LINES = ["values", "examples"];
+
+// Whether the values checks part is shown: a page whose `value-checks` answered, for an
+// account with its own Jev key (nothing is checked without one), while `flags` reports
+// evaluators shown.
+export const valueChecksShown = ({ valueChecks, hidden, llm }) =>
+  valueChecks !== null && llm?.jev?.keySet === true && hidden !== null && !hidden.includes("evaluators");
+
 export const machine = setup({
   actors: {
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
@@ -195,6 +204,7 @@ export const machine = setup({
     contracts: fromPromise(({ input }) => input.ask("catalog", "contracts", {})),
     tools: fromPromise(({ input }) => input.ask("conversations", "tools", {})),
     checks: fromPromise(({ input }) => input.ask("choice-point-checks", "read", {})),
+    valueChecks: fromPromise(({ input }) => input.ask("value-checks", "read", {})),
     evaluators: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
   },
 }).createMachine({
@@ -219,7 +229,12 @@ export const machine = setup({
       "it has no per-question settings, since every value of Your values counts toward its one " +
       "mark, and None takes it away again. Your values chosen as a box's own evaluator has no " +
       "per-question settings either. It stays when the box's evaluator is switched, and " +
-      "Not checked clears it with the rest. The part is " +
+      "Not checked clears it with the rest. Once a Jev key is saved, the Evaluating group " +
+      "also holds the values checks, which `value-checks` keeps, in a fold that starts closed: " +
+      "Check values with and Check examples with each choose the evaluator Jev uses for the " +
+      "value lines and for the examples of the Your values sheet, or Not checked; choosing the " +
+      "previous one again undoes a change. It is hidden on a page without `value-checks` and " +
+      "while `flags` reports evaluators hidden or has not answered. The choice point checks part is " +
       "hidden on a page without `choice-point-checks`, and while `flags` reports choice " +
       "points or evaluators hidden, or has not answered (a page without `flags` hides nothing). The Vim keys list names the chat box " +
       "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +
@@ -229,7 +244,7 @@ export const machine = setup({
       "idea? Send feedback\": the link opens the project's form chooser for a new issue in a new " +
       "tab, or in the Mac app in the user's browser, and fills nothing in.",
     kind: "view",
-    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited"],
+    emits: ["settings.edited", "llm.edited", "tools.edited", "checks.edited", "value-checks.edited"],
     // `account` (7.7): with it the sheet shows the "Your account" section beside
     // "This device"; without it, the page-links sheet exactly as before.
     attributes: ["account"],
@@ -241,6 +256,7 @@ export const machine = setup({
       "catalog: contracts",
       "conversations: tools",
       "choice-point-checks: read",
+      "value-checks: read",
       "evaluators: list",
       "flags: read",
     ],
@@ -272,6 +288,9 @@ export const machine = setup({
     checks: null,
     evaluators: [],
     past: {},
+    // The values checks: which evaluator checks the value lines and which the examples,
+    // or null when no fact answers (the part is then hidden).
+    valueChecks: null,
     // A key removal waits out the undo window (12, forgiveness): `removing` names the
     // key fields ("key", "jevKey") in their window, `removed` those whose removal went out
     // and whose new llm picture has not come yet, so the row does not read Key saved in
@@ -390,11 +409,30 @@ export const machine = setup({
         src: "checks",
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
-          { guard: ({ event }) => Boolean(event.output.error), target: "ready" },
-          { target: "loadingEvaluators", actions: assign({ checks: ({ event }) => event.output.settings }) },
+          { guard: ({ event }) => Boolean(event.output.error), target: "loadingValueChecks" },
+          { target: "loadingValueChecks", actions: assign({ checks: ({ event }) => event.output.settings }) },
         ],
-        onError: { target: "ready" },
+        onError: { target: "loadingValueChecks" },
       },
+    },
+    // The values checks: optional the same way.
+    loadingValueChecks: {
+      invoke: {
+        src: "valueChecks",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: [
+          { guard: ({ event }) => Boolean(event.output.error), target: "afterChecks" },
+          { target: "afterChecks", actions: assign({ valueChecks: ({ event }) => event.output.settings }) },
+        ],
+        onError: { target: "afterChecks" },
+      },
+    },
+    // The evaluators to choose from are wanted only when either checks part is shown.
+    afterChecks: {
+      always: [
+        { guard: ({ context }) => context.checks !== null || context.valueChecks !== null, target: "loadingEvaluators" },
+        { target: "ready" },
+      ],
     },
     loadingEvaluators: {
       invoke: {
@@ -496,6 +534,19 @@ export const machine = setup({
           guard: ({ context, event }) => context.checks !== null && !same(alsoChosen(context, event), shownBox(context, event.field)),
           actions: emit(({ context, event }) => checksEdited(event.field, alsoChosen(context, event))),
         },
+        // The values checks: the line's evaluator, or null for Not checked, emitted with the
+        // other line's as it stands and only when it differs; adopted back through
+        // value-checks.changed (4.3). Choosing the previous evaluator again is the undo.
+        _setValueChecker: {
+          guard: ({ context, event }) =>
+            context.valueChecks !== null && VALUE_LINES.includes(event.line) && (context.valueChecks[event.line] ?? null) !== (event.evaluator || null),
+          actions: emit(({ context, event }) => ({
+            type: "value-checks.edited",
+            values: context.valueChecks.values ?? null,
+            examples: context.valueChecks.examples ?? null,
+            [event.line]: event.evaluator || null,
+          })),
+        },
         _setQuestion: {
           guard: ({ context, event }) => context.checks !== null && !same(patched(context, event), shownBox(context, event.field)),
           actions: emit(({ context, event }) => checksEdited(event.field, patched(context, event))),
@@ -562,6 +613,9 @@ export const machine = setup({
     // shows no line's answers. XState drops a transition with no action, so it has an
     // empty one.
     "lines.checked": { actions: () => {} },
+    "value-checks.changed": { actions: assign({ valueChecks: ({ event }) => event.settings }) },
+    // Consumed only because it supersedes `value-checks: read` (4.2), like lines.checked.
+    "values.checked": { actions: () => {} },
     "evaluator.changed": {
       actions: assign({
         evaluators: ({ context, event }) =>

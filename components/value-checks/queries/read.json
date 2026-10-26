@@ -1,0 +1,163 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The day whose values' checks are wanted; only the settings when left out.",
+    "type": "object",
+    "properties": {
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Whether the account has a Jev key, the settings, whole as value-checks.changed carries them, and what Jev answered about each line of the day's values, as values.checked carries them.",
+    "type": "object",
+    "properties": {
+      "keySet": {
+        "type": "boolean",
+        "description": "The account has its own Jev key; without one nothing is checked and values is empty."
+      },
+      "settings": {
+        "type": "object",
+        "description": "Which evaluator checks the value lines and which checks the examples.",
+        "properties": {
+          "values": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+            "description": "The evaluator that checks each value line, read alone; null for none, so value lines are not checked."
+          },
+          "examples": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+            "description": "The evaluator that checks each example, read with its value; null for none, so examples are not checked."
+          }
+        },
+        "required": [
+          "values",
+          "examples"
+        ],
+        "additionalProperties": false
+      },
+      "values": {
+        "type": "array",
+        "description": "As values.checked carries them; empty when no day was asked for.",
+        "items": {
+          "type": "object",
+          "description": "One value of the day, with its checked lines in the order value, example.",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The value."
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "description": "One line of the value that Jev has answered, is checking, or could not check.",
+                "properties": {
+                  "line": {
+                    "enum": [
+                      "value",
+                      "example"
+                    ],
+                    "description": "value: the value itself, read alone. example: the example of living it, read together with the value."
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "The line as written in the sheet: the value's name, or its example."
+                  },
+                  "status": {
+                    "enum": [
+                      "pending",
+                      "done",
+                      "failed"
+                    ],
+                    "description": "pending: waiting for Jev. done: answered. failed: Jev could not be asked; error says why."
+                  },
+                  "answers": {
+                    "type": "array",
+                    "description": "Jev's answers to every question of the line's evaluator; empty until done.",
+                    "items": {
+                      "type": "object",
+                      "description": "Jev's answer to one question about the line.",
+                      "properties": {
+                        "question": {
+                          "type": "string",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                          "description": "The evaluator's question answered."
+                        },
+                        "option": {
+                          "type": "string",
+                          "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                          "description": "An answer of the question: the id of a pick question's option, or yes or no for a yes / no question."
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The answer as the user sees it: the option's name, or Yes or No."
+                        },
+                        "p": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1,
+                          "description": "How likely Jev holds the answer to be."
+                        }
+                      },
+                      "required": [
+                        "question",
+                        "option",
+                        "name",
+                        "p"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "unexpected": {
+                    "type": "array",
+                    "description": "The names of the answers that are not the one their question expects; empty when every answer is the expected one or no question expects one.",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "line",
+                  "text",
+                  "status",
+                  "answers",
+                  "unexpected"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "id",
+            "lines"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "keySet",
+      "settings",
+      "values"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "value-checks.changed",
+    "values.checked"
+  ]
+}

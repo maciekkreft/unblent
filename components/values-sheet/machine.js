@@ -48,9 +48,12 @@ export const isEmpty = (v) => !v.name.trim() && !v.meaning.trim();
 // waiting out its undo window is still kept until the window ends.
 export const savedValues = (drafts) => copy(drafts.filter((d) => !isEmpty(d)));
 
-const save = (enqueue, context, values) => {
+// `finished` names the rows the user has just left, of those saved, so their lines can be
+// checked once they are written and not while they are typed.
+const save = (enqueue, context, values, finished = []) => {
   if (!writable(context)) return;
-  enqueue.emit({ type: "values.saved", day: context.day, values });
+  const left = finished.filter((id) => values.some((v) => v.id === id));
+  enqueue.emit({ type: "values.saved", day: context.day, values, ...(left.length ? { finished: left } : {}) });
 };
 
 // The values the folded card names: the sheet's own while it is open, otherwise the
@@ -107,6 +110,24 @@ const saveWaiting = enqueueActions(({ context, enqueue }) => {
   enqueue.assign({ dirty: false });
 });
 
+// Leaving rows typed in since they were last left: the save names them as finished, even
+// when the throttle already saved their text (the values fact ignores a save that changes
+// nothing). Leaving any other row only saves what waits.
+const leaveRows = (rows) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const left = rows({ context, event }).filter((id) => context.edited.includes(id));
+    if (!left.length) {
+      if (context.dirty) {
+        save(enqueue, context, savedValues(context.drafts));
+        enqueue.assign({ dirty: false });
+      }
+      return;
+    }
+    save(enqueue, context, savedValues(context.drafts), left);
+    enqueue.assign({ dirty: false, edited: context.edited.filter((id) => !left.includes(id)) });
+  });
+const leaveAll = leaveRows(({ context }) => context.edited);
+
 const timerOf = (id) => `gone:${id}`;
 
 // Leaving the day ends every undo window at once: the values waiting are removed and
@@ -131,6 +152,7 @@ const typable = ({ context, event }) =>
 const edit = assign(({ context, event }) => ({
   drafts: context.drafts.map((d) => (d.id === event.id ? { ...d, [event.field]: event.value.replace(/\s*\n+\s*/g, " ") } : d)),
   dirty: true,
+  edited: context.edited.includes(event.id) ? context.edited : [...context.edited, event.id],
 }));
 
 export const machine = setup({
@@ -193,7 +215,9 @@ export const machine = setup({
       "Which days are listed, and whether Changed since is offered, is the values fact's to " +
       "say, and is asked again after every change. " +
       "What is written is saved a short time into typing and at once when a box loses focus " +
-      "or the sheet folds. When the page hands it the keyboard, it lands on the folded card " +
+      "or the sheet folds; a save made as the user leaves a row they typed in (Enter or Tab " +
+      "on to the next row, the box losing focus, or Done) names that row as finished, so its " +
+      "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded card " +
       "or the Write your values row, or, open, on the first box, or on a button when the " +
       "sheet is only read.",
     kind: "view",
@@ -222,6 +246,8 @@ export const machine = setup({
     open: false,
     drafts: [],
     dirty: false,
+    // The ids of the rows typed in since the user last left them (values.saved's finished).
+    edited: [],
     // The ids of the values waiting out their undo window.
     removing: [],
     // The list of earlier versions is shown, or another version is looked at:
@@ -252,7 +278,7 @@ export const machine = setup({
         guard: ({ context, event }) => isDay(event.day) && event.day !== context.day,
         target: ".loading",
         actions: [
-          saveWaiting,
+          leaveAll,
           finishRemovals,
           stopChild("lookup"),
           stopChild("recount"),
@@ -264,6 +290,7 @@ export const machine = setup({
             open: false,
             drafts: [],
             dirty: false,
+            edited: [],
             browsing: false,
             viewing: null,
           })),
@@ -342,14 +369,16 @@ export const machine = setup({
           guard: ({ context }) => context.open && writable(context),
           actions: assign(({ context }) => ({ drafts: [...context.drafts, blank(context.mint())] })),
         },
-        _blur: { guard: opened, actions: saveWaiting },
+        // A box lost focus: its row is left unless the keyboard went to the other box of
+        // the same row (`to` names the row it went to, null for anywhere else).
+        _blur: { guard: opened, actions: leaveRows(({ event }) => (event.id && event.to !== event.id ? [event.id] : [])) },
         // Done folds the sheet, saving what was typed; a value waiting out its undo window
         // keeps waiting, so Undo is still there when the sheet opens again.
         _done: {
           guard: opened,
           actions: [
-            saveWaiting,
-            assign({ open: false, drafts: [], browsing: false, viewing: null }),
+            leaveAll,
+            assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null }),
             stopChild("lookup"),
           ],
         },

@@ -1,11 +1,12 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView, checksShown } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
 import checksEdited from "./events/checks.edited.json" with { type: "json" };
+import valueChecksEdited from "./events/value-checks.edited.json" with { type: "json" };
 
 // The account's thinking effort and cache lifetime shown in plain words (7.7). The
 // effort choices come from `llm: read`; an unknown one falls back to its own name. The
@@ -54,7 +55,7 @@ class ActorController {
         // or a test can shorten it.
         undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
       },
-      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited },
+      events: { "settings.edited": edited, "llm.edited": llmEdited, "tools.edited": toolsEdited, "checks.edited": checksEdited, "value-checks.edited": valueChecksEdited },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -766,6 +767,7 @@ class SettingsSheet extends LitElement {
             save: (key) => this.#actor.send({ type: "_saveJevKey", key }),
             remove: () => this.#actor.send({ type: "_removeJevKey" }),
           })}
+          ${this.#valueChecks(llm, evaluators)}
         </div>
         ${this.#checks(checks, evaluators)}
         ${this.#tools(toolList, tools, profile)}
@@ -788,6 +790,36 @@ class SettingsSheet extends LitElement {
           <div class="boxes">${BOXES.map(({ field, label }) => this.#checkBox(field, label, checks[field], choosable))}</div>
         </details>
       </div>
+    `;
+  }
+
+  // The values checks: which evaluator Jev uses for the value lines and which for the
+  // examples of the Your values sheet. Offered only once a Jev key is saved, since nothing
+  // is checked without one (machine.js: valueChecksShown); folded like the choice point
+  // checks, so the group stays short until the user wants it.
+  #valueChecks(llm, evaluators) {
+    const { valueChecks, hidden } = this.#actor.snapshot.context;
+    if (!valueChecksShown({ valueChecks, hidden, llm })) return nothing;
+    const choosable = evaluators.filter((e) => !e.removing);
+    const row = (line, label) => {
+      const current = choosable.some((e) => e.id === valueChecks[line]) ? valueChecks[line] : null;
+      return html`
+        <div class="box" data-line=${line}>
+          <label class="field">
+            <span>${label}</span>
+            <select @change=${(e) => this.#actor.send({ type: "_setValueChecker", line, evaluator: e.target.value || null })}>
+              <option value="" ?selected=${!current}>Not checked</option>
+              ${choosable.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
+            </select>
+          </label>
+        </div>
+      `;
+    };
+    return html`
+      <details class="keys-fold value-checks">
+        <summary>Values checks</summary>
+        <div class="boxes">${row("values", "Check values with")}${row("examples", "Check examples with")}</div>
+      </details>
     `;
   }
 

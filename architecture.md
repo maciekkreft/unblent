@@ -222,6 +222,8 @@ The place of a note, a chat or an evaluator in its list, set by moving it there,
 
 `choice-point-checks` replicates as above, but the last write wins for which evaluator checks each box; Jev's answers about a line are added under a key made of the evaluator and the line's text and never change, so another device reuses them.
 
+`value-checks` replicates as above, but the last write wins for which evaluator checks the values and which checks their examples; Jev's answers about a line are added under a key made of the evaluator, the question and the text Jev read, and never change, so another device reuses them.
+
 `generators` replicates as above, but the last write wins, for a generator and for a result alike: a write is never refused for a stale version, so it never conflicts, and nothing is deleted. A result is kept under its generator and its item, with the SHA-256 of the content it was made from, so another device reuses it instead of asking the model again; two devices may make the same result once, and the later one is kept.
 
 `conversations` is remote-only: chats live in `data/<user>/conversations.db` and the browser holds only the open chat, in memory. A finished turn never changes, so the server adds turns by id and ignores one it already has; the chat row and a delete are last write wins, and which chat is open is kept in the browser only, per device.

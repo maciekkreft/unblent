@@ -1,0 +1,167 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createActor } from "xstate";
+import { machine } from "../machine.js";
+
+// The keep variant of changing who the browser belongs to (12, Connect and Disconnect of
+// the Mac app, 3.4): on session.changed with `leaving` and `keep` the fact uploads its
+// outbox and keeps its copy, marked `adopt` with the account it came from. After the
+// reload the account is asked for everything first: when it holds nothing of this kind,
+// the mark sends the copy on the versions it holds; when it holds something, the copy is
+// emptied and the account's is taken; offline, the mark stays for the next load. Either
+// way the pull starts again from 0 and the mark is cleared. Plain leaving still empties. The store,
+// the api and the asks are fakes of the shapes fact.js builds; every unknown store read
+// answers empty.
+// The settings and an answer, both sent.
+const LIVE = { values: "01ARZ3NDEKTSV4RRFFQ69G5FAV", examples: null, version: 3 };
+const ANSWER = { key: "0000000000000000000000000000", answers: [] };
+
+const flush = async (n = 40) => {
+  for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+
+function fakeStore(meta0) {
+  const meta = new Map(Object.entries(meta0));
+  const outbox = new Map();
+  const queued = [];
+  const log = [];
+  const known = {
+    settingsGet: async () => LIVE,
+    answerAll: async () => [ANSWER],
+    outboxAll: async () => [...outbox.values()],
+    outboxPut: async (r) => {
+      queued.push(r);
+      outbox.set(r.table ? r.key : r.id, r);
+    },
+    outboxDelete: async (k) => void outbox.delete(k),
+    metaGet: async (key) => meta.get(key),
+    metaPut: async (key, value) => void meta.set(key, value),
+    empty: async () => {
+      log.push("empty");
+      outbox.clear();
+    },
+  };
+  const store = new Proxy(known, {
+    get: (target, key) =>
+      key === "then" ? undefined : target[key] ?? (async () => (String(key).endsWith("All") || key === "all" ? [] : undefined)),
+  });
+  return { store, meta, queued, log };
+}
+
+// Any answer the fact reads is empty: no field that is a list holds anything.
+const empty = () => new Proxy({}, { get: (_, key) => (key === "cursor" ? 0 : key === "then" || key === "error" ? undefined : []) });
+
+function fakeApi(answer) {
+  const calls = [];
+  const api = new Proxy({}, {
+    get: (_, name) =>
+      name === "then"
+        ? undefined
+        : async (...args) => {
+            calls.push([name, ...args]);
+            return answer(name, ...args);
+          },
+  });
+  return { api, calls };
+}
+
+// A write is acknowledged with the next version; a pull brings nothing.
+const acked = (name, row) => (name === "pull" ? empty() : { ...row, version: (row?.baseVersion ?? 0) + 1, updatedAt: 900 });
+
+function start(meta, userId = "u1", answer = acked) {
+  const { store, meta: held, queued, log } = fakeStore(meta);
+  const { api, calls } = fakeApi(answer);
+  const ask = async (target) => (target === "session" ? { userId, registrationOpen: false } : empty());
+  const actor = createActor(machine, { input: { store, api, ask, now: () => 1000, revoke: () => {}, mint: () => "01ARZ3NDEKTSV4RRFFQ69G5FB9" } });
+  const emitted = [];
+  actor.on("*", (e) => emitted.push(e));
+  actor.start();
+  return { actor, meta: held, queued, log, calls, emitted };
+}
+
+const session = (extra = {}) => ({ type: "session.changed", userId: "u1", registrationOpen: false, ...extra });
+
+test("keep keeps the copy and marks it with the account it came from", async () => {
+  const { actor, meta, log } = start({ userId: "u1" });
+  await flush();
+  actor.send(session({ leaving: true, keep: true }));
+  await flush();
+  assert.deepEqual(log, [], "nothing is emptied");
+  assert.equal(meta.get("adopt"), "u1");
+  actor.stop();
+});
+
+test("a keep called off clears its mark", async () => {
+  const { actor, meta, log } = start({ userId: "u1" });
+  await flush();
+  actor.send(session({ leaving: true, keep: true }));
+  await flush();
+  actor.send(session());
+  await flush();
+  assert.deepEqual(log, []);
+  assert.equal(meta.get("adopt"), null);
+  actor.stop();
+});
+
+test("plain leaving still empties the copy and leaves no mark", async () => {
+  const { actor, meta, log } = start({ userId: "u1" });
+  await flush();
+  actor.send(session({ leaving: true }));
+  await flush();
+  assert.deepEqual(log, ["empty"]);
+  assert.equal(meta.get("adopt"), undefined);
+  actor.stop();
+});
+
+test("after the reload into an empty account the mark sends the copy from a cursor of 0, then clears", async () => {
+  const { actor, meta, queued, log, calls } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1");
+  await flush();
+  assert.deepEqual(log, [], "the copy is kept, not emptied as another account's");
+  const sent = queued.map((r) => r.table ? r.key : r.id);
+  assert.ok(sent.includes("settings"), `sent: ${sent}`);
+  assert.equal(queued.find((r) => (r.table ? r.key : r.id) === "settings").baseVersion, 3, "on the version it holds");
+  assert.ok(sent.includes("answer:0000000000000000000000000000"), `sent: ${sent}`);
+  assert.equal(meta.get("adopt"), null);
+  assert.equal(meta.get("userId"), "u1");
+  const pulls = calls.filter(([name]) => name === "pull");
+  assert.ok(pulls.length > 0 && pulls.every(([, since]) => since === 0), `pulled from 0: ${JSON.stringify(pulls)}`);
+  actor.stop();
+});
+
+// The account's answer to a pull: `fields` hold what it has, every other list is empty.
+const holding = (fields) =>
+  new Proxy(fields, { get: (t, key) => (key in t ? t[key] : key === "cursor" ? 0 : key === "then" || key === "error" ? undefined : []) });
+
+test("after the reload into an account that has an answer the copy is emptied and the account's is taken", async () => {
+  const answer = (name, row) => (name === "pull" ? holding({ answers: [{ ...ANSWER, key: "1111111111111111111111111111" }] }) : acked(name, row));
+  const { actor, meta, queued, log, calls } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, ["empty"], "this copy, outbox included, is emptied");
+  assert.deepEqual(queued, [], "nothing of this copy is sent");
+  assert.equal(meta.get("adopt"), null);
+  assert.equal(meta.get("userId"), "u1");
+  assert.deepEqual(calls.filter(([name]) => name === "pull")[0], ["pull", 0], "the account is asked for everything first");
+  actor.stop();
+});
+
+test("offline after the reload the mark stays and nothing is emptied or sent", async () => {
+  const answer = (name, row) => {
+    if (name === "pull") throw new Error("offline");
+    return acked(name, row);
+  };
+  const { actor, meta, queued, log } = start({ userId: "u0", adopt: "u0", cursor: 7 }, "u1", answer);
+  await flush();
+  assert.deepEqual(log, []);
+  assert.deepEqual(queued, []);
+  assert.equal(meta.get("adopt"), "u0", "the next load decides");
+  assert.equal(meta.get("userId"), "u1", "the copy is not taken for another account's meanwhile");
+  actor.stop();
+});
+
+test("a mark naming the account still signed in is only cleared", async () => {
+  const { actor, meta, queued } = start({ userId: "u1", adopt: "u1", cursor: 7 }, "u1");
+  await flush();
+  assert.equal(meta.get("adopt"), null);
+  assert.ok(!queued.some((r) => ["settings", "answer:0000000000000000000000000000"].includes(r.table ? r.key : r.id)), "nothing is sent again");
+  actor.stop();
+});

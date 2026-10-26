@@ -35,6 +35,14 @@
         ],
         "additionalProperties": false
       }
+    },
+    "finished": {
+      "type": "array",
+      "description": "The values whose rows the user has just left (Enter or Tab on to the next row, the box losing focus, or Done), so their lines can be checked; left out when no row was left.",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      }
     }
   },
   "required": [
