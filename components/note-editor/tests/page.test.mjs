@@ -281,10 +281,10 @@ for (const engine of ENGINES) {
       assert.ok(shape.dotRight <= shape.rows[0] + 1, "the dash stands left of the text");
       assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
 
-      // The text keeps the markdown marker, Enter putting a gap between the items.
+      // The text keeps the markdown marker, Enter putting the next item directly below.
       await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
       const body = await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
-      assert.match(body, /^- one item .*\n\n- two$/);
+      assert.match(body, /^- one item .*\n- two$/);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
@@ -655,7 +655,7 @@ for (const engine of ENGINES) {
       await page.keyboard.press("O");
       await page.keyboard.type("Zero");
       await page.keyboard.press("Escape");
-      // On an item, o opens the next item a gap below it.
+      // On an item, o opens the next item directly below it.
       await page.keyboard.press("j");
       await page.keyboard.press("o");
       await page.keyboard.type("- a");
@@ -673,7 +673,6 @@ for (const engine of ENGINES) {
         ["One", false, false, false],
         ["", false, true, false],
         ["\u2013a", false, false, true],
-        ["", false, true, false],
         ["\u2013b", false, false, true],
       ];
       await until(async () => (await shown()).length === want.length);

@@ -114,14 +114,10 @@ test("Enter on an item makes the next one; on an empty one it steps out or ends 
   assert.equal(nextItemAt("one", 3), null);
 });
 
-test("Enter on an item makes the next one a gap below; the line-break key one line below", () => {
-  assert.equal(run("- one", nextItemAt("- one", 5, 5, true)), "- one\n\n- ");
-  assert.equal(nextItemAt("- one", 5, 5, true).cursor, 9);
-  assert.equal(run("  * onetwo", nextItemAt("  * onetwo", 7, 7, true)), "  * one\n\n  * two");
-  // An empty item after a gap ends the list the same way, leaving the gap above.
-  assert.equal(run("- a\n\n- ", nextItemAt("- a\n\n- ", 7, 7, true)), "- a\n\n");
-  assert.equal(run("- a\n\n  - ", nextItemAt("- a\n\n  - ", 9, 9, true)), "- a\n\n- ");
-  assert.equal(run("- a\n\n- \n\n- b", nextItemAt("- a\n\n- \n\n- b", 7, 7, true)), "- a\n\n\n\n- b");
+test("an empty item after a gap ends the list or steps out the same way", () => {
+  assert.equal(run("- a\n\n- ", nextItemAt("- a\n\n- ", 7)), "- a\n\n");
+  assert.equal(run("- a\n\n  - ", nextItemAt("- a\n\n  - ", 9)), "- a\n\n- ");
+  assert.equal(run("- a\n\n- \n\n- b", nextItemAt("- a\n\n- \n\n- b", 7)), "- a\n\n\n\n- b");
 });
 
 test("o and O open a paragraph a gap below or above the line, or the next or previous item", () => {
@@ -136,14 +132,15 @@ test("o and O open a paragraph a gap below or above the line, or the next or pre
   assert.equal(openAt("A\n\nB", 3, false).cursor, 3);
   assert.equal(run("One", openAt("One", 2, false)), "\n\nOne");
   assert.equal(openAt("One", 2, false).cursor, 0);
-  // On an item, the next or previous item at its indent and with its marker.
+  // On an item, the next or previous item directly below or above, at its indent and
+  // with its marker.
   const t = "- a\n  * b";
-  assert.equal(run(t, openAt(t, 8, true, itemAt(t, 8))), "- a\n  * b\n\n  * ");
-  assert.equal(openAt(t, 8, true, itemAt(t, 8)).cursor, 15);
-  assert.equal(run(t, openAt(t, 8, false, itemAt(t, 8))), "- a\n  * \n\n  * b");
+  assert.equal(run(t, openAt(t, 8, true, itemAt(t, 8))), "- a\n  * b\n  * ");
+  assert.equal(openAt(t, 8, true, itemAt(t, 8)).cursor, 14);
+  assert.equal(run(t, openAt(t, 8, false, itemAt(t, 8))), "- a\n  * \n  * b");
   assert.equal(openAt(t, 8, false, itemAt(t, 8)).cursor, 8);
   // An empty item opens another; o never ends a list.
-  assert.equal(run("- ", openAt("- ", 2, true, itemAt("- ", 2))), "- \n\n- ");
+  assert.equal(run("- ", openAt("- ", 2, true, itemAt("- ", 2))), "- \n- ");
 });
 
 test("Backspace at the start of an item's text removes the bullet, keeping the text", () => {
@@ -334,7 +331,7 @@ test("item lines are drawn as items, except the ones an editor names, and none w
 test("Enter and Shift+Enter on an item make the next one, undone in one step", () => {
   const t = target("- one", 5, [...baseExtensions(), paragraphs()]);
   assert.ok(press(t, "Enter"));
-  assert.equal(t.state.doc.toString(), "- one\n\n- ");
+  assert.equal(t.state.doc.toString(), "- one\n- ");
   assert.ok(press(t, "Enter"));
   assert.equal(t.state.doc.toString(), "- one\n\n");
   assert.ok(undo(t));
@@ -367,7 +364,7 @@ test("o and O open a paragraph, an item on an item, but never on a named line or
   assert.equal(t.state.doc.lineAt(t.state.selection.main.head).number, 3);
   const item = target("- a", 3, [paragraphs()]);
   openLine(item, false);
-  assert.equal(item.state.doc.toString(), "- \n\n- a");
+  assert.equal(item.state.doc.toString(), "- \n- a");
   assert.equal(item.state.selection.main.head, 2);
   const named = target("- a", 3, [paragraphs({ notList: () => true })]);
   openLine(named, true);
@@ -429,7 +426,7 @@ test("with Vim inserting, o, Enter and typing with pauses are one undo step, red
   const item = target("- a", 3, [...baseExtensions(), paragraphs()]);
   vimOpen(item, false);
   type(item, "b");
-  assert.equal(item.state.doc.toString(), "- b\n\n- a");
+  assert.equal(item.state.doc.toString(), "- b\n- a");
   assert.ok(undo(item));
   assert.equal(item.state.doc.toString(), "- a");
 
@@ -614,11 +611,11 @@ test("numbers, checklist items and quotes are items too, each with the marker th
 });
 
 test("Enter on a numbered item, a checklist item or a quote continues it; on an empty one it ends", () => {
-  assert.equal(run("1. a", nextItemAt("1. a", 4, 4, true)), "1. a\n\n2. ");
+  assert.equal(run("1. a", nextItemAt("1. a", 4)), "1. a\n2. ");
   assert.equal(run("- [x] a", nextItemAt("- [x] a", 7)), "- [x] a\n- [ ] ");
-  assert.equal(run("> a", nextItemAt("> a", 3, 3, true)), "> a\n\n> ");
-  assert.equal(run("> a\n> ", nextItemAt("> a\n> ", 6, 6, true)), "> a\n\n");
-  assert.equal(run("- [ ] ", nextItemAt("- [ ] ", 6, 6, true)), "");
+  assert.equal(run("> a", nextItemAt("> a", 3)), "> a\n> ");
+  assert.equal(run("> a\n> ", nextItemAt("> a\n> ", 6)), "> a\n\n");
+  assert.equal(run("- [ ] ", nextItemAt("- [ ] ", 6)), "");
   // Backspace at the start of the text takes the whole marker.
   assert.equal(run("3. a", unbulletAt("3. a", 3)), "a");
   assert.equal(run("- [ ] a", unbulletAt("- [ ] a", 6)), "a");
@@ -678,7 +675,7 @@ test("a dash, a dot, a number, a box and a quote's bar are drawn, the bar across
 
 test("Enter, o and Tab on a numbered list renumber it in the same undo step; a load is left as it is", () => {
   const t = target("1. a\n2. b", 4, [...baseExtensions(), paragraphs()]);
-  assert.ok(press(t, "Shift-Enter"));
+  assert.ok(press(t, "Enter"));
   assert.equal(t.state.doc.toString(), "1. a\n2. \n3. b");
   assert.ok(undo(t));
   assert.equal(t.state.doc.toString(), "1. a\n2. b");
@@ -689,7 +686,7 @@ test("Enter, o and Tab on a numbered list renumber it in the same undo step; a l
   // O above an item.
   const o = target("1. a", 3, [paragraphs()]);
   vimOpen(o, false);
-  assert.equal(o.state.doc.toString(), "1. \n\n2. a");
+  assert.equal(o.state.doc.toString(), "1. \n2. a");
   // The editor's own change, as a load, keeps its numbers.
   const load = target("", 0, [paragraphs()]);
   load.dispatch(load.state.update({ changes: { from: 0, insert: "4. a\n4. b" } }));

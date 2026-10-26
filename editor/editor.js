@@ -58,22 +58,23 @@ export function pastGap(blank, count, n, dir) {
 // Enter makes, so o at a line's end and Enter there leave the same text. On an item
 // (`item`, what itemAt found there, or null) the new line is the next or the previous
 // item, at its indent and with the marker of the item after it (a numbered list is
-// renumbered after), a gap apart from it.
+// renumbered after), directly below or above it, as Enter makes it.
 export function openAt(text, pos, below, item = null) {
   const from = pos === 0 ? 0 : text.lastIndexOf("\n", pos - 1) + 1;
   let to = text.indexOf("\n", pos);
   if (to < 0) to = text.length;
   const lead = item ? " ".repeat(item.indent) + item.next + " " : "";
-  if (below) return { from: to, to, insert: "\n\n" + lead, cursor: to + 2 + lead.length };
-  return { from, to: from, insert: lead + "\n\n", cursor: from + lead.length };
+  const apart = item ? "\n" : "\n\n";
+  if (below) return { from: to, to, insert: apart + lead, cursor: to + apart.length + lead.length };
+  return { from, to: from, insert: lead + apart, cursor: from + lead.length };
 }
 
 // --- Lists ------------------------------------------------------------------------
 // A line that begins, after any spaces, with "- " or "* " is a bullet item, with "1. "
 // (any number) a numbered item, with "- [ ] " or "- [x] " (or "*") a checklist item,
 // and a line that begins with "> " is a quote line (10). The marker stays in the text,
-// so it stays markdown. Items of one list are a gap apart ("\n\n") when made with Enter
-// and one "\n" apart when made with Shift+Enter.
+// so it stays markdown. Enter and Shift+Enter make the next item one "\n" below (10); a
+// gap in a list is made by ending it and starting items again.
 
 const never = () => false;
 
@@ -169,16 +170,15 @@ export function renumber(text, from = 0, to = text.length, notList = never) {
   return changes;
 }
 
-// Enter (gap) or the line-break key on an item: the next item, at the same indent, a
-// gap below or one line below. On an empty item it steps out one level, or, at the top
-// level, ends the list: the item becomes the blank line of a new paragraph, a gap apart
-// from the text around it.
-export function nextItemAt(text, from, to = from, gap = false) {
+// Enter or Shift+Enter on an item: the next item, at the same indent, one line below.
+// On an empty item it steps out one level, or, at the top level, ends the list: the item
+// becomes the blank line of a new paragraph, a gap apart from the text around it.
+export function nextItemAt(text, from, to = from) {
   const item = itemAt(text, from);
   if (!item || from < item.textFrom || to > item.to) return null;
   const empty = from === to && text.slice(item.textFrom, item.to).trim() === "";
   if (!empty) {
-    const insert = (gap ? "\n\n" : "\n") + " ".repeat(item.indent) + item.next + " ";
+    const insert = "\n" + " ".repeat(item.indent) + item.next + " ";
     return { from, to, insert, cursor: from + insert.length };
   }
   if (item.indent > 0) {
@@ -750,7 +750,7 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     return (target) => itemLineAt(target.state, target.state.selection.main.from) !== null && run(target);
   };
   const listKeys = [
-    { key: "Enter", run: enter ? onItem((text, from, to) => nextItemAt(text, from, to, true), "input") : never },
+    { key: "Enter", run: enter ? onItem(nextItemAt, "input") : never },
     { key: "Shift-Enter", run: onItem(nextItemAt, "input") },
     { key: "Backspace", run: onItem(collapsed(unbulletAt), "delete.backward", true) },
     { key: "Tab", run: onItem(indentAt, "input.indent") },

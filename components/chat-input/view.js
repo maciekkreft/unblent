@@ -255,8 +255,7 @@ class ChatInput extends LitElement {
     return [
       baseExtensions({ vim: this.#vimOn }),
       this.#keys(),
-      // Enter stays a send (#keys); in Vim insert mode #keys leaves it here, where it
-      // makes a paragraph like Enter in every other editor (10).
+      // Enter is a send in every mode (#keys), so only Shift+Enter reaches the kit (10).
       paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
       this.#editable.of(EditorView.editable.of(this.#editableOn)),
       editorTheme,
@@ -281,7 +280,6 @@ class ChatInput extends LitElement {
           // Shift+Enter is the kit's line break (10), or Vim's own in normal mode.
           if (event.key === "Enter" && event.shiftKey) return false;
           if (event.key === "Enter") {
-            if (inserting(view)) return false; // Vim insert mode: the kit's paragraph
             event.preventDefault(); // a doomed Enter never drops a stray newline
             this.#send();
             return true;
