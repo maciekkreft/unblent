@@ -27,8 +27,8 @@ const boxTheme = (name) =>
 const nameTheme = boxTheme(true);
 const meaningTheme = boxTheme(false);
 
-const HINTS = { name: "A value, such as Being a present parent", meaning: "What it means to you (optional)" };
-const LABELS = { name: "Value", meaning: "What it means to you" };
+const HINTS = { name: "A value, such as Being a present parent", meaning: "An example of living it (optional)" };
+const LABELS = { name: "Value", meaning: "Example" };
 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();

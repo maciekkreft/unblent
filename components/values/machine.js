@@ -47,7 +47,7 @@ const inForce = (context, day) => {
   return list.at(-1) ?? null;
 };
 
-// What a version says to the reader: the names and meanings in order, trimmed at both
+// What a version says to the reader: the names and examples in order, trimmed at both
 // ends; ids do not count, so a value typed again reads as the same.
 const content = (values) => JSON.stringify(values.map((v) => [v.name.trim(), v.meaning.trim()]));
 const currentContent = (context) => content(inForce(context)?.values ?? []);
@@ -225,7 +225,7 @@ export const machine = setup({
   meta: {
     description:
       "Owns the client's values: one list per account, each value a short name and an " +
-      "optional sentence saying what it means. Every version is kept by day: a day's version " +
+      "optional example of living it. Every version is kept by day: a day's version " +
       "is the list as it stood at the end of that day, and only today's is written, so an " +
       "edit made today replaces today's version and an earlier day's never changes; a save " +
       "naming any other day is ignored, also yesterday's in the hour after midnight while " +
@@ -238,7 +238,7 @@ export const machine = setup({
       "chat may use it as a lookup, Reading your values. `values: versions` answers, oldest " +
       "first, only the past days worth looking at: it leaves out every empty version, every " +
       "version that reads the same as the one before it, and every one that reads the same " +
-      "as the current version, where reading the same means the same names and meanings in " +
+      "as the current version, where reading the same means the same names and examples in " +
       "the same order, spaces at either end aside. `values.changed` announces each " +
       "version written here or arriving from another device, with its day. It works signed " +
       "out, numbering versions itself, and syncs to the account when signed in (section 5); " +

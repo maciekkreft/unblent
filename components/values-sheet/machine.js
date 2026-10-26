@@ -172,7 +172,7 @@ export const machine = setup({
       "Shows the client's values on every journal day, under the day's text and above the " +
       "choice points, in a section headed \"Your values\": a folded card that lists the values' " +
       "names on one line; pressing it opens the sheet. Open, each value is a row of its name " +
-      "and an optional sentence saying what it means, with a New value row after them; with " +
+      "and an optional example of living it, with a New value row after them; with " +
       "no values yet today's page shows a muted Write your values row, and an earlier day " +
       "with none shows nothing. The boxes take Vim's keys when Vim keys is on, where p pastes " +
       "text or a link copied in the reader with Vim keys, its paragraphs joined into the " +

@@ -1,6 +1,6 @@
 {
   "tool": {
-    "description": "Returns the reader's own values: what matters to them, each a short name and an optional sentence saying what it means, as they wrote them for acceptance and commitment therapy. Give day (YYYY-MM-DD) for the values as they stood on that journal day, or nothing for the current ones. changedSince says whether the values changed after that day.",
+    "description": "Returns the reader's own values: what matters to them, each a short name and an optional example of living it, as they wrote them for acceptance and commitment therapy. Give day (YYYY-MM-DD) for the values as they stood on that journal day, or nothing for the current ones. changedSince says whether the values changed after that day.",
     "label": "Reading your values"
   },
   "payload": {
@@ -45,7 +45,7 @@
             },
             "meaning": {
               "type": "string",
-              "description": "One sentence saying what the value means; empty for none."
+              "description": "An example of living the value; empty for none."
             }
           },
           "required": [

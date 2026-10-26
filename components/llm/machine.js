@@ -1,6 +1,6 @@
 import { setup, assign, emit, enqueueActions, fromPromise, fromCallback } from "xstate";
 
-// `llm` owns access to the language model (architecture.md 3.1): remote-only,
+// `llm` owns access to the models, the language models and Jev (architecture.md 3.1): remote-only,
 // because a completion can only come from the server, which also holds the
 // account's model settings and API key (3.1, 7.7). It answers `read` (the account's
 // picture, never the key) and `complete` (start one answer; the answer arrives as
@@ -209,7 +209,7 @@ export const machine = setup({
   id: "llm",
   meta: {
     description:
-      "Owns access to the language models and the account's model settings: provider, model, " +
+      "Owns access to the models: the language models that write, and Jev, which decides; and the account's model settings: provider, model, " +
       "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
       "server and never sent back to the browser. A chat answer streams back piece by piece as " +
       "events, one answer at a time; `decide` asks Jev yes-or-no and pick-one questions and " +
@@ -232,7 +232,7 @@ export const machine = setup({
       "network call.",
     kind: "fact",
     shape: "remote-only",
-    owns: "access to the language model",
+    owns: "access to the models: the language models that write, and Jev, which decides",
     emits: ["llm.changed", "completion.progressed", "spending.changed"],
     asks: ["session: read", "session: guest"],
   },

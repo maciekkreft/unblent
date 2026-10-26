@@ -25,7 +25,7 @@
           },
           "meaning": {
             "type": "string",
-            "description": "One sentence saying what the value means; empty for none."
+            "description": "An example of living the value; empty for none."
           }
         },
         "required": [
