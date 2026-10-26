@@ -1,12 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user pressed Run on a generator: make its text again now, with the current prompt, for the item in front (the open chat, or the journal day shown on the stage), even when one exists.",
+  "description": "The user pressed Run on a generator: make its text again now, with the current prompt, for the item in front (the open chat, the journal day shown on the stage, or the first of today's values whose value line has a red mark), even when one exists.",
   "type": "object",
   "properties": {
     "generator": {
       "enum": [
         "chat-title",
-        "journal-summary"
+        "journal-summary",
+        "value-suggestion"
       ],
       "description": "Which generator: fixed, one per kind."
     }

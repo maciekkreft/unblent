@@ -126,16 +126,19 @@ async function drain(clock) {
 
 // --- Signed out ------------------------------------------------------------------------
 
-test("with nothing stored, list answers both generators at their approved defaults", async () => {
+test("with nothing stored, list answers the three generators at their approved defaults", async () => {
   const { actor } = start(fakeStore());
   await ready(actor);
   const generators = await list(actor);
   assert.deepEqual(generators.map((g) => [g.id, g.name, g.on, g.model, g.version]), [
     ["chat-title", "Chat title", true, "claude-haiku-5-5", 1],
     ["journal-summary", "Journal summary", true, "claude-haiku-5-5", 1],
+    ["value-suggestion", "Could be", true, "claude-haiku-5-5", 1],
   ]);
   assert.ok(generators[0].prompt.startsWith("Name this chat in 3 to 6 words"));
   assert.ok(generators[1].prompt.endsWith("No advice and no judgement."));
+  assert.ok(generators[2].prompt.startsWith("This is one of a person's values"));
+  assert.ok(generators[2].prompt.endsWith("Reply with the value only."));
 });
 
 test("an edit carries only the fields changed, is kept and announced, and the same fields are no change", async () => {
@@ -198,7 +201,7 @@ test("a store that rejects fails the fact: list answers the defaults and results
   const { actor } = start(store);
   const answer = list(actor);
   await flush();
-  assert.equal((await answer).length, 2);
+  assert.equal((await answer).length, 3);
   assert.deepEqual(await resultsOf(actor, "chat-title"), []);
 });
 

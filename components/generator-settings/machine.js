@@ -11,7 +11,7 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // on blur as the other editors save, and generation.requested for Run. The ask and the
 // clock arrive through input, so the machine is a pure definition importable in Node.
 
-export const IDS = ["chat-title", "journal-summary"];
+export const IDS = ["chat-title", "journal-summary", "value-suggestion"];
 const TYPED = ["name", "prompt"];
 
 // What Run does for each generator, in the words the user sees on its row and after
@@ -19,6 +19,7 @@ const TYPED = ["name", "prompt"];
 export const RUN = {
   "chat-title": { label: "Run on the open chat", asked: "Asked for a new title for the open chat." },
   "journal-summary": { label: "Run on the picked journal entry", asked: "Asked for a new summary of the picked journal entry." },
+  "value-suggestion": { label: "Run on your values", asked: "Asked for new suggestions for your values." },
 };
 
 // Signed in with a passkey: a guest or nobody runs no generator (3.4), so the tab asks
@@ -106,15 +107,15 @@ export const machine = setup({
   id: "generator-settings",
   meta: {
     description:
-      "The Generators tab of the gear's sheet, after Settings. It shows the two generators one " +
-      "under the other, Chat title and Journal summary, each with an On tick box, its name, Model " +
+      "The Generators tab of the gear's sheet, after Settings. It shows the three generators one " +
+      "under the other, Chat title, Journal summary and Could be, each with an On tick box, its name, Model " +
       "(the models the account's Anthropic key offers, Haiku 5.5 at first) and Ask the model, the " +
       "prompt, in an editor box that follows the Vim keys preference. Every change is saved to the " +
       "account (generator.edited, carrying only the fields changed): the tick box and the model at " +
       "once, the name and the prompt a short time into typing and when the field loses focus. " +
       "Without an Anthropic key one line says generators run on it and that it is added in the " +
-      "Settings tab. Run on the open chat, or Run on the picked journal " +
-      "entry, asks for that one text again now with the current prompt (generation.requested), " +
+      "Settings tab. Run on the open chat, Run on the picked journal " +
+      "entry, or Run on your values (the first of today's values with a red mark), asks for that one text again now with the current prompt (generation.requested), " +
       "saving what was typed first; a line under the button says what was asked for, for a few " +
       "seconds. The sheet takes the stage, so the chat list and the journal's contents stay in " +
       "sight and the new text is seen landing. Signed out or as a guest nothing runs, and the tab " +

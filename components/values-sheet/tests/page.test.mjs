@@ -1,11 +1,12 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 // What only a browser shows: Write your values opens the sheet with the keyboard in the
 // first name, Enter moves on, Escape folds it into a card that a reload keeps; Alt+Up
 // moves a row with the cursor, and with Vim keys on Escape steps onto the row where dd and
 // p move it; Jev's marks, their status line and the card's warning, on the desk and the
-// phone; removing a value strikes it through
+// phone; Could be's Use and its Undo; removing a value strikes it through
 // with Undo until its window ends; and an earlier day's values are read only and say when
 // they changed since. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -30,7 +31,7 @@ const dayOf = (ms) => {
 const ID = (n) => `01J0000000000000000000VAR${n}`;
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
-  describe(`values-sheet in ${engine.name}`, { timeout: 20000 }, () => {
+  describe(`values-sheet in ${engine.name}`, { timeout: 30000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -223,6 +224,64 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         }
       });
     }
+
+    // The evaluator, the values check, the values, Could be set to Echo (which needs no key
+    // and calls nothing) and its suggestion, kept under the hash of what it was made from,
+    // arrive through the APIs under the test's own login; Jev is answered here through
+    // page.route, and the account is told it has a key.
+    // Browser: a gesture.
+    test("Use puts Could be's suggestion in a red value line, and Undo puts the old one back", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("values-could-be"));
+      try {
+        const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
+        const [EV, Q, ACT, GOAL] = [id("E1"), id("Q1"), id("A0"), id("A1")];
+        const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
+        const options = [
+          { id: ACT, name: "A way of acting", description: "" },
+          { id: GOAL, name: "A goal", description: "" },
+        ];
+        const pick = { id: Q, kind: "pick", text: "What is it?", yes: "", no: "", options, expect: ACT };
+        assert.equal((await put(`evaluators/${EV}`, { book: id("B1"), name: "Is it a value?", on: true, baseVersion: null, questions: [pick] })).status(), 200);
+        assert.equal((await put("value-checks/settings", { values: EV, examples: null, baseVersion: null })).status(), 200);
+        const generator = { name: "Could be", on: true, model: "echo", prompt: "Suggest a value.", baseVersion: null };
+        assert.equal((await put("generators/generators/value-suggestion", generator)).status(), 200);
+        const source = createHash("sha256").update(JSON.stringify({ value: "Get rich", example: "A house", reads: "A goal" })).digest("hex");
+        const result = { generator: "value-suggestion", item: ID(1), text: "Building security.", source, baseVersion: null };
+        assert.equal((await put(`generators/results/value-suggestion:${ID(1)}`, result)).status(), 200);
+        assert.equal((await put(`values/${dayOf(Date.now())}`, { values: [{ id: ID(1), name: "Get rich", meaning: "A house" }], baseVersion: null })).status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.route("**/api/llm", async (route) => {
+          const res = await route.fetch();
+          const json = await res.json();
+          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+        });
+        await page.route("**/api/llm/decide", (route) => {
+          const { state, questions } = route.request().postDataJSON();
+          const answers = questions.map((q) => ({ id: q.id, p: 0.95, choice: state.text === "Get rich" ? GOAL : ACT }));
+          route.fulfill({ json: { answers, inputTokens: 1, ms: 1 } });
+        });
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const sheet = page.locator("values-sheet");
+        await sheet.locator(".card").click();
+        const name = sheet.locator(`.row[data-id="${ID(1)}"] .box[data-field="name"] .cm-content`);
+        const suggest = sheet.locator(".suggest", { hasText: "Could be Building security" });
+        await suggest.waitFor();
+        await suggest.getByRole("button", { name: "Use" }).click();
+        await until(async () => (await name.innerText()).trim() === "Building security");
+        const was = sheet.locator(".suggest.was", { hasText: "Was Get rich" });
+        await was.locator(".drain").waitFor();
+        assert.equal(await sheet.locator(`.row[data-id="${ID(1)}"] .box[data-field="meaning"] .cm-content`).innerText(), "A house", "the example is kept");
+        await was.getByRole("button", { name: /Undo/ }).click();
+        await until(async () => (await name.innerText()).trim() === "Get rich");
+        await suggest.waitFor();
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
 
     // An earlier day and two versions of the values arrive through the APIs under the
     // test's own login.

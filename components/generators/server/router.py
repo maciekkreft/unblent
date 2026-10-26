@@ -24,7 +24,7 @@ router = APIRouter()
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
-_GENERATORS = ("chat-title", "journal-summary")
+_GENERATORS = ("chat-title", "journal-summary", "value-suggestion")
 _SOURCE = re.compile(r"^[0-9a-f]{64}$")
 
 # A body that is not what the route takes is refused with this fixed reply rather than

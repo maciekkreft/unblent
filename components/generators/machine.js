@@ -1,9 +1,10 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
 import { chatTitle, firstRound } from "./strategies/chat-title.js";
 import { journalSummary, daySource } from "./strategies/journal-summary.js";
+import { valueSuggestion } from "./strategies/value-suggestion.js";
 
 // The engine tests reach the strategies through the machine, their one importer (11.1).
-export { chatTitle, firstRound, journalSummary, daySource };
+export { chatTitle, firstRound, journalSummary, daySource, valueSuggestion };
 
 // The fact component that owns the generators and what they write (3.1), replicated (5)
 // the way `choice-points` is: local-first, cached in the browser, numbering versions
@@ -13,7 +14,7 @@ export { chatTitle, firstRound, journalSummary, daySource };
 // network, the ask) arrives through input, so this stays a pure definition importable in
 // Node. It also runs the generators: the Strategies and Engine sections below.
 
-const IDS = ["chat-title", "journal-summary"];
+const IDS = ["chat-title", "journal-summary", "value-suggestion"];
 const isGenerator = (v) => IDS.includes(v);
 const HEX64 = /^[0-9a-f]{64}$/;
 const isResultId = (v) => typeof v === "string" && IDS.some((g) => v.startsWith(`${g}:`) && v.length > g.length + 1);
@@ -45,6 +46,21 @@ const DEFAULTS = {
       "Summarise this journal entry in one sentence of at most 25 words: what the day was about, " +
       "including what I was working on in its choice points. Keep my own words. No advice and no " +
       "judgement.",
+    version: 1,
+  },
+  "value-suggestion": {
+    id: "value-suggestion",
+    name: "Could be",
+    on: true,
+    model: "claude-haiku-5-5",
+    prompt:
+      "This is one of a person's values, written for acceptance and commitment therapy, with an " +
+      "example of living it and what a check found: it reads as a goal, a feeling, something others " +
+      "give, a rule, or avoidance, not as a way of acting.\n\nIn ACT Made Simple, a value is a " +
+      "quality of ongoing action: how the person wants to behave, which never gets finished.\n\n" +
+      "Write one value of at most five words that keeps what this person seems to care about and " +
+      "that the example still serves. Use a word or phrase about acting, such as \"Contributing\" or " +
+      "\"Being self-reliant\". Reply with the value only.",
     version: 1,
   },
 };
@@ -246,7 +262,7 @@ async function keepFor(store, from, userId, api) {
 // reads. Nothing about where the result shows: the result is announced and the place
 // that shows it follows that.
 
-const STRATEGIES = [chatTitle, journalSummary];
+const STRATEGIES = [chatTitle, journalSummary, valueSuggestion];
 const strategyOf = (generator) => STRATEGIES.find((s) => s.generator === generator);
 
 // --- The engine -----------------------------------------------------------------------
@@ -348,7 +364,8 @@ export const machine = setup({
       (context.forced.length > 0 || !context.stopped),
   },
   actors: {
-    // The starting picture of each strategy that reads one (journal: read, choice-points: list).
+    // The starting picture of each strategy that reads one (journal: read, choice-points:
+    // list, value-checks: read, values: read).
     scan: fromPromise(async ({ input }) => {
       const out = {};
       for (const strategy of STRATEGIES) if (strategy.load && input.ask) out[strategy.generator] = await strategy.load(input.ask);
@@ -424,10 +441,15 @@ export const machine = setup({
     description:
       "Owns the generators and what they write, and runs them. A generator is an instruction " +
       "the model runs by itself at a fixed moment, whose short text lands in a fixed place; an " +
-      "evaluator judges text, a generator writes it. There are two, with fixed ids: chat-title " +
+      "evaluator judges text, a generator writes it. There are three, with fixed ids: chat-title " +
       "names a chat from its first message, what was looked up for it and the first answer; " +
-      "journal-summary writes one sentence about a past journal day and its choice points. Each " +
-      "has a name, on or off, a model and a prompt; `generators: list` answers both, with the " +
+      "journal-summary writes one sentence about a past journal day and its choice points; " +
+      "value-suggestion, named Could be, writes one value that reads as a way of acting for each " +
+      "of today's values whose value line Jev has answered with a red mark (values.checked from " +
+      "`value-checks: read` and after, with `values: read` and values.changed for its example), " +
+      "from the value, its example and what the check found it reads as; a value line no longer " +
+      "red makes no item, and its old result is kept but not shown. Each " +
+      "has a name, on or off, a model and a prompt; `generators: list` answers all three, with the " +
       "approved defaults (Haiku 5.5, on) for one the account never changed. A change made in the " +
       "Generators tab (generator.edited) carries only the fields changed; it is kept and announced " +
       "as generator.changed. While an account signed in with a passkey has a page open (never a " +
@@ -436,15 +458,16 @@ export const machine = setup({
       "here yet, heard through conversation.changed; and every day `journal: read` lists that can " +
       "no longer be written and has text or choice points (`choice-points: list`). It asks " +
       "`llm: generate` for one text at a time, newest item first, skipping a generator that is " +
-      "off. Each result is kept per generator and item (a chat's id, a day's date) with the " +
+      "off. Each result is kept per generator and item (a chat's id, a day's date, a value's id) with the " +
       "SHA-256 of the content it was made from, so an item needs a new text only when its content " +
       "changes, never because the prompt did; the content is hashed as compact JSON with keys in " +
       "a fixed order, the same bytes Python writes, so a script can compute the same value. It " +
       "looks again when the page loads, when a day closes or its choice points change, and when " +
       "a chat's first answer finishes. An error from the model stops it until the page loads " +
       "again, a generator changes or a new item is ready. Run (generation.requested) makes the " +
-      "text again now, with the current prompt, for the chat last opened (conversation.opened) " +
-      "or the day last shown (day.shown), first in the queue. A chat whose first round looked " +
+      "text again now, with the current prompt, for the chat last opened (conversation.opened), " +
+      "the day last shown (day.shown) or the first of today's values with a red value line, " +
+      "first in the queue. A chat whose first round looked " +
       "something up is not named yet, because conversation.changed carries a lookup's size, not " +
       "its content. `generators: results` answers one generator's results, and every result kept " +
       "or pulled is announced as generation.changed. A title the user types for a chat in the list " +
@@ -459,7 +482,7 @@ export const machine = setup({
     shape: "replicated",
     owns: "the generators and the texts they wrote",
     emits: ["generator.changed", "generation.changed"],
-    asks: ["session: read", "journal: read", "choice-points: list", "llm: generate"],
+    asks: ["session: read", "journal: read", "choice-points: list", "value-checks: read", "values: read", "llm: generate"],
   },
   context: ({ input }) => ({
     generators: new Map(),

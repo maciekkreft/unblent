@@ -6,7 +6,7 @@ import { EditorState, Prec, Annotation, StateField, StateEffect } from "@codemir
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, toRegister } from "editor";
-import { machine, writable, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey } from "./machine.js";
+import { machine, writable, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor } from "./machine.js";
 import saved from "./events/values.saved.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text and above the choice
@@ -353,6 +353,30 @@ class ValuesSheet extends LitElement {
       background: none;
       border: 0;
       padding: var(--space-xs);
+      font-size: var(--text-caption);
+      color: var(--color-accent);
+    }
+    /* Could be: a muted line under the example, so the pair stays together, with Use; after Use, Was and the old
+       value with Undo, over the draining bar of the undo window. */
+    .suggest {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0 var(--space-xs);
+      padding: 0 var(--space-sm);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+      overflow-wrap: anywhere;
+    }
+    .suggest.was {
+      padding-bottom: var(--space-2xs);
+    }
+    .suggest button {
+      appearance: none;
+      background: none;
+      border: 0;
+      padding: 0 var(--space-xs);
       font-size: var(--text-caption);
       color: var(--color-accent);
     }
@@ -904,6 +928,28 @@ class ValuesSheet extends LitElement {
     this.#send({ type: "_undo", id }, `.box[data-key="${id}:name"]`);
   }
 
+  // Could be under the example of a value with a red mark, or, after Use, Was with Undo.
+  #suggest(context, draft) {
+    const used = context.used?.id === draft.id ? context.used : null;
+    if (used) {
+      return html`<p class="suggest was">
+        <span>Was ${used.was}</span>
+        <button class="revert" type="button" aria-label="Undo: put back ${used.was}" @click=${() => this.#send({ type: "_unuse" }, `.box[data-key="${draft.id}:name"]`)}>
+          Undo
+        </button>
+        <span class="drain"></span>
+      </p>`;
+    }
+    const text = suggestionFor(context, draft);
+    if (!text) return nothing;
+    return html`<p class="suggest">
+      <span>Could be ${text}</span>
+      <button class="use" type="button" aria-label="Use ${text}" @click=${() => this.#send({ type: "_use", id: draft.id }, `.row[data-id="${draft.id}"] .revert`)}>
+        Use
+      </button>
+    </p>`;
+  }
+
   #box(context, draft, field) {
     const key = `${draft.id}:${field}`;
     const lines = boxMarks(context, draft.id, field);
@@ -975,7 +1021,7 @@ class ValuesSheet extends LitElement {
       @keydown=${(e) => this.#rowKeydown(e, draft.id)}
       @blur=${(e) => this.#rowBlur(e, draft.id)}
     >
-      <div class="fields">${this.#box(context, draft, "name")} ${this.#box(context, draft, "meaning")}</div>
+      <div class="fields">${this.#box(context, draft, "name")} ${this.#box(context, draft, "meaning")} ${this.#suggest(context, draft)}</div>
       <div class="tools">
         ${cut ? html`<span class="cut-mark">Cut</span>` : nothing}
         <!-- A press does not take the keyboard first, so it goes with the row moved. -->

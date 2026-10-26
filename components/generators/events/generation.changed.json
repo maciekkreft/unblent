@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "A generator wrote a text for an item: the whole result (4.3, third rule), made here or pulled from another device. The place that shows it (a chat's title, a day's summary) follows this.",
+  "description": "A generator wrote a text for an item: the whole result (4.3, third rule), made here or pulled from another device. The place that shows it (a chat's title, a day's summary, a suggested value) follows this.",
   "type": "object",
   "properties": {
     "result": {
@@ -8,20 +8,21 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^(chat-title|journal-summary):.+$",
+          "pattern": "^(chat-title|journal-summary|value-suggestion):.+$",
           "description": "The generator and the item, as <generator>:<item>."
         },
         "generator": {
           "enum": [
             "chat-title",
-            "journal-summary"
+            "journal-summary",
+            "value-suggestion"
           ],
           "description": "Which generator: fixed, one per kind."
         },
         "item": {
           "type": "string",
           "minLength": 1,
-          "description": "What the text is about: a chat's id for chat-title, a journal day's date (YYYY-MM-DD) for journal-summary."
+          "description": "What the text is about: a chat's id for chat-title, a journal day's date (YYYY-MM-DD) for journal-summary, a value's id for value-suggestion."
         },
         "text": {
           "type": "string",

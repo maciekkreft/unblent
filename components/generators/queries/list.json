@@ -8,7 +8,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Both generators, chat-title first; the defaults when nothing is stored.",
+    "description": "Every generator, in a fixed order with chat-title first; the defaults when nothing is stored.",
     "type": "object",
     "properties": {
       "generators": {
@@ -19,7 +19,8 @@
             "id": {
               "enum": [
                 "chat-title",
-                "journal-summary"
+                "journal-summary",
+                "value-suggestion"
               ],
               "description": "Which generator: fixed, one per kind."
             },

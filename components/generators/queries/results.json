@@ -7,7 +7,8 @@
       "generator": {
         "enum": [
           "chat-title",
-          "journal-summary"
+          "journal-summary",
+          "value-suggestion"
         ],
         "description": "Which generator: fixed, one per kind."
       }
@@ -29,20 +30,21 @@
           "properties": {
             "id": {
               "type": "string",
-              "pattern": "^(chat-title|journal-summary):.+$",
+              "pattern": "^(chat-title|journal-summary|value-suggestion):.+$",
               "description": "The generator and the item, as <generator>:<item>."
             },
             "generator": {
               "enum": [
                 "chat-title",
-                "journal-summary"
+                "journal-summary",
+                "value-suggestion"
               ],
               "description": "Which generator: fixed, one per kind."
             },
             "item": {
               "type": "string",
               "minLength": 1,
-              "description": "What the text is about: a chat's id for chat-title, a journal day's date (YYYY-MM-DD) for journal-summary."
+              "description": "What the text is about: a chat's id for chat-title, a journal day's date (YYYY-MM-DD) for journal-summary, a value's id for value-suggestion."
             },
             "text": {
               "type": "string",

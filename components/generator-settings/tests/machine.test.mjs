@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, changed, modelsFor, keySet, signedIn } from "../machine.js";
+import { machine, changed, modelsFor, keySet, signedIn, IDS, RUN } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -45,6 +45,12 @@ test("it asks its four facts once and takes their pictures", async () => {
   assert.equal(context.signedIn, true);
   assert.equal(context.vimKeys, true);
   assert.equal(context.generators.length, 2);
+});
+
+test("each of the three generators has a row with its own Run", () => {
+  assert.deepEqual(IDS, ["chat-title", "journal-summary", "value-suggestion"]);
+  for (const id of IDS) assert.ok(RUN[id]?.label && RUN[id]?.asked, id);
+  assert.deepEqual(RUN["value-suggestion"], { label: "Run on your values", asked: "Asked for new suggestions for your values." });
 });
 
 test("signed out or as a guest the tab is the sign-in line", async () => {

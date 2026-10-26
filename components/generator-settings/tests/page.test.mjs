@@ -23,8 +23,9 @@ for (const engine of ENGINES) {
       watch(page, problems);
       await page.goto(PAGE, { waitUntil: "domcontentloaded" });
       const sections = page.locator("generator-settings section.generator");
-      await until(async () => (await sections.count()) === 2);
-      assert.deepEqual(await sections.locator("input.name").evaluateAll((els) => els.map((e) => e.value)), ["Chat title", "Journal summary"]);
+      await until(async () => (await sections.count()) === 3);
+      assert.deepEqual(await sections.locator("input.name").evaluateAll((els) => els.map((e) => e.value)), ["Chat title", "Journal summary", "Could be"]);
+      await sections.nth(2).getByRole("button", { name: "Run" }).waitFor();
       // No Anthropic key on a fresh account: one line says where to add it.
       await page.locator("generator-settings").getByText("Generators run on your Anthropic key.", { exact: false }).waitFor();
 
@@ -38,7 +39,7 @@ for (const engine of ENGINES) {
       await sections.nth(1).getByText("Asked for a new summary of the picked journal entry.").waitFor();
 
       await page.reload({ waitUntil: "domcontentloaded" });
-      await until(async () => (await sections.count()) === 2);
+      await until(async () => (await sections.count()) === 3);
       await until(async () => (await box.textContent()) === "Name the chat in three words.");
       assert.equal(await sections.first().locator("input.name").inputValue(), "Chat title", "only the prompt changed");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);

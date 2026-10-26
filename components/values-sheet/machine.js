@@ -9,8 +9,10 @@ import { setup, assign, enqueueActions, fromPromise, spawnChild, stopChild } fro
 // stays in journal-entry. Writing leaves as values.saved, the whole list (4.3, third rule).
 // It also asks settings: read for the "Vim keys" preference (12) and follows
 // settings.changed; and value-checks: read and evaluators: list for Jev's marks, following
-// values.checked, value-checks.changed, evaluator.changed and evaluator.deleted. The ask, the id minting, the clock, the throttle and the undo window
-// arrive through input, so the machine is importable in Node.
+// values.checked, value-checks.changed, evaluator.changed and evaluator.deleted; and
+// generators: results for Could be's suggestions, following generation.changed. The ask,
+// the id minting, the clock, the throttle, the undo window and the hash arrive through
+// input, so the machine is importable in Node.
 
 export const FIELDS = ["name", "meaning"];
 
@@ -254,6 +256,71 @@ export function statusOf(context) {
 
 const POINTS = new Set(["hover", "tap", "cursor"]);
 
+// --- Could be --------------------------------------------------------------------------
+// The generator Could be (generators, value-suggestion) writes one value for each of
+// today's values whose value line Jev answered with a red mark. A suggestion is shown only
+// while it was made from what the row says now: its result's source is the SHA-256 of the
+// same compact JSON the generator hashes, worked out here from the row and the report.
+
+const SUGGESTER = "value-suggestion";
+
+// What the generator reads for a value, keys in its order, or null when the value line as
+// written now is not answered with a red mark.
+export function sourceOf(context, value) {
+  const line = (context.checks.reports[value.id] ?? []).find((l) => l.line === "value");
+  if (!line || line.status !== "done" || line.text !== value.name || !line.unexpected?.length) return null;
+  return { value: value.name, example: value.meaning, reads: line.unexpected.join(", ") };
+}
+
+// A suggestion as Use puts it in the value line: trimmed, without a closing full stop.
+export const cleaned = (text) => text.trim().replace(/[.\s]+$/, "");
+
+// The suggestion to show under a value line, or null.
+export function suggestionFor(context, value) {
+  const source = sourceOf(context, value);
+  const result = source && context.suggestions[value.id];
+  if (!result || context.hashes[JSON.stringify(source)] !== result.source) return null;
+  return cleaned(result.text) || null;
+}
+
+const summaryOf = (r) => ({ text: r.text, source: r.source, version: r.version });
+
+// The hash of every source on screen that has none yet, sent back as _hashed.
+const hashSources = enqueueActions(({ context, enqueue }) => {
+  const hashes = { ...context.hashes };
+  let asked = false;
+  for (const v of context.open ? context.drafts : (context.version?.values ?? [])) {
+    const source = sourceOf(context, v);
+    const text = source && JSON.stringify(source);
+    if (!text || text in hashes) continue;
+    hashes[text] = null;
+    asked = true;
+    enqueue(({ self }) => Promise.resolve(context.sha256(text)).then((hex) => self.send({ type: "_hashed", text, hex }), () => {}));
+  }
+  if (asked) enqueue.assign({ hashes });
+});
+
+// SHA-256 hex of the UTF-8 of a text, through Web Crypto, which the browser and Node both
+// have.
+async function sha256(text) {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Use or Undo puts `name` in a value line and saves the row as finished, so Jev checks
+// the line as it now reads.
+function rename(enqueue, context, id, name) {
+  const drafts = context.drafts.map((d) => (d.id === id ? { ...d, name } : d));
+  enqueue.assign({ drafts, dirty: false, edited: context.edited.filter((e) => e !== id) });
+  save(enqueue, context, savedValues(drafts), [id]);
+}
+
+const endUse = enqueueActions(({ context, enqueue }) => {
+  if (!context.used) return;
+  enqueue.cancel("used");
+  enqueue.assign({ used: null });
+});
+
 // --- Reordering ------------------------------------------------------------------------
 
 // The drafts with one row moved to stand at index `to`.
@@ -298,11 +365,19 @@ const typable = ({ context, event }) =>
   context.open && writable(context) && held(context, event.id) && FIELDS.includes(event.field) && typeof event.value === "string";
 
 // A box holds one line: a line break typed or pasted becomes a space.
-const edit = assign(({ context, event }) => ({
-  drafts: context.drafts.map((d) => (d.id === event.id ? { ...d, [event.field]: event.value.replace(/\s*\n+\s*/g, " ") } : d)),
-  dirty: true,
-  edited: context.edited.includes(event.id) ? context.edited : [...context.edited, event.id],
-}));
+// Typing in a value line Use replaced ends its Undo, so Undo never takes back what was
+// typed since.
+const edit = enqueueActions(({ context, event, enqueue }) => {
+  enqueue.assign({
+    drafts: context.drafts.map((d) => (d.id === event.id ? { ...d, [event.field]: event.value.replace(/\s*\n+\s*/g, " ") } : d)),
+    dirty: true,
+    edited: context.edited.includes(event.id) ? context.edited : [...context.edited, event.id],
+  });
+  if (context.used?.id === event.id && event.field === "name") {
+    enqueue.cancel("used");
+    enqueue.assign({ used: null });
+  }
+});
 
 // A row of today's open sheet that is not waiting out its undo window can be moved.
 const movable = (context, id) => context.open && writable(context) && held(context, id) && !context.removing.includes(id);
@@ -349,6 +424,9 @@ export const machine = setup({
     evaluators: fromPromise(({ input }) =>
       input.ask("evaluators", "list", { day: input.day }).then((reply) => ({ day: input.day, reply })),
     ),
+    // Could be's suggestions, every one kept; on a page without generators the reply is
+    // no-answerer and nothing is suggested.
+    suggestions: fromPromise(({ input }) => input.ask("generators", "results", { generator: SUGGESTER })),
     // On a page without a settings fact the ask replies no-answerer and Vim stays off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     // Another version looked at in place: the current one, or an earlier day's.
@@ -415,10 +493,18 @@ export const machine = setup({
       "the sheet; dd cuts the row, shown greyed as Cut, p puts it below the row the keyboard " +
       "is on and P above, u on the cut row puts it back, and u after a paste undoes it; " +
       "Escape while a row is cut removes it, with Undo and the draining bar. A move is saved " +
-      "with the order and asks Jev nothing.",
+      "with the order and asks Jev nothing. On today's sheet, under the example of a value whose " +
+      "line Jev answered with a red mark, a muted line says Could be and the value the generator Could be " +
+      "suggested (`generators: results` and generation.changed), with Use; it shows only while " +
+      "the suggestion was made from the value, its example and the red answers as they are now. " +
+      "Use puts the suggestion in the value line, trimmed and without a closing full stop, " +
+      "keeps the example, and saves the row as finished, so Jev checks the new value; then " +
+      "Was and the old value, with Undo and the draining bar, stand there for the undo window, " +
+      "and Undo puts the old value back, saved the same way. Typing in that line, folding the " +
+      "sheet or moving to another day ends the Undo. Earlier days show no suggestion.",
     kind: "view",
     emits: ["values.saved"],
-    asks: ["values: read", "values: versions", "settings: read", "value-checks: read", "evaluators: list"],
+    asks: ["values: read", "values: versions", "settings: read", "value-checks: read", "evaluators: list", "generators: results"],
     attributes: [],
   },
   context: ({ input }) => ({
@@ -462,6 +548,13 @@ export const machine = setup({
     // the last paste, { id, index }, so u can take the paste back.
     cut: null,
     pasted: null,
+    // Could be: its results by value id ({ text, source, version }), the hash of each
+    // source worked out so far (null while it is being worked out), and the value line
+    // just replaced by Use, { id, was, now }, while its Undo lasts.
+    suggestions: {},
+    hashes: {},
+    used: null,
+    sha256: input.sha256 ?? sha256,
   }),
   // Beside the states, so the preference arrives whatever the sheet is doing; a
   // settings.changed that races it is held until the reply lands (4.2).
@@ -474,20 +567,44 @@ export const machine = setup({
   entry: [
     spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
     spawnChild("evaluators", { id: "evaluators", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
+    spawnChild("suggestions", { id: "suggestions", input: ({ context }) => ({ ask: context.ask }) }),
   ],
   initial: "loading",
   on: {
     "xstate.done.actor.checks": {
       guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.values),
-      actions: assign({ checks: ({ event }) => ({ settings: event.output.reply.settings, reports: reportsOf(event.output.reply.values), error: null }) }),
+      actions: [
+        assign({ checks: ({ event }) => ({ settings: event.output.reply.settings, reports: reportsOf(event.output.reply.values), error: null }) }),
+        hashSources,
+      ],
     },
+    // A result announced while the ask was open is held until the reply lands (4.2), so
+    // the reply never overwrites a newer one.
+    "xstate.done.actor.suggestions": {
+      guard: ({ event }) => Array.isArray(event.output?.results),
+      actions: [
+        assign({
+          suggestions: ({ context, event }) => {
+            const out = { ...context.suggestions };
+            for (const r of event.output.results) if (r.generator === SUGGESTER && !(out[r.item]?.version > r.version)) out[r.item] = summaryOf(r);
+            return out;
+          },
+        }),
+        hashSources,
+      ],
+    },
+    "generation.changed": {
+      guard: ({ context, event }) => event.result?.generator === SUGGESTER && !(context.suggestions[event.result.item]?.version > event.result.version),
+      actions: [assign({ suggestions: ({ context, event }) => ({ ...context.suggestions, [event.result.item]: summaryOf(event.result) }) }), hashSources],
+    },
+    _hashed: { actions: assign({ hashes: ({ context, event }) => ({ ...context.hashes, [event.text]: event.hex }) }) },
     "xstate.done.actor.evaluators": {
       guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.evaluators),
       actions: assign({ evaluators: ({ event }) => event.output.reply.evaluators }),
     },
     "values.checked": {
       guard: ({ context, event }) => event.day === context.day,
-      actions: assign({ checks: ({ context, event }) => ({ ...context.checks, reports: reportsOf(event.values), error: event.error ?? null }) }),
+      actions: [assign({ checks: ({ context, event }) => ({ ...context.checks, reports: reportsOf(event.values), error: event.error ?? null }) }), hashSources],
     },
     "value-checks.changed": { actions: assign({ checks: ({ context, event }) => ({ ...context.checks, settings: event.settings }) }) },
     "evaluator.changed": {
@@ -522,6 +639,7 @@ export const machine = setup({
         actions: [
           leaveAll,
           finishRemovals,
+          endUse,
           stopChild("lookup"),
           stopChild("recount"),
           assign(({ context, event }) => ({
@@ -592,6 +710,7 @@ export const machine = setup({
                 for (const e of context.early) enqueue.raise(e);
                 enqueue.assign({ early: [] });
               }),
+              hashSources,
             ],
           },
           // The fact could not answer: an honest failure rather than no values.
@@ -606,7 +725,7 @@ export const machine = setup({
     ready: {
       initial: "idle",
       on: {
-        "values.changed": { actions: follow },
+        "values.changed": { actions: [follow, hashSources] },
         // Opening shows the shown day's version; today with none yet opens on one empty row.
         _open: {
           guard: ({ context }) => !context.open,
@@ -615,6 +734,32 @@ export const machine = setup({
             return { open: true, drafts: values.length || !writable(context) ? values : [blank(context.mint())], browsing: false, viewing: null };
           }),
         },
+        // Use puts the suggestion in the value line, keeping the example, and offers Undo
+        // for the undo window.
+        _use: {
+          guard: ({ context, event }) => {
+            const draft = context.open && writable(context) && !context.removing.includes(event.id) && context.drafts.find((d) => d.id === event.id);
+            return Boolean(draft && suggestionFor(context, draft));
+          },
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            const draft = context.drafts.find((d) => d.id === event.id);
+            const now = suggestionFor(context, draft);
+            rename(enqueue, context, draft.id, now);
+            enqueue.cancel("used");
+            enqueue.assign({ used: { id: draft.id, was: draft.name, now } });
+            enqueue.raise({ type: "_used" }, { delay: context.undoMs, id: "used" });
+          }),
+        },
+        // Undo puts back the value line Use replaced.
+        _unuse: {
+          guard: ({ context }) => context.used !== null && context.open && writable(context) && held(context, context.used.id),
+          actions: enqueueActions(({ context, enqueue }) => {
+            rename(enqueue, context, context.used.id, context.used.was);
+            enqueue.cancel("used");
+            enqueue.assign({ used: null });
+          }),
+        },
+        _used: { actions: assign({ used: null }) },
         _add: {
           guard: ({ context }) => context.open && writable(context),
           // At the end, or at index `at` (Vim's o and O on a row).
@@ -632,6 +777,7 @@ export const machine = setup({
           guard: opened,
           actions: [
             leaveAll,
+            endUse,
             assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null, cut: null, pasted: null, pointed: { hover: null, tap: null, cursor: null } }),
             stopChild("lookup"),
           ],

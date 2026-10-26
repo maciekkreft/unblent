@@ -9,7 +9,8 @@
         "id": {
           "enum": [
             "chat-title",
-            "journal-summary"
+            "journal-summary",
+            "value-suggestion"
           ],
           "description": "Which generator: fixed, one per kind."
         },

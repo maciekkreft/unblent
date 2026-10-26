@@ -53,7 +53,7 @@ test("an edit in the tab reaches generators, and list answers what was kept", as
   const view = standIn(heard);
   try {
     await until(() => actors.generators.getSnapshot().matches("ready"));
-    assert.equal((await view.list()).generators.length, 2);
+    assert.equal((await view.list()).generators.length, 3);
     view.actor.send({ type: "go", body: { type: "generator.edited", id: "journal-summary", on: false } });
     await until(() => heard.length === 1);
     assert.deepEqual([heard[0].generator.id, heard[0].generator.on], ["journal-summary", false]);

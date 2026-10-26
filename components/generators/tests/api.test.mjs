@@ -60,6 +60,17 @@ test("a result is kept per generator and item, and a pull returns both kinds in 
   assert.deepEqual(await (await pull(all.cursor, cookie)).json(), { generators: [], results: [], cursor: 3 });
 });
 
+test("Could be's generator and its results, one per value, are kept like the others", async () => {
+  const cookie = freshCookie();
+  const VALUE = "01ARZ3NDEKTSV4RRFFQ69G5CP2";
+  const g = await (await put("generators/value-suggestion", generator({ name: "Could be" }), cookie)).json();
+  assert.deepEqual([g.id, g.name, g.version], ["value-suggestion", "Could be", 1]);
+  const r = await (await put(`results/value-suggestion:${VALUE}`, result({ generator: "value-suggestion", item: VALUE, text: "Contributing" }), cookie)).json();
+  assert.deepEqual([r.id, r.text, r.version], [`value-suggestion:${VALUE}`, "Contributing", 1]);
+  const all = await (await pull(0, cookie)).json();
+  assert.deepEqual(all.results.map((x) => x.id), [`value-suggestion:${VALUE}`]);
+});
+
 test("a body that is not a generator or a result is refused with a fixed reply", async () => {
   const cookie = freshCookie();
   const bad = [

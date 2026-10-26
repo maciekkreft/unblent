@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, firstRound, daySource, chatTitle, journalSummary, canonical } from "../machine.js";
+import { machine, firstRound, daySource, chatTitle, journalSummary, valueSuggestion, canonical } from "../machine.js";
 
 // The engine's decisions (3.2): which item is asked for next, one at a time, what stops
 // and resumes it, Run, and the bytes a source is made from. Driven with a fake store and
@@ -14,6 +14,12 @@ import { machine, firstRound, daySource, chatTitle, journalSummary, canonical } 
 const schema = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url)));
 const generatePayload = new Validator(schema("../../llm/queries/generate.json").payload, "2020-12");
 const sha = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+// The device's local date: Could be suggests for today's values only.
+const pad = (n) => String(n).padStart(2, "0");
+const TODAY = (() => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+})();
 
 // --- The source, byte for byte the backfill script's ----------------------------------
 
@@ -127,10 +133,15 @@ const day = (n, text, over = {}) => ({ id: ID(n), day: `2026-10-${String(n).padS
 const journal = (days, open = null) => ({ days, projects: [], detectors: [], answers: [], open, reason: null });
 
 // Every generate is held until the test answers it, so "one at a time" can be seen.
-function fakeAsk({ userId = "u1", guest = false, days = [], open = null, points = [] } = {}) {
+function fakeAsk({ userId = "u1", guest = false, days = [], open = null, points = [], values = [], checks = [] } = {}) {
   const asked = [];
   const ask = (target, name, payload) => {
     if (target === "session") return Promise.resolve({ userId, registrationOpen: false, guest });
+    if (target === "values") return Promise.resolve({ day: TODAY, values, changedSince: false });
+    if (target === "value-checks") {
+      assert.deepEqual(payload, { day: TODAY }, "today's checks");
+      return Promise.resolve({ keySet: true, settings: { values: null, examples: null }, values: checks });
+    }
     if (target === "journal") return Promise.resolve(journal(days, open));
     if (target === "choice-points") return Promise.resolve({ choicePoints: points });
     assert.equal(`${target}: ${name}`, "llm: generate");
@@ -301,4 +312,70 @@ test("nothing runs signed out, for a guest, or on a try page", async () => {
     assert.equal(f.asked.length, 0, JSON.stringify({ over, tryPage }));
     s.actor.stop();
   }
+});
+
+// --- Could be (value-suggestion) ---------------------------------------------------------
+
+const V = (n) => `01K7TEST00000000000000VA0${n}`;
+const value = (n, name, meaning = "") => ({ id: V(n), name, meaning });
+const line = (text, unexpected, over = {}) => ({ line: "value", text, status: "done", answers: [], unexpected, ...over });
+const VALUES = [value(1, "Being loved", "Calling my sister on Sundays"), value(2, "Being kind", "Holding the door"), value(3, "Success", "")];
+const CHECKS = [
+  { id: V(1), lines: [line("Being loved", ["A feeling", "Something others give"]), { ...line("Calling my sister on Sundays", ["No"]), line: "example" }] },
+  { id: V(2), lines: [line("Being kind", [])] },
+  { id: V(3), lines: [line("Success", ["A goal"], { status: "pending" })] },
+];
+
+test("Could be: only today's value lines answered with a red mark are items, with the source in a fixed key order", () => {
+  const seen = valueSuggestion.start();
+  valueSuggestion.loaded(seen, { day: TODAY, checks: { values: CHECKS }, values: { values: VALUES } });
+  const items = valueSuggestion.items(seen);
+  assert.deepEqual(items.map((i) => i.item), [V(1)], "a green line, and one Jev is still checking, are not items; a red example alone is not");
+  assert.deepEqual(Object.keys(items[0].source), ["value", "example", "reads"]);
+  assert.equal(canonical(items[0].source), '{"value":"Being loved","example":"Calling my sister on Sundays","reads":"A feeling, Something others give"}');
+  assert.equal(valueSuggestion.input(items[0].source), "Value: Being loved\nExample: Calling my sister on Sundays\nReads as: A feeling, Something others give");
+  assert.deepEqual(valueSuggestion.target(seen), items[0], "Run takes the first red value");
+
+  // The value line edited since it was checked makes no item: its old result stays unshown.
+  valueSuggestion.follow(seen, { type: "values.changed", day: TODAY, values: [value(1, "Being loving", "Calling my sister on Sundays"), ...VALUES.slice(1)] });
+  assert.deepEqual(valueSuggestion.items(seen), []);
+  assert.equal(valueSuggestion.target(seen), null);
+
+  // Checks of another day are not today's.
+  valueSuggestion.follow(seen, { type: "values.checked", day: "2020-01-01", values: [{ id: V(1), lines: [line("Being loving", ["A feeling"])] }] });
+  assert.deepEqual(valueSuggestion.items(seen), []);
+  valueSuggestion.follow(seen, { type: "values.checked", day: TODAY, values: [{ id: V(1), lines: [line("Being loving", ["A feeling"])] }] });
+  assert.deepEqual(valueSuggestion.items(seen).map((i) => i.source.reads), ["A feeling"]);
+});
+
+test("Could be: what the events said while the starting reads were open is kept", () => {
+  const seen = valueSuggestion.start();
+  valueSuggestion.follow(seen, { type: "values.checked", day: TODAY, values: [] });
+  valueSuggestion.loaded(seen, { day: TODAY, checks: { values: CHECKS }, values: { values: VALUES } });
+  assert.deepEqual(valueSuggestion.items(seen), [], "the newer announcement wins over the read");
+});
+
+test("Could be: a red value line is suggested for once per content, and kept with its hash", async () => {
+  const f = fakeAsk({ values: VALUES, checks: CHECKS });
+  const s = start({ ask: f.ask });
+  await settle();
+  assert.equal(f.asked.length, 1);
+  assert.equal(f.asked[0].payload.text, "Value: Being loved\nExample: Calling my sister on Sundays\nReads as: A feeling, Something others give");
+  assert.ok(f.asked[0].payload.prompt.startsWith("This is one of a person's values"));
+  f.asked[0].answer({ text: " Being loving. " });
+  await settle();
+  const r = s.results.at(-1);
+  assert.deepEqual([r.id, r.text], [`value-suggestion:${V(1)}`, "Being loving."]);
+  assert.equal(r.source, sha('{"value":"Being loved","example":"Calling my sister on Sundays","reads":"A feeling, Something others give"}'));
+  assert.ok(valueSuggestion.done(r, r.source));
+
+  // The same content announced again asks nothing; a new example asks again.
+  s.actor.send({ type: "values.checked", day: TODAY, values: CHECKS });
+  await settle();
+  assert.equal(f.asked.length, 1);
+  s.actor.send({ type: "values.changed", day: TODAY, values: [value(1, "Being loved", "Visiting my sister"), ...VALUES.slice(1)] });
+  await settle();
+  assert.equal(f.asked.length, 2);
+  assert.match(f.asked[1].payload.text, /Example: Visiting my sister/);
+  s.actor.stop();
 });

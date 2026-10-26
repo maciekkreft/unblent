@@ -1,9 +1,10 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, dayName, writable, shownValues, earlierDays, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey } from "../machine.js";
+import { machine, dateOf, dayName, writable, shownValues, earlierDays, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/values.saved.json", import.meta.url), "utf8"));
 const recorded = [];
@@ -19,7 +20,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 // `versions` maps a day a version was written to its values; the fake answers read as the
 // values fact does, the latest version on or before the day asked.
-async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators } = {}) {
+async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators, suggestions } = {}) {
   let n = 0;
   const asked = [];
   const clock = new SimulatedClock();
@@ -33,6 +34,7 @@ async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
         if (target === "value-checks") return Promise.resolve(checks ?? { error: "no-answerer" });
         if (target === "evaluators") return Promise.resolve(evaluators ? { evaluators } : { error: "no-answerer" });
+        if (target === "generators") return Promise.resolve(suggestions ? { results: suggestions } : { error: "no-answerer" });
         const days = daysOf();
         if (name === "versions") return Promise.resolve({ days });
         const on = days.filter((d) => payload.day === undefined || d <= payload.day).at(-1) ?? null;
@@ -307,7 +309,7 @@ test("marks show for the line as written, green or red by the expected answer, p
   const { actor, ctx, asked } = await start({ [TODAY]: [v(1, "Honest", "Say it"), v(2, "Get rich")] }, { checks, evaluators: EVALUATORS });
   assert.deepEqual(
     asked.filter((a) => a.target !== "values" && a.target !== "settings").map((a) => [a.target, a.name, a.payload]),
-    [["value-checks", "read", { day: TODAY }], ["evaluators", "list", { day: TODAY }]],
+    [["value-checks", "read", { day: TODAY }], ["evaluators", "list", { day: TODAY }], ["generators", "results", { generator: "value-suggestion" }]],
   );
   assert.deepEqual(marksFor(ctx(), v(1, "Honest"), "name"), [
     { question: Q, name: "A way of acting", tone: "right", icon: "compass", expected: "A way of acting", sure: 1 },
@@ -461,4 +463,96 @@ test("o and O add a value below or above a row", async () => {
   actor.send({ type: "_add" });
   assert.equal(ctx().drafts.length, 5);
   assert.equal(ctx().drafts.at(-1).name, "");
+});
+
+// --- Could be -------------------------------------------------------------------------
+
+// Web Crypto answers a hash a few turns later.
+const settle = async () => {
+  for (let i = 0; i < 6; i += 1) await flush();
+};
+const sha = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+const red = (text, unexpected = ["A goal"]) => ({ line: "value", text, status: "done", answers: [answer(Q, GOAL, "A goal")], unexpected });
+const suggestion = (n, text, source, version = 1) => ({ id: `value-suggestion:${id(n)}`, generator: "value-suggestion", item: id(n), text, source, version });
+const SOURCE = sha(JSON.stringify({ value: "Get rich", example: "Buy a house", reads: "A goal" }));
+const redChecks = { keySet: true, settings: { values: EV, examples: null }, values: [{ id: id(1), lines: [red("Get rich")] }] };
+
+test("Could be shows only a suggestion made from the value line as it is now, while it is red", async () => {
+  const { actor, ctx } = await start({ [TODAY]: [v(1, "Get rich", "Buy a house"), v(2, "Honest")] }, {
+    checks: redChecks,
+    evaluators: EVALUATORS,
+    suggestions: [suggestion(1, " Building security. ", SOURCE), suggestion(2, "Truthful", SOURCE)],
+  });
+  await settle();
+  assert.deepEqual(sourceOf(ctx(), v(1, "Get rich", "Buy a house")), { value: "Get rich", example: "Buy a house", reads: "A goal" });
+  assert.equal(suggestionFor(ctx(), v(1, "Get rich", "Buy a house")), "Building security", "trimmed, without its full stop");
+  assert.equal(suggestionFor(ctx(), v(2, "Honest")), null, "a line not red shows none");
+  assert.equal(suggestionFor(ctx(), v(1, "Get rich", "Buy a flat")), null, "made from another example");
+
+  // A newer result is taken; an older one announced later is not.
+  actor.send({ type: "generation.changed", result: suggestion(1, "Providing", SOURCE, 3) });
+  actor.send({ type: "generation.changed", result: suggestion(1, "Old", SOURCE, 2) });
+  assert.equal(suggestionFor(ctx(), v(1, "Get rich", "Buy a house")), "Providing");
+
+  // The line checked green now: nothing is suggested.
+  actor.send({ type: "values.checked", day: TODAY, values: [{ id: id(1), lines: [red("Get rich", [])] }] });
+  assert.equal(suggestionFor(ctx(), v(1, "Get rich", "Buy a house")), null);
+  assert.equal(cleaned("  Contributing.. "), "Contributing");
+});
+
+test("Use puts the suggestion in the value line and saves it finished; Undo puts the old one back the same way", async () => {
+  const { actor, ctx, emitted, clock } = await start({ [TODAY]: [v(1, "Get rich", "Buy a house")] }, {
+    checks: redChecks,
+    evaluators: EVALUATORS,
+    suggestions: [suggestion(1, "Building security.", SOURCE)],
+  });
+  await settle();
+  actor.send({ type: "_open" });
+  actor.send({ type: "_use", id: id(1) });
+  assert.deepEqual(ctx().drafts, [v(1, "Building security", "Buy a house")], "the example is kept");
+  assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(1, "Building security", "Buy a house")], finished: [id(1)] });
+  assert.deepEqual(ctx().used, { id: id(1), was: "Get rich", now: "Building security" });
+  assert.equal(suggestionFor(ctx(), ctx().drafts[0]), null, "the new line is not red, so no suggestion");
+
+  actor.send({ type: "_unuse" });
+  assert.deepEqual(ctx().drafts, [v(1, "Get rich", "Buy a house")]);
+  assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(1, "Get rich", "Buy a house")], finished: [id(1)] });
+  assert.equal(ctx().used, null);
+
+  // The undo window ends on its own.
+  actor.send({ type: "_use", id: id(1) });
+  clock.increment(3000);
+  assert.equal(ctx().used, null);
+  const saves = emitted.length;
+  actor.send({ type: "_unuse" });
+  assert.equal(emitted.length, saves, "no Undo after the window");
+});
+
+test("typing in the line, folding the sheet or another day ends Use's Undo; earlier days take no Use", async () => {
+  const { actor, ctx, emitted } = await start({ [TODAY]: [v(1, "Get rich", "Buy a house")] }, {
+    checks: redChecks,
+    evaluators: EVALUATORS,
+    suggestions: [suggestion(1, "Building security", SOURCE)],
+  });
+  await settle();
+  actor.send({ type: "_open" });
+  actor.send({ type: "_use", id: id(1) });
+  actor.send({ type: "_edit", id: id(1), field: "name", value: "Building safety" });
+  assert.equal(ctx().used, null);
+  actor.send({ type: "_unuse" });
+  assert.equal(ctx().drafts[0].name, "Building safety");
+
+  actor.send({ type: "_edit", id: id(1), field: "name", value: "Get rich" });
+  await flush();
+  actor.send({ type: "_use", id: id(1) });
+  actor.send({ type: "_done" });
+  assert.equal(ctx().used, null);
+
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: false });
+  await flush();
+  actor.send({ type: "_open" });
+  const saves = emitted.length;
+  actor.send({ type: "_use", id: id(1) });
+  assert.equal(emitted.length, saves);
+  assert.equal(ctx().used, null);
 });
