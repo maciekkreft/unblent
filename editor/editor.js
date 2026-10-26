@@ -302,7 +302,10 @@ const theme = Prec.low(
     // height map, and Vim's j/k move by pixels through it.
     ".cm-line": { fontSize: "var(--text-body)", padding: "0" },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-accent)" },
-    ".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-accent-selection)" },
+    "::selection": { backgroundColor: "var(--color-accent-selection)" },
+    // !important: CodeMirror's base theme paints the drawn selection grey or lavender
+    // through selectors more specific than this one.
+    ".cm-selectionBackground": { backgroundColor: "var(--color-accent-selection) !important" },
     ".cm-placeholder": { color: "var(--color-body-mid)" },
   }),
 );
@@ -340,7 +343,10 @@ const fatCursor = Prec.highest(
 // One compartment serves every editor on the page: a compartment is a key into each
 // state's own configuration, so sharing it shares nothing between editors.
 const vimSlot = new Compartment();
-const vimContent = (on) => (on ? [vim(), fatCursor, panelTheme] : []);
+// Vim hides the native selection, so its visual-mode range shows only through
+// CodeMirror's own selection layer. Without Vim the selection stays native: drawing it
+// makes the native one transparent, and WebKit on a phone then shows no handles.
+const vimContent = (on) => (on ? [vim(), drawSelection(), fatCursor, panelTheme] : []);
 
 // The "Vim keys" preference (12) turned on or off in place, keeping the text and the
 // undo history. Safe to call on every update: it dispatches only on a change.
@@ -395,9 +401,6 @@ export function baseExtensions({ vim: vimOn = false, history: withHistory = true
   return [
     vimSlot.of(vimContent(vimOn)),
     quit ? quitHandler.of(quit) : [],
-    // Vim hides the native selection, so its visual-mode range shows only through
-    // CodeMirror's own selection layer.
-    drawSelection(),
     withHistory ? history() : [],
     theme,
     Prec.low(keymap.of([...historyKeymap, ...standardKeymap])),
