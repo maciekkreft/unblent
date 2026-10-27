@@ -323,20 +323,15 @@ const panelTheme = EditorView.theme({
 
 // The Vim plugin ships its own Prec.highest theme for the block cursor in colours that
 // are not tokens; this one outranks it and marks the competing properties !important.
-// Unfocused, the cursor is hollowed with an inset shadow, because Safari clips the
-// outline the plugin draws outside its absolutely positioned span.
+// Unfocused, the cursor is hidden, as a plain CodeMirror caret is: a page of many small
+// boxes would otherwise show a cursor in each, and only the one with the keyboard takes keys.
 const fatCursor = Prec.highest(
   EditorView.theme({
     ".cm-fat-cursor": {
       background: "var(--color-accent) !important",
       color: "var(--color-accent-text) !important",
     },
-    "&:not(.cm-focused) .cm-fat-cursor": {
-      background: "none !important",
-      outline: "none !important",
-      color: "var(--color-ink) !important",
-      boxShadow: "inset 0 0 0 var(--border-width) var(--color-accent)",
-    },
+    "&:not(.cm-focused) .cm-fat-cursor": { visibility: "hidden" },
   }),
 );
 

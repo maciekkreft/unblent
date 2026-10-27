@@ -114,7 +114,7 @@ const drawn = (page) =>
     const fat = root.querySelector(".cm-fat-cursor");
     const fatStyle = fat && getComputedStyle(fat);
     return {
-      fat: fatStyle ? { outlineStyle: fatStyle.outlineStyle, boxShadow: fatStyle.boxShadow } : null,
+      fat: fatStyle ? { visibility: fatStyle.visibility } : null,
       levelMargins: [...root.querySelectorAll('.cm-line[class*="cm-level-"]')].map((l) => {
         const s = getComputedStyle(l);
         return [s.marginTop, s.marginBottom];
@@ -398,7 +398,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("levels keep Vim motions exact and both cursors stay visible", async () => {
+    test("levels keep Vim motions exact and the cursor shows only with the keyboard", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       const problems = [];
@@ -446,16 +446,14 @@ for (const engine of ENGINES) {
       const caret = await insertCaret(page);
       assert.ok(caret.left >= caret.scrollerLeft, `insert caret clipped: left ${caret.left} < scroller ${caret.scrollerLeft}`);
 
-      // An unfocused editor hollows the fat cursor from the inside, so no edge of
-      // it can be clipped; a focused one fills it.
+      // An unfocused editor hides the fat cursor, so a page of many boxes shows one
+      // cursor, in the box with the keyboard; a focused one shows it again.
       await page.keyboard.press("Escape");
-      await until(async () => (await drawn(page)).fat !== null);
+      await until(async () => (await drawn(page)).fat?.visibility === "visible");
       await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").blur());
-      await until(async () => (await drawn(page)).fat?.boxShadow.includes("inset"));
-      const blurred = (await drawn(page)).fat;
-      assert.equal(blurred.outlineStyle, "none", "no outline on the unfocused fat cursor");
+      await until(async () => (await drawn(page)).fat?.visibility === "hidden");
       await page.locator("note-editor .cm-content").click();
-      await until(async () => (await drawn(page)).fat?.boxShadow === "none");
+      await until(async () => (await drawn(page)).fat?.visibility === "visible");
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
