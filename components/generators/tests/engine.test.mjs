@@ -187,6 +187,23 @@ test("days that can no longer be written are summarised one at a time, newest fi
   t.actor.stop();
 });
 
+test("a day whose kept summary is empty is summarised again", async () => {
+  const f = fakeAsk({ days: [day(12, "Twelve")] });
+  const s = start({ ask: f.ask });
+  await settle();
+  f.asked[0].answer({ text: "" });
+  await settle();
+  assert.equal(s.results.at(-1).text, "");
+  s.actor.stop();
+
+  const again = fakeAsk({ days: [day(12, "Twelve")] });
+  const t = start({ ask: again.ask, store: s.store });
+  await settle();
+  assert.equal(again.asked.length, 1);
+  assert.equal(dayOf(again.asked[0].payload), "2026-10-12");
+  t.actor.stop();
+});
+
 test("a generator that is off is skipped until it is turned on", async () => {
   const f = fakeAsk({ days: [day(10, "Ten")] });
   const store = fakeStore([{ id: "journal-summary", name: "Journal summary", on: false, model: "claude-haiku-5-5", prompt: "Sum", version: 1 }]);

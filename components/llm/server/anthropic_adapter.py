@@ -81,13 +81,15 @@ async def stream(settings, key, request, forward, tool_name):
 
 def generate(key: str, model: str, system: str, text: str) -> dict:
     """One short text in one go (llm: generate): the generator's prompt is the system
-    text and the item's content the one user message. Not streamed and no thinking,
-    because the answer is a few words to a paragraph. Returns {"text", "usage"} or
-    {"error"} in complete's words: a key the provider refuses is no usable key."""
+    text and the item's content the one user message. Not streamed, because the answer is
+    a few words to a paragraph. Returns {"text", "usage"} or {"error"} in complete's
+    words: a key the provider refuses is no usable key."""
     try:
         final = Anthropic(api_key=key).messages.create(
             model=model,
-            max_tokens=400,
+            # Current models think by default, and that thinking counts toward this cap: a
+            # small cap is spent before any text is written (claude-api skill).
+            max_tokens=16000,
             system=system,
             messages=[{"role": "user", "content": text}],
         )
@@ -98,6 +100,9 @@ def generate(key: str, model: str, system: str, text: str) -> dict:
     if final.stop_reason == "refusal":
         return {"error": "unavailable"}
     written = "".join(block.text for block in final.content if block.type == "text").strip()
+    if not written:
+        # An empty answer kept as the result would count as done and never be made again.
+        return {"error": "unavailable"}
     return {"text": written, "usage": final.usage.model_dump(mode="json")}
 
 

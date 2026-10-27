@@ -71,7 +71,8 @@ export const journalSummary = {
     const source = d && daySource(d, [...seen.points.values()]);
     return source ? { item: d.day, at: d.at, source } : null;
   },
-  done: (result, source) => result?.source === source,
+  // A day has no summary the user cleared, so an empty one is one the model failed to write.
+  done: (result, source) => result?.source === source && result.text !== "",
   input: ({ day, text, choicePoints }) =>
     `Journal entry for ${day}:\n${text}` +
     (choicePoints.length
