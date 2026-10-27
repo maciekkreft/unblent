@@ -10,3 +10,13 @@ CREATE TABLE IF NOT EXISTS versions (
     seq     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS versions_seq ON versions(seq);
+-- Whether a journal day shows Your values, one row per day the user added the panel to or
+-- took it off; version and seq as above, seq drawn from the same count so one cursor
+-- pulls both tables. The last write wins.
+CREATE TABLE IF NOT EXISTS days (
+    day     TEXT PRIMARY KEY,
+    placed  INTEGER NOT NULL,
+    version INTEGER NOT NULL,
+    seq     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS days_seq ON days(seq);

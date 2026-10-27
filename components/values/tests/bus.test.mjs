@@ -21,6 +21,8 @@ const memory = () => {
     rows,
     all: async () => [...rows.values()],
     put: async (r) => void rows.set(r.day, r),
+    placesAll: async () => [],
+    placePut: async () => {},
     outboxAll: async () => [],
     outboxPut: async () => {},
     outboxDelete: async () => {},
@@ -29,18 +31,18 @@ const memory = () => {
   };
 };
 
-const sheetSchema = JSON.parse(readFileSync(new URL("../../values-sheet/events/values.saved.json", import.meta.url)));
+const sheetSchema = (name) => JSON.parse(readFileSync(new URL(`../../values-sheet/events/${name}.json`, import.meta.url)));
 
 function standIn(heard) {
   const machine = setup({}).createMachine({
     id: "test-sheet",
-    meta: { kind: "view", emits: ["values.saved"], asks: ["values: read", "values: versions"], attributes: [] },
+    meta: { kind: "view", emits: ["values.saved", "values.placed"], asks: ["values: read", "values: versions"], attributes: [] },
     on: {
       go: { actions: emit(({ event }) => event.body) },
       "values.changed": { actions: ({ event }) => heard.push(event) },
     },
   });
-  const actor = mount(machine, { events: { "values.saved": sheetSchema } });
+  const actor = mount(machine, { events: { "values.saved": sheetSchema("values.saved"), "values.placed": sheetSchema("values.placed") } });
   return { actor, read: (payload) => ask(machine, "values", "read", payload), versions: () => ask(machine, "values", "versions", {}) };
 }
 
@@ -55,8 +57,27 @@ test("the sheet's save reaches values, and read and versions answer what was sav
     await until(() => heard.length === 1);
     assert.deepEqual(heard[0].values, [parent]);
     assert.deepEqual(await sheet.read({}), { day: TODAY, values: [parent], changedSince: false });
-    assert.deepEqual(await sheet.read({ day: "2000-01-01" }), { day: null, values: [], changedSince: true });
+    assert.deepEqual(await sheet.read({ day: "2000-01-01" }), { day: null, values: [], changedSince: true, placed: false });
     assert.deepEqual(await sheet.versions(), { days: [] }, "today's is the current version, not an earlier one");
+  } finally {
+    unmount(sheet.actor);
+    unwire();
+  }
+});
+
+test("the sheet's placement reaches values, which announces it and answers it for the day", async () => {
+  const { actors, unwire } = await wire(["values"], { values: { store: memory(), now: () => Date.now() } });
+  const heard = [];
+  const sheet = standIn(heard);
+  try {
+    await until(() => actors.values.getSnapshot().matches("ready"));
+    sheet.actor.send({ type: "go", body: { type: "values.placed", day: TODAY, placed: true } });
+    await until(() => heard.length === 1);
+    assert.deepEqual({ ...heard[0], type: undefined }, { type: undefined, day: TODAY, values: [], placed: true });
+    assert.equal((await sheet.read({ day: TODAY })).placed, true);
+    sheet.actor.send({ type: "go", body: { type: "values.placed", day: TODAY, placed: false } });
+    await until(() => heard.length === 2);
+    assert.equal((await sheet.read({ day: TODAY })).placed, false);
   } finally {
     unmount(sheet.actor);
     unwire();

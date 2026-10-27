@@ -1,4 +1,4 @@
-import { setup, assign, enqueueActions, fromPromise, spawnChild, stopChild } from "xstate";
+import { setup, assign, emit, enqueueActions, fromPromise, spawnChild, stopChild } from "xstate";
 
 // The view component that shows the client's values on a journal day (6.4). It owns only
 // UI state — the day shown, that day's version as the fact last said it, whether the sheet
@@ -44,6 +44,14 @@ const isDay = (v) => typeof v === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.tes
 // yesterday's in the hour after midnight the journal keeps its text open, so a version
 // never changes after its day. A day the journal says cannot be written is read only too.
 export const writable = (context) => context.day === dateOf(context.now()) && context.dayWritable !== false;
+
+// Your values is added to a day or taken off it only where the values fact accepts it:
+// on today's page, by the same rule as a save.
+export const placeable = (context) => writable(context);
+
+// Whether the shown day shows the panel: as the fact says, and before it has, as a page
+// without placements always did.
+export const isPlaced = (context) => context.placed !== false;
 
 const blank = (id) => ({ id, name: "", meaning: "" });
 const copy = (values) => values.map((v) => ({ id: v.id, name: v.name, meaning: v.meaning }));
@@ -99,13 +107,18 @@ function merged(drafts, values) {
 // day's. Which days are worth listing, and whether the values changed since, only the fact
 // can say, since a change can make an earlier version read as today's: they are asked
 // again (recount).
+// A change of whether the shown day shows the panel arrives as that day with the values in
+// force on it, unchanged; the version it holds is kept, so its day stays when it was written
+// (the values fact ignores a save that changes nothing, so equal values are no new version).
 const follow = enqueueActions(({ context, event, enqueue }) => {
   if (!isDay(event.day) || !Array.isArray(event.values)) return;
   enqueue.stopChild("recount");
   enqueue.spawnChild("recount", { id: "recount", input: { ask: context.ask, day: context.day } });
+  if (event.day === context.day && typeof event.placed === "boolean") enqueue.assign({ placed: event.placed });
   const version = context.version;
   if (!version || event.day > context.day) return;
   if (version.day && event.day < version.day) return;
+  if (JSON.stringify(copy(event.values)) === JSON.stringify(version.values)) return;
   enqueue.assign({ version: { day: event.day, values: copy(event.values), changedSince: version.changedSince } });
   if (context.open && !context.dirty && !context.removing.length) enqueue.assign({ drafts: merged(context.drafts, event.values) });
 });
@@ -394,6 +407,26 @@ const reorder = (where) =>
     reorderNow(enqueue, context, id, to);
   });
 
+// Opening shows the shown day's version; today with none yet opens on one empty row.
+const openSheet = assign(({ context }) => {
+  const values = copy(context.version?.values ?? []);
+  return { open: true, drafts: values.length || !writable(context) ? values : [blank(context.mint())], browsing: false, viewing: null };
+});
+
+// Folding saves what was typed; a value waiting out its undo window keeps waiting, so Undo
+// is still there when the sheet opens again.
+const fold = enqueueActions(({ enqueue }) => {
+  enqueue(leaveAll);
+  enqueue(endUse);
+  enqueue.assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null, cut: null, pasted: null, pointed: { hover: null, tap: null, cursor: null } });
+  enqueue.stopChild("lookup");
+});
+
+const unplace = enqueueActions(({ context, enqueue }) => {
+  enqueue.emit({ type: "values.placed", day: context.day, placed: false });
+  enqueue.assign({ placed: false });
+});
+
 export const machine = setup({
   actors: {
     // The shown day's version and the days the values changed; the day rides along so a
@@ -443,12 +476,20 @@ export const machine = setup({
   id: "values-sheet",
   meta: {
     description:
-      "Shows the client's values on every journal day, under the day's text and above the " +
-      "choice points, in a section headed \"Your values\": a folded card that lists the values' " +
-      "names on one line; pressing it opens the sheet. Open, each value is a row of its name " +
+      "Shows the client's values on the journal days the user added them to, under the day's " +
+      "text and above the choice points, in a section headed \"Your values\": a folded card " +
+      "that lists the values' names on one line; pressing it, or anywhere on the folded " +
+      "section, opens the sheet. Whether a day shows the panel is the values fact's (values: " +
+      "read's placed, and values.changed after, also from another device). Today's page " +
+      "without it shows a muted + Your values row, which adds the panel to the day " +
+      "(values.placed) and opens the sheet; the open sheet's Remove from this day folds it and " +
+      "takes it off the day again, leaving the values untouched, so + Your values is the one " +
+      "step back, and Done on an added panel with no values takes it off too. An earlier day " +
+      "shows the panel, read only, only if it was added on that day, and never offers + Your " +
+      "values. Open, each value is a row of its name " +
       "and an optional example of living it, with a New value row after them; with " +
-      "no values yet today's page shows a muted Write your values row, and an earlier day " +
-      "with none shows nothing. The boxes take Vim's keys when Vim keys is on, where p pastes " +
+      "no values yet today's added panel shows a muted Write your values row, and an earlier " +
+      "day with none shows nothing. The boxes take Vim's keys when Vim keys is on, where p pastes " +
       "text or a link copied in the reader with Vim keys, its paragraphs joined into the " +
       "box's one line; Enter or Tab " +
       "moves on to the next box. A day shows the values as they stood on that day. They are " +
@@ -469,8 +510,8 @@ export const machine = setup({
       "What is written is saved a short time into typing and at once when a box loses focus " +
       "or the sheet folds; a save made as the user leaves a row they typed in (Enter or Tab " +
       "on to the next row, the box losing focus, or Done) names that row as finished, so its " +
-      "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded card " +
-      "or the Write your values row, or, open, on the first box, or on a button when the " +
+      "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded card, " +
+      "the + Your values row or the Write your values row, or, open, on the first box, or on a button when the " +
       "sheet is only read. When Settings names an evaluator to check the values or the " +
       "examples, and the account has its own Jev key, Jev's marks stand at the right end of " +
       "a line the user has finished, inside its box: a pulsing dot while Jev is checking, " +
@@ -503,7 +544,7 @@ export const machine = setup({
       "and Undo puts the old value back, saved the same way. Typing in that line, folding the " +
       "sheet or moving to another day ends the Undo. Earlier days show no suggestion.",
     kind: "view",
-    emits: ["values.saved"],
+    emits: ["values.saved", "values.placed"],
     asks: ["values: read", "values: versions", "settings: read", "value-checks: read", "evaluators: list", "generators: results"],
     attributes: [],
   },
@@ -521,6 +562,8 @@ export const machine = setup({
     // The shown day's version as the fact last said it: { day, values, changedSince },
     // null until the reply lands.
     version: null,
+    // Whether the shown day shows Your values, as the fact last said it; null until it has.
+    placed: null,
     // The days a version was written, oldest first.
     days: [],
     // Changes that arrived before the starting picture, applied after it.
@@ -646,6 +689,7 @@ export const machine = setup({
             day: event.day,
             dayWritable: typeof event.writable === "boolean" ? event.writable : null,
             version: null,
+            placed: null,
             early: [],
             open: false,
             drafts: [],
@@ -676,6 +720,7 @@ export const machine = setup({
         return {
           days: Array.isArray(versions?.days) ? [...versions.days].sort() : context.days,
           version: typeof read?.changedSince === "boolean" ? { ...context.version, changedSince: read.changedSince } : context.version,
+          placed: typeof read?.placed === "boolean" ? read.placed : context.placed,
         };
       }),
     },
@@ -703,6 +748,7 @@ export const machine = setup({
                 const { read, versions } = event.output;
                 return {
                   version: { day: read.day, values: copy(read.values), changedSince: read.changedSince === true },
+                  placed: read.placed !== false,
                   days: Array.isArray(versions?.days) ? [...versions.days].sort() : [],
                 };
               }),
@@ -726,13 +772,24 @@ export const machine = setup({
       initial: "idle",
       on: {
         "values.changed": { actions: [follow, hashSources] },
-        // Opening shows the shown day's version; today with none yet opens on one empty row.
         _open: {
-          guard: ({ context }) => !context.open,
-          actions: assign(({ context }) => {
-            const values = copy(context.version?.values ?? []);
-            return { open: true, drafts: values.length || !writable(context) ? values : [blank(context.mint())], browsing: false, viewing: null };
-          }),
+          guard: ({ context }) => !context.open && isPlaced(context),
+          actions: openSheet,
+        },
+        // + Your values adds the panel to today's page and opens it.
+        _place: {
+          guard: ({ context }) => !context.open && !isPlaced(context) && placeable(context),
+          actions: [
+            emit(({ context }) => ({ type: "values.placed", day: context.day, placed: true })),
+            assign({ placed: true }),
+            openSheet,
+          ],
+        },
+        // Remove from this day folds the sheet and takes the panel off today's page; the
+        // values are the account's and are not touched, so + Your values brings it back.
+        _unplace: {
+          guard: ({ context }) => context.open && isPlaced(context) && placeable(context),
+          actions: [fold, unplace],
         },
         // Use puts the suggestion in the value line, keeping the example, and offers Undo
         // for the undo window.
@@ -773,13 +830,16 @@ export const machine = setup({
         _blur: { guard: opened, actions: leaveRows(({ event }) => (event.id && event.to !== event.id ? [event.id] : [])) },
         // Done folds the sheet, saving what was typed; a value waiting out its undo window
         // keeps waiting, so Undo is still there when the sheet opens again.
+        // An added panel left with no values holds nothing, so Done also takes it off the
+        // day, as folding an empty choice point removes it.
         _done: {
           guard: opened,
           actions: [
-            leaveAll,
-            endUse,
-            assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null, cut: null, pasted: null, pointed: { hover: null, tap: null, cursor: null } }),
-            stopChild("lookup"),
+            enqueueActions(({ context, enqueue }) => {
+              const empty = placeable(context) && !savedValues(context.drafts).length && !(context.version?.values ?? []).length;
+              enqueue(fold);
+              if (empty) enqueue(unplace);
+            }),
           ],
         },
         // An empty row holds nothing to lose, so it goes at once; a value waits out the

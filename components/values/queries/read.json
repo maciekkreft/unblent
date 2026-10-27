@@ -59,6 +59,10 @@
       "changedSince": {
         "type": "boolean",
         "description": "A later version exists: the values changed after the day asked for."
+      },
+      "placed": {
+        "type": "boolean",
+        "description": "Whether the journal day asked for shows Your values; left out when no day was asked for."
       }
     },
     "required": [

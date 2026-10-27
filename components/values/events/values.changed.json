@@ -35,6 +35,10 @@
         ],
         "additionalProperties": false
       }
+    },
+    "placed": {
+      "type": "boolean",
+      "description": "Whether that journal day shows Your values. When only that changed, the day is the one it changed for and the values are those in force on it."
     }
   },
   "required": [

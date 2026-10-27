@@ -4,7 +4,8 @@ file, so isolation holds by construction and the code reads as if for a single u
 record is one day's version of the values, keyed by the day. version is assigned here.
 The last write wins, so a write is never refused for a stale base, and nothing is
 deleted. Which day may still be written is the browser's to decide, since only it knows
-the user's local date.
+the user's local date. Beside the versions it keeps, per day, whether that journal day shows
+Your values, the same way: versioned here, the last write winning.
 """
 
 import json
@@ -39,11 +40,29 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "values.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    _place_written_days(connection)
     try:
         with connection:
             yield connection
     finally:
         connection.close()
+
+
+# A file from before days were kept (user_version 0): every day with a written version shows
+# Your values, as it did then, and no other day does. Each gets a new seq, above every
+# cursor a browser holds, so the next pull brings it. OR IGNORE lets two requests racing
+# on a fresh file both pass.
+def _place_written_days(connection: sqlite3.Connection) -> None:
+    if connection.execute("PRAGMA user_version").fetchone()[0] >= 1:
+        return
+    with connection:
+        start = _next_seq(connection)
+        days = [row["day"] for row in connection.execute("SELECT day FROM versions ORDER BY seq")]
+        connection.executemany(
+            "INSERT OR IGNORE INTO days (day, placed, version, seq) VALUES (?, 1, 1, ?)",
+            [(day, start + i) for i, day in enumerate(days)],
+        )
+        connection.execute("PRAGMA user_version = 1")
 
 
 def _is_value(value) -> bool:
@@ -61,8 +80,22 @@ def _record(row: sqlite3.Row) -> dict:
     return {"day": row["day"], "values": json.loads(row["list"]), "version": row["version"]}
 
 
+def _placement(row: sqlite3.Row) -> dict:
+    return {"day": row["day"], "placed": bool(row["placed"]), "version": row["version"]}
+
+
+# One count for both tables, so a single cursor pulls versions and days alike.
 def _next_seq(connection: sqlite3.Connection) -> int:
-    return connection.execute("SELECT COALESCE(MAX(seq), 0) FROM versions").fetchone()[0] + 1
+    return (
+        connection.execute(
+            "SELECT MAX(COALESCE((SELECT MAX(seq) FROM versions), 0), COALESCE((SELECT MAX(seq) FROM days), 0))"
+        ).fetchone()[0]
+        + 1
+    )
+
+
+def _is_base(base) -> bool:
+    return base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1)
 
 
 @router.put("/{day}")
@@ -77,7 +110,7 @@ async def put_version(day: str, request: Request, user_id: str = Depends(require
     valid = (
         isinstance(values, list)
         and all(_is_value(value) for value in values)
-        and (base is None or (isinstance(base, int) and not isinstance(base, bool) and base >= 1))
+        and _is_base(base)
     )
     if not valid:
         return JSONResponse(_BAD, status_code=400)
@@ -101,6 +134,32 @@ async def put_version(day: str, request: Request, user_id: str = Depends(require
         return _record(connection.execute("SELECT * FROM versions WHERE day = ?", (day,)).fetchone())
 
 
+@router.put("/days/{day}")
+async def put_placement(day: str, request: Request, user_id: str = Depends(require_user)):
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    if not (_DAY.match(day) and isinstance(payload, dict) and set(payload) <= {"placed", "baseVersion"}):
+        return JSONResponse(_BAD, status_code=400)
+    placed, base = payload.get("placed"), payload.get("baseVersion")
+    if not (isinstance(placed, bool) and _is_base(base)):
+        return JSONResponse(_BAD, status_code=400)
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT * FROM days WHERE day = ?", (day,)).fetchone()
+        if row is None:
+            connection.execute(
+                "INSERT INTO days (day, placed, version, seq) VALUES (?, ?, ?, ?)",
+                (day, int(placed), (base or 0) + 1, _next_seq(connection)),
+            )
+        elif bool(row["placed"]) != placed:
+            connection.execute(
+                "UPDATE days SET placed = ?, version = ?, seq = ? WHERE day = ?",
+                (int(placed), row["version"] + 1, _next_seq(connection), day),
+            )
+        return _placement(connection.execute("SELECT * FROM days WHERE day = ?", (day,)).fetchone())
+
+
 @router.get("")
 def list_versions(since: str = "0", user_id: str = Depends(require_user)):
     if not since.isdigit():
@@ -108,5 +167,6 @@ def list_versions(since: str = "0", user_id: str = Depends(require_user)):
     after = int(since)
     with _connect(user_id) as connection:
         rows = connection.execute("SELECT * FROM versions WHERE seq > ? ORDER BY seq", (after,)).fetchall()
-    cursor = rows[-1]["seq"] if rows else after
-    return {"versions": [_record(row) for row in rows], "cursor": cursor}
+        days = connection.execute("SELECT * FROM days WHERE seq > ? ORDER BY seq", (after,)).fetchall()
+    cursor = max([after, *(row["seq"] for row in rows), *(row["seq"] for row in days)])
+    return {"versions": [_record(row) for row in rows], "days": [_placement(row) for row in days], "cursor": cursor}

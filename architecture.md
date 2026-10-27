@@ -218,7 +218,7 @@ The place of a note, a chat or an evaluator in its list, set by moving it there,
 
 `choice-points` replicates as above, but the last write wins: a write is never refused for a stale version, so it never conflicts, and a delete is still a tombstone that always wins.
 
-`values` replicates as above, but keeps one version of the list per day and the last write wins: only today's version is written, an edit made today replaces today's version, a version never changes after its day, and nothing is deleted.
+`values` replicates as above, but keeps one version of the list per day and the last write wins: only today's version is written, an edit made today replaces today's version, a version never changes after its day, and nothing is deleted. It also keeps, for each day, whether that journal day shows Your values, kept on the server so it is the same on every device; the last write wins.
 
 `choice-point-checks` replicates as above, but the last write wins for which evaluator checks each box; Jev's answers about a line are added under a key made of the evaluator and the line's text and never change, so another device reuses them.
 

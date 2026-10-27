@@ -2,7 +2,8 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
-// What only a browser shows: Write your values opens the sheet with the keyboard in the
+// What only a browser shows: + Your values adds the panel to today's page, which a reload
+// keeps, and Remove from this day takes it off; it opens the sheet with the keyboard in the
 // first name, Enter moves on, Escape folds it into a card that a reload keeps; Alt+Up
 // moves a row with the cursor, and with Vim keys on Escape steps onto the row where dd and
 // p move it; Jev's marks, their status line and the card's warning, on the desk and the
@@ -22,6 +23,7 @@ const VIM_ON = JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwit
 const inSheet = (page, fn) =>
   page.evaluate((fn) => new Function("root", `return (${fn})(root)`)(document.querySelector("values-sheet").shadowRoot), fn.toString());
 const focusedField = (page) => inSheet(page, (root) => root.activeElement?.closest(".box")?.dataset.field ?? null);
+const isOpen = (page) => inSheet(page, (root) => !!root.querySelector(".sheet"));
 const card = (page) => inSheet(page, (root) => root.querySelector(".card")?.innerText.trim() ?? null);
 
 const dayOf = (ms) => {
@@ -29,6 +31,42 @@ const dayOf = (ms) => {
   return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
 };
 const ID = (n) => `01J0000000000000000000VAR${n}`;
+
+// Two evaluators and the values checks that use them, and today's values "Honest" and
+// "Get rich", arrive through the APIs under the test's own login; Jev is answered through
+// page.route, so no real request is made: "Get rich" is A goal where A way of acting is
+// expected. The account is told it has a key.
+async function withMarks(context) {
+  const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
+  const [EV, EX, Q, QX, ACT, GOAL] = [id("E1"), id("E2"), id("Q1"), id("Q2"), id("A0"), id("A1")];
+  const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
+  const options = [
+    { id: ACT, name: "A way of acting", description: "", icon: "compass" },
+    { id: GOAL, name: "A goal", description: "" },
+  ];
+  const pick = { id: Q, kind: "pick", text: "What is it?", yes: "", no: "", options, expect: ACT };
+  assert.equal((await put(`evaluators/${EV}`, { book: id("B1"), name: "Is it a value?", on: true, baseVersion: null, questions: [pick] })).status(), 200);
+  const fits = { id: QX, kind: "yesno", text: "Does it fit?", yes: "", no: "", options: [] };
+  assert.equal((await put(`evaluators/${EX}`, { book: id("B1"), name: "Does the example fit?", on: true, baseVersion: null, questions: [fits] })).status(), 200);
+  assert.equal((await put("value-checks/settings", { values: EV, examples: EX, baseVersion: null })).status(), 200);
+  const values = [
+    { id: ID(1), name: "Honest", meaning: "Tell the truth" },
+    { id: ID(2), name: "Get rich", meaning: "" },
+  ];
+  assert.equal((await put(`values/${dayOf(Date.now())}`, { values, baseVersion: null })).status(), 200);
+  const page = await context.newPage();
+  await page.route("**/api/llm", async (route) => {
+    const res = await route.fetch();
+    const json = await res.json();
+    await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+  });
+  await page.route("**/api/llm/decide", (route) => {
+    const { state, questions } = route.request().postDataJSON();
+    const answers = questions.map((q) => (q.id === Q ? { id: q.id, p: 0.95, choice: /rich/.test(state.text) ? GOAL : ACT } : { id: q.id, p: 0.9 }));
+    route.fulfill({ json: { answers, inputTokens: 1, ms: 1 } });
+  });
+  return page;
+}
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
   describe(`values-sheet in ${engine.name}`, { timeout: 30000 }, () => {
@@ -41,7 +79,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: a reload against real storage.
-    test("Write your values opens a row in the name, Enter moves on, Escape folds to a card a reload keeps", async () => {
+    test("+ Your values opens a row in the name, Enter moves on, Escape folds to a card a reload keeps", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       // Signed out the journal page asks to sign in and draws no slot.
@@ -50,7 +88,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-        await page.locator("values-sheet .new", { hasText: "Write your values" }).click();
+        await page.locator("values-sheet .unplaced .new").click();
         await until(async () => (await focusedField(page)) === "name");
         await page.keyboard.type("Being a present parent");
         await page.keyboard.press("Enter");
@@ -68,6 +106,40 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await card(page).catch(() => null)) === "Being a present parent · Honest with people");
         await page.locator("values-sheet .card").click();
         assert.equal(await page.locator("values-sheet .when").innerText(), "Changed today");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Yesterday's values arrive through the API under the test's own login, so today has
+    // values in force but no version of its own, and so no panel until it is added.
+    // Browser: a reload against real storage.
+    test("+ Your values adds the panel, a reload keeps it, and Remove from this day takes it off and keeps the values", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("values-placed"));
+      try {
+        const values = [{ id: ID(1), name: "Honest", meaning: "" }];
+        const yesterday = dayOf(Date.now() - 86400000);
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${yesterday}`, { data: { values, baseVersion: null } })).status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const sheet = page.locator("values-sheet");
+        await sheet.locator(".unplaced .new").click();
+        await until(async () => (await focusedField(page)) === "name");
+        await sheet.locator(".done").click();
+        await until(async () => (await card(page)) === "Honest");
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await card(page).catch(() => null)) === "Honest");
+        await sheet.locator(".card").click();
+        await sheet.locator(".unplace").click();
+        await sheet.locator(".unplaced .new").waitFor();
+        assert.equal(await inSheet(page, (root) => root.activeElement?.textContent.trim()), "Your values", "the keyboard stays on the row that brings it back");
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await sheet.locator(".unplaced .new").click();
+        await until(async () => (await sheet.locator(".cm-content").first().innerText()) === "Honest");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -163,9 +235,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
-    // The evaluators, the values checks and the values arrive through the APIs under the
-    // test's own login; Jev is answered here through page.route, so no real request is
-    // made, and the account is told it has a key.
+    // The marks come from withMarks.
     for (const where of ["desk", "phone"]) {
       // Browser: rendering and layout.
       test(`on the ${where}, checked lines show Jev's marks, the status line says the answer, and the card warns`, async () => {
@@ -174,35 +244,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await signedIn(context, forgeCookie(`values-marks-${where}`));
         try {
           if (where === "phone") await context.addInitScript(() => localStorage.setItem("viewport", "phone"));
-          const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
-          const [EV, EX, Q, QX, ACT, GOAL] = [id("E1"), id("E2"), id("Q1"), id("Q2"), id("A0"), id("A1")];
-          const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
-          const options = [
-            { id: ACT, name: "A way of acting", description: "", icon: "compass" },
-            { id: GOAL, name: "A goal", description: "" },
-          ];
-          const pick = { id: Q, kind: "pick", text: "What is it?", yes: "", no: "", options, expect: ACT };
-          assert.equal((await put(`evaluators/${EV}`, { book: id("B1"), name: "Is it a value?", on: true, baseVersion: null, questions: [pick] })).status(), 200);
-          const fits = { id: QX, kind: "yesno", text: "Does it fit?", yes: "", no: "", options: [] };
-          assert.equal((await put(`evaluators/${EX}`, { book: id("B1"), name: "Does the example fit?", on: true, baseVersion: null, questions: [fits] })).status(), 200);
-          assert.equal((await put("value-checks/settings", { values: EV, examples: EX, baseVersion: null })).status(), 200);
-          const values = [
-            { id: ID(1), name: "Honest", meaning: "Tell the truth" },
-            { id: ID(2), name: "Get rich", meaning: "" },
-          ];
-          assert.equal((await put(`values/${dayOf(Date.now())}`, { values, baseVersion: null })).status(), 200);
-          const page = await context.newPage();
+          const page = await withMarks(context);
           const problems = watch(page);
-          await page.route("**/api/llm", async (route) => {
-            const res = await route.fetch();
-            const json = await res.json();
-            await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
-          });
-          await page.route("**/api/llm/decide", (route) => {
-            const { state, questions } = route.request().postDataJSON();
-            const answers = questions.map((q) => (q.id === Q ? { id: q.id, p: 0.95, choice: /rich/.test(state.text) ? GOAL : ACT } : { id: q.id, p: 0.9 }));
-            route.fulfill({ json: { answers, inputTokens: 1, ms: 1 } });
-          });
           await page.goto(PAGE, { waitUntil: "domcontentloaded" });
           if (where === "phone") await page.waitForFunction(() => document.documentElement.dataset.viewport === "phone");
           const sheet = page.locator("values-sheet");
@@ -224,6 +267,75 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         }
       });
     }
+
+    // Pressing Done takes the cursor out of the checked line, which empties the status
+    // line; Done must stay where it was pressed until the button is released.
+    // Browser: a gesture.
+    test("with a mark's answer in the status line, a press and release on Done folds the sheet", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("values-done-marks"));
+      try {
+        const page = await withMarks(context);
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const sheet = page.locator("values-sheet");
+        await sheet.locator(".card").click();
+        const name = sheet.locator(`.row[data-id="${ID(2)}"] .box[data-field="name"]`);
+        await name.locator(".mark.wrong").waitFor();
+        await name.locator(".cm-content").click();
+        await until(async () => (await sheet.locator(".status").innerText()) === "A goal · you expect A way of acting");
+        const at = await sheet.locator(".done").boundingBox();
+        await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+        await page.mouse.down();
+        await page.waitForTimeout(100);
+        assert.deepEqual(await sheet.locator(".done").boundingBox(), at, "Done stays under the pointer");
+        await page.mouse.up();
+        await until(async () => (await card(page)) === "Honest · Get rich");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // The journal around the sheet hands a press on anything that cannot take the keyboard
+    // to its own text (delegatesFocus); the section must keep it.
+    // Browser: focus and keys.
+    test("a press under the heading opens the folded sheet, and with it open leaves the journal's text alone", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("values-gap"));
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        const text = page.locator("journal-entry .cm-content").first();
+        await text.click();
+        await page.keyboard.type("Today");
+        await page.locator("values-sheet .unplaced .new").click();
+        await until(async () => (await focusedField(page)) === "name");
+        await page.keyboard.type("Kind");
+        await page.locator("values-sheet .done").click();
+        await until(async () => (await card(page)) === "Kind");
+        const gap = () =>
+          inSheet(page, (root) => {
+            const h = root.querySelector("h3").getBoundingClientRect();
+            const next = root.querySelector("h3").nextElementSibling.getBoundingClientRect();
+            return { x: h.x + h.width / 2, y: (h.bottom + next.y) / 2 };
+          });
+        let at = await gap();
+        await page.mouse.click(at.x, at.y);
+        await until(async () => (await focusedField(page)) === "name");
+        at = await gap();
+        await page.mouse.click(at.x, at.y);
+        await page.keyboard.type("x");
+        assert.equal(await text.innerText(), "Today", "the journal's text took no key");
+        assert.equal(await isOpen(page), true, "the sheet stays open");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
 
     // The evaluator, the values check, the values, Could be set to Echo (which needs no key
     // and calls nothing) and its suggestion, kept under the hash of what it was made from,

@@ -11,6 +11,7 @@ import { machine } from "../machine.js";
 // it holds, pulling again from 0. The store, the api and the asks are fakes of the shapes
 // fact.js builds.
 const KEPT = { day: "2026-10-01", values: [{ id: "01ARZ3NDEKTSV4RRFFQ69G5VA1", name: "Health", meaning: "" }], version: 3 };
+const PLACED = { day: "2026-10-02", placed: true, version: 2 };
 const ROW = { day: "2026-10-01", values: KEPT.values, baseVersion: 1 };
 
 const flush = async (n = 40) => {
@@ -25,6 +26,8 @@ function fakeStore({ rows = [], meta: meta0 = {} } = {}) {
   const store = {
     all: async () => [KEPT],
     put: async () => {},
+    placesAll: async () => [PLACED],
+    placePut: async () => {},
     outboxAll: async () => [...outbox.values()],
     outboxPut: async (r) => {
       queued.push(r);
@@ -48,6 +51,11 @@ function fakeApi({ offline = false } = {}) {
       calls.push(["put", row]);
       if (offline) throw new Error("offline");
       return { day: row.day, values: row.values, version: (row.baseVersion ?? 0) + 1 };
+    },
+    place: async (row) => {
+      calls.push(["place", row]);
+      if (offline) throw new Error("offline");
+      return { day: row.day, placed: row.placed, version: (row.baseVersion ?? 0) + 1 };
     },
     pull: async (since) => {
       calls.push(["pull", since]);
@@ -80,11 +88,13 @@ test("leaving with nothing to upload empties the local copy at once, without a p
   actor.stop();
 });
 
-test("leaving uploads the outbox first, then empties", async () => {
-  const { actor, log, calls } = start({ rows: [ROW], meta: { userId: "u1" } });
+test("leaving uploads the outbox first, placements too, then empties", async () => {
+  const PLACE_ROW = { day: "placed 2026-10-02", placed: true, baseVersion: 1 };
+  const { actor, log, calls } = start({ rows: [ROW, PLACE_ROW], meta: { userId: "u1" } });
   actor.send(session({ leaving: true }));
   await flush();
   assert.ok(calls.some(([name, row]) => name === "put" && row.day === ROW.day));
+  assert.ok(calls.some(([name, row]) => name === "place" && row.day === "2026-10-02" && row.placed === true));
   assert.deepEqual(log, ["empty"]);
   actor.stop();
 });
@@ -133,7 +143,7 @@ test("after the reload the mark sends the copy from a cursor of 0, then clears",
   const { actor, meta, queued, log, calls } = start({ meta: { userId: "u0", adopt: "u0", cursor: 7 } }, {}, "u1");
   await flush();
   assert.deepEqual(log, [], "the copy is kept, not emptied as another account's");
-  assert.deepEqual(queued.map((r) => [r.day, r.baseVersion]), [["2026-10-01", 3]], "on the version it holds");
+  assert.deepEqual(queued.map((r) => [r.day, r.baseVersion]), [["2026-10-01", 3], ["placed 2026-10-02", 2]], "on the version it holds, placements too");
   assert.equal(meta.get("adopt"), null);
   assert.equal(meta.get("userId"), "u1");
   const pulls = calls.filter(([name]) => name === "pull");

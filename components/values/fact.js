@@ -31,6 +31,18 @@ const api = {
     if (!res.ok) throw new Error(`values put ${res.status}`);
     return await res.json();
   },
+  async place({ day, ...payload }) {
+    const res = await fetch(`/api/values/days/${day}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+      keepalive: document.visibilityState === "hidden",
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (!res.ok) throw new Error(`values place ${res.status}`);
+    return await res.json();
+  },
   async pull(since) {
     const res = await fetch(`/api/values?since=${since}`, {
       credentials: "same-origin",

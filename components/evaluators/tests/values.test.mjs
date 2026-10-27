@@ -33,6 +33,9 @@ const memory = (key) => {
     rows,
     all: async () => [...rows.values()],
     put: async (r) => void rows.set(r[key], r),
+    // values keeps its days' placements beside its versions.
+    placesAll: async () => [],
+    placePut: async () => {},
     outboxAll: async () => [],
     outboxPut: async () => {},
     outboxDelete: async () => {},

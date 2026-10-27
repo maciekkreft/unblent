@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, dayName, writable, shownValues, earlierDays, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
+import { machine, isPlaced, placeable, dateOf, dayName, writable, shownValues, earlierDays, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/values.saved.json", import.meta.url), "utf8"));
+const PLACED = JSON.parse(readFileSync(new URL("../events/values.placed.json", import.meta.url), "utf8"));
 const recorded = [];
 
 const NOW = new Date(2026, 9, 24, 9, 30).getTime();
@@ -20,7 +21,8 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 
 // `versions` maps a day a version was written to its values; the fake answers read as the
 // values fact does, the latest version on or before the day asked.
-async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators, suggestions } = {}) {
+// `placed`, when given, maps a day to whether it shows the panel, as read's placed says.
+async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators, suggestions, placed } = {}) {
   let n = 0;
   const asked = [];
   const clock = new SimulatedClock();
@@ -38,7 +40,9 @@ async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators
         const days = daysOf();
         if (name === "versions") return Promise.resolve({ days });
         const on = days.filter((d) => payload.day === undefined || d <= payload.day).at(-1) ?? null;
-        return Promise.resolve({ day: on, values: on ? versions[on] : [], changedSince: payload.day !== undefined && days.some((d) => d > payload.day) });
+        const answer = { day: on, values: on ? versions[on] : [], changedSince: payload.day !== undefined && days.some((d) => d > payload.day) };
+        if (placed && payload.day !== undefined) answer.placed = placed[payload.day] === true;
+        return Promise.resolve(answer);
       },
       mint: () => `01K6TEST000000000000000M${String(++n).padStart(2, "0")}`,
       now: () => NOW,
@@ -47,18 +51,101 @@ async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators
     },
   });
   const emitted = [];
+  const places = [];
   actor.on("values.saved", (e) => {
     emitted.push(e);
     recorded.push(e);
   });
+  actor.on("values.placed", (e) => places.push(e));
   actor.start();
   await flush();
-  return { actor, clock, emitted, asked, ctx: () => actor.getSnapshot().context, state: () => actor.getSnapshot().value };
+  return { actor, clock, emitted, places, asked, ctx: () => actor.getSnapshot().context, state: () => actor.getSnapshot().value };
 }
 
 // Every emit of the suite matches its schema.
+const placedRecorded = [];
 after(() => {
   for (const { type, ...rest } of recorded) assert.ok(new Validator(SCHEMA, "2020-12").validate(rest).valid, JSON.stringify(rest));
+  for (const { type, ...rest } of placedRecorded) assert.ok(new Validator(PLACED, "2020-12").validate(rest).valid, JSON.stringify(rest));
+});
+
+test("today without the panel opens only by + Your values, which adds it and opens the sheet", async () => {
+  const { actor, places, ctx } = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: {} });
+  assert.equal(isPlaced(ctx()), false);
+  actor.send({ type: "_open" });
+  assert.equal(ctx().open, false, "a day without the panel has no sheet to open");
+  actor.send({ type: "_place" });
+  placedRecorded.push(...places);
+  assert.deepEqual(places, [{ type: "values.placed", day: TODAY, placed: true }]);
+  assert.equal(isPlaced(ctx()), true);
+  assert.equal(ctx().open, true);
+  assert.deepEqual(ctx().drafts, [v(1, "Honest")], "the account's values, as they stand");
+  actor.send({ type: "_place" });
+  assert.equal(places.length, 1, "added once");
+});
+
+test("Remove from this day folds the sheet, saves what was typed, and leaves the values alone", async () => {
+  const { actor, places, emitted, ctx } = await start({ [TODAY]: [v(1, "Honest")] }, { placed: { [TODAY]: true } });
+  actor.send({ type: "_open" });
+  actor.send({ type: "_edit", id: id(1), field: "name", value: "Honest and kind" });
+  actor.send({ type: "_unplace" });
+  placedRecorded.push(...places);
+  assert.deepEqual(places, [{ type: "values.placed", day: TODAY, placed: false }]);
+  assert.deepEqual(emitted.map((e) => e.values), [[v(1, "Honest and kind")]], "what was typed is saved, nothing removed");
+  assert.equal(ctx().open, false);
+  assert.equal(isPlaced(ctx()), false);
+  actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest and kind")], placed: false });
+  actor.send({ type: "_place" });
+  assert.equal(ctx().open, true, "+ Your values is the one step back");
+  assert.deepEqual(ctx().drafts.map((d) => d.name), ["Honest and kind"]);
+});
+
+test("Done on an added panel with no values takes it off the day; with values it keeps it", async () => {
+  const empty = await start({}, { placed: {} });
+  empty.actor.send({ type: "_place" });
+  empty.actor.send({ type: "_done" });
+  assert.deepEqual(empty.places.map((e) => e.placed), [true, false]);
+  assert.equal(isPlaced(empty.ctx()), false);
+
+  const kept = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: {} });
+  kept.actor.send({ type: "_place" });
+  kept.actor.send({ type: "_done" });
+  assert.deepEqual(kept.places.map((e) => e.placed), [true]);
+  assert.equal(isPlaced(kept.ctx()), true);
+});
+
+test("an earlier day shows the panel only if it was added, and is never placed from here", async () => {
+  const { actor, places, ctx } = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: { [YESTERDAY]: true } });
+  actor.send({ type: "day.shown", day: EARLIER, writable: false });
+  await flush();
+  assert.equal(isPlaced(ctx()), false);
+  assert.equal(placeable(ctx()), false);
+  actor.send({ type: "_place" });
+  actor.send({ type: "_open" });
+  assert.equal(ctx().open, false);
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
+  await flush();
+  assert.equal(isPlaced(ctx()), true);
+  actor.send({ type: "_open" });
+  assert.equal(ctx().open, true);
+  actor.send({ type: "_unplace" });
+  actor.send({ type: "_done" });
+  assert.deepEqual(places, [], "yesterday's panel stays, even in its hour after midnight");
+});
+
+test("a placement from another device arrives on values.changed and keeps the version's day", async () => {
+  const { actor, ctx } = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: {} });
+  actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest")], placed: true });
+  assert.equal(isPlaced(ctx()), true);
+  assert.equal(ctx().version.day, EARLIER, "a placement alone is no new version");
+  actor.send({ type: "values.changed", day: YESTERDAY, values: [v(1, "Honest")], placed: false });
+  assert.equal(isPlaced(ctx()), true, "another day's placement is not this day's");
+  actor.send({ type: "_open" });
+  actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest")], placed: false });
+  assert.equal(isPlaced(ctx()), false);
+  actor.send({ type: "_done" });
+  actor.send({ type: "_open" });
+  assert.equal(ctx().open, false);
 });
 
 test("it asks the shown day's version and the days, and follows day.shown", async () => {

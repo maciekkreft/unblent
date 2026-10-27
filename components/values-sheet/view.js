@@ -6,8 +6,9 @@ import { EditorState, Prec, Annotation, StateField, StateEffect } from "@codemir
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, toRegister } from "editor";
-import { machine, writable, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor } from "./machine.js";
+import { machine, writable, placeable, isPlaced, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor } from "./machine.js";
 import saved from "./events/values.saved.json" with { type: "json" };
+import placed from "./events/values.placed.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text and above the choice
 // points, inside the day's scrolling page, so it scrolls with the day it is about. It is
@@ -156,7 +157,7 @@ class ActorController {
         // Read off the host so a stylesheet or a test can shorten it.
         undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
       },
-      events: { "values.saved": saved },
+      events: { "values.saved": saved, "values.placed": placed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -181,12 +182,20 @@ class ValuesSheet extends LitElement {
       display: block;
       color: var(--color-body);
     }
+    /* Focusable only by script and by a press, so a press on the section's own text lands
+       here rather than being handed to the journal's text by its delegated focus. */
     section {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
       padding-top: var(--space-md);
       border-top: var(--border-width) solid var(--color-border);
+    }
+    section:focus {
+      outline: none;
+    }
+    section.folded {
+      cursor: pointer;
     }
     h3 {
       margin: 0;
@@ -532,8 +541,11 @@ class ValuesSheet extends LitElement {
       font-size: var(--text-caption);
       color: var(--color-body-mid);
     }
+    /* An empty status line keeps its height: pressing Done takes the cursor out of a line
+       or clears a tapped mark, which empties it, and Done must not move before the release,
+       or the press and the release land on different places and make no click. */
     .status.none {
-      display: none;
+      visibility: hidden;
     }
     .flag {
       display: inline-flex;
@@ -828,13 +840,18 @@ class ValuesSheet extends LitElement {
     this.#send({ type: "_open" }, writable(context) ? ".box[data-key]" : ".sheet .close");
   }
 
+  // + Your values: the panel joins today's page, open with the keyboard in the first name.
+  #place() {
+    this.#send({ type: "_place" }, ".box[data-key]");
+  }
+
   #done() {
     this.#send({ type: "_done" }, ".card, .new");
   }
 
   // A page that nests the sheet hands it the keyboard by its host (journal-entry, with
-  // Vim keys): folded, on the card or the Write your values row; open, on the first box,
-  // in Vim's normal mode, or on a button of a sheet that is only read.
+  // Vim keys): folded, on the card, the + Your values row or the Write your values row;
+  // open, on the first box, in Vim's normal mode, or on a button of a sheet only read.
   focus(options) {
     const first = this.renderRoot?.querySelector(".box[data-key]");
     const box = first && this.#boxes.get(first.dataset.key);
@@ -1038,14 +1055,15 @@ class ValuesSheet extends LitElement {
     </div>`;
   }
 
-  #foot(context, { about = nothing, back = false } = {}) {
+  #foot(context, { about = nothing, back = false, remove = false } = {}) {
     const read = !writable(context);
     const status = statusOf(context);
     return html`<div class="foot">
-      <span class="status ${status ? "" : "none"}" role="status">${status}</span>
+      <span class="status ${status ? "" : "none"}" role="status">${status || "\u200b"}</span>
       <div class="about">${about}</div>
       <div class="buttons">
         ${back ? html`<button type="button" class="back" @click=${() => this.#send({ type: "_back" }, ".sheet .close, .sheet .done")}>Back</button>` : nothing}
+        ${remove ? html`<button type="button" class="unplace" @click=${() => this.#send({ type: "_unplace" }, ".new")}>Remove from this day</button>` : nothing}
         <button type="button" class=${read ? "close" : "done"} @click=${() => this.#done()}>${read ? "Close" : "Done"}</button>
       </div>
     </div>`;
@@ -1094,7 +1112,7 @@ class ValuesSheet extends LitElement {
         ${write
           ? html`<button type="button" class="new" @click=${() => this.#add()}><span class="plus">${icon("plus")}</span>New value</button>`
           : nothing}
-        ${this.#foot(context, { about })}`;
+        ${this.#foot(context, { about, remove: placeable(context) })}`;
     }
     return html`<div class="sheet ${writable(context) ? "" : "read"}" role="group" aria-label="Your values" @keydown=${keydown} @pointerdown=${pointerdown}>${body}</div>`;
   }
@@ -1106,6 +1124,13 @@ class ValuesSheet extends LitElement {
     this.#wanted.clear();
     if (snapshot.matches("loading")) return nothing;
     const failed = snapshot.matches("failed");
+    // A day the panel was not added to shows nothing, and today's page the row that adds it.
+    if (!failed && !isPlaced(context)) {
+      if (!placeable(context)) return nothing;
+      return html`<section tabindex="-1" class="unplaced">
+        <button type="button" class="new" @click=${() => this.#place()}><span class="plus">${icon("plus")}</span>Your values</button>
+      </section>`;
+    }
     const shown = shownValues(context);
     const names = shown.map((v) => v.name.trim() || "A value");
     // An earlier day without values has nothing to show.
@@ -1122,7 +1147,12 @@ class ValuesSheet extends LitElement {
       </button>`;
     }
     else body = html`<button type="button" class="new" @click=${() => this.#open()}><span class="plus">${icon("plus")}</span>Write your values</button>`;
-    return html`<section aria-labelledby="heading">
+    // Folded, a press anywhere on the section opens the sheet, as a press on its card does.
+    const folded = !failed && !context.open;
+    const open = (e) => {
+      if (folded && !e.composedPath().some((n) => n.localName === "button")) this.#open();
+    };
+    return html`<section tabindex="-1" class=${folded ? "folded" : ""} aria-labelledby="heading" @click=${open}>
       <h3 id="heading">Your values</h3>
       ${body}
     </section>`;
