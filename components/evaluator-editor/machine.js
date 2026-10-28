@@ -28,7 +28,7 @@ const blankOption = (id) => ({ id, name: "", description: "", removing: false })
 const live = (items) => items.filter((x) => !x.removing);
 
 // The icons an option may be given for its mark on a choice point line (choice-point-cards).
-export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning"];
+export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning", "gavel", "prohibit"];
 
 // The answer a question expects, while it names one the question has: yes or no, or one of
 // its options. An option waiting out its undo window still counts, so the expectation is
@@ -162,6 +162,10 @@ const kinded = (draft, id, kind, mint) =>
 
 const liveQuestion = (context, id) => context.draft.questions.find((q) => q.id === id && !q.removing);
 const liveOption = (context, question, id) => liveQuestion(context, question)?.options.find((o) => o.id === id && !o.removing);
+
+// An option can be removed only once its name and description are cleared, so one press on
+// its x never takes written words away by accident.
+export const removable = (option) => !option.name.trim() && !option.description.trim();
 
 // An option's icon, or null for none: an option with no icon carries no `icon` at all.
 const withIcon = (draft, question, id, chosen) => ({
@@ -582,7 +586,10 @@ export const machine = setup({
             ),
             _removeOption: removal(
               "option",
-              (context, event) => liveOption(context, event.question, event.id),
+              (context, event) => {
+                const option = liveOption(context, event.question, event.id);
+                return option && removable(option) ? option : undefined;
+              },
               (d, event) => patchOption(d, event.question, event.id, { removing: true }),
               (d, event) => ({
                 ...d,

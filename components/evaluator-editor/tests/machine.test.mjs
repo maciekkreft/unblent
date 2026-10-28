@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isEmpty, duplicateNames, newest, shownExpect, showing } from "../machine.js";
+import { machine, isEmpty, duplicateNames, newest, shownExpect, showing, removable } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -227,6 +227,7 @@ test("the expected answer is saved at once, None takes it away, and removing its
   assert.equal(saves(emitted).length, 2, "an answer the question does not have, or the same one, is no change");
   actor.send({ type: "_expect", question: Q2, expect: null });
   assert.equal("expect" in saves(emitted).at(-1).questions[1], false);
+  clear(actor, O2);
   actor.send({ type: "_removeOption", question: Q1, id: O2 });
   actor.send({ type: "_editQuestion", id: Q1, patch: { text: "Goal or value, really?" } });
   actor.send({ type: "_blur" });
@@ -254,14 +255,30 @@ test("switching a question's kind and back brings its expected answer back", asy
   assert.equal(saves(emitted).at(-1).questions[0].expect, "yes", "a new choice for the other kind replaces it");
 });
 
+const clear = (actor, id) => actor.send({ type: "_editOption", question: Q1, id, patch: { name: "", description: "" } });
+
+test("an option is removed only once its name and description are cleared", async () => {
+  const { actor, emitted, ctx } = await start();
+  await select(actor, { id: R, book: P });
+  assert.equal(removable(opt(O1, " ", " ")), true);
+  actor.send({ type: "_removeOption", question: Q1, id: O2 });
+  assert.equal(emitted.some((e) => e.type === "removal.started"), false, "a named option stays");
+  actor.send({ type: "_editOption", question: Q1, id: O2, patch: { name: "", description: "Why" } });
+  actor.send({ type: "_removeOption", question: Q1, id: O2 });
+  assert.equal(emitted.some((e) => e.type === "removal.started"), false, "so does one with a description");
+  clear(actor, O2);
+  actor.send({ type: "_removeOption", question: Q1, id: O2 });
+  assert.equal(ctx().draft.questions[0].options[1].removing, true);
+});
+
 test("removing an option, a question or the evaluator saves first, then emits removal.started and hides it", async () => {
   const { actor, emitted, ctx } = await start();
   await select(actor, { id: R, book: P });
-  actor.send({ type: "_editOption", question: Q1, id: O2, patch: { name: "Value " } });
+  actor.send({ type: "_editOption", question: Q1, id: O2, patch: { name: " ", description: "" } });
   actor.send({ type: "_removeOption", question: Q1, id: O2 });
   assert.deepEqual(emitted.map((e) => e.type), ["evaluator.saved", "removal.started"]);
-  assert.equal(emitted[0].questions[0].options[1].name, "Value ");
-  assert.deepEqual(emitted[1], { type: "removal.started", kind: "option", id: O2, name: "Value" });
+  assert.equal(emitted[0].questions[0].options[1].name, " ");
+  assert.deepEqual(emitted[1], { type: "removal.started", kind: "option", id: O2, name: "" });
   assert.equal(ctx().draft.questions[0].options[1].removing, true);
 
   actor.send({ type: "_removeQuestion", id: Q2 });
@@ -279,11 +296,13 @@ test("removing an option, a question or the evaluator saves first, then emits re
 test("Undo from the fact brings an item back; a settled removal drops it, even while typing", async () => {
   const { actor, ctx } = await start();
   await select(actor, { id: R, book: P });
+  clear(actor, O2);
   actor.send({ type: "_removeOption", question: Q1, id: O2 });
-  const flagged = { ...EVALUATOR, questions: [{ ...EVALUATOR.questions[0], options: [opt(O1, "Goal"), opt(O2, "Value", "", true)] }, EVALUATOR.questions[1]] };
+  const flagged = { ...EVALUATOR, questions: [{ ...EVALUATOR.questions[0], options: [opt(O1, "Goal"), opt(O2, "", "", true)] }, EVALUATOR.questions[1]] };
   actor.send(changed(flagged));
   actor.send({ type: "_editQuestion", id: Q2, patch: { text: "Typing" } });
-  actor.send(changed(EVALUATOR));
+  const undone = { ...EVALUATOR, questions: [{ ...EVALUATOR.questions[0], options: [opt(O1, "Goal"), opt(O2, "")] }, EVALUATOR.questions[1]] };
+  actor.send(changed(undone));
   assert.equal(ctx().draft.questions[0].options[1].removing, false);
   assert.equal(ctx().draft.questions[1].text, "Typing");
 

@@ -6,7 +6,7 @@ import { EditorState, Compartment, Annotation } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, duplicateNames, OPTION_ICONS, showing } from "./machine.js";
+import { machine, duplicateNames, OPTION_ICONS, showing, removable } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
 import started from "./events/removal.started.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -41,6 +41,8 @@ const GLYPHS = {
   question: ["Question mark", icon("question")],
   check: ["Check", icon("check")],
   warning: ["Warning", icon("warning")],
+  gavel: ["Gavel", icon("gavel")],
+  prohibit: ["No entry", icon("prohibit")],
 };
 const CHOICES = OPTION_ICONS.map((name) => [name, ...GLYPHS[name]]);
 
@@ -509,9 +511,15 @@ class EvaluatorEditor extends LitElement {
       background: transparent;
       color: var(--color-body);
     }
-    button.quiet:hover {
+    button.quiet:hover:not([aria-disabled="true"]) {
       color: var(--color-ink);
       background: var(--color-surface-hover);
+    }
+    /* aria-disabled rather than disabled, so the button still takes the pointer and the
+       keyboard and its title says what to do first. */
+    button[aria-disabled="true"] {
+      cursor: default;
+      color: var(--color-mute);
     }
     button.icon {
       display: inline-flex;
@@ -988,8 +996,9 @@ class EvaluatorEditor extends LitElement {
                 <button
                   type="button"
                   class="quiet icon remove"
-                  title="Remove option"
+                  title=${removable(o) ? "Remove option" : "Clear the option's name and description first"}
                   aria-label="Remove option ${o.name.trim()}"
+                  aria-disabled=${removable(o) ? "false" : "true"}
                   @click=${() => this.#send({ type: "_removeOption", question: q.id, id: o.id })}
                 >
                   ${icon("x")}
