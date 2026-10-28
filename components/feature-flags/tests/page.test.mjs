@@ -44,7 +44,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
             if (offline) return route.abort();
             off = body.on ? off.filter((f) => f !== body.feature) : [...off, body.feature];
           }
-          return route.fulfill({ json: { off, hidden: [] } });
+          return route.fulfill({ json: { off, hidden: off } });
         });
         const page = await context.newPage();
         const problems = watch(page, [], { ignore: [/api\/flags/] });
@@ -54,7 +54,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const chats = page.locator("feature-flags").getByRole("switch", { name: "Chats" });
         await until(async () => (await page.locator("feature-flags").getByRole("switch").count()) === 4);
         const said = await text(page);
-        for (const line of ["Feature flags", "hidden from everyone but you", "Chats", "Evaluators", "Choice points", "Highlights", "The Highlights row"]) {
+        for (const line of ["Feature flags", "hidden from everyone, you included", "Chats", "Evaluators", "Choice points", "Highlights", "The Highlights row"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
         assert.equal(await chats.isChecked(), true, "every feature is on");

@@ -43,10 +43,10 @@ export const machine = setup({
   meta: {
     description:
       "The Feature flags tab of the gear's sheet, shown only to the admin. One switch per " +
-      "feature that can be hidden from everyone but the admin (Chats, Evaluators, Choice " +
+      "feature that can be hidden from everyone, the admin included (Chats, Evaluators, Choice " +
       "points, Highlights), each with a sentence saying what turning it off hides. A switch " +
-      "moves at once when pressed and applies to everyone else at their next start; " +
-      "pressing it again is the undo. The admin keeps seeing every feature. A switch that " +
+      "moves at once when pressed, hides or shows the feature for the admin at once and for " +
+      "everyone else at their next start; pressing it again is the undo. A switch that " +
       "cannot be saved, for example offline, goes back to where it was and a line under " +
       "the switches says so.",
     kind: "view",

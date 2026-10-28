@@ -1,10 +1,10 @@
 """The server side of ``flags`` (architecture.md 3.1, 3.4): which features are off for
-everyone except the admin, in one shared file, data/flags.db, because a flag is the
+everyone, the admin included, in one shared file, data/flags.db, because a flag is the
 same for every account.
 
 GET answers anyone, signed out included: ``off``, the features turned off, and
-``hidden``, what this request's account does not see, read from the cookie. The admin
-sees every feature, except while viewing as someone (12). PUT, the admin alone, turns
+``hidden``, what this request's account does not see, which is the same for every
+account. PUT, the admin alone, turns
 one feature on or off and answers the same picture. Hiding is not a lock: no other
 server module reads this file.
 """
@@ -63,14 +63,14 @@ def _admin(request: Request) -> bool:
     return bool(session and session["admin"])
 
 
-def _picture(request: Request) -> dict:
+def _picture() -> dict:
     turned_off = off()
-    return {"off": turned_off, "hidden": [] if _admin(request) else turned_off}
+    return {"off": turned_off, "hidden": turned_off}
 
 
 @router.get("")
 async def read(request: Request):
-    return await run_in_threadpool(_picture, request)
+    return await run_in_threadpool(_picture)
 
 
 @router.put("")
@@ -89,4 +89,4 @@ async def edit(request: Request):
     ):
         return JSONResponse({"error": "bad-request"}, status_code=400)
     await run_in_threadpool(switch, body["feature"], body["on"])
-    return await run_in_threadpool(_picture, request)
+    return await run_in_threadpool(_picture)

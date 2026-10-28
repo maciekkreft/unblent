@@ -2,7 +2,7 @@ import { setup, assign, emit, enqueueActions } from "xstate";
 
 // A remote-only fact component (3.1): which features are off is server truth, kept in
 // one shared file by its server module. The server also says what this viewer does not
-// see, read from the cookie (3.4), so the fact never asks who is the admin. The last
+// see, so the fact never asks who is the admin. The last
 // answer is kept on the device through `input`, so a reload or an offline start hides
 // the same features. The fetches arrive through `input` too, so the machine is a pure
 // definition importable in Node.
@@ -49,10 +49,9 @@ export const machine = setup({}).createMachine({
   id: "flags",
   meta: {
     description:
-      "Owns which features are off for everyone except the admin: Chats, Evaluators, Choice " +
-      "points and Highlights. The admin turns them on and off in the Feature flags tab and " +
-      "sees every feature, except while viewing as someone, when the admin sees what that " +
-      "account sees. The last answer of the server is kept on this device, so a reload or " +
+      "Owns which features are off for everyone, the admin included: Chats, Evaluators, " +
+      "Choice points and Highlights. The admin turns them on and off in the Feature flags " +
+      "tab. The last answer of the server is kept on this device, so a reload or " +
       "an offline start hides the same features; with no answer yet every feature that has " +
       "a flag is hidden. It reads again whenever the account changes, and forgets the kept " +
       "answer when the browser is about to change account. A switch that cannot be saved, " +

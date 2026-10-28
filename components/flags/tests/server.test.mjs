@@ -49,7 +49,7 @@ out["back"] = call("PUT", admin, {"feature": "highlights", "on": True})
 print(json.dumps(out))
 `;
 
-test("anyone reads which features are off; only the admin switches one, and sees every feature", () => {
+test("anyone reads which features are off; only the admin switches one, and every account, the admin included, sees the same", () => {
   const data = mkdtempSync(join(tmpdir(), "flags-server-"));
   try {
     const out = JSON.parse(
@@ -62,13 +62,13 @@ test("anyone reads which features are off; only the admin switches one, and sees
     assert.deepEqual(out.notAdmin, [403, { error: "not-admin" }]);
     assert.deepEqual(out.viewing, [403, { error: "not-admin" }], "not while the admin views as someone");
     assert.deepEqual(out.bad, [400, 400, 400, 400, 400]);
-    assert.deepEqual(out.off, [200, { off: ["highlights"], hidden: [] }], "the admin sees every feature");
-    assert.deepEqual(out.twice, [200, { off: ["chats", "highlights"], hidden: [] }], "turning off twice is once, in the tab's order");
+    assert.deepEqual(out.off, [200, { off: ["highlights"], hidden: ["highlights"] }], "the admin sees what everyone sees");
+    assert.deepEqual(out.twice, [200, { off: ["chats", "highlights"], hidden: ["chats", "highlights"] }], "turning off twice is once, in the tab's order");
     assert.deepEqual(out.signedOut, [200, { off: ["chats", "highlights"], hidden: ["chats", "highlights"] }]);
     assert.deepEqual(out.someone, out.signedOut);
-    assert.deepEqual(out.admin, [200, { off: ["chats", "highlights"], hidden: [] }]);
-    assert.deepEqual(out.adminViewing, out.signedOut, "viewing as someone, the admin sees what they see");
-    assert.deepEqual(out.back, [200, { off: ["chats"], hidden: [] }]);
+    assert.deepEqual(out.admin, out.signedOut);
+    assert.deepEqual(out.adminViewing, out.signedOut);
+    assert.deepEqual(out.back, [200, { off: ["chats"], hidden: ["chats"] }]);
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

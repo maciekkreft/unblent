@@ -107,7 +107,7 @@ class FeatureFlags extends LitElement {
     return html`
       <h3>Feature flags</h3>
       <div class="part">
-        <p class="hint">A feature turned off is hidden from everyone but you, from their next visit.</p>
+        <p class="hint">A feature turned off is hidden from everyone, you included: from you at once, from others at their next visit.</p>
         ${FEATURES.map((f) => {
           const on = onOf(context, f.id);
           return html`
