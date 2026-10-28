@@ -746,6 +746,7 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - `gt` and `gT` with Vim keys on, showing the next and previous tab of the group that has the keyboard, the same as Ctrl+. and Ctrl+, do today, from the book reader, the journal and the note editors as well.
 - Pipes, where a line in a journal day or a note names steps after it with `|` (an evaluator, a hint, later any step that turns text into text with a model), the line runs through them in order when the user presses Run, and each step's result is kept and shown under the line, never written into the text unless the user inserts it (sketch: `~/.claude/plans/line-pipes.md`).
 - A weekly series of eight posts in the owner's community r/PracticePsychology, teaching the Choice Point and Values from *ACT Made Simple* to people practicing on their own, each ending with how Unblent's free journal holds the practice (section 17; the plan and the first post: https://claude.ai/artifact/Uozrxwx742EPpQEXuXbAUo).
+- The folded Your values panel listing every value with its example under it, in smaller type and read only, with an Edit link beside the heading on today's page, and + Your values showing that list first instead of opening the editor, or the editor at once when no values are written yet (plan, with its open questions: https://claude.ai/artifact/6k2NJVrTb3SdVfoyn3YuZ6).
 
 ---
 
