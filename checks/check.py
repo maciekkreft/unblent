@@ -327,6 +327,26 @@ def _check_draft(path: str, schema: object, what: str) -> None:
              f'{what} must state the draft: "$schema": "{_DRAFT}"')
 
 
+def tool_problems(tool: object) -> list:
+    """Section 7.2, 7.7, 11.2: a query's `tool` entry is a { description, label } of
+    non-empty strings, with an optional `name` and `excerpt`, each a JSON pointer
+    (RFC 6901) into the reply, and an optional `switch`, which only `false` may hold,
+    since a tool the user can switch is the default. Pure; returns the failure details."""
+    ok = isinstance(tool, dict) and all(
+        isinstance(tool.get(f), str) and tool.get(f).strip() for f in ("description", "label")
+    )
+    if not ok:
+        return ["a query's tool entry must be a { description, label } of non-empty strings (7.7)"]
+    out = []
+    for f in ("name", "excerpt"):
+        if f in tool and not (isinstance(tool[f], str) and tool[f].startswith("/")):
+            out.append(f"a query's tool entry {f!r} must be a JSON pointer, a string starting with \"/\" (7.2)")
+    if "switch" in tool and tool["switch"] is not False:
+        out.append("a query's tool entry 'switch' may only be false, which keeps the tool always on "
+                   "and out of Settings; leave it out for a tool the user can switch (7.7)")
+    return out
+
+
 def check_contracts(manifests: dict) -> None:
     """Section 7.2: every declared emit has events/<name>.json, every answered
     query queries/<name>.json ({ payload, reply }, with an optional supersededBy the
@@ -369,17 +389,8 @@ def check_contracts(manifests: dict) -> None:
                             fail(schema_path, "contract check (11.2)",
                                  f"unknown top-level key {key!r} in a query schema (only payload, reply, supersededBy, tool)")
                     if "tool" in schema:
-                        tool = schema["tool"]
-                        ok = isinstance(tool, dict) and all(
-                            isinstance(tool.get(f), str) and tool.get(f).strip() for f in ("description", "label")
-                        )
-                        if not ok:
-                            fail(schema_path, "contract check (11.2)",
-                                 "a query's tool entry must be a { description, label } of non-empty strings (7.7)")
-                        for f in ("name", "excerpt"):
-                            if ok and f in tool and not (isinstance(tool[f], str) and tool[f].startswith("/")):
-                                fail(schema_path, "contract check (11.2)",
-                                     f"a query's tool entry {f!r} must be a JSON pointer, a string starting with \"/\" (7.2)")
+                        for detail in tool_problems(schema["tool"]):
+                            fail(schema_path, "contract check (11.2)", detail)
                 else:
                     _check_draft(schema_path, schema, "the schema")
 

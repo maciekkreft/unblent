@@ -63,6 +63,7 @@ const CONTRACTS = {
     { target: "notes", name: "list", payload: {}, reply: {}, askers: [], tool: { description: "List the reader's notes.", label: "Reading the notes" } },
     { target: "books", name: "read", payload: {}, reply: {}, askers: [], tool: { description: "Open a book's details.", label: "Opening a book" } },
     { target: "subject", name: "read", payload: {}, reply: {}, askers: [] },
+    { target: "evaluators", name: "active", payload: {}, reply: {}, askers: [], tool: { description: "List the evaluators.", label: "Listing your evaluators", switch: false } },
   ],
 };
 
@@ -329,7 +330,7 @@ test("with the account attribute the tools are listed and the off ones known (7.
   assert.deepEqual(
     snapshot.context.toolList.map((t) => t.key),
     ["books: read", "notes: list"],
-    "the tool queries, sorted by key; a query with no tool entry is left out",
+    "the tool queries, sorted by key; a query with no tool entry, or one that is always on, is left out",
   );
   assert.deepEqual(snapshot.context.toolList[0], { key: "books: read", label: "Opening a book", description: "Open a book's details." });
   assert.deepEqual(snapshot.context.tools, { "notes: list": false }, "the preference map says notes is off, the rest on");

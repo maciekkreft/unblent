@@ -45,6 +45,8 @@ export const wire = (d) => ({
   id: d.id,
   book: d.book,
   name: d.name,
+  // Always sent, so clearing the box is kept rather than read as "keep the one it has".
+  description: d.description ?? "",
   questions: live(d.questions).map((q) => ({
     id: q.id,
     on: q.on !== false,
@@ -60,6 +62,7 @@ export const wire = (d) => ({
 // Nothing written anywhere in it: a New evaluator opened and left adds no row to the list.
 export const isEmpty = (d) =>
   !d.name.trim() &&
+  !(d.description ?? "").trim() &&
   d.questions.every(
     (q) => !q.text.trim() && !q.yes.trim() && !q.no.trim() && q.options.every((o) => !o.name.trim() && !o.description.trim()),
   );
@@ -81,11 +84,11 @@ const savable = (context) =>
   context.draft && !context.draft.removing && !context.draft.derivedFrom && (known(context, context.draft.id) || !isEmpty(context.draft));
 
 const copy = (r) =>
-  structuredClone({ id: r.id, book: r.book, name: r.name, questions: r.questions, removing: r.removing, ...(r.derivedFrom ? { derivedFrom: r.derivedFrom } : {}) });
+  structuredClone({ id: r.id, book: r.book, name: r.name, description: typeof r.description === "string" ? r.description : "", questions: r.questions, removing: r.removing, ...(r.derivedFrom ? { derivedFrom: r.derivedFrom } : {}) });
 
 const opened = (context, id, book) => {
   const found = context.evaluators.find((r) => r.id === id);
-  return found ? copy(found) : { id, book, name: "", questions: [blankQuestion(context.mint())], removing: false };
+  return found ? copy(found) : { id, book, name: "", description: "", questions: [blankQuestion(context.mint())], removing: false };
 };
 
 // While typing waits to be saved, a change from the fact brings only its removal marks,
@@ -356,7 +359,9 @@ export const machine = setup({
   id: "evaluator-editor",
   meta: {
     description:
-      "Edits one evaluator, the item of the Evaluators tab: its name and its questions. Each " +
+      "Edits one evaluator, the item of the Evaluators tab: its name, its description and its questions. " +
+        "Directly under the name, Description is a small text box saying what the evaluator checks, " +
+        "which the chat reads to choose an evaluator; it is saved with the evaluator like every other field. Each " +
       "question has a tick box that switches it on or off: one switched off is greyed but stays " +
       "editable and is kept, but not asked, and ticking it again brings it back; a new question " +
       "starts switched on. Each question is Yes / no, with optional words for what yes and no mean, or Pick one, with " +
@@ -391,7 +396,7 @@ export const machine = setup({
       "in its name. Whichever evaluator it opens, " +
       "picked or opened by itself, the list beside it marks. Signed out it shows no evaluator, " +
       "only \"Sign in to run evaluators.\", as the list beside it does, and signing in shows " +
-      "it again without a reload; on a try page a visitor not yet signed in edits the starters. Your values, which is built from the user's values, opens read only: its name, and each question with its answers and what each means, Serves marked expected, as words with nothing to type in, no Delete, and a line saying to change the values in the Values sheet, under the day's text in the Journal; with no values it says there is nothing to ask.",
+      "it again without a reload; on a try page a visitor not yet signed in edits the starters. Your values, which is built from the user's values, opens read only: its name, its fixed description, and each question with its answers and what each means, Serves marked expected, as words with nothing to type in, no Delete, and a line saying to change the values in the Values sheet, under the day's text in the Journal; with no values it says there is nothing to ask.",
     kind: "view",
     emits: ["evaluator.saved", "removal.started", "pin.toggled", "evaluator.opened"],
     attributes: ["subject"],

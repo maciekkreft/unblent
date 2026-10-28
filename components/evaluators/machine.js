@@ -72,6 +72,7 @@ const record = (r) => ({
   id: r.id,
   book: r.book,
   name: str(r.name),
+  description: str(r.description),
   on: r.on !== false,
   questions: questionsOf(r.questions),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
@@ -153,6 +154,7 @@ const bare = (questions) =>
 const content = (r) => ({
   book: r.book,
   name: r.name,
+  description: r.description,
   on: r.on,
   questions: bare(r.questions),
   starterFor: pagesOf(r.starterFor),
@@ -170,6 +172,8 @@ const visible = (r) => r && !r.deleted;
 export const YOURS = YOURS_ID;
 const JOURNAL = "00000000000000000000000JRN";
 const YOURS_NAME = "Your values";
+const YOURS_DESCRIPTION =
+  "Checks how an action relates to each of your values: whether it serves the value, goes against it, or is unrelated.";
 const SERVES = "0000000000000000000000SRVS";
 const AGAINST = "0000000000000000000000AGST";
 const UNRELATED = "0000000000000000000000NRTD";
@@ -223,7 +227,7 @@ const plain = (context, r) => {
 };
 const announce = (context, r, values = context.values ?? []) =>
   r.id === YOURS
-    ? { ...plain(context, r), book: JOURNAL, name: YOURS_NAME, questions: values.map(valueQuestion), derivedFrom: "values", combined: true }
+    ? { ...plain(context, r), book: JOURNAL, name: YOURS_NAME, description: YOURS_DESCRIPTION, questions: values.map(valueQuestion), derivedFrom: "values", combined: true }
     : plain(context, r);
 
 // Your values is news only where the values fact is known to be.
@@ -250,6 +254,165 @@ function replyList(context, payload, reply) {
     .then(() => context.ask("values", "read", day ? { day } : {}))
     .then(valuesOf, () => null)
     .then(answer);
+}
+
+// --- The chat's tools (7.7) -------------------------------------------------------------
+
+// The current values for Your values, or null where the values fact does not answer.
+function withValues(context, then) {
+  if (typeof context.ask !== "function") return then(null);
+  Promise.resolve()
+    .then(() => context.ask("values", "read", {}))
+    .then(valuesOf, () => null)
+    .then(then);
+}
+
+const filled = (s) => typeof s === "string" && s.trim() !== "";
+const liveOptions = (q) => q.options.filter((o) => !o.removing);
+
+// The questions Jev can be asked, the same rule value-checks keeps (components never
+// import each other): switched on, worded, and for a pick question two live options with
+// distinct names, because Jev knows an option by its name (llm: decide).
+const pickable = (q) => {
+  const names = liveOptions(q).map((o) => str(o.name).trim());
+  return names.length >= 2 && names.every((n) => n !== "") && new Set(names).size === names.length;
+};
+const askable = (q) => q.on !== false && !q.removing && filled(q.text) && (q.kind !== "pick" || pickable(q));
+
+const toQuestion = (q) => {
+  const asked = { id: q.id, instructions: q.text };
+  if (q.kind === "pick") {
+    asked.kind = "pick";
+    asked.options = liveOptions(q).map((o) => ({ id: o.id, name: o.name, ...(filled(o.description) ? { description: o.description } : {}) }));
+  } else {
+    if (filled(q.yes)) asked.yes = q.yes;
+    if (filled(q.no)) asked.no = q.no;
+  }
+  return asked;
+};
+
+// The expected answer by the name the model reads, honoured only for the question's kind.
+const expectedOf = (q) =>
+  q.kind === "pick" ? liveOptions(q).find((o) => o.id === q.expect)?.name : q.expect === "yes" ? "Yes" : q.expect === "no" ? "No" : undefined;
+
+// An evaluator the chat may use: switched on, not in its undo window, with a question to
+// ask, its questions as announced (Your values' from the values given).
+function usable(context, r, values) {
+  if (!r || !r.on || r.removing) return null;
+  const evaluator = announce(context, r, values ?? undefined);
+  const questions = evaluator.questions.filter(askable);
+  return questions.length ? { ...evaluator, questions } : null;
+}
+
+// Every switched-on evaluator of every book, as the model reads it (queries/active.json).
+function replyActive(context, reply) {
+  withValues(context, (values) => {
+    const evaluators = [...context.evaluators.values()]
+      .filter((r) => visible(r) && r.id !== YOURS)
+      .concat(values ? [yours(context)] : [])
+      .sort(byPosition)
+      .map((r) => usable(context, r, values))
+      .filter(Boolean)
+      .map((e) => ({
+        id: e.id,
+        name: e.name,
+        description: e.description,
+        book: e.book,
+        ...(e.combined ? { combined: true } : {}),
+        questions: e.questions.map((q) => {
+          const expected = expectedOf(q);
+          return {
+            text: q.text,
+            kind: q.kind,
+            ...(q.kind === "pick"
+              ? { options: liveOptions(q).map((o) => ({ name: o.name, description: o.description })) }
+              : { yes: q.yes, no: q.no }),
+            ...(expected ? { expected } : {}),
+          };
+        }),
+      }));
+    reply({ evaluators });
+  });
+}
+
+// What llm: decide may answer instead of answers; anything else (a bus refusal) counts
+// as unavailable.
+const DECIDE_ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable", "used-up", "paused", "blocked"]);
+// How long a text waits when Jev is busy with another request (llm answers a second one
+// busy), and how many times it is asked before busy is the answer: value-checks' pause.
+export const CHECK_PAUSE_MS = 1500;
+export const BUSY_TRIES = 5;
+
+// Jev's answer to one question by name: the side a yes / no question leans to, or the
+// option picked, with how likely it is; null when Jev gave none.
+function answerOf(q, a) {
+  if (!a || typeof a.p !== "number") return null;
+  const p = Math.min(1, Math.max(0, a.p));
+  if (q.kind === "pick") {
+    const option = liveOptions(q).find((o) => o.id === a.choice);
+    return option ? { answer: option.name, p } : null;
+  }
+  return p >= 0.5 ? { answer: "Yes", p } : { answer: "No", p: 1 - p };
+}
+
+// One text against the evaluator's questions. It passes when every expected answer was
+// given, or, for an evaluator shown as one mark (combined), when any was, as its mark is
+// green then.
+function judged(evaluator, text, answers) {
+  const byId = new Map((Array.isArray(answers) ? answers : []).map((a) => [a?.id, a]));
+  const out = [];
+  let hits = 0;
+  let expects = 0;
+  for (const q of evaluator.questions) {
+    const got = answerOf(q, byId.get(q.id));
+    const expected = expectedOf(q);
+    const matches = expected !== undefined && got?.answer === expected;
+    if (expected !== undefined) {
+      expects += 1;
+      if (matches) hits += 1;
+    }
+    if (got) out.push({ question: q.text, ...got, ...(expected !== undefined ? { expected, matches } : {}) });
+  }
+  const passed = expects === 0 || (evaluator.combined ? hits > 0 : hits === expects);
+  return { text, passed, answers: out };
+}
+
+// The chat checks texts with one evaluator (queries/evaluate.json): one llm: decide per
+// text, in turn, a busy answer waited out and asked again.
+function replyEvaluate(context, payload, reply) {
+  const { evaluator: id, texts } = payload ?? {};
+  const run = (values) => {
+    const r = id === YOURS ? (values ? yours(context) : null) : live(context, id);
+    if (!r || r.removing) return reply({ error: "not-found" });
+    if (!r.on) return reply({ error: "off" });
+    const evaluator = usable(context, r, values);
+    if (!evaluator) return reply({ error: "no-questions" });
+    const questions = evaluator.questions.map(toQuestion);
+    const decide = async (text) => {
+      for (let tries = 1; ; tries += 1) {
+        const answer = await Promise.resolve()
+          .then(() => context.ask("llm", "decide", { state: { text }, questions }))
+          .catch(() => ({ error: "unavailable" }));
+        if (answer?.error === "busy" && tries < BUSY_TRIES) {
+          await context.wait(CHECK_PAUSE_MS);
+          continue;
+        }
+        return answer;
+      }
+    };
+    (async () => {
+      const results = [];
+      for (const text of texts) {
+        const answer = await decide(text);
+        if (!Array.isArray(answer?.answers)) return reply({ error: DECIDE_ERRORS.has(answer?.error) ? answer.error : "unavailable" });
+        results.push(judged(evaluator, text, answer.answers));
+      }
+      reply({ results });
+    })();
+  };
+  if (typeof context.ask !== "function") return reply({ error: "unavailable" });
+  if (id === YOURS) withValues(context, run);
+  else run(null);
 }
 
 // The incoming list with every marked item of the old list that it left out put back
@@ -328,7 +491,7 @@ function applySave(context, event, enqueue) {
   if (!was) {
     if (!isId(event.book)) return;
     const position = firstPosition(context);
-    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, on: true, questions: event.questions, position }));
+    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, description: event.description, on: true, questions: event.questions, position }));
   }
   const questions = keepMarked(
     was.questions,
@@ -337,7 +500,9 @@ function applySave(context, event, enqueue) {
       return { ...q, options: keepMarked(old ? old.options : [], q.options) };
     }),
   );
-  const next = { ...was, name: str(event.name), questions };
+  // A save from an editor without the description field keeps the one held.
+  const description = typeof event.description === "string" ? event.description : was.description;
+  const next = { ...was, name: str(event.name), description, questions };
   if (same(was, next)) return;
   commit(context, enqueue, next);
 }
@@ -364,6 +529,7 @@ const copyOf = (starter, journal, newId) =>
     id: newId(),
     book: journal,
     name: starter.name,
+    description: starter.description,
     on: true,
     questions: questionsOf(starter.questions).map((q) => {
       const ids = new Map(q.options.map((o) => [o.id, newId()]));
@@ -487,6 +653,8 @@ function settleAll(context, enqueue) {
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.payload, message.reply);
+  else if (message.type === "active?") replyActive(context, message.reply);
+  else if (message.type === "evaluate?") replyEvaluate(context, message.payload, message.reply);
   else if (message.type === "evaluator.saved") applySave(context, message, enqueue);
   else if (message.type === "evaluator.switched") applySwitch(context, message, enqueue);
   else if (message.type === "evaluator.moved") applyMove(context, message, enqueue);
@@ -497,9 +665,15 @@ function flush(context, message, enqueue) {
   else if (message.type === "evaluator.discarded") applyDiscard(context, message, enqueue);
 }
 
+// A failed store answers what it can: no evaluators, and nothing to check with.
+function unanswerable(message) {
+  if (message.type === "list?" || message.type === "active?") message.reply({ evaluators: [] });
+  else if (message.type === "evaluate?") message.reply({ error: "unavailable" });
+}
+
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.started", "removal.undone", "removal.settled", "evaluator.discarded"].map((t) => [t, { actions: queue }]),
+  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.started", "removal.undone", "removal.settled", "evaluator.discarded"].map((t) => [t, { actions: queue }]),
 );
 
 // A visitor on a try page (8) with nothing in this browser yet gets the page's
@@ -657,7 +831,8 @@ export const machine = setup({
   id: "evaluators",
   meta: {
     description:
-      "Owns the evaluators kept with each book: an evaluator is a name and a list of questions, " +
+      "Owns the evaluators kept with each book: an evaluator is a name, an optional description " +
+      "of what it checks (shown under its name in the evaluator editor and read by the chat), and a list of questions, " +
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
       "options, each option with an optional icon its mark on a choice point line shows; a " +
       "question may name the answer expected (an option, or yes or no), kept across a switch " +
@@ -696,12 +871,23 @@ export const machine = setup({
       "kept with the Journal; the copies are the visitor's own and upload with the rest once " +
       "the guest is made, and later changes by the admin do not reach them. Start over on a " +
       "try page, once its Undo window ends, deletes every evaluator in the browser and " +
-      "copies the starters in again the same way.",
+      "copies the starters in again the same way. Your values has a fixed description. The chat " +
+      "may use two of its queries as tools, always offered, because the evaluator's own switch " +
+      "decides what they cover: `evaluators: active` (\"Listing your evaluators\") lists the " +
+      "switched-on evaluators of every book that have a question to ask, each with its description, " +
+      "its switched-on questions, their options and the answer each expects by name; " +
+      "`evaluators: evaluate` (\"Checking with an evaluator\") checks up to ten texts with one " +
+      "switched-on evaluator, asking Jev (`llm: decide`) about one text at a time and, when Jev is " +
+      "busy, waiting 1.5 seconds and asking again up to five times. Each text passes when every " +
+      "expected answer was given, or, for Your values, when any was, as its mark is green then. " +
+      "An unknown evaluator, one switched off, or one with nothing to ask is refused, and an " +
+      "error Jev gives, such as no key, is the reply. It costs what any use of Jev costs and " +
+      "changes nothing.",
     kind: "fact",
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
     owns: "the evaluators kept with each book",
-    asks: ["session: read", "books: list", "values: read"],
+    asks: ["session: read", "books: list", "values: read", "llm: decide"],
   },
   context: ({ input }) => ({
     evaluators: new Map(),
@@ -710,6 +896,8 @@ export const machine = setup({
     api: input.api,
     ask: input.ask,
     now: input.now ?? (() => new Date().toISOString()),
+    // How a busy text waits before it is asked again; a test passes its own clock.
+    wait: input.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     // The try page this tab is on (8), by name, or null; and how a copy gets its ids.
     tryPage: input.tryPage ?? null,
     newId: input.newId,
@@ -758,7 +946,7 @@ export const machine = setup({
         onError: {
           target: "failed",
           actions: enqueueActions(({ context, enqueue }) => {
-            for (const message of context.queued) if (message.type === "list?") message.reply({ evaluators: [] });
+            for (const message of context.queued) unanswerable(message);
             enqueue.assign({ queued: [] });
           }),
         },
@@ -827,6 +1015,8 @@ export const machine = setup({
       initial: "idle",
       on: {
         "list?": { actions: ({ context, event }) => replyList(context, event.payload, event.reply) },
+        "active?": { actions: ({ context, event }) => replyActive(context, event.reply) },
+        "evaluate?": { actions: ({ context, event }) => replyEvaluate(context, event.payload, event.reply) },
         "evaluator.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "evaluator.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySwitch(context, event, enqueue)) },
         "evaluator.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
@@ -951,7 +1141,9 @@ export const machine = setup({
     },
     failed: {
       on: {
-        "list?": { actions: ({ event }) => event.reply({ evaluators: [] }) },
+        "list?": { actions: ({ event }) => unanswerable(event) },
+        "active?": { actions: ({ event }) => unanswerable(event) },
+        "evaluate?": { actions: ({ event }) => unanswerable(event) },
       },
     },
   },

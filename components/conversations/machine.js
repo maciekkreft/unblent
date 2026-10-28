@@ -489,7 +489,8 @@ const convertReply = (reply, replySchema) => {
 // queries the owners marked as tools (7.7), sorted by name so the provider caches a
 // stable order, each carrying its payload schema (sent to the model) and its reply
 // schema and label (kept for converting results and naming the lookup). A tool the user
-// keeps off (7.7) is kept in the metadata but left out of what is offered.
+// keeps off (7.7) is kept in the metadata but left out of what is offered; a tool whose
+// owner set `switch: false` has no switch in Settings, so the map cannot turn it off.
 const buildTools = (context, reply) => {
   const queries = (reply && reply.queries) || [];
   const meta = {};
@@ -498,7 +499,7 @@ const buildTools = (context, reply) => {
     if (!q.tool) continue;
     const key = `${q.target}: ${q.name}`;
     meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
-    if (context.tools[key] === false) continue;
+    if (q.tool.switch !== false && context.tools[key] === false) continue;
     offered.push({ key, target: q.target, name: q.name, description: q.tool.description, payload: q.payload });
   }
   offered.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));

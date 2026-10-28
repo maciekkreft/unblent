@@ -1,0 +1,133 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The evaluator to check with, by id, and the texts to check, one to ten.",
+    "type": "object",
+    "properties": {
+      "evaluator": {
+        "type": "string",
+        "description": "An evaluator's id, as evaluators: active lists it."
+      },
+      "texts": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 10,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": "The texts to check, each on its own."
+      }
+    },
+    "required": [
+      "evaluator",
+      "texts"
+    ],
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Per text, in the order given, Jev's answer to each question and whether the text passed; or an error: not-found for an unknown evaluator, off for one switched off, no-questions for one with nothing to ask, or the error llm: decide gave (busy once it stayed busy after every retry).",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "passed": {
+                  "type": "boolean",
+                  "description": "Every expected answer was given (for a combined evaluator: any was); true when none is expected."
+                },
+                "answers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "question": {
+                        "type": "string",
+                        "description": "The question's text."
+                      },
+                      "answer": {
+                        "type": "string",
+                        "description": "Jev's answer by name: Yes, No, or an option's name."
+                      },
+                      "p": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                        "description": "How likely that answer is."
+                      },
+                      "expected": {
+                        "type": "string",
+                        "description": "The answer expected, by name; absent when none is."
+                      },
+                      "matches": {
+                        "type": "boolean",
+                        "description": "The answer is the one expected; absent when none is."
+                      }
+                    },
+                    "required": [
+                      "question",
+                      "answer",
+                      "p"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "text",
+                "passed",
+                "answers"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "error": {
+            "enum": [
+              "not-found",
+              "off",
+              "no-questions",
+              "signed-out",
+              "no-key",
+              "bad-key",
+              "rate-limited",
+              "overloaded",
+              "invalid",
+              "busy",
+              "unavailable",
+              "used-up",
+              "paused",
+              "blocked"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": [],
+  "tool": {
+    "description": "Checks texts with one of the reader's switched-on evaluators (ids from evaluators: active): Jev answers each of its questions about each text, and a text passes when it gets the expected answers. Use it to test your own suggestions, such as candidate names or wordings, before offering them, and offer only those that pass. Each use costs a little.",
+    "label": "Checking with an evaluator",
+    "switch": false
+  }
+}

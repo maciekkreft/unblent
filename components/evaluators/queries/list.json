@@ -38,6 +38,10 @@
             "name": {
               "type": "string"
             },
+            "description": {
+              "type": "string",
+              "description": "What the evaluator checks, in the user's words, shown under its name and read by the chat to choose an evaluator; empty for none. Your values has a fixed one."
+            },
             "on": {
               "type": "boolean",
               "description": "Switched on or off."

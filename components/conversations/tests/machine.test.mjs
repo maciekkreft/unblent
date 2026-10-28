@@ -647,6 +647,17 @@ test("a tool switched off is not offered, and its call is refused", async () => 
   assert.equal(stored.calls[0].invalid, "unknown tool", "the stored call stays marked, so the thread never names it as a lookup");
 });
 
+// A tool its owner marked `switch: false` has no switch in Settings (7.7), so an old
+// "off" left in the map must not hide it.
+test("a tool with switch: false is offered even when the map says off", async () => {
+  const always = { ...SUBJECT_TOOL, tool: { ...SUBJECT_TOOL.tool, switch: false } };
+  const h = start({ ids: [ANSWER], contracts: { queries: [CHAPTER_TOOL, always] }, tools: { tools: { "subject: read": false, "books: chapter": false }, approval: "auto" } });
+  await ready(h);
+  submit(h);
+  await flush();
+  assert.deepEqual(h.calls.completes[0].tools.map((t) => `${t.target}: ${t.name}`), ["subject: read"], "only the switchable off tool is left out");
+});
+
 test("a tool that errors is fed back as an error result", async () => {
   const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ error: "not-found" }) });
   await ready(h);

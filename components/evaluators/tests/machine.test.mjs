@@ -392,7 +392,7 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(api.puts.length, 0, "not before the window");
   await drain(clock);
   assert.equal(api.puts.length, 1);
-  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "id", "name", "on", "position", "questions", "starterFor", "updatedAt"]);
+  assert.deepEqual(Object.keys(api.puts[0]).sort(), ["baseVersion", "book", "description", "id", "name", "on", "position", "questions", "starterFor", "updatedAt"]);
   assert.deepEqual([changed.at(-1).pending, changed.at(-1).version], [false, 1]);
   assert.equal(store.outbox.size, 0);
 });

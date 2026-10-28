@@ -60,11 +60,12 @@ const toolsEdited = (key, on) => ({ type: "tools.edited", tools: { [key]: on } }
 // The tools the chat may offer the model (7.7): the queries whose owners marked them as
 // tools, from `catalog: contracts`. Each is one switch: its key `"target: name"`, the
 // person's label and the description. Sorted by key so the list is stable, matching the
-// order `conversations` offers them in.
+// order `conversations` offers them in. A tool whose owner set `switch: false` is always
+// on (7.7), so it gets no switch here.
 const toolsFrom = (contracts) => {
   const queries = (contracts && contracts.queries) || [];
   return queries
-    .filter((q) => q.tool)
+    .filter((q) => q.tool && q.tool.switch !== false)
     .map((q) => ({ key: `${q.target}: ${q.name}`, label: q.tool.label, description: q.tool.description }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 };

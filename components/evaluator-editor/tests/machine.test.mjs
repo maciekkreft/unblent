@@ -121,6 +121,7 @@ test("every edit leaves as the whole evaluator, without the evaluator's on/off o
     id: R,
     book: P,
     name: "Goal or value",
+    description: "",
     questions: [
       { id: Q1, on: true, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "Done once" }, { id: O2, name: "Value", description: "" }] },
       { id: Q2, on: true, kind: "yesno", text: "Is it a goal?", yes: "it ends", no: "never", options: [] },
@@ -131,6 +132,22 @@ test("every edit leaves as the whole evaluator, without the evaluator's on/off o
   assert.equal(saves(emitted).at(-1).name, "GV");
   clock.increment(400);
   assert.equal(emitted.length, 2);
+});
+
+test("the description is saved with the evaluator, cleared too, and alone makes a new evaluator worth saving", async () => {
+  const { actor, clock, emitted, ctx } = await start([{ ...EVALUATOR, description: "Goals against values" }]);
+  await select(actor, { id: R, book: P });
+  assert.equal(ctx().draft.description, "Goals against values");
+  actor.send({ type: "_edit", patch: { description: "" } });
+  clock.increment(200);
+  assert.deepEqual(saves(emitted).map((e) => e.description), [""]);
+
+  await select(actor, { id: NEW, book: P });
+  assert.equal(ctx().draft.description, "");
+  actor.send({ type: "_edit", patch: { description: "Checks a plan" } });
+  assert.equal(isEmpty(ctx().draft), false);
+  actor.send({ type: "_blur" });
+  assert.deepEqual(saves(emitted).filter((e) => e.id === NEW).map((e) => [e.name, e.description]), [["", "Checks a plan"]]);
 });
 
 test("a question's tick switches it off and on in one step, saved with the whole evaluator; it stays editable", async () => {

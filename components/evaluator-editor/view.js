@@ -533,7 +533,7 @@ class EvaluatorEditor extends LitElement {
 
   // The field that last held the keyboard in this editor.
   #last = null;
-  // The CodeMirror boxes by key ("<question>:text", "<question>:<option>:description"),
+  // The CodeMirror boxes by key ("description", "<question>:text", "<question>:<option>:description"),
   // each with the region it is drawn in; and what the last render asked of each box.
   #boxes = new Map();
   #wanted = new Map();
@@ -796,6 +796,16 @@ class EvaluatorEditor extends LitElement {
               @input=${(e) => this.#send({ type: "_edit", patch: { name: e.target.value } })}
             />
           </label>
+          <div class="field">
+            <span class="caption" aria-hidden="true">Description</span>
+            ${this.#box("description", "description", {
+              text: draft.description ?? "",
+              label: "Description",
+              hint: "What this evaluator checks, for the chat",
+              small: true,
+              edit: (description) => this.#send({ type: "_edit", patch: { description } }),
+            })}
+          </div>
           <fieldset class="field">
             <legend>Questions</legend>
             <div class="questions">${questions.map((q, i) => this.#question(q, i))}</div>
@@ -825,6 +835,12 @@ class EvaluatorEditor extends LitElement {
             <span class="caption">Name</span>
             <h2 class="name">${draft.name}</h2>
           </div>
+          ${draft.description
+            ? html`<div class="field">
+                <span class="caption">Description</span>
+                <p class="text description">${draft.description}</p>
+              </div>`
+            : nothing}
           <p class="where">
             It asks one question for each of your values. Change your values in the Values sheet, under the day's text in the
             Journal.

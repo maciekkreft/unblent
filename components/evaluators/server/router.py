@@ -62,6 +62,8 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN starter_for TEXT NOT NULL DEFAULT '[]'")
     if "position" not in columns:
         connection.executescript("ALTER TABLE evaluators ADD COLUMN position TEXT")
+    if "description" not in columns:
+        connection.executescript("ALTER TABLE evaluators ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     # "Show in journal" is gone and the journal lists only its own evaluators, so one
     # still ticked moves to the journal, with a new version and seq so every device pulls it.
     for (ticked,) in connection.execute("SELECT id FROM evaluators WHERE journal = 1").fetchall():
@@ -83,6 +85,8 @@ def _shared() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(DATA / "evaluators.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_STARTERS)
+    if "description" not in {row["name"] for row in connection.execute("PRAGMA table_info(starters)")}:
+        connection.executescript("ALTER TABLE starters ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     try:
         with connection:
             yield connection
@@ -95,13 +99,13 @@ def _publish(connection: sqlite3.Connection, user_id: str) -> None:
     Rows are kept by whose they are, so the throwaway server's many forged admins do
     not undo one another; the product has one admin."""
     rows = connection.execute(
-        "SELECT id, name, questions, starter_for FROM evaluators WHERE deleted = 0 AND starter_for != '[]' ORDER BY id"
+        "SELECT id, name, description, questions, starter_for FROM evaluators WHERE deleted = 0 AND starter_for != '[]' ORDER BY id"
     ).fetchall()
     with _shared() as shared:
         shared.execute("DELETE FROM starters WHERE owner = ?", (user_id,))
         shared.executemany(
-            "INSERT INTO starters (owner, page, id, name, questions) VALUES (?, ?, ?, ?, ?)",
-            [(user_id, page, row["id"], row["name"], row["questions"]) for row in rows for page in json.loads(row["starter_for"])],
+            "INSERT INTO starters (owner, page, id, name, description, questions) VALUES (?, ?, ?, ?, ?, ?)",
+            [(user_id, page, row["id"], row["name"], row["description"], row["questions"]) for row in rows for page in json.loads(row["starter_for"])],
         )
 
 
@@ -135,6 +139,7 @@ def _record(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "book": row["book"],
         "name": row["name"],
+        "description": row["description"],
         "on": bool(row["on"]),
         "journal": bool(row["journal"]),
         "questions": json.loads(row["questions"]),
@@ -180,7 +185,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
     book, name, on = payload.get("book"), payload.get("name"), payload.get("on")
     questions, base, deleted = payload.get("questions"), payload.get("baseVersion"), payload.get("deleted", False)
     journal, updated = payload.get("journal"), payload.get("updatedAt")
-    starter_for = payload.get("starterFor")
+    starter_for, description = payload.get("starterFor"), payload.get("description")
     valid = (
         _is_id(book)
         and isinstance(name, str)
@@ -192,6 +197,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         and (journal is None or isinstance(journal, bool))
         and (updated is None or _is_time(updated))
         and (starter_for is None or _pages(starter_for) is not None)
+        and (description is None or isinstance(description, str))
     )
     if not valid:
         return JSONResponse(_BAD, status_code=400)
@@ -204,7 +210,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
     admin = bool((session_of(request) or {}).get("admin"))
     with _connect(user_id) as connection:
         pages = _pages(starter_for) if admin and starter_for is not None else None
-        result = _write(connection, evaluator_id, book, name, on, journal, stored, base, deleted, updated, pages)
+        result = _write(connection, evaluator_id, book, name, description, on, journal, stored, base, deleted, updated, pages)
         if position is not None:
             result = _place(connection, evaluator_id, position)
         if admin:
@@ -212,16 +218,17 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         return result
 
 
-def _write(connection, evaluator_id, book, name, on, journal, stored, base, deleted, updated, pages) -> dict:
-    """One write onto the user's own file; pages is the new starterFor, None to keep it."""
+def _write(connection, evaluator_id, book, name, description, on, journal, stored, base, deleted, updated, pages) -> dict:
+    """One write onto the user's own file; pages is the new starterFor and description the
+    new description, each None to keep what is held."""
     row = connection.execute("SELECT * FROM evaluators WHERE id = ?", (evaluator_id,)).fetchone()
     if row is None:
         # A new id is an idempotent upsert of the browser's own ULID (5): it continues
         # from the base the client held, or 1, so an evaluator made signed out arrives
         # with its history. A tombstone can be born here, for one deleted before upload.
         connection.execute(
-            'INSERT INTO evaluators (id, book, name, "on", journal, questions, version, seq, deleted, updated_at, starter_for) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (evaluator_id, book, name, int(on), int(bool(journal)), stored, (base or 0) + 1, _next_seq(connection), int(deleted), updated, json.dumps(pages or [])),
+            'INSERT INTO evaluators (id, book, name, description, "on", journal, questions, version, seq, deleted, updated_at, starter_for) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (evaluator_id, book, name, description or "", int(on), int(bool(journal)), stored, (base or 0) + 1, _next_seq(connection), int(deleted), updated, json.dumps(pages or [])),
         )
         return _reread(connection, evaluator_id)
     # A write onto a tombstone, or a second delete, returns the tombstone unchanged.
@@ -230,13 +237,15 @@ def _write(connection, evaluator_id, book, name, on, journal, stored, base, dele
     # A write from a browser that predates "Show in journal" leaves it out and keeps it.
     shown = row["journal"] if journal is None else int(journal)
     ticks = row["starter_for"] if pages is None else json.dumps(pages)
+    # A write from a tab older than the description leaves it out and keeps it.
+    said = row["description"] if description is None else description
     # What the server already holds is not a change: no new version and no new seq,
     # so a resend of a write already applied is harmless.
-    if not deleted and (name, int(on), shown, stored, ticks) == (row["name"], row["on"], row["journal"], row["questions"], row["starter_for"]):
+    if not deleted and (name, said, int(on), shown, stored, ticks) == (row["name"], row["description"], row["on"], row["journal"], row["questions"], row["starter_for"]):
         return _record(row)
     connection.execute(
-        'UPDATE evaluators SET name = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ?, updated_at = ?, starter_for = ? WHERE id = ?',
-        (name, int(on), shown, stored, row["version"] + 1, _next_seq(connection), int(deleted), updated, ticks, evaluator_id),
+        'UPDATE evaluators SET name = ?, description = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ?, updated_at = ?, starter_for = ? WHERE id = ?',
+        (name, said, int(on), shown, stored, row["version"] + 1, _next_seq(connection), int(deleted), updated, ticks, evaluator_id),
     )
     return _reread(connection, evaluator_id)
 
@@ -263,8 +272,8 @@ def list_evaluators(since: str = "0", user_id: str = Depends(require_user)):
 
 @router.get("/starters/{page}")
 def starters(page: str):
-    """A try page's starters (8), for anyone: each ticked evaluator's name and questions,
+    """A try page's starters (8), for anyone: each ticked evaluator's name, description and questions,
     oldest first. Nothing of the admin's but what they ticked leaves the server."""
     with _shared() as shared:
-        rows = shared.execute("SELECT name, questions FROM starters WHERE page = ? ORDER BY id", (page,)).fetchall()
-    return {"evaluators": [{"name": row["name"], "questions": json.loads(row["questions"])} for row in rows]}
+        rows = shared.execute("SELECT name, description, questions FROM starters WHERE page = ? ORDER BY id", (page,)).fetchall()
+    return {"evaluators": [{"name": row["name"], "description": row["description"], "questions": json.loads(row["questions"])} for row in rows]}

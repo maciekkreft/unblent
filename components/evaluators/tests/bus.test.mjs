@@ -65,3 +65,54 @@ test("an evaluator's removal waits in notice-stack: Undo brings it back, the win
     unwire();
   }
 });
+
+// The chat's tools (7.7) on the real bus, with llm real and its call to Jev faked, so no
+// request leaves the test. A stand-in asks the way conversations' tool loop does. Two
+// checks at once find llm busy with the other, and the second waits and asks again.
+test("the chat lists the switched-on evaluators and checks texts with one through llm", async () => {
+  const Q1 = "01ARZ3NDEKTSV4RRFFQ69G5QQ1";
+  const store = memory();
+  store.rows.set(ID, {
+    id: ID,
+    book: BOOK,
+    name: "Short",
+    description: "Checks a name is short",
+    on: true,
+    version: 1,
+    questions: [{ id: Q1, kind: "yesno", text: "Is it under three words?", yes: "", no: "", options: [], expect: "yes" }],
+  });
+  const asked = [];
+  const waits = [];
+  const decide = async (payload) => {
+    asked.push(payload.state.text);
+    await new Promise((r) => setTimeout(r, 30));
+    return { answers: [{ id: Q1, p: payload.state.text.split(" ").length < 3 ? 0.9 : 0.1 }], inputTokens: 1, ms: 1 };
+  };
+  const picture = { signedIn: true, provider: "echo", providers: [], model: "", models: [], effort: "default", efforts: [], ttl: "1h", jev: { keySet: true } };
+  const { actors, unwire } = await wire(["llm", "evaluators"], {
+    llm: { session: async () => ({ userId: "u1" }), read: async () => picture, decide },
+    evaluators: { store, wait: (ms) => (waits.push(ms), new Promise((r) => setTimeout(r, ms / 50))) },
+  });
+  const { ask } = await import("bus");
+  const chat = setup({}).createMachine({
+    id: "test-chat",
+    meta: { kind: "view", emits: [], asks: ["*: tool"], attributes: [] },
+  });
+  const actor = mount(chat, {});
+  try {
+    await until(() => actors.evaluators.getSnapshot().matches("ready") && actors.llm.getSnapshot().context.picture?.signedIn === true);
+    const listed = await ask(chat, "evaluators", "active", {});
+    assert.deepEqual(listed.evaluators.map((e) => [e.id, e.description]), [[ID, "Checks a name is short"]]);
+    const [one, two] = await Promise.all([
+      ask(chat, "evaluators", "evaluate", { evaluator: ID, texts: ["Calm"] }),
+      ask(chat, "evaluators", "evaluate", { evaluator: ID, texts: ["A very long name indeed"] }),
+    ]);
+    assert.deepEqual(one.results.map((r) => [r.text, r.passed]), [["Calm", true]]);
+    assert.deepEqual(two.results.map((r) => [r.text, r.passed]), [["A very long name indeed", false]]);
+    assert.deepEqual(waits, [1500], "the second found llm busy and waited");
+    assert.deepEqual(asked.sort(), ["A very long name indeed", "Calm"], "and was asked again once llm was free");
+  } finally {
+    unmount(actor);
+    unwire();
+  }
+});

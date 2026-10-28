@@ -12,6 +12,8 @@
 -- evaluator's place in the list (5), a key the browser computes; last write wins, so
 -- setting it bumps seq but never version. NULL for one from before places, which the
 -- browser orders by id, oldest first, until it is moved; the router adds the column.
+-- description is what the evaluator checks, '' for none; the router adds it to a file
+-- made before it.
 CREATE TABLE IF NOT EXISTS evaluators (
     id        TEXT PRIMARY KEY,
     book      TEXT NOT NULL,
@@ -24,6 +26,7 @@ CREATE TABLE IF NOT EXISTS evaluators (
     deleted   INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT,
     starter_for TEXT NOT NULL DEFAULT '[]',
-    position  TEXT
+    position  TEXT,
+    description TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS evaluators_seq ON evaluators(seq);

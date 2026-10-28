@@ -97,6 +97,7 @@ const list = (actor, payload = {}) =>
 
 const STARTER = {
   name: "Clear goal",
+  description: "Checks a goal is clear",
   questions: [
     { id: Q1, on: true, kind: "pick", text: "Goal or value?", yes: "", no: "", options: [{ id: O1, name: "Goal", description: "", icon: "trophy" }], expect: O1 },
   ],
@@ -130,9 +131,9 @@ test("on a try page, a visitor with nothing here gets copies of the starters bef
   const { actor } = start(store, { api, ask, tryPage: "evaluators" });
   const first = await list(actor, { book: JOURNAL });
   assert.deepEqual(api.asked, ["evaluators"]);
-  assert.deepEqual(first.map((e) => [e.name, e.book, e.on, e.version]), [
-    ["Clear goal", JOURNAL, true, 1],
-    ["Second", JOURNAL, true, 1],
+  assert.deepEqual(first.map((e) => [e.name, e.description, e.book, e.on, e.version]), [
+    ["Clear goal", "Checks a goal is clear", JOURNAL, true, 1],
+    ["Second", "", JOURNAL, true, 1],
   ]);
   const [copy] = first;
   assert.notEqual(copy.questions[0].id, Q1, "the copy's questions have their own ids");

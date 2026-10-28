@@ -5,6 +5,8 @@ import { openEvaluators } from "./store.js";
 import changed from "./events/evaluator.changed.json" with { type: "json" };
 import deleted from "./events/evaluator.deleted.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
+import active from "./queries/active.json" with { type: "json" };
+import evaluate from "./queries/evaluate.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store and
 // the sync `api` — and mounts it, so machine.js stays importable in Node. The api
@@ -63,7 +65,7 @@ const actor = mount(machine, {
     newId: monotonicFactory(),
   },
   events: { "evaluator.changed": changed, "evaluator.deleted": deleted },
-  queries: { list },
+  queries: { list, active, evaluate },
 });
 
 // A tab regaining focus drains then pulls, which is how an edit made on another device

@@ -1,0 +1,123 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "No input: every switched-on evaluator of every book is wanted.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The switched-on evaluators of every book that have a question to ask, Your values among them when the user has values, in their places in the list. Each carries only its switched-on questions that can be asked.",
+    "type": "object",
+    "properties": {
+      "evaluators": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The evaluator's id, which evaluators: evaluate takes."
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string",
+              "description": "What the evaluator checks, in the user's words; empty when the user wrote none."
+            },
+            "book": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The book the evaluator is kept with."
+            },
+            "combined": {
+              "type": "boolean",
+              "description": "A text passes when any question gets its expected answer, rather than every one (Your values: it serves at least one value). False when absent."
+            },
+            "questions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "The question."
+                  },
+                  "kind": {
+                    "enum": [
+                      "yesno",
+                      "pick"
+                    ],
+                    "description": "yesno: answered Yes or No. pick: answered with one of the options, by name."
+                  },
+                  "yes": {
+                    "type": "string",
+                    "description": "What Yes means, for a yesno question; empty for none."
+                  },
+                  "no": {
+                    "type": "string",
+                    "description": "What No means, for a yesno question; empty for none."
+                  },
+                  "options": {
+                    "type": "array",
+                    "description": "The options of a pick question.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "What the option means; empty for none."
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "description"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "expected": {
+                    "type": "string",
+                    "description": "The answer a text should get, by name (Yes, No, or an option's name); absent when none is expected."
+                  }
+                },
+                "required": [
+                  "text",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "description",
+            "book",
+            "questions"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "evaluators"
+    ],
+    "additionalProperties": false
+  },
+  "supersededBy": [
+    "evaluator.changed",
+    "evaluator.deleted"
+  ],
+  "tool": {
+    "description": "Lists the reader's evaluators that are switched on: for each, its id, name, a description of what it checks, and its questions, each with what Yes and No mean or its options, and the answer a text should get. Use it to choose an evaluator, then check text with it through evaluators: evaluate.",
+    "label": "Listing your evaluators",
+    "switch": false
+  }
+}

@@ -43,7 +43,7 @@ test("a create continues from the base the browser held, and any later write win
   const cookie = freshCookie();
   const created = await (await put(ID, body({ baseVersion: 3 }), cookie)).json();
   const { updatedAt, ...rest } = created;
-  assert.deepEqual(rest, { id: ID, book: BOOK, name: "Goals", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false, position: null });
+  assert.deepEqual(rest, { id: ID, book: BOOK, name: "Goals", description: "", on: true, journal: false, questions: [QUESTION], version: 4, deleted: false, position: null });
   assert.ok(!Number.isNaN(Date.parse(updatedAt)), "a write without a time is stamped by the server");
   // Last write wins: a stale base is never refused.
   const res = await put(ID, body({ name: "Renamed", on: false, baseVersion: 1 }), cookie);
@@ -90,6 +90,17 @@ test("the browser's time of a change is kept, and a resend of the same content k
   assert.equal(edited.updatedAt, "2026-02-02T00:00:00.000Z");
 });
 
+test("a description is kept, a change of it is a new version, and a write leaving it out keeps it", async () => {
+  const cookie = freshCookie();
+  const made = await (await put(ID, body({ description: "Checks goals" }), cookie)).json();
+  assert.deepEqual([made.description, made.version], ["Checks goals", 1]);
+  const kept = await (await put(ID, body(), cookie)).json();
+  assert.deepEqual([kept.description, kept.version], ["Checks goals", 1], "an older tab's write keeps it");
+  const changed = await (await put(ID, body({ description: "Checks clear goals" }), cookie)).json();
+  assert.deepEqual([changed.description, changed.version], ["Checks clear goals", 2]);
+  assert.equal((await put(ID, body({ description: 3 }), cookie)).status, 400);
+});
+
 test("a file from before updatedAt gains the column, its rows null", async () => {
   const user = freshUser();
   const dir = join(process.env.UNBLENT_DATA, user);
@@ -103,7 +114,7 @@ test("a file from before updatedAt gains the column, its rows null", async () =>
     BOOK,
   ]);
   const all = await (await pull(0, cookieFor(user))).json();
-  assert.deepEqual(all.evaluators.map((e) => [e.name, e.updatedAt]), [["Old", null]]);
+  assert.deepEqual(all.evaluators.map((e) => [e.name, e.updatedAt, e.description]), [["Old", null, ""]]);
 });
 
 test("a book is set when the evaluator is born and never changes", async () => {
@@ -153,12 +164,12 @@ const freshPage = () => `api-${Date.now()}-${counter++}`;
 test("the admin's ticked evaluators are copied to the shared file, which anyone can read", async () => {
   const admin = cookieFor(`${freshUser()}|admin`);
   const page = freshPage();
-  const ticked = await (await put(ID, body({ starterFor: [page, page] }), admin)).json();
+  const ticked = await (await put(ID, body({ description: "Checks goals", starterFor: [page, page] }), admin)).json();
   assert.deepEqual([ticked.starterFor, ticked.version], [[page], 1]);
   await put(ID2, body({ name: "Not ticked" }), admin);
   const res = await starters(page);
   assert.equal(res.status, 200, "no account is needed");
-  assert.deepEqual(await res.json(), { evaluators: [{ name: "Goals", questions: [QUESTION] }] });
+  assert.deepEqual(await res.json(), { evaluators: [{ name: "Goals", description: "Checks goals", questions: [QUESTION] }] });
 
   // A save the admin makes reaches the copy; a save leaving starterFor out keeps the tick.
   await put(ID, body({ name: "Clear goal" }), admin);

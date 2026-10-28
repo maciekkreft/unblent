@@ -92,7 +92,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test("Your values opens read only: its name and its questions as words, where to change them, no Delete", async () => {
+    test("Your values opens read only: its name, its description and its questions as words, where to change them, no Delete", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 700 } });
       context.setDefaultTimeout(4000);
       await signedIn(context, forgeCookie("evaluator-values"));
@@ -110,9 +110,45 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const editor = page.locator("evaluator-editor");
         await editor.locator(".read .name").getByText("Your values").waitFor();
         await editor.getByText("Change your values in the Values sheet").waitFor();
+        assert.match(await editor.locator(".read .description").innerText(), /how an action relates to each of your values/);
         assert.match(await editor.locator(".question .text").innerText(), /“Being a present parent” \(Showing up for my kids\)\?/);
         assert.deepEqual(await editor.locator(".answer").allInnerTexts(), ["Serves (expected)", "Goes against", "Unrelated"]);
         assert.equal(await editor.locator("input, select, .box, button:not(.pin)").count(), 0, "nothing to type in, choose or delete");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
+    test("the Description box sits directly under the name, shows its placeholder, and what is typed in it is saved", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("evaluator-description"));
+      try {
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
+        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
+        await page.click("evaluator-list .row.new .open");
+        const editor = page.locator("evaluator-editor");
+        const box = editor.locator('.box[data-key="description"]');
+        await box.locator(".cm-placeholder").getByText("What this evaluator checks, for the chat").waitFor();
+        const order = await inEditor(page, (root) =>
+          [...root.querySelectorAll("form > *")].slice(0, 3).map((el) => (el.querySelector("input.title") ? "name" : el.querySelector('.box[data-key="description"]') ? "description" : el.localName)),
+        );
+        assert.deepEqual(order, ["name", "description", "fieldset"]);
+        const [name, under] = [await editor.locator("input.title").boundingBox(), await box.boundingBox()];
+        assert.ok(under.y > name.y + name.height && Math.abs(under.x - name.x) < 1 && Math.abs(under.width - name.width) < 1, "under the name, as wide");
+
+        await box.locator(".cm-content").click();
+        await page.keyboard.type("Checks a plan");
+        await page.keyboard.press("Tab");
+        await until(async () => {
+          await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+          const { evaluators } = await (await context.request.get(`${BASE_URL}/api/evaluators`)).json();
+          return evaluators.some((e) => e.description === "Checks a plan");
+        });
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
