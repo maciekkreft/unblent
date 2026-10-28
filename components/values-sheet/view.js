@@ -6,7 +6,7 @@ import { EditorState, Prec, Annotation, StateField, StateEffect } from "@codemir
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, toRegister } from "editor";
-import { machine, writable, placeable, isPlaced, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor } from "./machine.js";
+import { machine, writable, placeable, isPlaced, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor, isEmpty } from "./machine.js";
 import saved from "./events/values.saved.json" with { type: "json" };
 import placed from "./events/values.placed.json" with { type: "json" };
 
@@ -343,9 +343,13 @@ class ValuesSheet extends LitElement {
       background: transparent;
       color: var(--color-body-mid);
     }
-    .remove:hover {
+    .remove:hover:not([aria-disabled="true"]) {
       background: var(--color-surface-hover);
       color: var(--color-danger);
+    }
+    .remove[aria-disabled="true"] {
+      cursor: default;
+      color: var(--color-mute);
     }
     /* A value counting down to its removal is struck through, with Undo and the draining
        bar, as a row counting down to its delete is in the lists. */
@@ -1052,7 +1056,18 @@ class ValuesSheet extends LitElement {
             ${icon("arrow-down")}
           </button>
         </span>
-        <button class="remove" type="button" aria-label="Remove ${name}" title="Remove" @click=${() => this.#remove(draft.id)}>${icon("x")}</button>
+        <!-- Only an emptied value can go, so one press never takes written words away;
+             aria-disabled keeps the button reachable so its title says what to do first. -->
+        <button
+          class="remove"
+          type="button"
+          aria-label="Remove ${name}"
+          aria-disabled=${isEmpty(draft) ? "false" : "true"}
+          title=${isEmpty(draft) ? "Remove" : "Clear the value and its example first"}
+          @click=${() => isEmpty(draft) && this.#remove(draft.id)}
+        >
+          ${icon("x")}
+        </button>
       </div>
     </div>`;
   }

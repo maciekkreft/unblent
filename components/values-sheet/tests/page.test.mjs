@@ -203,16 +203,18 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: a gesture.
-    test("removing a value strikes it through with Undo, which keeps it; once the window ends it is gone", async () => {
+    test("x removes a value only once emptied, at once; with Vim keys dd and Escape strike one through with Undo, which keeps it; once the window ends it is gone", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       const cookie = forgeCookie("values-remove");
       await signedIn(context, cookie);
       await shortUndo(context, 400);
       try {
+        await context.addInitScript((v) => localStorage.setItem("settings", v), VIM_ON);
         const values = [
           { id: ID(1), name: "Honest", meaning: "" },
           { id: ID(2), name: "Kind", meaning: "Gentle with myself too" },
+          { id: ID(3), name: "Calm", meaning: "" },
         ];
         const put = await context.request.put(`${BASE_URL}/api/values/${dayOf(Date.now())}`, { data: { values, baseVersion: null } });
         assert.equal(put.status(), 200);
@@ -221,14 +223,36 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
         const sheet = page.locator("values-sheet");
         await sheet.locator(".card").click();
-        await sheet.locator(`.row[data-id="${ID(2)}"] .remove`).click();
+        const remove = (n) => sheet.locator(`.row[data-id="${ID(n)}"] .remove`);
+        assert.equal(await remove(1).getAttribute("aria-disabled"), "true", "a value with words in it stays");
+        await remove(1).click({ force: true });
+        assert.equal(await sheet.locator(".row.removing").count(), 0);
+        await sheet.locator(`.row[data-id="${ID(1)}"] .box`).first().click();
+        await page.keyboard.press("Control+a");
+        await page.keyboard.press("Backspace");
+        await until(async () => (await remove(1).getAttribute("aria-disabled")) === "false");
+        await remove(1).click();
+        await until(async () => (await sheet.locator(`.row[data-id="${ID(1)}"]`).count()) === 0);
+
+        const onRow = () => inSheet(page, (root) => (root.activeElement?.matches(".row") ? root.activeElement.dataset.id : null));
+        const dd = async () => {
+          await sheet.locator(`.row[data-id="${ID(2)}"] .box`).first().click();
+          // A click may leave Vim in insert or normal mode; Escape until the row has the keyboard.
+          for (let i = 0; i < 2 && (await onRow()) !== ID(2); i++) await page.keyboard.press("Escape");
+          await until(async () => (await onRow()) === ID(2));
+          await page.keyboard.press("d");
+          await page.keyboard.press("d");
+          await sheet.locator(`.row.cut[data-id="${ID(2)}"]`).waitFor();
+          await page.keyboard.press("Escape");
+        };
+        await dd();
         await sheet.locator(`.row.removing[data-id="${ID(2)}"] .undo`).click();
         await sheet.locator(`.row[data-id="${ID(2)}"] .box`).first().waitFor();
-        await sheet.locator(`.row[data-id="${ID(1)}"] .remove`).click();
+        await dd();
         await sheet.locator(".row.removing").waitFor();
         await until(async () => (await sheet.locator(".row.removing").count()) === 0);
         await sheet.locator(".done").click();
-        await until(async () => (await card(page)) === "Kind");
+        await until(async () => (await card(page)) === "Calm");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

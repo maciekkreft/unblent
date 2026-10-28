@@ -498,7 +498,9 @@ export const machine = setup({
       "day the sheet is read only, with Close instead of Done, and says Changed since · see " +
       "today's when the values changed after that day, which shows the current values in " +
       "place, read only, with Back. Done, or Escape, folds the sheet; with Vim keys on, the " +
-      "first Escape in a box leaves insert mode and the next puts the keyboard on the row. Removing a value strikes it through with " +
+      "first Escape in a box leaves insert mode and the next puts the keyboard on the row. A row's x is greyed, " +
+      "with the hint to clear the value and its example first, until both are empty, and then " +
+      "removes the empty row at once. Removing a value with Vim keys strikes it through with " +
       "Undo and a draining bar for the undo window; once it ends the value is gone from " +
       "today's version, and earlier days keep theirs. The window goes on while the sheet is " +
       "folded, and moving to another day ends it at once. A row whose name and sentence are " +
