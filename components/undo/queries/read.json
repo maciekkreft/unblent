@@ -1,0 +1,36 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What Undo and Redo would reverse or make again now, null when there is nothing; the same as undo.changed.",
+    "type": "object",
+    "properties": {
+      "undo": { "$ref": "#/$defs/step" },
+      "redo": { "$ref": "#/$defs/step" }
+    },
+    "required": ["undo", "redo"],
+    "additionalProperties": false,
+    "$defs": {
+      "step": {
+        "oneOf": [
+          { "type": "null" },
+          {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+              "label": { "type": "string" }
+            },
+            "required": ["id", "label"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
+  "supersededBy": ["undo.changed"]
+}

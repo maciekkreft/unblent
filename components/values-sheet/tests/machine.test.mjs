@@ -22,7 +22,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 // `versions` maps a day a version was written to its values; the fake answers read as the
 // values fact does, the latest version on or before the day asked.
 // `placed`, when given, maps a day to whether it shows the panel, as read's placed says.
-async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators, suggestions, placed } = {}) {
+async function start(versions = {}, { vimKeys, checks, evaluators, suggestions, placed } = {}) {
   let n = 0;
   const asked = [];
   const clock = new SimulatedClock();
@@ -47,7 +47,6 @@ async function start(versions = {}, { vimKeys, undoMs = 3000, checks, evaluators
       mint: () => `01K6TEST000000000000000M${String(++n).padStart(2, "0")}`,
       now: () => NOW,
       throttleMs: 400,
-      undoMs,
     },
   });
   const emitted = [];
@@ -208,36 +207,21 @@ test("a row with neither a name nor a sentence is not saved, and its removal is 
   assert.deepEqual(emitted.at(-1).values, [v(1, "Honest")]);
   actor.send({ type: "_remove", id: row });
   assert.deepEqual(ctx().drafts, [v(1, "Honest")]);
-  assert.deepEqual(ctx().removing, []);
 });
 
-test("removing a value waits out the undo window; Undo keeps it, and the end saves without it", async () => {
-  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [v(1, "Honest"), v(2, "Kind")] });
+test("removing a value saves without it at once, after what was typed elsewhere", async () => {
+  const { actor, emitted, ctx } = await start({ [TODAY]: [v(1, "Honest"), v(2, "Kind")] });
   actor.send({ type: "_open" });
   actor.send({ type: "_remove", id: id(1) });
-  assert.deepEqual(ctx().removing, [id(1)]);
-  assert.deepEqual(shownValues(ctx()), [v(2, "Kind")]);
-  clock.increment(1000);
-  actor.send({ type: "_undo", id: id(1) });
-  clock.increment(5000);
-  assert.equal(emitted.length, 0, "Undo cancelled the removal");
-  assert.equal(ctx().drafts.length, 2);
-
-  actor.send({ type: "_remove", id: id(2) });
-  // The window goes on while the sheet is folded.
-  actor.send({ type: "_done" });
-  assert.deepEqual(shownValues(ctx()), [v(1, "Honest")]);
-  clock.increment(3000);
-  assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(1, "Honest")] });
-  assert.deepEqual(ctx().removing, []);
-});
-
-test("moving to another day ends an undo window at once", async () => {
-  const { actor, emitted } = await start({ [TODAY]: [v(1, "Honest"), v(2, "Kind")] });
-  actor.send({ type: "_open" });
-  actor.send({ type: "_remove", id: id(1) });
-  actor.send({ type: "day.shown", day: YESTERDAY });
   assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(2, "Kind")] });
+  assert.deepEqual(shownValues(ctx()), [v(2, "Kind")]);
+
+  actor.send({ type: "_add" });
+  actor.send({ type: "_edit", id: ctx().drafts[1].id, field: "name", value: "Brave" });
+  const typed = ctx().drafts[1];
+  actor.send({ type: "_remove", id: id(2) });
+  assert.deepEqual(emitted.at(-2).values, [v(2, "Kind"), typed], "the typing is its own save");
+  assert.deepEqual(emitted.at(-1).values, [typed], "and the removal another");
 });
 
 test("an earlier day is read only and says when the values changed since", async () => {
@@ -468,7 +452,7 @@ test("a row moved up or down is saved in its new order without finishing any row
   assert.deepEqual(emitted.at(-1).finished, [id(2)], "leaving it afterwards still finishes it");
 });
 
-test("dd cuts a row, p or P places it, u puts the cut back or takes a paste back", async () => {
+test("dd cuts a row, p or P places it, u puts the cut back", async () => {
   const { actor, emitted, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B"), v(3, "C")] });
   actor.send({ type: "_open" });
   actor.send({ type: "_cut", id: id(1) });
@@ -482,13 +466,10 @@ test("dd cuts a row, p or P places it, u puts the cut back or takes a paste back
   actor.send({ type: "_paste", at: id(3), below: true });
   assert.deepEqual(order(ctx), ["B", "C", "A"]);
   assert.deepEqual(emitted.at(-1).values.map((x) => x.name), ["B", "C", "A"]);
-  actor.send({ type: "_unpaste" });
-  assert.deepEqual(order(ctx), ["A", "B", "C"], "u takes the paste back");
-  assert.deepEqual(emitted.at(-1).values.map((x) => x.name), ["A", "B", "C"]);
 
-  actor.send({ type: "_cut", id: id(3) });
-  actor.send({ type: "_paste", at: id(1), below: false });
-  assert.deepEqual(order(ctx), ["C", "A", "B"], "P places it above");
+  actor.send({ type: "_cut", id: id(1) });
+  actor.send({ type: "_paste", at: id(2), below: false });
+  assert.deepEqual(order(ctx), ["A", "B", "C"], "P places it above");
   const saves = emitted.length;
   actor.send({ type: "_cut", id: id(2) });
   actor.send({ type: "_paste", at: id(2), below: true });
@@ -496,16 +477,12 @@ test("dd cuts a row, p or P places it, u puts the cut back or takes a paste back
   assert.equal(ctx().cut, null);
 });
 
-test("Escape while a row is cut removes it with its undo window", async () => {
-  const { actor, clock, emitted, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B")] });
+test("Escape while a row is cut removes it at once", async () => {
+  const { actor, emitted, ctx } = await start({ [TODAY]: [v(1, "A"), v(2, "B")] });
   actor.send({ type: "_open" });
   actor.send({ type: "_cut", id: id(1) });
   actor.send({ type: "_remove", id: id(1) });
   assert.equal(ctx().cut, null);
-  assert.deepEqual(ctx().removing, [id(1)]);
-  actor.send({ type: "_cut", id: id(1) });
-  assert.equal(ctx().cut, null, "a row waiting to be removed cannot be cut");
-  clock.increment(3000);
   assert.deepEqual(emitted.at(-1).values, [v(2, "B")]);
 });
 
@@ -587,8 +564,8 @@ test("Could be shows only a suggestion made from the value line as it is now, wh
   assert.equal(cleaned("  Contributing.. "), "Contributing");
 });
 
-test("Use puts the suggestion in the value line and saves it finished; Undo puts the old one back the same way", async () => {
-  const { actor, ctx, emitted, clock } = await start({ [TODAY]: [v(1, "Get rich", "Buy a house")] }, {
+test("Use puts the suggestion in the value line and saves it finished", async () => {
+  const { actor, ctx, emitted } = await start({ [TODAY]: [v(1, "Get rich", "Buy a house")] }, {
     checks: redChecks,
     evaluators: EVALUATORS,
     suggestions: [suggestion(1, "Building security.", SOURCE)],
@@ -598,48 +575,20 @@ test("Use puts the suggestion in the value line and saves it finished; Undo puts
   actor.send({ type: "_use", id: id(1) });
   assert.deepEqual(ctx().drafts, [v(1, "Building security", "Buy a house")], "the example is kept");
   assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(1, "Building security", "Buy a house")], finished: [id(1)] });
-  assert.deepEqual(ctx().used, { id: id(1), was: "Get rich", now: "Building security" });
   assert.equal(suggestionFor(ctx(), ctx().drafts[0]), null, "the new line is not red, so no suggestion");
-
-  actor.send({ type: "_unuse" });
-  assert.deepEqual(ctx().drafts, [v(1, "Get rich", "Buy a house")]);
-  assert.deepEqual(emitted.at(-1), { type: "values.saved", day: TODAY, values: [v(1, "Get rich", "Buy a house")], finished: [id(1)] });
-  assert.equal(ctx().used, null);
-
-  // The undo window ends on its own.
-  actor.send({ type: "_use", id: id(1) });
-  clock.increment(3000);
-  assert.equal(ctx().used, null);
-  const saves = emitted.length;
-  actor.send({ type: "_unuse" });
-  assert.equal(emitted.length, saves, "no Undo after the window");
 });
 
-test("typing in the line, folding the sheet or another day ends Use's Undo; earlier days take no Use", async () => {
+test("earlier days take no Use", async () => {
   const { actor, ctx, emitted } = await start({ [TODAY]: [v(1, "Get rich", "Buy a house")] }, {
     checks: redChecks,
     evaluators: EVALUATORS,
     suggestions: [suggestion(1, "Building security", SOURCE)],
   });
   await settle();
-  actor.send({ type: "_open" });
-  actor.send({ type: "_use", id: id(1) });
-  actor.send({ type: "_edit", id: id(1), field: "name", value: "Building safety" });
-  assert.equal(ctx().used, null);
-  actor.send({ type: "_unuse" });
-  assert.equal(ctx().drafts[0].name, "Building safety");
-
-  actor.send({ type: "_edit", id: id(1), field: "name", value: "Get rich" });
-  await flush();
-  actor.send({ type: "_use", id: id(1) });
-  actor.send({ type: "_done" });
-  assert.equal(ctx().used, null);
-
   actor.send({ type: "day.shown", day: YESTERDAY, writable: false });
   await flush();
   actor.send({ type: "_open" });
   const saves = emitted.length;
   actor.send({ type: "_use", id: id(1) });
   assert.equal(emitted.length, saves);
-  assert.equal(ctx().used, null);
 });

@@ -2,8 +2,7 @@ import { setup, assign, emit, enqueueActions, fromPromise, spawnChild, stopChild
 
 // The view component that shows the client's values on a journal day (6.4). It owns only
 // UI state — the day shown, that day's version as the fact last said it, whether the sheet
-// is open, its drafts, which values wait out their undo window, and which other version is
-// being looked at — and points at one fact: it asks values: read for the shown day and
+// is open, its drafts, and which other version is being looked at — and points at one fact: it asks values: read for the shown day and
 // values: versions for the days the values changed, and follows values.changed after (4.3,
 // fourth rule). The day comes from day.shown, so the rule for which day the journal shows
 // stays in journal-entry. Writing leaves as values.saved, the whole list (4.3, third rule).
@@ -11,8 +10,9 @@ import { setup, assign, emit, enqueueActions, fromPromise, spawnChild, stopChild
 // settings.changed; and value-checks: read and evaluators: list for Jev's marks, following
 // values.checked, value-checks.changed, evaluator.changed and evaluator.deleted; and
 // generators: results for Could be's suggestions, following generation.changed. The ask,
-// the id minting, the clock, the throttle, the undo window and the hash arrive through
-// input, so the machine is importable in Node.
+// the id minting, the clock, the throttle and the hash arrive through input, so the
+// machine is importable in Node. Undo is `undo`'s and the values fact's (12, Undo): each
+// save here is a step there, so nothing waits out an undo window.
 
 export const FIELDS = ["name", "meaning"];
 
@@ -58,8 +58,7 @@ const copy = (values) => values.map((v) => ({ id: v.id, name: v.name, meaning: v
 
 export const isEmpty = (v) => !v.name.trim() && !v.meaning.trim();
 
-// What a save sends: every row with a name or a sentence, in the sheet's order. A value
-// waiting out its undo window is still kept until the window ends.
+// What a save sends: every row with a name or a sentence, in the sheet's order.
 export const savedValues = (drafts) => copy(drafts.filter((d) => !isEmpty(d)));
 
 // `finished` names the rows the user has just left, of those saved, so their lines can be
@@ -71,10 +70,10 @@ const save = (enqueue, context, values, finished = []) => {
 };
 
 // The values the folded card names: the sheet's own while it is open, otherwise the
-// version the fact said, without those waiting to be removed.
+// version the fact said.
 export function shownValues(context) {
   const list = context.open && writable(context) ? context.drafts : (context.version?.values ?? []);
-  return list.filter((v) => !context.removing.includes(v.id) && !isEmpty(v));
+  return list.filter((v) => !isEmpty(v));
 }
 
 // The days the values changed before the version the shown day holds, newest first:
@@ -93,8 +92,7 @@ export function changedLine(context) {
 }
 
 // The open sheet follows a version from the fact only while nothing typed waits to be
-// saved and no value waits out its undo window, so a change never overwrites what is on
-// screen. Rows keep their order; a value the fact no longer has goes, unless it is an
+// saved, so a change never overwrites what is on screen; an Undo or Redo arrives this way. Rows keep their order; a value the fact no longer has goes, unless it is an
 // empty row the user has just added; a value new to the sheet joins at the end.
 function merged(drafts, values) {
   const by = new Map(values.map((v) => [v.id, v]));
@@ -120,7 +118,7 @@ const follow = enqueueActions(({ context, event, enqueue }) => {
   if (version.day && event.day < version.day) return;
   if (JSON.stringify(copy(event.values)) === JSON.stringify(version.values)) return;
   enqueue.assign({ version: { day: event.day, values: copy(event.values), changedSince: version.changedSince } });
-  if (context.open && !context.dirty && !context.removing.length) enqueue.assign({ drafts: merged(context.drafts, event.values) });
+  if (context.open && !context.dirty) enqueue.assign({ drafts: merged(context.drafts, event.values) });
 });
 
 const saveWaiting = enqueueActions(({ context, enqueue }) => {
@@ -146,20 +144,6 @@ const leaveRows = (rows) =>
     enqueue.assign({ dirty: false, edited: context.edited.filter((id) => !left.includes(id)) });
   });
 const leaveAll = leaveRows(({ context }) => context.edited);
-
-const timerOf = (id) => `gone:${id}`;
-
-// Leaving the day ends every undo window at once: the values waiting are removed and
-// saved, so a removal the user asked for is never left half done.
-const finishRemovals = enqueueActions(({ context, enqueue }) => {
-  if (!context.removing.length) return;
-  for (const id of context.removing) enqueue.cancel(timerOf(id));
-  if (writable(context)) {
-    const list = context.open ? context.drafts : (context.version?.values ?? []);
-    save(enqueue, context, savedValues(list.filter((v) => !context.removing.includes(v.id))));
-  }
-  enqueue.assign({ removing: [], dirty: false });
-});
 
 // --- Jev's marks ----------------------------------------------------------------------
 // What value-checks announced is turned into marks here, so the view only draws them, as
@@ -320,19 +304,13 @@ async function sha256(text) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Use or Undo puts `name` in a value line and saves the row as finished, so Jev checks
-// the line as it now reads.
+// Use puts `name` in a value line and saves the row as finished, so Jev checks the line
+// as it now reads; that save is one step, which Undo takes back.
 function rename(enqueue, context, id, name) {
   const drafts = context.drafts.map((d) => (d.id === id ? { ...d, name } : d));
   enqueue.assign({ drafts, dirty: false, edited: context.edited.filter((e) => e !== id) });
   save(enqueue, context, savedValues(drafts), [id]);
 }
-
-const endUse = enqueueActions(({ context, enqueue }) => {
-  if (!context.used) return;
-  enqueue.cancel("used");
-  enqueue.assign({ used: null });
-});
 
 // --- Reordering ------------------------------------------------------------------------
 
@@ -378,22 +356,14 @@ const typable = ({ context, event }) =>
   context.open && writable(context) && held(context, event.id) && FIELDS.includes(event.field) && typeof event.value === "string";
 
 // A box holds one line: a line break typed or pasted becomes a space.
-// Typing in a value line Use replaced ends its Undo, so Undo never takes back what was
-// typed since.
-const edit = enqueueActions(({ context, event, enqueue }) => {
-  enqueue.assign({
-    drafts: context.drafts.map((d) => (d.id === event.id ? { ...d, [event.field]: event.value.replace(/\s*\n+\s*/g, " ") } : d)),
-    dirty: true,
-    edited: context.edited.includes(event.id) ? context.edited : [...context.edited, event.id],
-  });
-  if (context.used?.id === event.id && event.field === "name") {
-    enqueue.cancel("used");
-    enqueue.assign({ used: null });
-  }
-});
+const edit = assign(({ context, event }) => ({
+  drafts: context.drafts.map((d) => (d.id === event.id ? { ...d, [event.field]: event.value.replace(/\s*\n+\s*/g, " ") } : d)),
+  dirty: true,
+  edited: context.edited.includes(event.id) ? context.edited : [...context.edited, event.id],
+}));
 
-// A row of today's open sheet that is not waiting out its undo window can be moved.
-const movable = (context, id) => context.open && writable(context) && held(context, id) && !context.removing.includes(id);
+// A row of today's open sheet can be moved.
+const movable = (context, id) => context.open && writable(context) && held(context, id);
 
 function reorderNow(enqueue, context, id, to) {
   const drafts = moved(context.drafts, id, to);
@@ -403,7 +373,6 @@ function reorderNow(enqueue, context, id, to) {
 const reorder = (where) =>
   enqueueActions(({ context, event, enqueue }) => {
     const { id, to } = where({ context, event });
-    enqueue.assign({ pasted: null });
     reorderNow(enqueue, context, id, to);
   });
 
@@ -413,12 +382,10 @@ const openSheet = assign(({ context }) => {
   return { open: true, drafts: values.length || !writable(context) ? values : [blank(context.mint())], browsing: false, viewing: null };
 });
 
-// Folding saves what was typed; a value waiting out its undo window keeps waiting, so Undo
-// is still there when the sheet opens again.
+// Folding saves what was typed.
 const fold = enqueueActions(({ enqueue }) => {
   enqueue(leaveAll);
-  enqueue(endUse);
-  enqueue.assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null, cut: null, pasted: null, pointed: { hover: null, tap: null, cursor: null } });
+  enqueue.assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null, cut: null, pointed: { hover: null, tap: null, cursor: null } });
   enqueue.stopChild("lookup");
 });
 
@@ -500,10 +467,9 @@ export const machine = setup({
       "place, read only, with Back. Done, or Escape, folds the sheet; with Vim keys on, the " +
       "first Escape in a box leaves insert mode and the next puts the keyboard on the row. A row's x is greyed, " +
       "with the hint to clear the value and its example first, until both are empty, and then " +
-      "removes the empty row at once. Removing a value with Vim keys strikes it through with " +
-      "Undo and a draining bar for the undo window; once it ends the value is gone from " +
-      "today's version, and earlier days keep theirs. The window goes on while the sheet is " +
-      "folded, and moving to another day ends it at once. A row whose name and sentence are " +
+      "removes the empty row at once. A value removed with Vim keys is gone from today's " +
+      "version at once, and earlier days keep theirs; every change here is a step that Undo " +
+      "in the top bar takes back, and a removal shows the short notice with Undo. A row whose name and sentence are " +
       "both empty is not saved. The footer says Changed today when today's version was " +
       "written today, or when the shown version was written, and Earlier versions with how " +
       "many there are, which lists their days; picking one shows that version, read only. " +
@@ -525,7 +491,7 @@ export const machine = setup({
       "expect A way of acting\"), is said in a status line in the footer while the pointer is " +
       "over a mark, after a mark is tapped until something else is pressed, or while the text " +
       "cursor is in a checked line; otherwise it says why Jev could not check, or nothing. A " +
-      "read-only row, on an earlier day or waiting out its undo window, shows its marks after " +
+      "read-only row, on an earlier day, shows its marks after " +
       "the text. The folded card shows a red warning beside a value whose value or example " +
       "has a red mark. Today's values can be put in another order: each row has up and down " +
       "buttons, shown while the pointer or the keyboard is on the row and always on a phone, " +
@@ -534,17 +500,15 @@ export const machine = setup({
       "keyboard on the row; there j, k or the arrow keys, gg and G move between rows, Enter " +
       "or i goes back into the value, o and O add a value below or above, and Escape folds " +
       "the sheet; dd cuts the row, shown greyed as Cut, p puts it below the row the keyboard " +
-      "is on and P above, u on the cut row puts it back, and u after a paste undoes it; " +
-      "Escape while a row is cut removes it, with Undo and the draining bar. A move is saved " +
+      "is on and P above, u on the cut row puts it back, and u anywhere else is the top bar's " +
+      "Undo; Escape while a row is cut removes it at once. A move is saved " +
       "with the order and asks Jev nothing. On today's sheet, under the example of a value whose " +
       "line Jev answered with a red mark, a muted line says Could be and the value the generator Could be " +
       "suggested (`generators: results` and generation.changed), with Use; it shows only while " +
       "the suggestion was made from the value, its example and the red answers as they are now. " +
       "Use puts the suggestion in the value line, trimmed and without a closing full stop, " +
-      "keeps the example, and saves the row as finished, so Jev checks the new value; then " +
-      "Was and the old value, with Undo and the draining bar, stand there for the undo window, " +
-      "and Undo puts the old value back, saved the same way. Typing in that line, folding the " +
-      "sheet or moving to another day ends the Undo. Earlier days show no suggestion.",
+      "keeps the example, and saves the row as finished, so Jev checks the new value; Undo " +
+      "puts the old value back. Earlier days show no suggestion.",
     kind: "view",
     emits: ["values.saved", "values.placed"],
     asks: ["values: read", "values: versions", "settings: read", "value-checks: read", "evaluators: list", "generators: results"],
@@ -557,7 +521,6 @@ export const machine = setup({
     mint: input.mint,
     now: input.now,
     throttleMs: input.throttleMs ?? 400,
-    undoMs: input.undoMs ?? 3000,
     day: dateOf(input.now()),
     // Whether the journal page says the shown day can be written; null until it has.
     dayWritable: null,
@@ -575,8 +538,6 @@ export const machine = setup({
     dirty: false,
     // The ids of the rows typed in since the user last left them (values.saved's finished).
     edited: [],
-    // The ids of the values waiting out their undo window.
-    removing: [],
     // The list of earlier versions is shown, or another version is looked at:
     // { kind: "current" | "earlier", day, values }.
     browsing: false,
@@ -589,16 +550,12 @@ export const machine = setup({
     // The line whose answers the status line says, by how it was pointed at: each
     // { id, field, text } or null.
     pointed: { hover: null, tap: null, cursor: null },
-    // The id of the row cut with dd, waiting for p or P; and the place a row had before
-    // the last paste, { id, index }, so u can take the paste back.
+    // The id of the row cut with dd, waiting for p or P.
     cut: null,
-    pasted: null,
-    // Could be: its results by value id ({ text, source, version }), the hash of each
-    // source worked out so far (null while it is being worked out), and the value line
-    // just replaced by Use, { id, was, now }, while its Undo lasts.
+    // Could be: its results by value id ({ text, source, version }), and the hash of each
+    // source worked out so far (null while it is being worked out).
     suggestions: {},
     hashes: {},
-    used: null,
     sha256: input.sha256 ?? sha256,
   }),
   // Beside the states, so the preference arrives whatever the sheet is doing; a
@@ -683,8 +640,6 @@ export const machine = setup({
         target: ".loading",
         actions: [
           leaveAll,
-          finishRemovals,
-          endUse,
           stopChild("lookup"),
           stopChild("recount"),
           assign(({ context, event }) => ({
@@ -702,7 +657,6 @@ export const machine = setup({
             checks: { settings: context.checks.settings, reports: {}, error: null },
             pointed: { hover: null, tap: null, cursor: null },
             cut: null,
-            pasted: null,
           })),
           stopChild("checks"),
           spawnChild("checks", { id: "checks", input: ({ context }) => ({ ask: context.ask, day: context.day }) }),
@@ -793,32 +747,17 @@ export const machine = setup({
           guard: ({ context }) => context.open && isPlaced(context) && placeable(context),
           actions: [fold, unplace],
         },
-        // Use puts the suggestion in the value line, keeping the example, and offers Undo
-        // for the undo window.
+        // Use puts the suggestion in the value line, keeping the example.
         _use: {
           guard: ({ context, event }) => {
-            const draft = context.open && writable(context) && !context.removing.includes(event.id) && context.drafts.find((d) => d.id === event.id);
+            const draft = context.open && writable(context) && context.drafts.find((d) => d.id === event.id);
             return Boolean(draft && suggestionFor(context, draft));
           },
           actions: enqueueActions(({ context, event, enqueue }) => {
             const draft = context.drafts.find((d) => d.id === event.id);
-            const now = suggestionFor(context, draft);
-            rename(enqueue, context, draft.id, now);
-            enqueue.cancel("used");
-            enqueue.assign({ used: { id: draft.id, was: draft.name, now } });
-            enqueue.raise({ type: "_used" }, { delay: context.undoMs, id: "used" });
+            rename(enqueue, context, draft.id, suggestionFor(context, draft));
           }),
         },
-        // Undo puts back the value line Use replaced.
-        _unuse: {
-          guard: ({ context }) => context.used !== null && context.open && writable(context) && held(context, context.used.id),
-          actions: enqueueActions(({ context, enqueue }) => {
-            rename(enqueue, context, context.used.id, context.used.was);
-            enqueue.cancel("used");
-            enqueue.assign({ used: null });
-          }),
-        },
-        _used: { actions: assign({ used: null }) },
         _add: {
           guard: ({ context }) => context.open && writable(context),
           // At the end, or at index `at` (Vim's o and O on a row).
@@ -830,8 +769,7 @@ export const machine = setup({
         // A box lost focus: its row is left unless the keyboard went to the other box of
         // the same row (`to` names the row it went to, null for anywhere else).
         _blur: { guard: opened, actions: leaveRows(({ event }) => (event.id && event.to !== event.id ? [event.id] : [])) },
-        // Done folds the sheet, saving what was typed; a value waiting out its undo window
-        // keeps waiting, so Undo is still there when the sheet opens again.
+        // Done folds the sheet, saving what was typed.
         // An added panel left with no values holds nothing, so Done also takes it off the
         // day, as folding an empty choice point removes it.
         _done: {
@@ -844,38 +782,19 @@ export const machine = setup({
             }),
           ],
         },
-        // An empty row holds nothing to lose, so it goes at once; a value waits out the
-        // undo window.
+        // A removal is immediate: Undo brings the value back (12, Undo). What was typed
+        // elsewhere is saved first, so the removal is a step of its own.
         _remove: {
-          guard: ({ context, event }) => context.open && writable(context) && held(context, event.id) && !context.removing.includes(event.id),
+          guard: ({ context, event }) => context.open && writable(context) && held(context, event.id),
           actions: enqueueActions(({ context, event, enqueue }) => {
             const draft = context.drafts.find((d) => d.id === event.id);
-            if (context.cut === event.id) enqueue.assign({ cut: null });
-            if (isEmpty(draft)) {
-              enqueue.assign({ drafts: context.drafts.filter((d) => d.id !== event.id) });
-              return;
-            }
-            enqueue.assign({ removing: [...context.removing, event.id] });
-            enqueue.raise({ type: "_gone", id: event.id }, { delay: context.undoMs, id: timerOf(event.id) });
-          }),
-        },
-        _undo: {
-          guard: ({ context, event }) => context.removing.includes(event.id),
-          actions: enqueueActions(({ context, event, enqueue }) => {
-            enqueue.cancel(timerOf(event.id));
-            enqueue.assign({ removing: context.removing.filter((id) => id !== event.id) });
-          }),
-        },
-        // The undo window ran out: the value goes from today's version, folded or not.
-        _gone: {
-          guard: ({ context, event }) => context.removing.includes(event.id),
-          actions: enqueueActions(({ context, event, enqueue }) => {
-            const removing = context.removing.filter((id) => id !== event.id);
             const drafts = context.drafts.filter((d) => d.id !== event.id);
-            const values = (context.open ? drafts : (context.version?.values ?? [])).filter((v) => v.id !== event.id);
-            enqueue.assign({ removing, drafts, dirty: false });
-            if (context.version) enqueue.assign({ version: { ...context.version, values: savedValues(values) } });
-            save(enqueue, context, savedValues(values));
+            if (context.cut === event.id) enqueue.assign({ cut: null });
+            enqueue.assign({ drafts, edited: context.edited.filter((id) => id !== event.id) });
+            if (isEmpty(draft)) return;
+            if (context.dirty) save(enqueue, context, savedValues(context.drafts));
+            enqueue.assign({ dirty: false });
+            save(enqueue, context, savedValues(drafts));
           }),
         },
         // A row moved to stand at index `to` (the up and down buttons, Alt+Up and Alt+Down)
@@ -889,7 +808,7 @@ export const machine = setup({
         // dd on a row: it stays where it is, greyed as Cut, until p, P, u or Escape.
         _cut: {
           guard: ({ context, event }) => movable(context, event.id),
-          actions: assign({ cut: ({ event }) => event.id, pasted: null }),
+          actions: assign({ cut: ({ event }) => event.id }),
         },
         // u on the cut row puts it back: it never left its place.
         _uncut: { guard: ({ context }) => context.cut !== null, actions: assign({ cut: null }) },
@@ -901,16 +820,8 @@ export const machine = setup({
             const index = context.drafts.findIndex((d) => d.id === id);
             const rest = context.drafts.filter((d) => d.id !== id);
             const at = event.at === id ? index : rest.findIndex((d) => d.id === event.at) + (event.below ? 1 : 0);
-            enqueue.assign({ cut: null, pasted: at === index ? null : { id, index } });
+            enqueue.assign({ cut: null });
             if (at !== index) reorderNow(enqueue, context, id, at);
-          }),
-        },
-        // u after a paste puts the row back where it stood before it.
-        _unpaste: {
-          guard: ({ context }) => context.pasted !== null && held(context, context.pasted.id),
-          actions: enqueueActions(({ context, enqueue }) => {
-            enqueue.assign({ pasted: null });
-            reorderNow(enqueue, context, context.pasted.id, context.pasted.index);
           }),
         },
         _browse: { guard: opened, actions: assign({ browsing: true, viewing: null }) },

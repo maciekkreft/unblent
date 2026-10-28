@@ -91,7 +91,9 @@ function fakeApi({ pull } = {}) {
 function start(store, { api, ask, day = "2026-10-14" } = {}) {
   const clock = new SimulatedClock();
   clock.set(noon(day));
-  const actor = createActor(machine, { input: { store, api, ask, now: () => clock.now() }, clock });
+  let minted = 0;
+  const mint = () => `01ARZ3NDEKTSV4RRFFQ69G${String(++minted).padStart(4, "0")}`;
+  const actor = createActor(machine, { input: { store, api, ask, mint, now: () => clock.now() }, clock });
   const changed = [];
   actor.on("values.changed", (e) => {
     const { type, ...payload } = e;
@@ -127,6 +129,8 @@ const versions = (actor) =>
   });
 
 const saved = (day, values) => ({ type: "values.saved", day, values });
+// A record as the server keeps it, without the step that wrote it in this browser.
+const unstepped = ({ step, ...rest }) => rest;
 
 async function drain(clock) {
   clock.increment(SYNC_IDLE_MS);
@@ -151,7 +155,7 @@ test("a save today writes today's version, announced and cached, and signed out 
   actor.send(saved("2026-10-14", [parent]));
   assert.deepEqual(changed, [{ day: "2026-10-14", values: [parent], placed: true }]);
   assert.deepEqual(await read(actor), { day: "2026-10-14", values: [parent], changedSince: false });
-  assert.deepEqual(store.rows.get("2026-10-14"), { day: "2026-10-14", values: [parent], version: 1 });
+  assert.deepEqual(unstepped(store.rows.get("2026-10-14")), { day: "2026-10-14", values: [parent], version: 1 });
   assert.equal(api.puts.length, 0);
 });
 
@@ -393,7 +397,7 @@ test("placing today adds Your values to the day, announced and cached; taking it
   actor.send(placed("2026-10-14", true));
   assert.deepEqual(changed, [{ day: "2026-10-14", values: [], placed: true }]);
   assert.equal((await read(actor, { day: "2026-10-14" })).placed, true);
-  assert.deepEqual(store.places.get("2026-10-14"), { day: "2026-10-14", placed: true, version: 1 });
+  assert.deepEqual(unstepped(store.places.get("2026-10-14")), { day: "2026-10-14", placed: true, version: 1 });
   actor.send(placed("2026-10-14", true));
   assert.equal(changed.length, 1, "placing a day that shows it is no change");
   actor.send(placed("2026-10-14", false));
@@ -437,7 +441,7 @@ test("signed in: a placement waits out the window, is sent under its own key and
   assert.deepEqual(api.placeCalls, [{ day: "2026-10-14", placed: false, baseVersion: null }]);
   assert.equal(api.puts.length, 1);
   assert.equal(store.outbox.size, 0);
-  assert.deepEqual(store.places.get("2026-10-14"), { day: "2026-10-14", placed: false, version: 1 });
+  assert.deepEqual(unstepped(store.places.get("2026-10-14")), { day: "2026-10-14", placed: false, version: 1 });
 });
 
 test("signed in: a pulled placement is adopted and announced, unless a later version exists", async () => {

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What Undo and Redo would reverse or make again now, for this account in this browser (12, Undo); null when there is nothing.",
+  "type": "object",
+  "properties": {
+    "undo": { "$ref": "#/$defs/step" },
+    "redo": { "$ref": "#/$defs/step" }
+  },
+  "required": ["undo", "redo"],
+  "additionalProperties": false,
+  "$defs": {
+    "step": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
+            "label": { "type": "string", "description": "The step as people read it, such as remove value Courage." }
+          },
+          "required": ["id", "label"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

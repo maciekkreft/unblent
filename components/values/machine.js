@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the client's values (3.1), replicated (5) the way
 // `choice-points` is: local-first, cached in the browser, numbering versions itself while
@@ -27,12 +28,18 @@ const dateOf = (ms) => {
 const value = (v) => ({ id: v.id, name: str(v.name), meaning: str(v.meaning) });
 const valuesOf = (list) => (Array.isArray(list) ? list.filter((v) => typeof v?.id === "string" && ULID.test(v.id)).map(value) : []);
 
+// The step that last wrote a record in this browser (12, Undo), kept beside it so an Undo
+// can tell the record is still as that step left it; a record pulled from the server has
+// none, since another device wrote it.
+const writer = (r) => (typeof r.step === "string" ? { step: r.step } : {});
+
 // One fixed shape and key order, so two copies of the same content compare equal as
 // text.
 const record = (r) => ({
   day: r.day,
   values: valuesOf(r.values),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
+  ...writer(r),
 });
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -42,6 +49,7 @@ const placement = (p) => ({
   day: p.day,
   placed: p.placed === true,
   version: Number.isInteger(p.version) && p.version >= 1 ? p.version : 1,
+  ...writer(p),
 });
 
 // A placement waits in the same outbox as the versions (session waits on it, 12), under a
@@ -130,9 +138,9 @@ function commit(context, enqueue, next) {
 }
 
 // The same for a placement: kept, stored, queued under its own key and announced.
-function commitPlace(context, enqueue, day, placed) {
+function commitPlace(context, enqueue, day, placed, step) {
   const current = context.placements.get(day);
-  const p = { day, placed, version: current ? current.version + (context.userId == null ? 1 : 0) : 1 };
+  const p = { day, placed, version: current ? current.version + (context.userId == null ? 1 : 0) : 1, step };
   context.placements.set(day, p);
   enqueue(() => context.store.placePut(p).catch(() => {}));
   if (context.userId != null) {
@@ -149,20 +157,139 @@ function commitPlace(context, enqueue, day, placed) {
 // yesterday's in the hour after midnight while its journal text is still open, so a
 // version never changes after its day. A save that leaves the values as they are in
 // force today is no change, so opening the sheet and closing it writes no version.
+// Every change is a step (12, Undo); rows the save names as finished close the stretch
+// of typing they belong to, also when the save changes nothing.
 function applySave(context, event, enqueue) {
   if (!isDay(event.day) || event.day !== dateOf(context.now())) return;
   const values = valuesOf(event.values);
   const held = inForce(context, event.day);
-  if (same(held ? held.values : [], values)) return;
-  commit(context, enqueue, { day: event.day, values, version: 1 });
+  const before = held ? held.values : [];
+  let stretch = context.stretch;
+  if (!same(before, values)) {
+    const step = stepOf(context, held, values);
+    commit(context, enqueue, { day: event.day, values, version: 1, step: step.id });
+    enqueue.emit({
+      type: "step.recorded",
+      id: step.id,
+      owner: "values",
+      label: step.label,
+      undo: { kind: "values", values: step.before },
+      redo: { kind: "values", values },
+      ...(step.notice ? { notice: true } : {}),
+    });
+    stretch = step.stretch;
+  }
+  const finished = Array.isArray(event.finished) ? event.finished : [];
+  if (stretch && finished.length) {
+    const rows = stretch.rows.filter((id) => !finished.includes(id));
+    stretch = rows.length ? { ...stretch, rows } : null;
+  }
+  if (stretch !== context.stretch) enqueue.assign({ stretch });
 }
 
 // Your values is added to or taken off today's page only, by the same rule as a save; a
-// placement that leaves the day as it shows is no change.
+// placement that leaves the day as it shows is no change. Either is one step.
 function applyPlace(context, event, enqueue) {
   if (!isDay(event.day) || event.day !== dateOf(context.now()) || typeof event.placed !== "boolean") return;
   if (placedOn(context, event.day) === event.placed) return;
-  commitPlace(context, enqueue, event.day, event.placed);
+  const id = context.mint();
+  commitPlace(context, enqueue, event.day, event.placed, id);
+  enqueue.emit({
+    type: "step.recorded",
+    id,
+    owner: "values",
+    label: event.placed ? "add Your values to the day" : "take Your values off the day",
+    undo: { kind: "placed", day: event.day, placed: !event.placed },
+    redo: { kind: "placed", day: event.day, placed: event.placed },
+  });
+  enqueue.assign({ stretch: null });
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// What changed between two lists: the values gone, the values new, those whose name or
+// example changed, and whether the ones in both stand in another order.
+export function diff(before, after) {
+  const was = new Map(before.map((v) => [v.id, v]));
+  const now = new Map(after.map((v) => [v.id, v]));
+  const order = (list, other) => list.filter((v) => other.has(v.id)).map((v) => v.id).join();
+  return {
+    removed: before.filter((v) => !now.has(v.id)),
+    added: after.filter((v) => !was.has(v.id)),
+    edited: after.filter((v) => was.has(v.id) && (was.get(v.id).name !== v.name || was.get(v.id).meaning !== v.meaning)),
+    moved: order(before, now) !== order(after, was),
+  };
+}
+
+const nameOf = (v) => {
+  const name = v.name.trim() || v.meaning.trim();
+  return name ? `value ${name}` : "a value";
+};
+
+// The one value whose place changed: the rest stand in the same order without it.
+function movedOne(before, after) {
+  const without = (list, id) => list.filter((v) => v.id !== id).map((v) => v.id).join();
+  return after.find((v) => without(before, v.id) === without(after, v.id)) ?? null;
+}
+
+// The step as people read it after "Undo:".
+export function labelOf(before, after) {
+  const { removed, added, edited, moved } = diff(before, after);
+  const changes = removed.length + added.length + edited.length;
+  if (moved && changes === 0) {
+    const one = movedOne(before, after);
+    return one ? `move ${nameOf(one)}` : "reorder values";
+  }
+  if (moved || changes !== 1) return removed.length && !added.length && !edited.length && !moved ? `remove ${removed.length} values` : "change values";
+  if (removed.length) return `remove ${nameOf(removed[0])}`;
+  if (added.length) return `add ${nameOf(added[0])}`;
+  const was = before.find((v) => v.id === edited[0].id);
+  return `change ${nameOf(edited[0].name.trim() || edited[0].meaning.trim() ? edited[0] : was)}`;
+}
+
+// The step a save makes. A save that only changes rows of the stretch of typing still
+// open, while that stretch last wrote the list, joins it: the same id, its undo kept by
+// `undo`. A move or a removal is a step of its own, and a removal asks for the notice.
+// Any other change opens a stretch on the rows it changed, closed when they are left.
+function stepOf(context, held, after) {
+  const before = held ? held.values : [];
+  const { removed, added, edited, moved } = diff(before, after);
+  const rows = [...removed, ...added, ...edited].map((v) => v.id);
+  const open = context.stretch;
+  if (open && held?.step === open.id && !moved && rows.every((id) => open.rows.includes(id)))
+    return { id: open.id, before: open.before, label: labelOf(open.before, after), stretch: open };
+  const id = context.mint();
+  const label = labelOf(before, after);
+  if (moved && !rows.length) return { id, before, label, stretch: null };
+  if (removed.length && !added.length && !edited.length && !moved) return { id, before, label, stretch: null, notice: true };
+  return { id, before, label, stretch: { id, before, rows } };
+}
+
+// An Undo or Redo of one of this fact's steps. It is applied only while what it would
+// reverse is as the step left it: the list in force today, or the day's placement, was
+// last written in this browser by that step. Anything written since, here, in another
+// tab or on another device, refuses it. A list from an earlier day is applied to today's
+// version, since an earlier day never changes (5); a placement belongs to its day, which
+// can only be written on that day.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "values") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "values", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  const today = dateOf(context.now());
+  enqueue.assign({ stretch: null });
+  if (p.kind === "values" && Array.isArray(p.values)) {
+    if (inForce(context, today)?.step !== event.id) return settle("refused", "changed");
+    commit(context, enqueue, { day: today, values: valuesOf(p.values), version: 1, step: event.id });
+    return settle("applied");
+  }
+  if (p.kind === "placed" && isDay(p.day) && typeof p.placed === "boolean") {
+    if (p.day !== today) return settle("refused", "closed");
+    if (context.placements.get(p.day)?.step !== event.id) return settle("refused", "changed");
+    commitPlace(context, enqueue, p.day, p.placed, event.id);
+    return settle("applied");
+  }
+  settle("refused", "changed");
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
@@ -171,10 +298,11 @@ function flush(context, message, enqueue) {
   else if (message.type === "versions?") replyVersions(context, message.reply);
   else if (message.type === "values.saved") applySave(context, message, enqueue);
   else if (message.type === "values.placed") applyPlace(context, message, enqueue);
+  else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
-const QUEUED = Object.fromEntries(["read?", "versions?", "values.saved", "values.placed"].map((t) => [t, { actions: queue }]));
+const QUEUED = Object.fromEntries(["read?", "versions?", "values.saved", "values.placed", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]));
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
 const SYNC_IDLE_MS = 2000;
@@ -315,7 +443,7 @@ export const machine = setup({
       "questions, so a Towards line gets no values mark at all rather than a grey one.",
     kind: "fact",
     shape: "replicated",
-    emits: ["values.changed"],
+    emits: ["values.changed", "step.recorded", "step.settled"],
     owns: "the client's values and their versions by day",
     asks: ["session: read"],
   },
@@ -327,6 +455,10 @@ export const machine = setup({
     api: input.api,
     ask: input.ask,
     now: input.now ?? (() => Date.now()),
+    mint: input.mint ?? ulid,
+    // The stretch of typing still open (12, Undo): { id, before, rows }, the step's id, the
+    // list before it, and the rows typed in and not yet left; null when none is.
+    stretch: null,
     userId: null,
     cursor: 0,
     queued: [],
@@ -398,6 +530,8 @@ export const machine = setup({
         "versions?": { actions: ({ context, event }) => replyVersions(context, event.reply) },
         "values.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "values.placed": { actions: enqueueActions(({ context, event, enqueue }) => applyPlace(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         // Signing in enqueues every version, so what was written signed out becomes the
         // account's (5); a different user resets the cursor.
         "session.changed": {

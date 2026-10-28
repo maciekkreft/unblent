@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A step left the undo list because it was pushed out past the last 100 (12, Undo); it can no longer be undone, so its owner may finish what the step left pending.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The step's id." },
+    "owner": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The component that recorded the step." },
+    "payload": { "type": "object", "description": "The step's `redo`, the state it left." }
+  },
+  "required": ["id", "owner", "payload"],
+  "additionalProperties": false
+}

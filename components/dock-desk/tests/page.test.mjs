@@ -222,7 +222,7 @@ for (const engine of ENGINES) {
             c.localName === "slot" ? c.name : c.localName + (c.classList.contains("pill") ? ".pill" : ""),
           ),
         ),
-        ["profile-switch", "layout-switch", "button.pill", "session-switch"],
+        ["profile-switch", "layout-switch", "undo-bar", "button.pill", "session-switch"],
         "the gear sits directly before the account button",
       );
 

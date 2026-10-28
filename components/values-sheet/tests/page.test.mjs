@@ -7,11 +7,10 @@ import { createHash } from "node:crypto";
 // first name, Enter moves on, Escape folds it into a card that a reload keeps; Alt+Up
 // moves a row with the cursor, and with Vim keys on Escape steps onto the row where dd and
 // p move it; Jev's marks, their status line and the card's warning, on the desk and the
-// phone; Could be's Use and its Undo; removing a value strikes it through
-// with Undo until its window ends; and an earlier day's values are read only and say when
-// they changed since. The decisions are tested in Node.
+// phone; Could be's Use; removing a value, with x once emptied and with Vim keys at once;
+// and an earlier day's values are read only and say when they changed since. The decisions are tested in Node.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch, signedIn, forgeCookie, shortUndo } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, until, watch, signedIn, forgeCookie } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -203,12 +202,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: a gesture.
-    test("x removes a value only once emptied, at once; with Vim keys dd and Escape strike one through with Undo, which keeps it; once the window ends it is gone", async () => {
+    test("x removes a value only once emptied; with Vim keys dd and Escape remove one at once and the next row has the keyboard", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       const cookie = forgeCookie("values-remove");
       await signedIn(context, cookie);
-      await shortUndo(context, 400);
       try {
         await context.addInitScript((v) => localStorage.setItem("settings", v), VIM_ON);
         const values = [
@@ -226,7 +224,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const remove = (n) => sheet.locator(`.row[data-id="${ID(n)}"] .remove`);
         assert.equal(await remove(1).getAttribute("aria-disabled"), "true", "a value with words in it stays");
         await remove(1).click({ force: true });
-        assert.equal(await sheet.locator(".row.removing").count(), 0);
+        assert.equal(await sheet.locator(`.row[data-id="${ID(1)}"]`).count(), 1);
         await sheet.locator(`.row[data-id="${ID(1)}"] .box`).first().click();
         await page.keyboard.press("Control+a");
         await page.keyboard.press("Backspace");
@@ -235,22 +233,16 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await sheet.locator(`.row[data-id="${ID(1)}"]`).count()) === 0);
 
         const onRow = () => inSheet(page, (root) => (root.activeElement?.matches(".row") ? root.activeElement.dataset.id : null));
-        const dd = async () => {
-          await sheet.locator(`.row[data-id="${ID(2)}"] .box`).first().click();
-          // A click may leave Vim in insert or normal mode; Escape until the row has the keyboard.
-          for (let i = 0; i < 2 && (await onRow()) !== ID(2); i++) await page.keyboard.press("Escape");
-          await until(async () => (await onRow()) === ID(2));
-          await page.keyboard.press("d");
-          await page.keyboard.press("d");
-          await sheet.locator(`.row.cut[data-id="${ID(2)}"]`).waitFor();
-          await page.keyboard.press("Escape");
-        };
-        await dd();
-        await sheet.locator(`.row.removing[data-id="${ID(2)}"] .undo`).click();
-        await sheet.locator(`.row[data-id="${ID(2)}"] .box`).first().waitFor();
-        await dd();
-        await sheet.locator(".row.removing").waitFor();
-        await until(async () => (await sheet.locator(".row.removing").count()) === 0);
+        await sheet.locator(`.row[data-id="${ID(2)}"] .box`).first().click();
+        // A click may leave Vim in insert or normal mode; Escape until the row has the keyboard.
+        for (let i = 0; i < 2 && (await onRow()) !== ID(2); i++) await page.keyboard.press("Escape");
+        await until(async () => (await onRow()) === ID(2));
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await sheet.locator(`.row.cut[data-id="${ID(2)}"]`).waitFor();
+        await page.keyboard.press("Escape");
+        await until(async () => (await sheet.locator(`.row[data-id="${ID(2)}"]`).count()) === 0);
+        await until(async () => (await onRow()) === ID(3));
         await sheet.locator(".done").click();
         await until(async () => (await card(page)) === "Calm");
         assert.deepEqual(problems, []);
@@ -366,7 +358,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // arrive through the APIs under the test's own login; Jev is answered here through
     // page.route, and the account is told it has a key.
     // Browser: a gesture.
-    test("Use puts Could be's suggestion in a red value line, and Undo puts the old one back", async () => {
+    test("Use puts Could be's suggestion in a red value line and keeps the example", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       await signedIn(context, forgeCookie("values-could-be"));
@@ -407,12 +399,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await suggest.waitFor();
         await suggest.getByRole("button", { name: "Use" }).click();
         await until(async () => (await name.innerText()).trim() === "Building security");
-        const was = sheet.locator(".suggest.was", { hasText: "Was Get rich" });
-        await was.locator(".drain").waitFor();
         assert.equal(await sheet.locator(`.row[data-id="${ID(1)}"] .box[data-field="meaning"] .cm-content`).innerText(), "A house", "the example is kept");
-        await was.getByRole("button", { name: /Undo/ }).click();
-        await until(async () => (await name.innerText()).trim() === "Get rich");
-        await suggest.waitFor();
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

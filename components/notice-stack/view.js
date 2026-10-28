@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from "lit";
-import { mount, unmount } from "bus";
+import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { machine } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
@@ -7,6 +7,7 @@ import undone from "./events/removal.undone.json" with { type: "json" };
 import settled from "./events/removal.settled.json" with { type: "json" };
 import useReset from "./events/use.reset.json" with { type: "json" };
 import guestBlocked from "./events/guest.blocked.json" with { type: "json" };
+import requested from "./events/step.requested.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's fade
 // window; the token is the one clock, shared with the timer bar's animation.
@@ -35,7 +36,17 @@ const REMOVED = {
   option: ["Option", "removed"],
 };
 
+const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
 function describe(source) {
+  if (source.type === "step.recorded") return capital(source.label);
+  if (source.type === "step.settled") {
+    const what = `${source.side} ${source.label || "that"}`.trim();
+    if (source.outcome === "unreachable") return `Can't ${what} on this page.`;
+    if (source.reason === "changed") return `Couldn't ${what}: it changed since.`;
+    if (source.reason === "closed") return `Couldn't ${what}: that day is closed.`;
+    return `Couldn't ${what}.`;
+  }
   if (source.type === "removal.started") {
     if (source.kind === "trial") return "Starting over.";
     const [noun, verb] = REMOVED[source.kind] ?? ["Item", "deleted"];
@@ -94,13 +105,14 @@ class ActorController {
     // importable in Node.
     const fadeMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
-      input: { fadeMs },
+      input: { fadeMs, ask: (target, name, payload) => ask(machine, target, name, payload) },
       events: {
         "note.saved": saved,
         "removal.undone": undone,
         "removal.settled": settled,
         "use.reset": useReset,
         "guest.blocked": guestBlocked,
+        "step.requested": requested,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -349,7 +361,7 @@ class NoticeStack extends LitElement {
                 <button class="dismiss" aria-label="Dismiss" @click=${() => this.#actor.send({ type: "_dismiss", key: n.key })}>
                   ${icon("x")}
                 </button>
-                <div class="timer"></div>
+                ${n.bar ? html`<div class="timer"></div>` : nothing}
               </div>
             `;
           return html`

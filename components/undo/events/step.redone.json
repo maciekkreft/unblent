@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Redo was asked for (step.requested) and this is the step to make again: its owner applies `payload`, the `redo` it recorded, and answers with step.settled (12, Undo).",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The step's id, as its owner recorded it." },
+    "owner": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The component that recorded the step and alone applies it." },
+    "payload": { "type": "object", "description": "The step's `redo`, whatever its owner needs to restore the state the step left." }
+  },
+  "required": ["id", "owner", "payload"],
+  "additionalProperties": false
+}

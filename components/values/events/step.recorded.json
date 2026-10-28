@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user made one change to their own data that Undo can reverse (12, Undo), recorded by the fact that owns the record, since only it knows the state before. Recording an id already recorded replaces that step's label and redo and keeps its undo, which is how one stretch of typing stays one step. Every owner keeps its own copy of this schema.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The step's id, minted by its owner." },
+    "owner": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The component that recorded the step and alone applies it." },
+    "label": { "type": "string", "minLength": 1, "description": "The step as people read it after Undo:, starting lower case, such as remove value Courage." },
+    "undo": { "type": "object", "description": "What the owner needs to restore the state before the step." },
+    "redo": { "type": "object", "description": "What the owner needs to restore the state the step left." },
+    "notice": { "type": "boolean", "description": "True asks for a short notice with Undo, as for a delete. False when absent." }
+  },
+  "required": ["id", "owner", "label", "undo", "redo"],
+  "additionalProperties": false
+}

@@ -1,4 +1,4 @@
-import { setup, enqueueActions } from "xstate";
+import { setup, assign, enqueueActions, fromPromise } from "xstate";
 
 // The view of refused gestures (12): what a fact could not honour, shown where the
 // user can see it. It owns only UI state — the notices on screen and their fade
@@ -64,6 +64,31 @@ const TABLE = {
     undo: true,
     actions: [{ label: "undo", emit: { type: "guest.blocked", user: p.user, blocked: !p.blocked } }],
   }),
+  // A step that asked for it (a delete) shows the dark notice with Undo, the same as the
+  // top bar's, and no countdown: Undo goes on working after it has gone (12, Undo). One
+  // notice for all of them, so the next one replaces it.
+  "step.recorded": (p) =>
+    p.notice === true
+      ? {
+          key: "step",
+          step: p.id,
+          standing: false,
+          undo: true,
+          bar: false,
+          actions: [{ label: "undo", emit: { type: "step.requested", direction: "undo" } }],
+        }
+      : null,
+  // A step its owner refused, or one whose owner is not on this page, is only news.
+  "step.settled": (p, context) => {
+    if (p.outcome === "applied") return null;
+    const known = context.steps[p.id];
+    return {
+      key: `step.settled:${p.id}`,
+      standing: false,
+      actions: [],
+      source: { ...p, label: known?.label ?? "", side: known?.side ?? "undo" },
+    };
+  },
 };
 
 // A Map with one entry replaced, or removed, as a new Map so assign sees a fresh
@@ -94,22 +119,46 @@ function end(context, key, enqueue) {
 }
 
 function show(context, event, enqueue) {
-  const row = TABLE[event.type](event);
+  const row = TABLE[event.type](event, context);
   if (!row) return;
   const notice = {
     key: row.key,
     standing: row.standing,
-    source: event,
+    source: row.source ?? event,
     actions: row.actions,
     settle: row.settle ?? null,
     undo: Boolean(row.settle || row.undo),
+    bar: row.bar !== false,
+    step: row.step ?? null,
     gone: false,
   };
   enqueue.assign({ notices: ({ context }) => replaced(context.notices, notice) });
   fade(context, notice, enqueue);
 }
 
-export const machine = setup({}).createMachine({
+// What Undo and Redo name now, remembered by id with the side it stood on, so a refusal
+// can name its step after `undo` has dropped it.
+function learn(context, picture, enqueue) {
+  const steps = { ...context.steps };
+  for (const side of ["undo", "redo"]) {
+    const step = picture?.[side];
+    if (step && typeof step.id === "string") steps[step.id] = { label: step.label, side };
+  }
+  enqueue.assign({ steps });
+  // The delete notice is about the step on top; once another is, it goes.
+  const notice = context.notices.get("step");
+  if (notice && picture && picture.undo?.id !== notice.step) {
+    enqueue.cancel("fade:step");
+    enqueue.assign({ notices: ({ context }) => without(context.notices, "step") });
+  }
+}
+
+export const machine = setup({
+  actors: {
+    // On a page without undo the reply is no-answerer and no step is named.
+    undo: fromPromise(({ input }) => (input.ask ? input.ask("undo", "read", {}) : Promise.resolve(null))),
+  },
+}).createMachine({
   id: "notice-stack",
   meta: {
     description:
@@ -123,19 +172,34 @@ export const machine = setup({}).createMachine({
       "Unblock on a guest in Administration take effect at once and show the same dark notice, " +
       "whose Undo does the opposite. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
-      "because `notes` does not keep conflicts. Notices sit in the bottom corner of the " +
+      "because `notes` does not keep conflicts. A step that is a delete (12, Undo) shows a " +
+      "short dark notice naming it, such as Remove value Courage, with Undo and no countdown; " +
+      "its Undo is the same as the top bar's, and the notice goes when it times out, is " +
+      "dismissed, or another step is recorded or undone, while Undo goes on working. A step " +
+      "Undo or Redo could not apply says so: Couldn't undo it, it changed since, when the " +
+      "thing changed on another device or in another tab, and Can't undo it on this page when " +
+      "the part that owns it is not on the page. Notices sit in the bottom corner of the " +
       "window, and in the phone preview in the bottom of the phone's screen.",
     kind: "view",
-    emits: ["note.saved", "removal.undone", "removal.settled", "use.reset", "guest.blocked"],
+    emits: ["note.saved", "removal.undone", "removal.settled", "use.reset", "guest.blocked", "step.requested"],
     attributes: [],
-    asks: [],
+    asks: ["undo: read"],
   },
   context: ({ input }) => ({
     // How long a passing notice stays (the --duration-undo token, read in the view
     // and passed in so the machine stays importable in Node).
     fadeMs: input.fadeMs,
+    ask: input.ask,
     notices: new Map(),
+    // Each step Undo or Redo has named, by id: { label, side }.
+    steps: {},
   }),
+  invoke: {
+    src: "undo",
+    input: ({ context }) => ({ ask: context.ask }),
+    onDone: { actions: enqueueActions(({ context, event, enqueue }) => learn(context, event.output, enqueue)) },
+    onError: { actions: [] },
+  },
   initial: "ready",
   states: { ready: {} },
   on: {
@@ -145,6 +209,19 @@ export const machine = setup({}).createMachine({
     "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "use.reset": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "guest.blocked": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    "step.recorded": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        enqueue.assign({ steps: { ...context.steps, [event.id]: { label: event.label, side: "undo" } } });
+        const notice = context.notices.get("step");
+        if (notice && notice.step !== event.id) {
+          enqueue.cancel("fade:step");
+          enqueue.assign({ notices: ({ context }) => without(context.notices, "step") });
+        }
+        show(context, event, enqueue);
+      }),
+    },
+    "step.settled": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
+    "undo.changed": { actions: enqueueActions(({ context, event, enqueue }) => learn(context, event, enqueue)) },
     // A delete always wins (5): a keep-mine onto a tombstone would be dropped by
     // notes, so the conflict notice for a note that is gone offers nothing, and
     // says so. notes emits note.conflicted before note.deleted, so the notice exists.

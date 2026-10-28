@@ -2,6 +2,8 @@ import { mount, ask } from "bus";
 import { machine } from "./machine.js";
 import { openValues } from "./store.js";
 import changed from "./events/values.changed.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import versions from "./queries/versions.json" with { type: "json" };
 
@@ -56,7 +58,7 @@ const api = {
 
 const actor = mount(machine, {
   input: { store, api, now: () => Date.now(), ask: (target, name, payload) => ask(machine, target, name, payload) },
-  events: { "values.changed": changed },
+  events: { "values.changed": changed, "step.recorded": recorded, "step.settled": settled },
   queries: { read, versions },
 });
 

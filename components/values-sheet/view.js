@@ -132,15 +132,6 @@ const marksDecorations = (point) =>
     return Decoration.set(ranges);
   });
 
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
-// the token is the one clock, shared with the bar's animation.
-const toMs = (text, fallback = 3000) => {
-  const t = text.trim();
-  const n = parseFloat(t);
-  if (!Number.isFinite(n)) return fallback;
-  return t.endsWith("ms") ? n : n * 1000;
-};
-
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -156,8 +147,6 @@ class ActorController {
         now: () => Date.now(),
         // Vim's registers are one per page, so text put there is what any editor's p pastes.
         pushRegister: toRegister,
-        // Read off the host so a stylesheet or a test can shorten it.
-        undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
       },
       events: { "values.saved": saved, "values.placed": placed },
     });
@@ -351,28 +340,7 @@ class ValuesSheet extends LitElement {
       cursor: default;
       color: var(--color-mute);
     }
-    /* A value counting down to its removal is struck through, with Undo and the draining
-       bar, as a row counting down to its delete is in the lists. */
-    .row.removing {
-      overflow: hidden;
-      align-items: center;
-      padding-bottom: var(--space-2xs);
-    }
-    .row.removing .name,
-    .row.removing .meaning {
-      color: var(--color-mute);
-      text-decoration: line-through;
-    }
-    .undo {
-      appearance: none;
-      background: none;
-      border: 0;
-      padding: var(--space-xs);
-      font-size: var(--text-caption);
-      color: var(--color-accent);
-    }
-    /* Could be: a muted line under the example, so the pair stays together, with Use; after Use, Was and the old
-       value with Undo, over the draining bar of the undo window. */
+    /* Could be: a muted line under the example, so the pair stays together, with Use. */
     .suggest {
       position: relative;
       display: flex;
@@ -384,9 +352,6 @@ class ValuesSheet extends LitElement {
       color: var(--color-body-mid);
       overflow-wrap: anywhere;
     }
-    .suggest.was {
-      padding-bottom: var(--space-2xs);
-    }
     .suggest button {
       appearance: none;
       background: none;
@@ -394,26 +359,6 @@ class ValuesSheet extends LitElement {
       padding: 0 var(--space-xs);
       font-size: var(--text-caption);
       color: var(--color-accent);
-    }
-    /* The visible echo of the machine's timer; both read --duration-undo, so they cannot
-       disagree. It stays under reduced motion because it is the only sign of how long is
-       left. */
-    .drain {
-      position: absolute;
-      inset-inline: 0;
-      inset-block-end: 0;
-      height: var(--space-2xs);
-      background: var(--color-accent);
-      transform-origin: left;
-      animation: drain var(--duration-undo) linear forwards;
-    }
-    @keyframes drain {
-      from {
-        transform: scaleX(1);
-      }
-      to {
-        transform: scaleX(0);
-      }
     }
     .foot {
       display: flex;
@@ -902,9 +847,11 @@ class ValuesSheet extends LitElement {
     this.#afterG = action === "g";
     this.#afterD = action === "d";
     if (!action) return;
+    const context = this.#actor.snapshot.context;
+    // u on a row not cut is the page's Undo (12, Undo), so it is left to go on.
+    if (action === "undo" && !context.cut) return;
     e.preventDefault();
     e.stopPropagation();
-    const context = this.#actor.snapshot.context;
     const rows = [...this.renderRoot.querySelectorAll(".rows > .row[data-id]")];
     const at = rows.findIndex((r) => r.dataset.id === id);
     const index = context.drafts.findIndex((d) => d.id === id);
@@ -920,19 +867,11 @@ class ValuesSheet extends LitElement {
       this.#moving = true;
       return this.#send({ type: "_paste", at: id, below: action === "below" }, `.row[data-id="${context.cut}"]`);
     }
-    if (action === "undo") {
-      if (context.cut === id) return this.#send({ type: "_uncut" }, `.row[data-id="${id}"]`);
-      if (context.removing.includes(id)) return this.#send({ type: "_undo", id }, `.row[data-id="${id}"]`);
-      if (context.pasted) {
-        this.#moving = true;
-        return this.#send({ type: "_unpaste" }, `.row[data-id="${context.pasted.id}"]`);
-      }
-      return;
-    }
+    if (action === "undo") return this.#send({ type: "_uncut" }, `.row[data-id="${context.cut}"]`);
     if (action === "add-below" || action === "add-above") return this.#add(index < 0 ? undefined : index + (action === "add-below" ? 1 : 0));
     if (action === "escape") {
-      // A cut row is removed, with its Undo and draining bar (12).
-      if (context.cut) return this.#send({ type: "_remove", id: context.cut }, `.row[data-id="${context.cut}"]`);
+      // A cut row is removed at once; the keyboard goes to the row that takes its place.
+      if (context.cut) return this.#remove(context.cut, true);
       this.#done();
     }
   }
@@ -943,31 +882,23 @@ class ValuesSheet extends LitElement {
     this.#actor.send({ type: "_blur", id, to: e.relatedTarget?.closest?.(".row")?.dataset.id ?? null });
   }
 
-  #remove(id) {
-    this.#send({ type: "_remove", id }, `.row[data-id="${id}"] .undo`);
+  // The keyboard goes to the row after the one removed, or before it, or to New value:
+  // on the row itself when it held the keyboard (Vim keys), else into its value.
+  #remove(id, onRow = false) {
+    const drafts = this.#actor.snapshot?.context.drafts ?? [];
+    const at = drafts.findIndex((d) => d.id === id);
+    const next = drafts[at + 1] ?? drafts[at - 1];
+    const focus = !next ? ".sheet .new" : onRow ? `.row[data-id="${next.id}"]` : `.box[data-key="${next.id}:name"]`;
+    this.#send({ type: "_remove", id }, focus);
   }
 
-  #undo(id) {
-    this.#send({ type: "_undo", id }, `.box[data-key="${id}:name"]`);
-  }
-
-  // Could be under the example of a value with a red mark, or, after Use, Was with Undo.
+  // Could be under the example of a value with a red mark.
   #suggest(context, draft) {
-    const used = context.used?.id === draft.id ? context.used : null;
-    if (used) {
-      return html`<p class="suggest was">
-        <span>Was ${used.was}</span>
-        <button class="revert" type="button" aria-label="Undo: put back ${used.was}" @click=${() => this.#send({ type: "_unuse" }, `.box[data-key="${draft.id}:name"]`)}>
-          Undo
-        </button>
-        <span class="drain"></span>
-      </p>`;
-    }
     const text = suggestionFor(context, draft);
     if (!text) return nothing;
     return html`<p class="suggest">
       <span>Could be ${text}</span>
-      <button class="use" type="button" aria-label="Use ${text}" @click=${() => this.#send({ type: "_use", id: draft.id }, `.row[data-id="${draft.id}"] .revert`)}>
+      <button class="use" type="button" aria-label="Use ${text}" @click=${() => this.#send({ type: "_use", id: draft.id }, `.box[data-key="${draft.id}:name"]`)}>
         Use
       </button>
     </p>`;
@@ -1003,33 +934,17 @@ class ValuesSheet extends LitElement {
     >`;
   }
 
-  // A value to read: its name and sentence as text. A row waiting out its undo window
-  // keeps the keyboard when it has it (Vim keys: u on it takes the removal back).
-  #readRow(context, v, extra = nothing, state = "") {
-    const keyed = state === "removing";
-    return html`<div
-      class="row ${state}"
-      data-id=${v.id}
-      tabindex=${keyed ? "-1" : nothing}
-      @keydown=${keyed ? (e) => this.#rowKeydown(e, v.id) : nothing}
-    >
+  // A value to read: its name and sentence as text.
+  #readRow(context, v) {
+    return html`<div class="row" data-id=${v.id}>
       <div class="fields">
         <p class="name">${v.name || "—"}${this.#after(context, v, "name")}</p>
         ${v.meaning ? html`<p class="meaning">${v.meaning}${this.#after(context, v, "meaning")}</p>` : nothing}
       </div>
-      ${extra}
     </div>`;
   }
 
   #row(context, draft, i) {
-    if (context.removing.includes(draft.id)) {
-      return this.#readRow(
-        context,
-        draft,
-        html`<button class="undo" type="button" @click=${() => this.#undo(draft.id)}>Undo</button><span class="drain"></span>`,
-        "removing",
-      );
-    }
     const name = draft.name.trim() || "this value";
     const last = context.drafts.length - 1;
     const move = (by, dir) => {

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user asked to undo the last step or redo the last one undone (12, Undo).",
+  "type": "object",
+  "properties": {
+    "direction": { "enum": ["undo", "redo"] }
+  },
+  "required": ["direction"],
+  "additionalProperties": false
+}

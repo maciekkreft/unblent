@@ -293,3 +293,56 @@ test("Block and Unblock each offer an Undo that does the opposite, and pass on t
   assert.equal(notices(actor).size, 0);
   assert.deepEqual(out, [{ type: "guest.blocked", user: "g9", blocked: false }]);
 });
+
+// --- Steps (12, Undo) -----------------------------------------------------------
+
+const S1 = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+const S2 = "01ARZ3NDEKTSV4RRFFQ69G5FB2";
+const recorded = (id, extra = {}) => ({ type: "step.recorded", id, owner: "values", label: "remove value Courage", undo: {}, redo: {}, ...extra });
+
+test("a delete step shows the dark notice with Undo and no bar; Undo asks undo for it", async () => {
+  const { actor } = start();
+  const requested = [];
+  actor.on("step.requested", (e) => requested.push(e.direction));
+  actor.send(recorded(S1, { notice: true }));
+  const n = notice(actor, "step");
+  assert.equal(n.undo, true);
+  assert.equal(n.bar, false);
+  actor.send({ type: "_act", key: "step", index: 0 });
+  await tick();
+  assert.deepEqual(requested, ["undo"]);
+  assert.equal(notice(actor, "step"), undefined);
+});
+
+test("the delete notice goes when another step is recorded, when its step is no longer on top, or when it fades", () => {
+  const { actor, clock } = start();
+  actor.send(recorded(S1, { notice: true }));
+  actor.send(recorded(S2, { label: "change value Calm" }));
+  assert.equal(notice(actor, "step"), undefined, "another step");
+  assert.equal(notices(actor).size, 0, "a step that asks for no notice shows none");
+
+  actor.send(recorded(S1, { notice: true }));
+  actor.send({ type: "undo.changed", undo: { id: S1, label: "remove value Courage" }, redo: null });
+  assert.ok(notice(actor, "step"), "still the step on top");
+  actor.send({ type: "undo.changed", undo: null, redo: { id: S1, label: "remove value Courage" } });
+  assert.equal(notice(actor, "step"), undefined, "undone");
+
+  actor.send(recorded(S2, { notice: true }));
+  clock.increment(FADE_MS);
+  assert.equal(notice(actor, "step"), undefined, "faded");
+});
+
+test("a refused or unreachable step is named, with the side it was on", () => {
+  const { actor } = start();
+  actor.send({ type: "undo.changed", undo: { id: S1, label: "remove value Courage" }, redo: { id: S2, label: "move value Calm" } });
+  // undo drops a refused step before the refusal reaches here.
+  actor.send({ type: "undo.changed", undo: null, redo: { id: S2, label: "move value Calm" } });
+  actor.send({ type: "step.settled", id: S1, owner: "values", outcome: "refused", reason: "changed" });
+  const refused = notice(actor, "step.settled:" + S1).source;
+  assert.equal(refused.label, "remove value Courage");
+  assert.equal(refused.side, "undo");
+  actor.send({ type: "step.settled", id: S2, owner: "values", outcome: "unreachable" });
+  assert.equal(notice(actor, "step.settled:" + S2).source.side, "redo");
+  actor.send({ type: "step.settled", id: S2, owner: "values", outcome: "applied" });
+  assert.equal(notices(actor).size, 2, "applied is no news");
+});
