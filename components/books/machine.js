@@ -119,12 +119,13 @@ const bookFor = (context, id) => (id === JOURNAL ? context.journal : visible(con
 // tombstone flag, built field by field so nothing stray is stored or later emitted.
 // title is the display title (the user's when set, else the file's); fileTitle is the
 // file's own, kept only so an empty rename can restore it locally at once (D11); it
-// never rides book.changed or a reply.
+// never rides book.changed or a reply. author and fileAuthor follow the same rule.
 const serverRecord = (b) => ({
   id: b.id,
   title: b.title,
   fileTitle: b.fileTitle ?? b.title,
   author: b.author,
+  fileAuthor: b.fileAuthor ?? b.author,
   cover: b.cover ?? null,
   chapters: b.chapters,
   toc: b.toc,
@@ -299,24 +300,31 @@ function applyProgress(context, event, enqueue) {
 }
 
 // The user renamed a book (book-shelf emits book.renamed, 4.3 fifth rule): give it a
-// user title at once, announce it pending, and queue the write, last write wins and
-// never refused like a position (D11). A trimmed empty string restores the file's
-// title, which the cache keeps as fileTitle so the change shows without a round trip.
-// The row is keyed under `title:<id>`, apart from a pending position or delete, so a
-// rename and a page turn for the same book both reach the server. A missing or
-// tombstoned book, or a title that changes nothing, is ignored, and so is the journal,
-// which is never in the cache.
+// user title and author at once, announce it pending, and queue the write, last write
+// wins and never refused like a position (D11). A trimmed empty string restores the
+// file's title or author, which the cache keeps as fileTitle and fileAuthor so the
+// change shows without a round trip. The row is keyed under `title:<id>`, apart from a
+// pending position or delete, so a rename and a page turn for the same book both reach
+// the server; it carries only the fields that changed, merged into a row still waiting,
+// so a later author change never drops an unsent title. A missing or tombstoned book,
+// or a rename that changes nothing, is ignored, and so is the journal, which is never
+// in the cache. An event without an author leaves the author as it is.
 function applyRename(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
   if (!current || current.deleted) return;
-  const sent = (event.title || "").trim();
-  const next = sent || current.fileTitle || current.title;
-  if (next === current.title) return;
-  const record = { ...current, title: next, updatedAt: context.now() };
+  const fields = {};
+  const sentTitle = (event.title || "").trim();
+  const title = sentTitle || current.fileTitle || current.title;
+  if (title !== current.title) fields.title = sentTitle;
+  const sentAuthor = (event.author ?? "").trim();
+  const author = sentAuthor || (current.fileAuthor ?? current.author);
+  if (typeof event.author === "string" && author !== current.author) fields.author = sentAuthor;
+  if (Object.keys(fields).length === 0) return;
+  const record = { ...current, title, author: "author" in fields ? author : current.author, updatedAt: context.now() };
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
-  const row = { id: `title:${id}`, kind: "title", book: id, title: sent };
+  const row = { ...context.outbox.get(`title:${id}`), id: `title:${id}`, kind: "title", book: id, ...fields };
   context.outbox.set(row.id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit(changed(record, true));
@@ -467,14 +475,15 @@ const untouched = (book) =>
   book.id === FIRST_BOOK &&
   (book.position?.chapter ?? 0) === 0 &&
   (book.position?.block ?? 0) === 0 &&
-  !(book.fileTitle && book.title !== book.fileTitle);
+  !(book.fileTitle && book.title !== book.fileTitle) &&
+  !(book.fileAuthor !== undefined && book.author !== book.fileAuthor);
 
 // The browser joined an account keeping this copy (12, keep). The account is asked for
 // every book it holds first: when it already holds one that is not deleted, this copy is
 // emptied, outbox included, and the pull from 0 brings the account's books. When it holds
 // none, every book gets one outbox row that adds it to the account (kind "adopt", synced
 // first): its file is read from `source`, the Mac's own server ("local") or the account
-// ("remote"), and imported, then its place and the user's title are sent. Either way the
+// ("remote"), and imported, then its place and the user's title and author are sent. Either way the
 // cursor goes back to 0 and the copy is marked as the account's, so the sign-in path
 // (switchAccount) does not empty it again. A tombstone is not sent: the account never had
 // the book. The mark is cleared only once every row is stored in the outbox, so a reload
@@ -504,6 +513,7 @@ async function keepFor(store, from, userId, api, source) {
         if (book.deleted || book.id === JOURNAL || untouched(book)) continue;
         const row = { id: `adopt:${book.id}`, kind: "adopt", book: book.id, position: book.position, from: source };
         if (book.fileTitle && book.title !== book.fileTitle) row.title = book.title;
+        if (book.fileAuthor !== undefined && book.author !== book.fileAuthor) row.author = book.author;
         await store.outboxPut(row);
         // No cover is shown until the account has the file, so its image is never asked of
         // the account before it exists; the account's row brings it back.
@@ -578,13 +588,13 @@ export const machine = setup({
               : row.kind === "open"
                 ? await api.opened(row.book)
                 : row.kind === "title"
-                  ? await api.title(row.book, row.title)
+                  ? await api.title(row.book, row.title, row.author)
                   : await api.position(row.id, row.chapter, row.block);
         } catch {
           return { acks, networkError: true };
         }
         if (result.error === "unauthorized") return { acks, authFailed: true };
-        acks.push({ id: row.id, kind: row.kind, sent: row.title, row: result });
+        acks.push({ id: row.id, kind: row.kind, sent: { title: row.title, author: row.author }, row: result });
         await store.outboxDelete(row.id).catch(() => {});
       }
       if (!pull) return { acks };
@@ -602,15 +612,15 @@ export const machine = setup({
   id: "books",
   meta: {
     description:
-      "Owns the books in the library: each book's title, chapters, table of contents, reading " +
-      "position, and which book is open. A book is added only while signed in, because adding " +
+      "Owns the books in the library: each book's title, author, chapters, table of contents, " +
+      "reading position, and which book is open. A book is added only while signed in, because adding " +
       "uploads the epub file; its chapters and images are extracted once on the server and " +
       "fetched by URL, so this fact never holds the file. A book whose file holds several " +
       "chapters in one piece is cut where its contents say each chapter begins. The reading " +
-      "position, a title the user gives a book, and which book is open are last write wins: " +
-      "they are never refused, " +
-      "and a pull brings them to every device. An empty title restores the title read from the " +
-      "file, and a re-import refreshes the file's title without touching the user's. It also " +
+      "position, a title and an author the user gives a book, and which book is open are last " +
+      "write wins: they are never refused, and a pull brings them to every device. An empty " +
+      "title or author restores the one read from the file, and a re-import refreshes the " +
+      "file's title and author without touching the user's. It also " +
       "presents the journal as the first book, signed in or out: its chapters are the days, " +
       "oldest first, with today's empty page last while no day has been started today, and " +
       "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
@@ -950,7 +960,7 @@ function applySync(context, output, enqueue) {
       // rename has not queued since; the onDone re-raises a drain for one that has.
       const server = ack.row;
       const queued = context.outbox.get(ack.id);
-      if (!queued || queued.title === ack.sent) {
+      if (!queued || (queued.title === ack.sent.title && queued.author === ack.sent.author)) {
         context.outbox.delete(ack.id);
         enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
       } else {

@@ -109,7 +109,10 @@ export const machine = setup({
       "and down to the tile above or below, and with Vim keys on h, j, k and l do the same, " +
       "gg and G go to the first and last tile, dd removes the tile with its Undo (the journal " +
       "ignores it), u on a tile in its undo window takes it back, o or O opens the file " +
-      "picker to add a book, and cc renames the tile where titles can be changed. " +
+      "picker to add a book, and cc renames the tile where titles can be changed. Renaming, " +
+      "by the pencil on a cover or cc, turns the title and the author into two fields, the " +
+      "title ready to type in and Tab moving to the author; Enter or leaving both saves, " +
+      "Escape cancels, and an empty field brings back what the book's file says. " +
       "Signed out it shows only \"Sign in to see your books.\": no tiles, not even the " +
       "journal's, and no Add a book. The books stay kept in this browser and come back, with " +
       "the open one highlighted, when the user signs in, without a reload. A removal still " +
@@ -257,17 +260,26 @@ export const machine = setup({
       guard: ({ context, event }) => event.kind === "book" && context.handed.has(event.id),
       actions: assign({ handed: ({ context, event }) => without(context.handed, event.id) }),
     },
-    // The user edited a title in place (D11, 7.2 internal gesture): announce the
-    // trimmed text as book.renamed, which books turns into a user title (last write
-    // wins) and the book.changed that redraws the tile. Unchanged text emits nothing,
-    // so a blur that changed nothing is silent; an empty string is a real change (it
-    // restores the file's title), so it is announced.
+    // The user edited a title and author in place (D11, 7.2 internal gesture): announce
+    // the trimmed texts as book.renamed, which books turns into a user title and author
+    // (last write wins) and the book.changed that redraws the tile. Unchanged text emits
+    // nothing, so a blur that changed nothing is silent; an empty string is a real change
+    // (it restores the file's title or author), so it is announced.
     _rename: {
       guard: ({ context, event }) => {
         const tile = context.books.find((b) => b.id === event.id);
-        return Boolean(tile) && !tile.written && event.title.trim() !== tile.title;
+        return (
+          Boolean(tile) &&
+          !tile.written &&
+          (event.title.trim() !== tile.title || event.author.trim() !== (tile.author ?? ""))
+        );
       },
-      actions: emit(({ event }) => ({ type: "book.renamed", id: event.id, title: event.title.trim() })),
+      actions: emit(({ event }) => ({
+        type: "book.renamed",
+        id: event.id,
+        title: event.title.trim(),
+        author: event.author.trim(),
+      })),
     },
     // The trash on a tile: begin the undo window. Nothing is emitted yet; only its
     // elapse makes the delete a fact.

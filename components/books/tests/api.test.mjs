@@ -45,12 +45,13 @@ const position = (id, body, cookie) =>
     headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
     body: JSON.stringify(body),
   });
-const setTitle = (id, title, cookie) =>
+const setLabel = (id, body, cookie) =>
   fetch(`${BASE_URL}/api/books/${id}/title`, {
     method: "PUT",
     headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(body),
   });
+const setTitle = (id, title, cookie) => setLabel(id, { title }, cookie);
 const remove = (id, cookie) =>
   fetch(`${BASE_URL}/api/books/${id}/deleted`, {
     method: "PUT",
@@ -321,6 +322,26 @@ test("a user title is last write wins, kept beside the file's, and rides the pul
 
   // A title for a book that is not there is refused honestly.
   assert.equal((await setTitle(ID2, "x", cookie)).status, 404);
+});
+
+test("a user author is kept beside the file's, apart from the title, and an empty one restores the file's", async () => {
+  const cookie = cookieFor(freshUser());
+  const imported = await (await importBook(ID, SAMPLE, cookie)).json();
+  assert.equal(imported.author, imported.fileAuthor, "a fresh book's display and file authors match");
+
+  const named = await (await setLabel(ID, { title: "My Copy", author: "  Someone  " }, cookie)).json();
+  assert.equal(named.author, "Someone", "the display author is the user's, trimmed");
+  assert.equal(named.fileAuthor, imported.author, "the file's author is kept apart");
+
+  const titled = await (await setTitle(ID, "Only Title", cookie)).json();
+  assert.equal(titled.author, "Someone", "a title alone leaves the author as it is");
+
+  const authored = await (await setLabel(ID, { author: "Another" }, cookie)).json();
+  assert.equal(authored.title, "Only Title", "an author alone leaves the title as it is");
+  assert.equal(authored.author, "Another");
+
+  const cleared = await (await setLabel(ID, { author: " " }, cookie)).json();
+  assert.equal(cleared.author, imported.author, "an empty author restores the file's");
 });
 
 test("a re-import refreshes the file's title without touching the user's (D11)", async () => {

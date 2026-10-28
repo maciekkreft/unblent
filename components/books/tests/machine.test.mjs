@@ -96,12 +96,16 @@ function fakeApi(impl = {}) {
       opens.push(id);
       return impl.opened ? impl.opened(id) : { id, at: 500 };
     },
-    title: async (id, t) => {
-      titles.push([id, t]);
-      // The server reports the display title (the user's when set, else the file's) and
-      // the file's own; an empty user title clears it, so the file's "T" comes back.
+    title: async (id, t, a) => {
+      titles.push(a === undefined ? [id, t] : [id, t, a]);
+      // The server reports the display title and author (the user's when set, else the
+      // file's) and the file's own; an empty one clears the user's, so the file's "T" or
+      // "A" comes back.
       const trimmed = (t || "").trim();
-      return impl.title ? impl.title(id, t) : book(id, { version: 2, title: trimmed || "T", fileTitle: "T" });
+      const author = a === undefined ? "A" : a.trim() || "A";
+      return impl.title
+        ? impl.title(id, t, a)
+        : book(id, { version: 2, title: trimmed || "T", fileTitle: "T", author, fileAuthor: "A" });
     },
     pull: async (since) => {
       pulls.push(since);
@@ -296,6 +300,34 @@ test("a rename for a missing or unchanged title is ignored", async () => {
   actor.send({ type: "book.renamed", id: ID, title: "  Same  " }); // unchanged after trim
   await flush();
   assert.equal(changed.length, 0);
+  assert.equal(store.outbox.size, 0);
+});
+
+test("a rename changes the author apart from the title, and an empty author restores the file's", async () => {
+  const store = fakeStore([book(ID, { title: "My Title" })]);
+  const api = fakeApi();
+  const { actor, changed, clock } = start(store, { api, ask: askUser("u1") });
+  await ready(actor);
+  changed.length = 0;
+
+  actor.send({ type: "book.renamed", id: ID, title: "My Title", author: "  Someone  " });
+  await flush();
+  assert.equal(changed[0].author, "Someone", "the author is trimmed and shown at once");
+  assert.equal(changed[0].title, "My Title");
+  assert.equal(store.outbox.get(`title:${ID}`).title, undefined, "an unchanged title is not sent");
+
+  // A second change before the first is sent keeps both in the one waiting row.
+  actor.send({ type: "book.renamed", id: ID, title: "Other", author: "Someone" });
+  await flush();
+  await drain(clock);
+  assert.deepEqual(api.titles, [[ID, "Other", "Someone"]], "the title and the author drain together");
+  assert.equal(changed.at(-1).author, "Someone");
+
+  actor.send({ type: "book.renamed", id: ID, title: "Other", author: "  " });
+  await flush();
+  assert.equal(changed.at(-1).author, "A", "the file's author comes back without a round trip");
+  await drain(clock);
+  assert.deepEqual(api.titles.at(-1), [ID, undefined, ""], "only the cleared author is sent");
   assert.equal(store.outbox.size, 0);
 });
 

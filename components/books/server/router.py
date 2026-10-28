@@ -46,10 +46,12 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
     # schema.sql is replayed per connect, but CREATE IF NOT EXISTS never adds a column
-    # to an existing table, so a db from before user titles is migrated here (5, D11).
+    # to an existing table, so a db from before user titles or authors is migrated here (5, D11).
     columns = {row["name"] for row in connection.execute("PRAGMA table_info(books)")}
     if "user_title" not in columns:
         connection.executescript("ALTER TABLE books ADD COLUMN user_title TEXT")
+    if "user_author" not in columns:
+        connection.executescript("ALTER TABLE books ADD COLUMN user_author TEXT")
     try:
         with connection:
             yield connection
@@ -75,7 +77,9 @@ def _record(row: sqlite3.Row) -> dict:
         # title rides the bus (book.changed); fileTitle stays inside the books fact.
         "title": row["user_title"] if row["user_title"] is not None else row["title"],
         "fileTitle": row["title"],
-        "author": row["author"],
+        # The author follows the title's rule: the user's when set, else the file's.
+        "author": row["user_author"] if row["user_author"] is not None else row["author"],
+        "fileAuthor": row["author"],
         "cover": row["cover"],
         "chapters": json.loads(row["chapters"]),
         "toc": json.loads(row["toc"]),
@@ -215,19 +219,22 @@ async def set_position(book_id: str, request: Request, user_id: str = Depends(re
 
 @router.put("/{book_id}/title")
 async def set_title(book_id: str, request: Request, user_id: str = Depends(require_user)):
-    # A user title, last write wins (D11): no base, never a 409. It is kept apart from
-    # the file's title, which a re-import refreshes without touching this; a trimmed
-    # empty string clears it (NULL), so the display title falls back to the file's.
+    # A user title and author, last write wins (D11): no base, never a 409. Each is kept
+    # apart from the file's, which a re-import refreshes without touching them; a trimmed
+    # empty string clears one (NULL), so it falls back to the file's. A field the
+    # payload leaves out is left as it is, so a title alone never clears the author.
     payload = await request.json()
-    user_title = (payload.get("title") or "").strip() or None
+    columns = {"title": "user_title", "author": "user_author"}
+    given = {columns[k]: (payload[k] or "").strip() or None for k in columns if k in payload}
     now = int(time.time() * 1000)
     with _connect(user_id) as connection:
         row = connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404)
+        sets = "".join(f"{column} = ?, " for column in given)
         connection.execute(
-            "UPDATE books SET user_title = ?, version = ?, updated_at = ?, seq = ? WHERE id = ?",
-            (user_title, row["version"] + 1, now, _next_seq(connection), book_id),
+            f"UPDATE books SET {sets}version = ?, updated_at = ?, seq = ? WHERE id = ?",
+            (*given.values(), row["version"] + 1, now, _next_seq(connection), book_id),
         )
         return _reread(connection, book_id)
 

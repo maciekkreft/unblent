@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS books (
     id               TEXT PRIMARY KEY,
     title            TEXT NOT NULL,   -- the title read from the file; a re-import refreshes it
     user_title       TEXT,            -- the title the user gave (D11), NULL when none; the display title is this when set, else title
-    author           TEXT NOT NULL,
+    author           TEXT NOT NULL,   -- the author read from the file; a re-import refreshes it
+    user_author      TEXT,            -- the author the user gave, NULL when none; the display author is this when set, else author
     cover            TEXT,
     chapters         TEXT NOT NULL,   -- JSON: [{ title }] in spine order
     toc              TEXT NOT NULL,   -- JSON: [{ title, chapter, block, children }]

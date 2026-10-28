@@ -69,6 +69,7 @@ const tiles = (page) =>
   page.evaluate(() =>
     [...document.querySelector("book-shelf").shadowRoot.querySelectorAll(".tile:not(.adding)")].map((t) => ({
       title: t.querySelector(".title").textContent.trim(),
+      author: t.querySelector(".author").textContent.trim(),
       selected: t.getAttribute("aria-selected") === "true",
     })),
   );
@@ -203,7 +204,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("renaming a book in place updates the tile and reaches the server (D11)", async () => {
+    test("renaming a book's title and author in place updates the tile and reaches the server (D11)", async () => {
       const { page, problems } = await open();
       await setFile(page, SAMPLE);
       await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
@@ -218,14 +219,22 @@ for (const engine of ENGINES) {
       const input = page.locator("book-shelf .title-input");
       await input.waitFor();
       await input.fill("My Renamed Book");
+      // Tab moves to the author's field without saving: the edit stays open until both
+      // are done.
+      await input.press("Tab");
+      const author = page.locator("book-shelf .author-input");
+      assert.ok(await author.evaluate((el) => el.matches(":focus")), "Tab moved to the author");
+      await author.fill("Someone Else");
       // The write drains on its own debounce (5); wait for that ack so the round trip
       // is proven, not just the instant local change.
       const titledOk = page.waitForResponse(
         (res) => /\/api\/books\/[^/]+\/title$/.test(res.url()) && res.ok(),
         { timeout: 4000 },
       );
-      await input.press("Enter");
-      await until(async () => (await tiles(page)).some((t) => t.title === "My Renamed Book"));
+      await author.press("Enter");
+      await until(async () =>
+        (await tiles(page)).some((t) => t.title === "My Renamed Book" && t.author === "Someone Else"),
+      );
       // Enter saves the title and nothing more: it does not open the book (a book.selected
       // the "Contents" tab follows), so the renamed tile is not selected.
       assert.ok(

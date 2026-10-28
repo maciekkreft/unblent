@@ -1,10 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user renamed a book inline on the shelf (D11): books gives it a user title (last write wins, kept beside the file's), a trimmed empty string restoring the file's title.",
+  "description": "The user renamed a book inline on the shelf (D11): books gives it a user title and author (last write wins, each kept beside the file's), a trimmed empty string restoring the file's. Without author, the author is left as it is.",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },
-    "title": { "type": "string" }
+    "title": { "type": "string" },
+    "author": { "type": "string" }
   },
   "required": ["id", "title"],
   "additionalProperties": false

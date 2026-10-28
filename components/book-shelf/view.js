@@ -252,10 +252,16 @@ class BookShelf extends LitElement {
         visibility: visible;
       }
     }
-    /* Editing a title in place: the field takes the title's row, holding the current
-       text, selected, so the whole model is edit-here (Norman: one conceptual model,
-       forgiveness — Escape or an empty save restores). */
-    .title-input {
+    /* Editing a title and author in place: each field takes its line's row, holding the
+       current text, the title selected, so the whole model is edit-here (Norman: one
+       conceptual model, forgiveness — Escape or an empty save restores). */
+    .rename {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-2xs);
+    }
+    .title-input,
+    .author-input {
       font: inherit;
       font-size: var(--text-sm);
       font-weight: var(--weight-semibold);
@@ -267,7 +273,13 @@ class BookShelf extends LitElement {
       width: 100%;
       box-sizing: border-box;
     }
-    .title-input:focus-visible {
+    .author-input {
+      font-size: var(--text-caption);
+      font-weight: var(--weight-normal);
+      color: var(--color-body-mid);
+    }
+    .title-input:focus-visible,
+    .author-input:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
@@ -490,33 +502,44 @@ class BookShelf extends LitElement {
     this.#actor.send({ type: "_discard", id });
   }
 
-  // Turn a tile's title into a field holding the current text, selected, so a rename
-  // starts from what is there and one keystroke can replace it (D11). The click does
-  // not open the book: the edit tool is its own target.
+  // Turn a tile's title and author into fields holding the current text, the title
+  // selected, so a rename starts from what is there and one keystroke can replace it
+  // (D11). The click does not open the book: the edit tool is its own target.
   #startEdit(event, id) {
     event.stopPropagation();
     this.#editingId = id;
     this.requestUpdate();
     this.updateComplete.then(() => {
       const input = this.renderRoot.querySelector(".title-input");
-      if (!input) return;
-      // Set the current title imperatively (not a value binding), so a re-render from
+      const author = this.renderRoot.querySelector(".author-input");
+      if (!input || !author) return;
+      // Set the current texts imperatively (not a value binding), so a re-render from
       // another book's book.changed never clobbers the text being typed.
       const tile = this.#actor.snapshot?.context.books.find((b) => b.id === id);
       input.value = tile?.title ?? "";
+      author.value = tile?.author ?? "";
       input.focus();
       input.select();
     });
   }
 
-  // Enter or blur saves, Escape cancels (D11); the machine ignores unchanged text and
-  // reads an empty string as "restore the file's title". Save clears the field first so
-  // the blur a programmatic close would fire finds nothing to save again.
-  #commitEdit(id, value) {
+  // Enter or leaving both fields saves, Escape cancels (D11); the machine ignores
+  // unchanged text and reads an empty string as "restore the file's". Save clears the
+  // edit first so the blur a programmatic close would fire finds nothing to save again.
+  #commitEdit(id) {
     if (this.#editingId !== id) return;
+    const title = this.renderRoot.querySelector(".title-input")?.value ?? "";
+    const author = this.renderRoot.querySelector(".author-input")?.value ?? "";
     this.#editingId = null;
-    this.#actor.send({ type: "_rename", id, title: value });
+    this.#actor.send({ type: "_rename", id, title, author });
     this.requestUpdate();
+  }
+
+  // Tab between the title and the author stays inside the edit; only focus landing
+  // outside both saves.
+  #editFocusout(event, id) {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    this.#commitEdit(id);
   }
 
   #cancelEdit() {
@@ -531,7 +554,7 @@ class BookShelf extends LitElement {
     event.stopPropagation();
     if (event.key === "Enter") {
       event.preventDefault();
-      this.#commitEdit(id, event.target.value);
+      this.#commitEdit(id);
     } else if (event.key === "Escape") {
       event.preventDefault();
       this.#cancelEdit();
@@ -739,19 +762,18 @@ class BookShelf extends LitElement {
             : nothing}
         </div>
         ${this.#editingId === t.id
-          ? html`<input
-              class="title-input"
-              placeholder="Empty restores the original title"
-              aria-label="Book title"
+          ? html`<div
+              class="rename"
               @click=${(e) => e.stopPropagation()}
               @keydown=${(e) => this.#editKeydown(e, t.id)}
-              @blur=${(e) => this.#commitEdit(t.id, e.target.value)}
-            />`
-          : html`<span class="title">${t.title}</span>`}
-        ${t.written
-          ? html`<span class="author">Written by you</span>`
-          : html`<span class="author">${t.author || " "}</span>
-              <span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>`}
+              @focusout=${(e) => this.#editFocusout(e, t.id)}
+            >
+              <input class="title-input" placeholder="Empty restores the original title" aria-label="Book title" />
+              <input class="author-input" placeholder="Empty restores the original author" aria-label="Book author" />
+            </div>`
+          : html`<span class="title">${t.title}</span>
+              <span class="author">${t.written ? "Written by you" : t.author || " "}</span>`}
+        ${t.written ? nothing : html`<span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>`}
       </li>
     `;
   }

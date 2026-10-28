@@ -61,9 +61,9 @@ const api = {
   // file is read from where the row says (3.4), the Mac's own server past the relay
   // (X-Unblent-Local) after a Connect, or the account with the kept device sign-in
   // (X-Unblent-Remote) after a Disconnect, and uploaded as an import; then its place and
-  // the user's title are sent. A file that is not there (404) or that is not an epub (422)
-  // cannot be added; a 401 is the session; anything else throws, so the machine retries
-  // it at the next sync, as offline.
+  // the user's title and author are sent. A file that is not there (404) or that is not
+  // an epub (422) cannot be added; a 401 is the session; anything else throws, so the
+  // machine retries it at the next sync, as offline.
   async adopt(row) {
     const side = row.from === "remote" ? { "X-Unblent-Remote": "1" } : { "X-Unblent-Local": "1" };
     const local = await fetch(`/api/books/${row.book}/source`, {
@@ -88,8 +88,8 @@ const api = {
       if (placed.error) return placed;
       book = placed;
     }
-    if (row.title) {
-      const titled = await api.title(row.book, row.title);
+    if (row.title || row.author) {
+      const titled = await api.title(row.book, row.title || undefined, row.author || undefined);
       if (titled.error) return titled;
       book = titled;
     }
@@ -107,16 +107,17 @@ const api = {
     if (!res.ok) throw new Error(`books position ${res.status}`);
     return await res.json();
   },
-  // A user title, last write wins and never refused (like a position): the server
-  // keeps it beside the file's title and stamps a new version, replying the row.
-  // An empty title clears it, restoring the file's. A 401 drops the session.
-  async title(id, title) {
+  // A user title and author, last write wins and never refused (like a position): the
+  // server keeps each beside the file's and stamps a new version, replying the row. An
+  // empty one clears it, restoring the file's; one left undefined is not sent, so the
+  // server leaves it as it is. A 401 drops the session.
+  async title(id, title, author) {
     const res = await fetch(`/api/books/${id}/title`, {
       method: "PUT",
       credentials: "same-origin",
       keepalive: true,
       headers: { "content-type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, author }),
     });
     if (res.status === 401) return { error: "unauthorized" };
     if (!res.ok) throw new Error(`books title ${res.status}`);

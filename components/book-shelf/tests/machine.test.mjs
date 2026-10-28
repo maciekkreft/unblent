@@ -4,7 +4,7 @@ import { createActor } from "xstate";
 import { machine, showing, shown } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
-// blur into a _rename gesture carrying the field's text, and the machine announces it
+// blur into a _rename gesture carrying the fields' texts, and the machine announces it
 // as book.renamed only when it is a real change. Enter/blur/Escape themselves are the
 // view's DOM concern, driven in the browser test; here we drive the actor directly
 // with a fake ask, the shape fact.js builds for real.
@@ -47,17 +47,25 @@ test("_rename announces book.renamed with the trimmed text when the title change
   const { actor, renamed } = start();
   await flush();
   actor.send(changed(ID, "Old"));
-  actor.send({ type: "_rename", id: ID, title: "  New  " });
-  assert.deepEqual(renamed, [{ type: "book.renamed", id: ID, title: "New" }]);
+  actor.send({ type: "_rename", id: ID, title: "  New  ", author: "A" });
+  assert.deepEqual(renamed, [{ type: "book.renamed", id: ID, title: "New", author: "A" }]);
+});
+
+test("_rename announces book.renamed with the trimmed author when only the author changed", async () => {
+  const { actor, renamed } = start();
+  await flush();
+  actor.send(changed(ID, "Old"));
+  actor.send({ type: "_rename", id: ID, title: "Old", author: "  New Author  " });
+  assert.deepEqual(renamed, [{ type: "book.renamed", id: ID, title: "Old", author: "New Author" }]);
 });
 
 test("_rename ignores unchanged text and an unknown book (no announcement)", async () => {
   const { actor, renamed } = start();
   await flush();
   actor.send(changed(ID, "Old"));
-  actor.send({ type: "_rename", id: ID, title: "Old" }); // unchanged
-  actor.send({ type: "_rename", id: ID, title: "  Old  " }); // unchanged after trim
-  actor.send({ type: "_rename", id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", title: "X" }); // unknown
+  actor.send({ type: "_rename", id: ID, title: "Old", author: "A" }); // unchanged
+  actor.send({ type: "_rename", id: ID, title: "  Old  ", author: " A " }); // unchanged after trim
+  actor.send({ type: "_rename", id: "01ARZ3NDEKTSV4RRFFQ69G5FB0", title: "X", author: "A" }); // unknown
   assert.deepEqual(renamed, []);
 });
 
@@ -65,8 +73,8 @@ test("_rename to an empty string is a real change: it restores the file's title"
   const { actor, renamed } = start();
   await flush();
   actor.send(changed(ID, "User Title"));
-  actor.send({ type: "_rename", id: ID, title: "   " });
-  assert.deepEqual(renamed, [{ type: "book.renamed", id: ID, title: "" }]);
+  actor.send({ type: "_rename", id: ID, title: "   ", author: "A" });
+  assert.deepEqual(renamed, [{ type: "book.renamed", id: ID, title: "", author: "A" }]);
 });
 
 // The "Vim keys" preference (12): asked of settings at start, followed after.
@@ -114,7 +122,7 @@ test("the journal sits first and cannot be renamed or discarded", async () => {
   actor.send(changed(ID, "Imported"));
   actor.send({ ...changed(JRN, "Journal"), addedAt: 0, written: true });
   assert.deepEqual(actor.getSnapshot().context.books.map((b) => b.id), [JRN, ID]);
-  actor.send({ type: "_rename", id: JRN, title: "Diary" });
+  actor.send({ type: "_rename", id: JRN, title: "Diary", author: "Me" });
   actor.send({ type: "_discard", id: JRN });
   assert.deepEqual(renamed, []);
   assert.equal(actor.getSnapshot().context.discarding.size, 0);
