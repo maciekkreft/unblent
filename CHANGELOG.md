@@ -6,6 +6,17 @@ All notable changes to Unblent for Mac are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-29
+
+### Added
+
+- A Choice Point sheet on every journal day, the tool from acceptance and commitment
+  therapy that Russ Harris describes in *ACT Made Simple*. Under the day's text, *New
+  choice point* opens a sheet with four boxes: the situation, the thoughts and feelings it
+  brought up, what you did when hooked (away) and what you did or could do unhooked
+  (towards). Done folds it into a card; a card opens again with a click. Works offline,
+  with no account.
+
 ## [0.2.4] — 2026-10-25
 
 ### Added
@@ -52,6 +63,38 @@ All notable changes to Unblent for Mac are listed here. The format follows
 ### Fixed
 
 - A choice point whose boxes hold only spaces or blank lines is no longer kept.
+
+## [0.2.2] — 2026-10-24
+
+### Changed
+
+- Connecting to an account no longer asks you to choose: an account that already has
+  notes, journal days or books shows them, and an empty account receives what the Mac
+  had. Nothing is ever deleted from the account.
+- Disconnecting keeps on the Mac everything it showed while connected, as its own copy.
+  The Mac's earlier files are moved aside to a backup folder, not deleted.
+
+## [0.2.1] — 2026-10-24
+
+### Fixed
+
+- Connecting to an account on app.unblent.com no longer fails. In 0.2.0 it failed on
+  every Mac.
+
+## [0.2.0] — 2026-10-24
+
+### Added
+
+- Connect the Mac to an account on app.unblent.com, from a new Account tab in Settings.
+  While connected, the Mac shows that account, the same as the website and the phone,
+  and syncs with it. The account needs sync turned on by the admin first. Disconnect
+  stops syncing.
+
+### Fixed
+
+- When two devices each start the same journal day, the journal shows one day for the
+  date and asks you which to keep, instead of showing two. An empty copy or a copy with
+  the same text is dropped by itself.
 
 ## [0.1.2] — 2026-10-23
 
@@ -107,7 +150,13 @@ The first release.
 - Everything is stored on your Mac, in `~/Library/Application Support/Unblent`. There is
   no account and no sync.
 
-[Unreleased]: https://github.com/maciekkreft/unblent/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/maciekkreft/unblent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/maciekkreft/unblent/compare/v0.2.4...v0.3.0
+[0.2.4]: https://github.com/maciekkreft/unblent/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/maciekkreft/unblent/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/maciekkreft/unblent/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/maciekkreft/unblent/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/maciekkreft/unblent/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/maciekkreft/unblent/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/maciekkreft/unblent/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maciekkreft/unblent/releases/tag/v0.1.0

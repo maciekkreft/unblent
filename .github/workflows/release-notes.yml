@@ -1,0 +1,28 @@
+# Rewrites the text of every published release from CHANGELOG.md whenever the changelog
+# changes on main, so a correction or a late entry reaches the Releases page without a
+# new release. The files of a release are never touched.
+name: Release notes
+
+on:
+  push:
+    branches: [main]
+    paths: [CHANGELOG.md, mac/release-notes.py]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Rewrite each release's text
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 200 --json tagName --jq '.[].tagName' | while read -r tag; do
+            python3 mac/release-notes.py "${tag#v}" > notes.md
+            gh release edit "$tag" --notes-file notes.md
+          done
