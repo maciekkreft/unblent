@@ -498,6 +498,60 @@ export const scrollFor = (action, { top, height, max, line }) => {
   return to === undefined ? null : Math.max(0, Math.min(max, to));
 };
 
+// A Journal chapter is a day, named by its date (13, Link); a book's never has that
+// shape, so the date alone tells the Journal apart without the thread learning about books.
+const isDay = (chapter) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chapter ?? "");
+
+// A link's chapter fields, taken from the subject when it has an open chapter.
+const chapterPart = (subject) =>
+  subject?.chapter ? { chapter: subject.chapter, chapterTitle: subject.chapterTitle } : {};
+
+// What the Link or Unlink button would make of the open chat's links, or null when it
+// shows none: only on a chat with a message, so with a record, whose first link is to the subject, while the
+// subject has an open chapter. Linked to the open chapter, it unlinks to the whole book;
+// otherwise it links to the open chapter, which also moves a chat from another chapter.
+// Pure, so it is tested in Node; the same rule as the note editor's label.
+export function relinkOf(context) {
+  const { conversation, subject, openId } = context;
+  if (openId == null || !conversation || conversation.id !== openId || !conversation.turns?.length || !subject?.chapter) return null;
+  const list = conversation.about ?? [];
+  const first = list[0];
+  if (!first || first.kind !== subject.kind || first.id !== subject.id) return null;
+  const { chapter, chapterTitle, ...whole } = first;
+  const unlink = chapter === subject.chapter;
+  const next = unlink ? whole : { ...whole, ...chapterPart(subject) };
+  return {
+    about: [next, ...list.slice(1)],
+    label: unlink ? "Unlink" : "Link to " + subject.chapterTitle,
+  };
+}
+
+// The chapter label at the top of the chat: the chapter the chat's first link names, as
+// its title read when it was linked, so it shows whichever chapter is open; or the whole
+// book; and the button relinkOf offers. A new chat shows the chapter it will be linked to
+// at its first message, without a button, since there is no chat yet to change. Null for a
+// chat linked to nothing, while no subject is known for a new chat, and while a chat loads.
+export function chapterLabelOf(snapshot) {
+  const { conversation, subject } = snapshot.context;
+  const whole = (journal) => (journal ? "Whole Journal" : "Whole book");
+  // A chat with no message yet is new too: `conversations` answers an id it has no chat
+  // for with an empty one, and its links are written with the first message.
+  if (snapshot.matches("empty") || (snapshot.matches("showing") && !conversation?.turns?.length)) {
+    if (!subject) return null;
+    return { text: subject.chapterTitle ?? whole(isDay(subject.chapter)), linked: Boolean(subject.chapter), action: null };
+  }
+  if (!snapshot.matches("showing")) return null;
+  const link = conversation?.about?.[0];
+  if (!link) return null;
+  const ofSubject = subject != null && link.kind === subject.kind && link.id === subject.id;
+  const journal = isDay(link.chapter) || (ofSubject && isDay(subject.chapter));
+  return {
+    text: link.chapterTitle ?? whole(journal),
+    linked: Boolean(link.chapter),
+    action: relinkOf(snapshot.context)?.label ?? null,
+  };
+}
+
 export const machine = setup({
   actors: {
     // The starting picture (4.3): which chat is open, then that chat. conversation.opened
@@ -511,6 +565,9 @@ export const machine = setup({
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
     // races it is held for us until the reply lands (settings: read supersededBy).
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
+    // What is on the stage, for the chapter label (12). subject.changed that races it is
+    // held for us until the reply lands (subject: read supersededBy).
+    subject: fromPromise(({ input }) => input.ask("subject", "read", {})),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -529,7 +586,14 @@ export const machine = setup({
       "chat when the subject changes; opening another chat while it is on moves the pin to it, " +
       "and the pin is kept by `pins`, so it survives a reload. A chat with no message yet " +
       "cannot be pinned: its pin is shown unavailable, saying why, until the first message " +
-      "is sent, and then it is on unless the user turned pins off. In the last finished " +
+      "is sent, and then it is on unless the user turned pins off. At the top left a rounded " +
+      "label names the chapter the chat is linked to, as the chapter's title read when it " +
+      "was linked, or \"Whole book\" (\"Whole Journal\") when it is linked to no chapter; " +
+      "a new chat shows the chapter it will be linked to. While the chat's book is the " +
+      "subject and a chapter is open, the label holds one button: Unlink, when the chat is " +
+      "linked to the open chapter, which links it to the whole book, or \"Link to\" and the " +
+      "open chapter's title otherwise, which also moves it from another chapter; the label " +
+      "turns at once, and pressing again reverses it. In the last finished " +
       "answer the user selects a passage and writes a comment on it, as in Redline: the " +
       "passage is highlighted with a number and the comments are listed under the answer, " +
       "kept with the chat by `conversations` and sent with the next message, after which they " +
@@ -543,7 +607,7 @@ export const machine = setup({
     kind: "view",
     attributes: ["height", "markdown"],
     emits: ["pin.toggled", "marks.edited", "conversation.relinked"],
-    asks: ["conversations: open", "conversations: read", "pins: read", "settings: read"],
+    asks: ["conversations: open", "conversations: read", "pins: read", "settings: read", "subject: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -559,6 +623,9 @@ export const machine = setup({
     // The "Vim keys" preference (12): off until settings says otherwise, and off on a
     // page without a settings fact.
     vimKeys: false,
+    // The subject on the stage, from subject: read then subject.changed; null until known,
+    // whenever nothing on the stage is a subject, and on a page without a subject fact.
+    subject: null,
     // The comment being written on the last answer, and the comments in their undo window.
     draft: null,
     discarding: new Map(),
@@ -580,10 +647,28 @@ export const machine = setup({
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
       onError: { actions: [] },
     },
+    {
+      src: "subject",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ subject: ({ event }) => event.output?.subject ?? null }) },
+      onError: { actions: [] },
+    },
   ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "pins.changed": { actions: assign({ pin: ({ event }) => event.chat ?? null, pinsObserved: true }) },
+    "subject.changed": { actions: assign({ subject: ({ event }) => event.subject ?? null }) },
+    // The chapter label's button (4.3, fifth rule): the gesture goes to `conversations`
+    // with the chat's new links, and the label turns at once; the echo in
+    // conversation.changed brings back what the fact now holds. Pressed again, it reverses.
+    _relink: {
+      guard: ({ context }) => relinkOf(context) != null,
+      actions: enqueueActions(({ context, enqueue }) => {
+        const { about } = relinkOf(context);
+        enqueue.assign({ conversation: { ...context.conversation, about } });
+        enqueue.emit({ type: "conversation.relinked", id: context.openId, about });
+      }),
+    },
     // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the
     // button turns at once. Nothing to pin until the open chat has its first message.
     _togglePin: {

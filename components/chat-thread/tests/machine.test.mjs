@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -17,6 +17,7 @@ const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
 const PIN_TOGGLED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "pin.toggled.json"), "utf8"));
 const MARKS_EDITED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "marks.edited.json"), "utf8"));
+const RELINKED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "conversation.relinked.json"), "utf8"));
 
 const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
 const CHAT2 = "01HQ8ZK7M4N5P6Q7R8S9T0V1W5";
@@ -35,7 +36,7 @@ const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
 function start(options = {}) {
-  const { openId = null, chatsById = {}, readError = {}, pinned = null, vimKeys = false } = options;
+  const { openId = null, chatsById = {}, readError = {}, pinned = null, vimKeys = false, subject = null } = options;
   const input = {
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
@@ -51,17 +52,24 @@ function start(options = {}) {
       }
       if (key === "pins: read") return Promise.resolve({ note: null, chat: pinned, evaluators: null });
       if (key === "settings: read") return Promise.resolve({ vimKeys });
+      if (key === "subject: read") return Promise.resolve({ subject });
       throw new Error(`unexpected ask ${key}`);
     },
   };
   const actor = createActor(machine, { input });
   const toggled = [];
+  const relinked = [];
+  actor.on("conversation.relinked", (e) => {
+    const { type, ...payload } = e;
+    relinked.push(payload);
+    see(payload, RELINKED);
+  });
   actor.on("pin.toggled", (e) => {
     toggled.push(e.id);
     see({ what: e.what, id: e.id }, PIN_TOGGLED);
   });
   actor.start();
-  return { actor, toggled };
+  return { actor, toggled, relinked };
 }
 
 // The top state only: showing has substates of its own (the comment being written).
@@ -515,6 +523,56 @@ test("opening another chat saves the comment being written and carries out a wai
   actor.send({ type: "_typed", text: "yes" });
   actor.send({ type: "conversation.opened", id: CHAT2 });
   assert.deepEqual(emitted.at(-1).marks, [{ ...other, comment: "yes" }]);
+});
+
+const BOOK = { kind: "book", id: "b1", title: "ACT Made Simple", view: "book-reader" };
+const ONE = { ...BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" };
+const TWO = { ...BOOK, chapter: "chapter-two", chapterTitle: "Chapter Two" };
+const DAY = { kind: "book", id: "journal", title: "Journal", view: "book-reader", chapter: "2026-10-29", chapterTitle: "Thursday 29 October" };
+const IN_ONE = { kind: "book", id: "b1", chapter: "chapter-one", chapterTitle: "Chapter One" };
+const WHOLE = { kind: "book", id: "b1" };
+const chatAbout = (about) => ({ openId: CHAT, conversation: emptyChat(CHAT, { about, turns: [{ id: "01HQ8ZK7M4N5P6Q7R8S9T0V1U2", role: "user", text: "q" }] }) });
+
+test("the chapter button unlinks a chat in the open chapter and links one elsewhere to it", () => {
+  assert.deepEqual(relinkOf({ ...chatAbout([IN_ONE]), subject: ONE }), { about: [WHOLE], label: "Unlink" });
+  assert.deepEqual(relinkOf({ ...chatAbout([WHOLE]), subject: ONE }), { about: [IN_ONE], label: "Link to Chapter One" });
+  assert.deepEqual(relinkOf({ ...chatAbout([IN_ONE]), subject: TWO }).about, [{ ...WHOLE, chapter: "chapter-two", chapterTitle: "Chapter Two" }], "moved from another chapter");
+  // No button: no chapter open, a chat about another book, a chat about nothing, no chat.
+  assert.equal(relinkOf({ ...chatAbout([IN_ONE]), subject: BOOK }), null);
+  assert.equal(relinkOf({ ...chatAbout([{ kind: "book", id: "b2" }]), subject: ONE }), null);
+  assert.equal(relinkOf({ ...chatAbout([]), subject: ONE }), null);
+  assert.equal(relinkOf({ openId: null, conversation: null, subject: ONE }), null);
+  assert.equal(relinkOf({ openId: CHAT, conversation: emptyChat(CHAT), subject: ONE }), null, "a chat with no message has no record to change");
+});
+
+test("the chapter label names the chat's chapter, the whole book, or a new chat's chapter to be", () => {
+  const shown = (context, value = "showing") => chapterLabelOf({ context, matches: (s) => s === value });
+  assert.deepEqual(shown({ ...chatAbout([IN_ONE]), subject: TWO }), { text: "Chapter One", linked: true, action: "Link to Chapter Two" });
+  assert.deepEqual(shown({ ...chatAbout([WHOLE]), subject: BOOK }), { text: "Whole book", linked: false, action: null });
+  assert.deepEqual(shown({ ...chatAbout([{ kind: "book", id: "journal" }]), subject: DAY }), { text: "Whole Journal", linked: false, action: "Link to Thursday 29 October" });
+  assert.equal(shown({ ...chatAbout([]), subject: ONE }), null, "a chat about nothing has no label");
+  assert.deepEqual(shown({ openId: null, conversation: null, subject: ONE }, "empty"), { text: "Chapter One", linked: true, action: null });
+  assert.equal(shown({ openId: null, conversation: null, subject: null }, "empty"), null);
+  assert.deepEqual(shown({ openId: CHAT, conversation: emptyChat(CHAT), subject: TWO }), { text: "Chapter Two", linked: true, action: null }, "an empty new chat shows the chapter it will take");
+  assert.equal(shown({ ...chatAbout([IN_ONE]), subject: ONE }, "loading"), null, "nothing while a chat loads");
+});
+
+test("pressing the chapter button relinks at once and announces the new links", async () => {
+  const turns = [{ id: "01HQ8ZK7M4N5P6Q7R8S9T0V1U1", role: "user", text: "hi" }];
+  const h = start({ openId: CHAT, subject: ONE, chatsById: { [CHAT]: emptyChat(CHAT, { about: [WHOLE], turns }) } });
+  await until(() => state(h) === "showing" && h.actor.getSnapshot().context.subject != null, "showing");
+  h.actor.send({ type: "_relink" });
+  assert.deepEqual(conv(h).about, [IN_ONE], "the label turns at once");
+  assert.deepEqual(h.relinked, [{ id: CHAT, about: [IN_ONE] }]);
+  h.actor.send({ type: "_relink" });
+  assert.deepEqual(h.relinked.at(-1), { id: CHAT, about: [WHOLE] }, "pressed again, it reverses");
+  // A change of chapter alone moves nothing: the chat stays, and the button follows.
+  h.actor.send({ type: "subject.changed", subject: TWO });
+  assert.equal(state(h), "showing");
+  assert.equal(chapterLabelOf(h.actor.getSnapshot()).action, "Link to Chapter Two");
+  h.actor.send({ type: "subject.changed", subject: null });
+  h.actor.send({ type: "_relink" });
+  assert.equal(h.relinked.length, 2, "no button, no relink");
 });
 
 test("every query payload and marks.edited matches its schema", () => {

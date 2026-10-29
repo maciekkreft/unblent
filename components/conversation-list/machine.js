@@ -54,18 +54,72 @@ const isAbout = (chat, subject) =>
 // The rows to show (12): while following, with a subject on the stage, only the chats
 // about it — a chat about a book belongs to that book. Only when nothing on the stage is a
 // subject (a null subject, or the attribute off) is there nothing to scope by, and every
-// chat shows. The draft row is the view's, always on top of whichever set this returns.
+// chat shows. While the subject has an open chapter the user may narrow these further to
+// that chapter (`chaptered`); this is the set under All chapters. The draft row is the
+// view's, always on top of whichever set this returns.
 // A chat whose delete was handed to the corner notice is not shown while it waits there.
 export const shown = ({ chats, following, subject, handed }) =>
   (following && subject != null ? chats.filter((c) => isAbout(c, subject)) : chats).filter((c) => !handed?.has(c.id));
 
+// A Journal chapter is a day, named by its date (13, Link); a book's never has that
+// shape, so the date alone tells the Journal apart without the list learning about books.
+const isDay = (chapter) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chapter ?? "");
+
+// The chat's link to the subject, the one that says which of its chapters the chat is in.
+const linkTo = (chat, subject) =>
+  subject == null ? undefined : links(chat).find((l) => l.kind === subject.kind && l.id === subject.id);
+
+// The chapter a row names in its second line: its chapter of the subject, or, for a chat
+// not about the subject, the first chapter it is linked to; none for a whole-book chat.
+export const chapterOf = (chat, subject) =>
+  (linkTo(chat, subject) ?? links(chat).find((l) => l.chapter))?.chapterTitle ?? null;
+
+// The chapter switch and its groups, as note-list has them: only while following a
+// subject that has an open chapter; null otherwise, and then the list is `shown` with no
+// switch. `all` is the user's choice, This chapter by default. Under This chapter the chats
+// linked to no chapter come first, so they are easy to link, then the open chapter's;
+// `more` counts the chats about the subject that stay out of sight in other chapters. The
+// open chat, if it is one of those, is listed apart instead (`apart`), and not counted.
+export const chaptered = (context) => {
+  const { following, subject, allChapters, open } = context;
+  if (!following || !subject?.chapter) return null;
+  const chats = shown(context);
+  const chapter = (c) => linkTo(c, subject)?.chapter ?? null;
+  const loose = chats.filter((c) => chapter(c) == null);
+  const here = chats.filter((c) => chapter(c) === subject.chapter);
+  const more = chats.filter((c) => chapter(c) != null && chapter(c) !== subject.chapter && c.id !== open).length;
+  return { unit: isDay(subject.chapter) ? "day" : "chapter", title: subject.chapterTitle, all: Boolean(allChapters), loose, here, more };
+};
+
 // The open chat, when it is not among the shown chats (12): a pinned chat after the stage
-// moved. Only while following a subject; otherwise the open chat is always shown. Its row
-// is the same row as any other; the view sets it apart, as note-list does for a note.
-export const apart = ({ chats, following, subject, open, handed }) => {
+// moved, or, under This chapter, a chat of another chapter. Only while following a
+// subject; otherwise the open chat is always shown. Its row is the same row as any other;
+// the view sets it apart, as note-list does for a note.
+export const apart = (context) => {
+  const { chats, following, subject, open, handed, allChapters } = context;
   if (!following || subject == null || open == null) return null;
   const chat = chats.find((c) => c.id === open);
-  return chat && !isAbout(chat, subject) && !handed?.has(chat.id) ? chat : null;
+  if (!chat || handed?.has(chat.id)) return null;
+  if (!isAbout(chat, subject)) return chat;
+  const other = linkTo(chat, subject)?.chapter;
+  return subject.chapter && !allChapters && other != null && other !== subject.chapter ? chat : null;
+};
+
+// Where a chat placed at a row of the list (p, P, o, O; 12) goes in the whole order the
+// user set: right below or above that row, next to it in every list that shows both, even
+// while a subject or a chapter hides the chats between it and its neighbour on screen.
+// `ids` are the chat rows as shown; from a fixed row (New chat, a chat listed apart) the
+// chat goes above the first shown chat. The chat being moved is never its own neighbour.
+export const placement = ({ chats, cut }, ids, current, below) => {
+  const all = chats.filter((c) => c.id !== cut).map((c) => c.id);
+  const shownIds = ids.filter((id) => id !== cut);
+  let at = shownIds.indexOf(current);
+  if (at < 0) {
+    if (!shownIds.length) return { after: null, before: all[0] ?? null };
+    [at, below] = [0, false];
+  }
+  const i = all.indexOf(shownIds[at]);
+  return below ? { after: all[i], before: all[i + 1] ?? null } : { after: all[i - 1] ?? null, before: all[i] };
 };
 
 // The book titles (12), as { id: title }, from books: list then book.changed and
@@ -73,10 +127,13 @@ export const apart = ({ chats, following, subject, open, handed }) => {
 export const titles = (reply) =>
   Array.isArray(reply?.books) ? Object.fromEntries(reply.books.map((b) => [b.id, b.title])) : null;
 
-// The tag on the chat listed apart (12): where it was opened from, the title of the first
+// The tag on the chat listed apart (12): where it was opened from — its chapter of the
+// subject when that is what hides it ("From Chapter Two"), else the title of the first
 // book among its links ("From Journal"); "Not linked" when it links to no book; "Pinned"
 // while the titles cannot be read, or the book is not among them.
-export const source = (chat, books) => {
+export const source = (chat, books, subject) => {
+  const chapter = linkTo(chat, subject)?.chapterTitle;
+  if (chapter) return `From ${chapter}`;
   const book = links(chat).find((l) => l.kind === "book");
   if (!book) return "Not linked";
   const title = books?.[book.id];
@@ -190,11 +247,23 @@ export const machine = setup({
       "put: dd does nothing there. cc on a chat row edits its title in place: Enter or " +
       "leaving the field saves, Escape cancels, and an empty title gives back the first line " +
       "of the chat's first message; New chat, a cut row and a row counting down are not " +
-      "renamed. With a subject a move places the chat between its " +
-      "neighbours as the filtered list shows them. While a subject is on the stage only the chats " +
+      "renamed. A moved or new chat goes right below or above the row it was placed at, also " +
+      "in the whole order, so chats hidden by the subject or the chapter stay where they were. " +
+      "While a subject is on the stage only the chats " +
       "about it are listed; with no subject every chat is listed. The open chat, when it is not " +
       "about the subject, such as a pinned chat, is listed apart at the top so the open row is " +
-      "never missing. That row's tag says where the chat is from: \"From \" and the title of the " +
+      "never missing. While the subject has an open chapter (a book's chapter, or the " +
+      "Journal's day), a switch above the list reads \"This chapter\" and \"All chapters\" " +
+      "(\"This day\" and \"All days\" in the Journal). It starts on This chapter and the " +
+      "choice is kept in this browser. This chapter shows first the chats about the book " +
+      "linked to no chapter, under \"Not linked to a chapter\" when there are any, then, under " +
+      "the open chapter's title, its chats or \"No chats in this chapter yet.\" (\"on this " +
+      "day\" in the Journal), then \"N more in other chapters\" with Show all, which switches " +
+      "to All chapters; an open chat of another chapter is listed apart. All chapters lists " +
+      "every chat about the book. A chat row linked to a chapter names the chapter's title " +
+      "before its second line; a chat linked to the whole book shows nothing extra. That " +
+      "apart row's tag says where the chat is from: \"From \" and its chapter's title when it " +
+      "is in another chapter of the book, else \"From \" and the title of the " +
       "first book it is about, such as \"From ACT made simple\", following a rename at once; " +
       "\"Not linked\" when it is about no book; \"Pinned\" while the book titles cannot be " +
       "read. Deleting waits out the undo " +
@@ -206,7 +275,8 @@ export const machine = setup({
     kind: "view",
     emits: ["conversation.selected", "conversation.discarded", "conversation.moved", "conversation.renamed", "removal.started"],
     // The subject attribute (12): off is every chat shown, no subject ask; on, only the
-    // chats about the subject on the stage.
+    // chats about the subject on the stage, and the chapter switch while the subject has
+    // an open chapter.
     attributes: ["subject"],
     asks: ["conversations: list", "conversations: open", "subject: read", "settings: read", "session: read", "books: list"],
   },
@@ -222,6 +292,9 @@ export const machine = setup({
     // Whether the page set the `subject` attribute (12); through input so the machine
     // stays importable in Node.
     following: Boolean(input.following),
+    // The chapter switch: true on All chapters. UI state the view keeps in localStorage
+    // (3.1) and hands back through input, so the choice follows the device.
+    allChapters: Boolean(input.allChapters),
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
@@ -400,6 +473,8 @@ export const machine = setup({
     "subject.changed": {
       actions: assign({ subject: ({ event }) => event.subject }),
     },
+    // The chapter switch, or Show all: which chats the list shows; nothing is emitted.
+    _chapters: { actions: assign({ allChapters: ({ event }) => Boolean(event.all) }) },
     // The trash on a row, or a swipe past its threshold (5): begin the undo window.
     // Nothing is emitted yet; only its elapse makes the delete a fact.
     _discard: {

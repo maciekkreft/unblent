@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
+import { machine, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
@@ -107,13 +107,80 @@ class ChatThread extends LitElement {
     :host([height="fill"]) {
       flex: 1;
     }
-    /* The header: the pin at the top right, where the note editor has its pin, so the
-       two panels pin the same way. */
+    /* The header: the chapter label at the left, the pin at the top right, where the
+       note editor has its pin, so the two panels pin the same way. */
     .header {
       flex: none;
       display: flex;
-      justify-content: flex-end;
+      align-items: center;
+      gap: var(--space-sm);
       padding: var(--space-xs) var(--space-md) 0;
+    }
+    /* The chapter label, as the note editor draws it: a rounded tag naming the chapter
+       the chat is linked to, accent while linked to one, holding the Link or Unlink
+       button. The header keeps its height whether or not it shows, and the label is as
+       tall without its button as with it, so the transcript never jumps. On a narrow
+       panel the chapter's name gives way before the button that acts. */
+    .place {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      min-height: calc(var(--text-caption) * var(--leading-tight) + 4 * var(--space-2xs) + 2 * var(--border-width));
+    }
+    .chapter {
+      flex: 0 1 auto;
+      min-width: 0;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: var(--space-2xs);
+      padding-inline-start: var(--space-sm);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-full);
+      background: var(--color-canvas-soft);
+      color: var(--color-body-mid);
+      font-size: var(--text-caption);
+      line-height: var(--leading-tight);
+      white-space: nowrap;
+    }
+    .chapter:not(:has(button)) {
+      padding-inline-end: var(--space-sm);
+    }
+    .chapter.linked {
+      border-color: var(--color-accent);
+      background: var(--color-accent-subtle);
+      color: var(--color-ink);
+    }
+    .chapter > span {
+      flex: 0 10 auto;
+    }
+    .chapter > span,
+    .relink {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .relink {
+      flex: 0 1 auto;
+      appearance: none;
+      border: none;
+      border-radius: var(--radius-full);
+      padding: var(--space-2xs) var(--space-xs);
+      margin: 0;
+      background: var(--color-canvas);
+      color: var(--color-ink);
+      font: inherit;
+      font-weight: var(--weight-semibold);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .relink:hover {
+      background: var(--color-surface-hover);
+    }
+    .relink:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* The pin: a toggle, muted while following, accent when pinned, as the note
        editor's. */
@@ -674,6 +741,7 @@ class ChatThread extends LitElement {
     const label = !available ? "Pin chat: available after the first message" : pinned ? "Unpin chat" : "Pin chat";
     return html`
       <div class="header">
+        <div class="place">${this.#chapter(chapterLabelOf(snapshot))}</div>
         <button
           class="pin"
           type="button"
@@ -687,6 +755,24 @@ class ChatThread extends LitElement {
         </button>
       </div>
     `;
+  }
+
+  // The chapter label (machine.js: chapterLabelOf decides what it says and offers).
+  #chapter(label) {
+    if (!label) return nothing;
+    return html`<span class=${label.linked ? "chapter linked" : "chapter"}
+      ><span>${label.text}</span>${label.action
+        ? html`<button
+            class="relink"
+            type="button"
+            title=${label.action}
+            @mousedown=${(e) => e.preventDefault()}
+            @click=${() => this.#actor.send({ type: "_relink" })}
+          >
+            ${label.action}
+          </button>`
+        : nothing}</span
+    >`;
   }
 
   #body(snapshot) {
