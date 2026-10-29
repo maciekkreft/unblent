@@ -93,6 +93,7 @@ jobs:
           else
             channel=(--latest)
           fi
+          python3 mac/release-notes.py "$VERSION" > release-notes.md
           gh release create "$GITHUB_REF_NAME" --title "Unblent $VERSION" "${channel[@]}" \
-            --notes "Download Unblent.dmg, open it and drag Unblent to Applications. Or: brew install --cask maciekkreft/unblent/unblent" \
+            --notes-file release-notes.md \
             release/Unblent.dmg release/Unblent.app.tar.gz release/Unblent.app.tar.gz.sig release/latest.json

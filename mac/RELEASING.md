@@ -38,10 +38,20 @@ to the cask is copied into that repository by hand.
 ## Each release
 
 1. Make sure `main` holds what should ship and the checks pass.
-2. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
-3. Watch the run under the repository's Actions tab. It takes about 15 minutes.
-4. On success the release holds `Unblent.dmg`, `Unblent.app.tar.gz`, its `.sig`
-   and `latest.json`, and Homebrew installs the new version.
+2. Write the version's section in `CHANGELOG.md`, headed `## [0.1.0] — <date>`. It
+   becomes the release's text on GitHub, with a line under it saying which file to
+   download; `python3 mac/release-notes.py 0.1.0` prints that text.
+3. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
+4. Watch the run under the repository's Actions tab. It takes about 15 minutes.
+5. On success the release holds `Unblent.dmg`, `Unblent.app.tar.gz`, its `.sig`
+   and `latest.json`, and Homebrew installs the new version. Only `Unblent.dmg` is for
+   people: the other three are what an installed copy reads and downloads to update
+   itself, so a release without them is never offered as an update. GitHub adds the
+   two source code archives to every release on its own; they cannot be removed.
+
+A change to `CHANGELOG.md` pushed to `main` rewrites the text of every release from it
+(the Release notes workflow), so a correction to an old version's section needs no new
+release.
 
 The version comes from the tag, not from `tauri.conf.json`. A tag must be higher
 than the last one, or installed copies will not see it as an update.
