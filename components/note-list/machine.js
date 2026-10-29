@@ -80,10 +80,11 @@ export const highlights = ({ notes, following, subject, hidden }) => {
 };
 
 // The rows to show (D6): while following, with a subject on the stage, only the notes
-// about it — a note always belongs to what is on the stage, so there is no "all notes"
-// choice to fall back to. Only when nothing on the stage is a subject (a null subject,
-// or the attribute off) is there nothing to scope by, and every note shows. The draft
-// row is the view's, always on top of whichever set this returns.
+// about it; only when nothing on the stage is a subject (a null subject, or the attribute
+// off) is there nothing to scope by, and every note shows. While the subject has an open
+// chapter the user may narrow these further to that chapter (`chaptered`); this is the
+// set under All chapters. The draft row is the view's, always on top of whichever set
+// this returns.
 // A note whose delete was handed to the corner notice is not shown while it waits there.
 export const shown = ({ notes, following, subject, handed }) =>
   (following && subject != null
@@ -91,15 +92,68 @@ export const shown = ({ notes, following, subject, handed }) =>
     : notes
   ).filter((n) => !handed?.has(n.id));
 
+// A Journal chapter is a day, named by its date (13, Link); a book's never has that
+// shape, so the date alone tells the Journal apart without the list learning about books.
+const isDay = (chapter) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chapter ?? "");
+
+// The note's link to the subject, the one that says which of its chapters the note is in.
+const linkTo = (note, subject) =>
+  subject == null ? undefined : links(note).find((l) => l.kind === subject.kind && l.id === subject.id && !l.place);
+
+// The chapter a row names in its second line: its chapter of the subject, or, for a note
+// not about the subject, the first chapter it is linked to; none for a whole-book note.
+export const chapterOf = (note, subject) =>
+  (linkTo(note, subject) ?? links(note).find((l) => l.chapter))?.chapterTitle ?? null;
+
+// The chapter switch and its groups (plan step 3): only while following a subject that has
+// an open chapter; null otherwise, and then the list is `shown` with no switch. `all` is
+// the user's choice, This chapter by default. Under This chapter the notes linked to no
+// chapter come first, so they are easy to link, then the open chapter's; `more` counts the
+// notes about the subject that stay out of sight in other chapters. The open note, if it is
+// one of those, is listed apart instead (`apart`), and not counted.
+export const chaptered = (context) => {
+  const { following, subject, allChapters, open } = context;
+  if (!following || !subject?.chapter) return null;
+  const notes = shown(context);
+  const chapter = (n) => linkTo(n, subject)?.chapter ?? null;
+  const loose = notes.filter((n) => chapter(n) == null);
+  const here = notes.filter((n) => chapter(n) === subject.chapter);
+  const more = notes.filter((n) => chapter(n) != null && chapter(n) !== subject.chapter && n.id !== open).length;
+  return { unit: isDay(subject.chapter) ? "day" : "chapter", title: subject.chapterTitle, all: Boolean(allChapters), loose, here, more };
+};
+
 // The note the editor has open, when it is not among the shown notes (12): a pinned
-// note after the stage moved, or one still open after unpinning. Only while following a
-// subject; otherwise the open note is always in the shown set, so there is nothing apart. Its row is the same row as any other; the
+// note after the stage moved, or one still open after unpinning, or, under This chapter,
+// a note of another chapter. Only while following a subject; otherwise the open note is
+// always in the shown set, so there is nothing apart. Its row is the same row as any other; the
 // view sets it apart. Computed from context, so no handler decides it: note.opened,
 // subject.changed, note.changed and note.deleted keep the inputs current.
-export const apart = ({ notes, following, subject, open, handed }) => {
+export const apart = (context) => {
+  const { notes, following, subject, open, handed, allChapters } = context;
   if (!following || subject == null || open == null) return null;
   const note = notes.find((n) => n.id === open);
-  return note && !isAbout(note, subject) && !isHighlight(note, subject) && !handed?.has(note.id) ? note : null;
+  if (!note || isHighlight(note, subject) || handed?.has(note.id)) return null;
+  if (!isAbout(note, subject)) return note;
+  const other = linkTo(note, subject)?.chapter;
+  return subject.chapter && !allChapters && other != null && other !== subject.chapter ? note : null;
+};
+
+// Where a note placed at a row of the list (p, P, o, O; 12) goes in the whole order the
+// user set: right below or above that row, next to it in every list that shows both, even
+// while a subject or a chapter hides the notes between it and its neighbour on screen.
+// `ids` are the note rows as shown; from a fixed row (New note, Highlights, a note listed
+// apart) the note goes above the first shown note. The note being moved is never its own
+// neighbour.
+export const placement = ({ notes, cut }, ids, current, below) => {
+  const all = notes.filter((n) => n.id !== cut).map((n) => n.id);
+  const shownIds = ids.filter((id) => id !== cut);
+  let at = shownIds.indexOf(current);
+  if (at < 0) {
+    if (!shownIds.length) return { after: null, before: all[0] ?? null };
+    [at, below] = [0, false];
+  }
+  const i = all.indexOf(shownIds[at]);
+  return below ? { after: all[i], before: all[i + 1] ?? null } : { after: all[i - 1] ?? null, before: all[i] };
 };
 
 // A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
@@ -115,10 +169,13 @@ const without = (set, id) => {
 export const titles = (reply) =>
   Array.isArray(reply?.books) ? Object.fromEntries(reply.books.map((b) => [b.id, b.title])) : null;
 
-// The tag on the note listed apart (12): where it was opened from, the title of the first
+// The tag on the note listed apart (12): where it was opened from — its chapter of the
+// subject when that is what hides it ("From Chapter Two"), else the title of the first
 // book among its links ("From Journal"); "Not linked" when it links to no book; "Pinned"
 // while the titles cannot be read, or the book is not among them.
-export const source = (note, books) => {
+export const source = (note, books, subject) => {
+  const chapter = linkTo(note, subject)?.chapterTitle;
+  if (chapter) return `From ${chapter}`;
   const book = links(note).find((l) => l.kind === "book");
   if (!book) return "Not linked";
   const title = books?.[book.id];
@@ -209,11 +266,23 @@ export const machine = setup({
       "while a row is cut or counting down (a row opened, another panel, a click elsewhere), " +
       "the delete moves to the dark notice in the corner with its Undo. o makes a new note " +
       "below the cursor row and O above it, opened in the editor. The New note and Highlights " +
-      "rows stay put: dd does nothing there. With `subject` a move places the note between its " +
-      "neighbours as the filtered list shows them. With `subject` it lists only the " +
+      "rows stay put: dd does nothing there. A moved or new note goes right below or above the " +
+      "row it was placed at, also in the whole order, so notes hidden by the subject or the " +
+      "chapter stay where they were. With `subject` it lists only the " +
       "notes about the subject, and a note open in the editor that is not about it, such as a " +
       "pinned note, is listed apart at the top so the open row is never missing; it learns " +
-      "which note is open from the editor. That row's tag says where the note is from: \"From \" " +
+      "which note is open from the editor. While the subject has an open chapter (a book's " +
+      "chapter, or the Journal's day), a switch above the list reads \"This chapter\" and " +
+      "\"All chapters\" (\"This day\" and \"All days\" in the Journal). It starts on This " +
+      "chapter and the choice is kept in this browser. This chapter shows first the notes about " +
+      "the book linked to no chapter, under \"Not linked to a chapter\" when there are any, " +
+      "then, under the open chapter's title, its notes or \"No notes in this chapter yet.\" " +
+      "(\"on this day\" in the Journal), then \"N more in other chapters\" with Show all, " +
+      "which switches to All chapters; an open note of another chapter is listed apart. All " +
+      "chapters lists every note about the book. A note row linked to a chapter names the " +
+      "chapter's title before its second line; a note linked to the whole book shows nothing " +
+      "extra. That apart row's tag says where the note is from: \"From \" and its chapter's " +
+      "title when it is in another chapter of the book, else \"From \" " +
       "and the title of the first book it is linked to, such as \"From Journal\", following a " +
       "rename at once; \"Not linked\" when it is linked to no book; \"Pinned\" while the book " +
       "titles cannot be read. While the subject has at least one highlight, a " +
@@ -234,7 +303,7 @@ export const machine = setup({
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
     // no filtering, every note shown. On, the list shows only the notes about the
     // subject on the stage, with the Highlights row above them while the subject has
-    // a highlight; there is no switch to all notes.
+    // a highlight, and the chapter switch while the subject has an open chapter.
     attributes: ["subject"],
     asks: ["notes: list", "subject: read", "settings: read", "session: read", "books: list", "flags: read"],
   },
@@ -253,6 +322,9 @@ export const machine = setup({
     // input, because the panel keeps showing the Highlights across a reload and the
     // keyboard must come back to their row, not to the note the editor still holds.
     highlightsOpen: Boolean(input.highlightsOpen),
+    // The chapter switch (plan step 3): true on All chapters. UI state the view keeps in
+    // localStorage (3.1) and hands back through input, so the choice follows the device.
+    allChapters: Boolean(input.allChapters),
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
@@ -495,6 +567,8 @@ export const machine = setup({
     "note.opened": { actions: assign({ open: ({ event }) => event.id }) },
     // A note put in the panel, from this list or anywhere else: the Highlights give way.
     "note.selected": { actions: assign({ highlightsOpen: false }) },
+    // The chapter switch, or Show all: which notes the list shows; nothing is emitted.
+    _chapters: { actions: assign({ allChapters: ({ event }) => Boolean(event.all) }) },
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.

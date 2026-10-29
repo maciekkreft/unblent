@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, source, highlights, showing } from "./machine.js";
+import { machine, shown, apart, source, highlights, showing, chaptered, chapterOf, placement } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
@@ -43,6 +43,16 @@ class ActorController {
     } catch {
       // No storage: the mark lives only for this page.
     }
+    // Which way the chapter switch stands, kept in this browser (3.1) so the choice
+    // follows the device; This chapter unless All chapters was chosen.
+    this.chaptersKey = `note-list${this.host.id ? `#${this.host.id}` : ""}:chapters`;
+    let allChapters = false;
+    try {
+      allChapters = localStorage.getItem(this.chaptersKey) === "all";
+    } catch {
+      // No storage: the switch starts on This chapter.
+    }
+    this.#keptAll = allChapters;
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
@@ -53,6 +63,7 @@ class ActorController {
         // today's behaviour.
         following: this.host.subject,
         highlightsOpen,
+        allChapters,
         // A try page (8) shows the list signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
@@ -66,6 +77,7 @@ class ActorController {
     });
     this.subscription = this.actor.subscribe((snapshot) => {
       this.#keep(snapshot.context.highlightsOpen);
+      this.#keepAll(snapshot.context.allChapters);
       this.host.requestUpdate();
     });
   }
@@ -79,6 +91,18 @@ class ActorController {
       else localStorage.removeItem(this.key);
     } catch {
       // No storage: nothing to keep.
+    }
+  }
+
+  #keptAll = false;
+  #keepAll(all) {
+    if (all === this.#keptAll) return;
+    this.#keptAll = all;
+    try {
+      if (all) localStorage.setItem(this.chaptersKey, "all");
+      else localStorage.removeItem(this.chaptersKey);
+    } catch {
+      // No storage: the choice lasts for this page.
     }
   }
 
@@ -377,6 +401,77 @@ class NoteList extends LitElement {
         transform: scaleX(0);
       }
     }
+    /* The chapter switch, above the list: two buttons in one rounded box, the pressed
+       one raised, as the viewport switch draws its choice. */
+    .switch {
+      flex: none;
+      display: flex;
+      gap: var(--space-2xs);
+      align-self: flex-start;
+      margin: var(--space-xs) var(--space-sm) 0;
+      padding: var(--space-2xs);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-full);
+      font-size: var(--text-sm);
+    }
+    .switch button {
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: var(--space-2xs) var(--space-sm);
+      border-radius: var(--radius-full);
+      font-family: inherit;
+      font-size: inherit;
+      color: var(--color-body);
+    }
+    .switch button:hover {
+      background: var(--color-surface-hover);
+    }
+    .switch button:focus-visible,
+    .show-all:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .switch button[aria-pressed="true"] {
+      color: var(--color-ink);
+      font-weight: var(--weight-semibold);
+      background: var(--color-surface-active);
+    }
+    /* A group's heading under This chapter: small and muted, so the rows lead. */
+    .group {
+      padding: var(--space-sm) var(--space-sm) var(--space-2xs);
+      font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
+      color: var(--color-body-mid);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .none,
+    .more {
+      padding: var(--space-xs) var(--space-sm);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
+    }
+    .show-all {
+      appearance: none;
+      background: none;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      font: inherit;
+      cursor: pointer;
+      color: var(--color-accent);
+      border-radius: var(--radius-sm);
+    }
+    .show-all:hover {
+      text-decoration: underline;
+    }
+    /* The chapter a row is linked to, a shade stronger than the rest of its second line. */
+    .subtitle .in {
+      color: var(--color-body-mid);
+    }
     .empty {
       margin: 0;
       padding: var(--space-md);
@@ -409,7 +504,10 @@ class NoteList extends LitElement {
   #swallowClick = false;
 
   #rows(snapshot) {
-    const notes = shown(snapshot.context);
+    // Under This chapter only the notes linked to no chapter and the open chapter's show,
+    // in that order (render draws the group headings between them).
+    const groups = chaptered(snapshot.context);
+    const notes = groups && !groups.all ? [...groups.loose, ...groups.here] : shown(snapshot.context);
     const { draft } = snapshot.context;
     // The open note, when it is not about the subject (12), leads the list set apart, so
     // its highlighted row is never missing. It is a real row: pickable, deletable, and it
@@ -419,7 +517,7 @@ class NoteList extends LitElement {
     // only while the subject has a highlight. It is not a note; the view sets it apart.
     const hs = highlights(snapshot.context);
     const lead = [
-      ...(kept ? [{ ...kept, apart: source(kept, snapshot.context.books) }] : []),
+      ...(kept ? [{ ...kept, apart: source(kept, snapshot.context.books, snapshot.context.subject) }] : []),
       ...(draft ? [{ id: draft, draft: true }] : []),
       ...(hs ? [{ id: HIGHLIGHTS, highlights: true, count: hs.count, updatedAt: hs.updatedAt }] : []),
     ];
@@ -460,17 +558,11 @@ class NoteList extends LitElement {
     );
   }
 
-  // The note rows a move is placed among (12): the notes as shown, without the one cut.
-  // From a fixed row (New note, Highlights, a note open from elsewhere) a move goes to the
-  // top of the notes. below: between the cursor row and the next; otherwise above it.
+  // The neighbours a move is placed between (12), worked out by the machine (placement)
+  // from the note rows as shown; the fixed rows are not notes a move can stand next to.
   #neighbours(rows, current, below) {
-    const { cut } = this.#actor.snapshot.context;
-    const notes = rows.filter((r) => !r.draft && !r.highlights && !r.apart && r.id !== cut);
-    const at = notes.findIndex((r) => r.id === current);
-    if (at < 0) return { after: null, before: notes[0]?.id ?? null };
-    return below
-      ? { after: notes[at].id, before: notes[at + 1]?.id ?? null }
-      : { after: notes[at - 1]?.id ?? null, before: notes[at].id };
+    const ids = rows.filter((r) => !r.draft && !r.highlights && !r.apart).map((r) => r.id);
+    return placement(this.#actor.snapshot.context, ids, current, below);
   }
 
   #keydown(event, rows) {
@@ -632,9 +724,11 @@ class NoteList extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { open, discarding, highlightsOpen, cut } = snapshot.context;
+    const { open, discarding, highlightsOpen, cut, subject } = snapshot.context;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, snapshot.context);
+    const groups = chaptered(snapshot.context);
+    const row = (r) => this.#row(r, open, focusId, discarding, highlightsOpen, cut, subject);
     // The failed state is the one time no rows show: notes could not answer, so the
     // next-note row would write into a picture we do not have. Otherwise the list is
     // always at least the next-note row, so there is no empty state.
@@ -642,14 +736,53 @@ class NoteList extends LitElement {
       ${snapshot.matches("failed")
         ? html`<p class="empty">Notes unavailable.</p>`
         : html`
+            ${groups ? this.#switch(groups) : nothing}
             <ul class="list" role="listbox" aria-label="Notes" @keydown=${(e) => this.#keydown(e, rows)}>
-              ${rows.map((r) => this.#row(r, open, focusId, discarding, highlightsOpen, cut))}
+              ${groups && !groups.all ? this.#grouped(rows, groups, row) : rows.map(row)}
             </ul>
           `}
     `;
   }
 
-  #row(r, open, focusId, discarding, highlightsOpen, cut) {
+  // The chapter switch: two buttons, the pressed one the list as it stands, so its state
+  // is seen and Tab reaches it before the rows.
+  #switch({ unit, all }) {
+    const set = (value) => this.#actor.send({ type: "_chapters", all: value });
+    return html`
+      <div class="switch" role="group" aria-label="Which notes">
+        <button type="button" aria-pressed=${all ? "false" : "true"} @click=${() => set(false)}>This ${unit}</button>
+        <button type="button" aria-pressed=${all ? "true" : "false"} @click=${() => set(true)}>All ${unit}s</button>
+      </div>
+    `;
+  }
+
+  // Under This chapter: the fixed rows, then the notes linked to no chapter under their
+  // heading (only when there are any), then the open chapter's under its title, or a line
+  // saying it has none, then how many notes the other chapters hold, with Show all. The
+  // headings and lines are not options, so the keyboard moves over the rows alone.
+  #grouped(rows, { unit, title, loose, here, more }, row) {
+    const day = unit === "day";
+    const lead = rows.slice(0, rows.length - loose.length - here.length);
+    return html`
+      ${lead.map(row)}
+      ${loose.length
+        ? html`<li class="group" role="presentation">Not linked to a ${unit}</li>
+            ${rows.slice(lead.length, lead.length + loose.length).map(row)}`
+        : nothing}
+      <li class="group" role="presentation">${title}</li>
+      ${here.length
+        ? rows.slice(lead.length + loose.length).map(row)
+        : html`<li class="none" role="presentation">No notes ${day ? "on this day" : "in this chapter"} yet.</li>`}
+      ${more
+        ? html`<li class="more" role="presentation">
+            ${more} more ${day ? "on other days" : "in other chapters"} ·
+            <button type="button" class="show-all" @click=${() => this.#actor.send({ type: "_chapters", all: true })}>Show all</button>
+          </li>`
+        : nothing}
+    `;
+  }
+
+  #row(r, open, focusId, discarding, highlightsOpen, cut, subject) {
     const isDiscarding = discarding.has(r.id);
     const isCut = cut === r.id;
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
@@ -715,6 +848,8 @@ class NoteList extends LitElement {
     }
 
     const untitled = !r.title;
+    // The chapter the note is linked to, before its second line; nothing for the whole book.
+    const chapter = chapterOf(r, subject);
     const trailing = isDiscarding
       ? html`<button class="undo" type="button" aria-label="Undo delete">Undo</button>`
       : isCut
@@ -744,7 +879,10 @@ class NoteList extends LitElement {
           <span class="text">
             ${r.apart ? html`<span class="tag">${r.apart}</span>` : nothing}
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "Untitled" : r.title}</span>
-            <span class="subtitle">${r.subtitle || " "}</span>
+            <span class="subtitle"
+              >${chapter ? html`<span class="in">${chapter}</span>${r.subtitle ? " · " : ""}` : nothing}${r.subtitle ||
+              (chapter ? "" : " ")}</span
+            >
           </span>
           <span class="trailing">${trailing}</span>
         </span>
