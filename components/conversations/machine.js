@@ -653,25 +653,31 @@ const fireSave = (context, self, chatId) => {
     .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks, sendPosition: sentPosition }));
 };
 
-// A title is last write wins (5), so one rename is in flight per chat; a title changed
-// meanwhile is sent when it comes back (_renamed). The links ride along, because a save
-// that names a chat without them would leave it with none.
+// A title and the links are last write wins (5), so one rename is in flight per chat; a
+// title or links changed meanwhile are sent when it comes back (_renamed). The links ride
+// along, because a save that names a chat without them would leave it with none; a relink
+// alone sends no title, so it never writes back a title another device has changed.
 const fireRename = (context, self, id) => {
-  if (context.titleInFlight.has(id) || !context.renaming.has(id)) return;
+  if (context.titleInFlight.has(id) || (!context.renaming.has(id) && !context.relinking.has(id))) return;
   const title = context.renaming.get(id);
-  const about = context.chats.get(id)?.about ?? context.headings.find((h) => h.id === id)?.about ?? [];
+  const about = context.relinking.get(id) ?? context.chats.get(id)?.about ?? context.headings.find((h) => h.id === id)?.about ?? [];
+  const body = title === undefined ? { rename: true, about } : { rename: true, title, about };
   context.titleInFlight.add(id);
   context
-    .saveChat(id, { rename: true, title, about })
-    .then((r) => self.send({ type: "_renamed", id, title, missing: Boolean(r && r.missing) }))
+    .saveChat(id, body)
+    .then((r) => self.send({ type: "_renamed", id, title, about, missing: Boolean(r && r.missing) }))
     .catch(() => self.send({ type: "_renameFailed", id }));
 };
 
+const sameLinks = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
 const onRenamed = (context, event, enqueue, self) => {
-  context.titleInFlight.delete(event.id);
-  // A chat the server does not have yet gets its title with its first turns (fireSave).
-  if (event.missing || context.renaming.get(event.id) === event.title) context.renaming.delete(event.id);
-  else enqueue(() => fireRename(context, self, event.id));
+  const { id } = event;
+  context.titleInFlight.delete(id);
+  // A chat the server does not have yet gets its title and links with its first turns (fireSave).
+  if (context.renaming.has(id) && (event.missing || context.renaming.get(id) === event.title)) context.renaming.delete(id);
+  if (context.relinking.has(id) && (event.missing || sameLinks(context.relinking.get(id), event.about))) context.relinking.delete(id);
+  if (context.renaming.has(id) || context.relinking.has(id)) enqueue(() => fireRename(context, self, id));
 };
 
 // The comments go away when a new answer starts: sent with the message, or dropped by
@@ -960,6 +966,23 @@ const onTitle = (context, id, text, enqueue, self) => {
   enqueue(() => fireLoad(context, self, id));
 };
 
+// The user linked the open chat to another chapter, or unlinked it (conversation.relinked,
+// 4.3 fifth rule). Like a rename it is last write wins and not news: the links are saved
+// alone, and the time and the place stay, so the chat never becomes the latest about its
+// subject. A chat not in memory is only listed with them, since its turns are not here to
+// announce.
+const onRelinked = (context, event, enqueue, self) => {
+  const chat = context.chats.get(event.id);
+  if (!chat && !context.headings.some((h) => h.id === event.id)) return;
+  context.headings = context.headings.map((h) => (h.id === event.id ? { ...h, about: event.about } : h));
+  context.relinking.set(event.id, event.about);
+  enqueue(() => fireRename(context, self, event.id));
+  if (chat) {
+    chat.about = event.about;
+    enqueue.emit(changedPayload(context, chat));
+  }
+};
+
 const onSelect = (context, event, enqueue, self) => {
   setOpen(context, enqueue, event.id);
   if (event.id != null && !context.chats.has(event.id) && context.headings.some((h) => h.id === event.id))
@@ -1084,6 +1107,7 @@ const onLoaded = (context, event, enqueue, self) => {
   if (isPosition(position)) chat.position = position;
   // A title not yet on the server is the latest write; one waiting for this read is given now.
   if (context.renaming.has(event.id)) chat.title = context.renaming.get(event.id);
+  if (context.relinking.has(event.id)) chat.about = context.relinking.get(event.id);
   context.chats.set(event.id, chat);
   if (context.retitle.has(event.id)) {
     const text = context.retitle.get(event.id);
@@ -1172,7 +1196,8 @@ const onListed = (context, event) => {
   const placed = (h) => {
     const mine = local.get(h.id);
     const kept = mine && context.unsentPosition.has(h.id) && isPosition(mine.position) ? { ...h, position: mine.position } : h;
-    return context.renaming.has(h.id) ? { ...kept, title: context.renaming.get(h.id) } : kept;
+    const named = context.renaming.has(h.id) ? { ...kept, title: context.renaming.get(h.id) } : kept;
+    return context.relinking.has(h.id) ? { ...named, about: context.relinking.get(h.id) } : named;
   };
   context.headings = [...result.conversations.map(fromServer).map(placed), ...keptLocal];
   if (result.tools) {
@@ -1192,12 +1217,12 @@ const onFocus = (context, enqueue, self) => {
   if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && !hasUnsentMarks(context, context.openId) && context.headings.some((h) => h.id === context.openId))
     enqueue(() => fireLoad(context, self, context.openId));
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
-  for (const id of context.renaming.keys()) enqueue(() => fireRename(context, self, id));
+  for (const id of new Set([...context.renaming.keys(), ...context.relinking.keys()])) enqueue(() => fireRename(context, self, id));
 };
 
 const onOnline = (context, enqueue, self) => {
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
-  for (const id of context.renaming.keys()) enqueue(() => fireRename(context, self, id));
+  for (const id of new Set([...context.renaming.keys(), ...context.relinking.keys()])) enqueue(() => fireRename(context, self, id));
 };
 
 // The boot picture: who is signed in decides whether the server is read at all (3.4);
@@ -1209,7 +1234,7 @@ const onOnline = (context, enqueue, self) => {
 // views ask for (4.3), so it announces nothing.
 const applyBoot = (context, out, enqueue, self) => {
   const before = context.openId;
-  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
+  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), relinking: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
   } else if (out.failed) {
@@ -1293,7 +1318,10 @@ export const machine = setup({
       "titled at first with the first line of its first message; the chat-title generator's " +
       "text replaces it, and so does a title the user types in the list, where an empty one " +
       "gives the first line back. A rename keeps the chat's links and its place and does not " +
-      "count as news, so it never makes a chat the latest about its subject.",
+      "count as news, so it never makes a chat the latest about its subject. A new chat's link " +
+      "names the chapter it was made in (the Journal's day), as written by the view where it " +
+      "was created; the user links a chat to another chapter or to the whole book from the " +
+      "open chat, and like a rename that keeps its time and its place.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",
@@ -1328,7 +1356,8 @@ export const machine = setup({
     unsentPosition: new Set(), // chat ids whose place the server does not have yet (5)
     positionInFlight: new Set(), // chat ids with a save carrying a place on its way
     renaming: new Map(), // chat id -> a title the server does not have yet (5)
-    titleInFlight: new Set(), // chat ids with a rename on its way
+    relinking: new Map(), // chat id -> links the server does not have yet (5)
+    titleInFlight: new Set(), // chat ids with a rename or a relink on its way
     retitle: new Map(), // chat id -> a title waiting for the chat to be read
     reading: new Map(), // id -> [reply]; read replies held while a chat loads
     loading: new Set(),
@@ -1380,6 +1409,7 @@ export const machine = setup({
         "marks.edited": { actions: queue },
         "generation.changed": { guard: ({ event }) => event.result.generator === "chat-title", actions: queue },
         "conversation.renamed": { actions: queue },
+        "conversation.relinked": { actions: queue },
       },
     },
     ready: {
@@ -1415,6 +1445,8 @@ export const machine = setup({
           actions: enqueueActions(({ context, event, enqueue, self }) => onTitle(context, event.result.item, event.result.text, enqueue, self)),
         },
         "conversation.renamed": { actions: enqueueActions(({ context, event, enqueue, self }) => onTitle(context, event.id, event.title, enqueue, self)) },
+        // The chat's chapter label (12): the user linked it to the open chapter or unlinked it.
+        "conversation.relinked": { actions: enqueueActions(({ context, event, enqueue, self }) => onRelinked(context, event, enqueue, self)) },
         // The fact's own news about who is signed in (4.3): a different user re-boots
         // the chats; signing out clears them.
         "session.changed": [

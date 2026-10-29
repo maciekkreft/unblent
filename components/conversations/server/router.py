@@ -150,17 +150,19 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
     position = payload.get("position")
     if position is not None and not (isinstance(position, str) and _POSITION.fullmatch(position)):
         return JSONResponse({"error": "invalid-position"}, status_code=422)
-    # A rename (a generator's title or the user's) is last write wins like a place: it
-    # writes the title, and the links only when the body carries them, so a chat never
-    # loses its links to a rename, and like a move it is not news, so updated_at stays.
+    # A rename (a generator's title or the user's) and a relink (the chat's chapter label)
+    # are last write wins like a place: each writes the title and the links only when the
+    # body carries them, so a chat never loses its links to a rename nor its title to a
+    # relink, and like a move neither is news, so updated_at stays.
     if payload.get("rename") is True:
         with _connect(user_id) as connection:
             row = connection.execute("SELECT updated_at FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
             if row is None:
                 return {"missing": True}
-            connection.execute(
-                "UPDATE conversations SET title = ? WHERE id = ?", (str(payload.get("title", "")), conversation_id)
-            )
+            if "title" in payload:
+                connection.execute(
+                    "UPDATE conversations SET title = ? WHERE id = ?", (str(payload["title"]), conversation_id)
+                )
             if isinstance(payload.get("about"), list):
                 connection.execute(
                     "UPDATE conversations SET about = ? WHERE id = ?", (json.dumps(payload["about"]), conversation_id)

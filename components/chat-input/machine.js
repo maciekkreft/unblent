@@ -148,6 +148,11 @@ export const sendLabel = (conversation) => {
   return n === 1 ? "Send 1 comment" : "Send " + n + " comments";
 };
 
+// A new chat's link takes the chapter open in the subject, the Journal's open day
+// included, with the title it reads now (13, Link); none while no chapter is open.
+const chapterPart = (subject) =>
+  subject.chapter ? { chapter: subject.chapter, chapterTitle: subject.chapterTitle } : {};
+
 const submit = (context, enqueue, text) => {
   const body = sendable(text);
   if (!canSend(context.conversation, text)) return;
@@ -155,7 +160,7 @@ const submit = (context, enqueue, text) => {
   const conversationId = context.openId ?? context.mint();
   const event = { type: "turn.submitted", conversationId, turn: { id: context.mint(), text: body } };
   if (isNew(context)) {
-    event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id }] : [];
+    event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id, ...chapterPart(context.subject) }] : [];
     event.start = startText(context.subject);
   }
   enqueue.emit(event);
@@ -211,7 +216,8 @@ export const machine = setup({
       "arriving Send becomes Stop, and a chat left without an answer offers Continue or Try " +
       "again. It writes the instructions a new chat starts with once, when the chat is created, " +
       "naming the open item on one line; they never change afterwards, so the provider's cache " +
-      "holds and the chat is an honest record of what the model was told. When the user picks a " +
+      "holds and the chat is an honest record of what the model was told. A new chat is linked " +
+      "to the open item and to the chapter open in it, the Journal's open day included. When the user picks a " +
       "chat with no messages yet, such as the New chat row or a new chat made with o or O in " +
       "the chat list, the box takes focus, in Vim's " +
       "insert mode when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; it follows the user's pick and not which chat is open, " +

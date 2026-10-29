@@ -1140,6 +1140,46 @@ test("a rename by hand names the chat; an empty one gives back the first line of
   assert.equal(renames(h)[1].body.title, "hello there");
 });
 
+const RELINKED = JSON.parse(readFileSync(resolve(HERE, "..", "..", "chat-thread", "events", "conversation.relinked.json"), "utf8"));
+const relinked = (id, about) => {
+  const event = { type: "conversation.relinked", id, about };
+  see(event, RELINKED);
+  return event;
+};
+const IN_CHAPTER = [{ kind: "book", id: "b1", chapter: "chapter-one", chapterTitle: "Chapter One" }];
+
+test("a relink stores the chat's links alone, announced, with its time and place kept", async () => {
+  const h = start({ conversations: [heading(CHAT, 500, { about: LINKS })], chatsById: { [CHAT]: loaded(CHAT, { title: "Mine" }) } });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length > 0, "loaded");
+  const before = lastChange(h);
+  h.actor.send(relinked(CHAT, IN_CHAPTER));
+  await flush();
+  const after = lastChange(h);
+  assert.deepEqual(after.about, IN_CHAPTER);
+  assert.equal(after.updatedAt, before.updatedAt, "a relink is not news");
+  assert.equal(after.position, before.position, "nor a move");
+  assert.equal(after.title, "Mine");
+  await until(() => renames(h).length === 1, "saved");
+  assert.deepEqual(renames(h)[0].body, { rename: true, about: IN_CHAPTER }, "no title, so another device's title stays");
+  const listed = (await query(h.actor, "list", {}, QUERIES.list.reply)).conversations;
+  assert.deepEqual(listed[0].about, IN_CHAPTER);
+  assert.equal(listed[0].updatedAt, 500);
+});
+
+test("links changed while a relink is on its way are sent when it comes back", async () => {
+  const h = start({ conversations: [heading(CHAT, 500, { about: LINKS })], chatsById: { [CHAT]: loaded(CHAT) } });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length > 0, "loaded");
+  h.actor.send(relinked(CHAT, IN_CHAPTER));
+  h.actor.send(relinked(CHAT, LINKS));
+  await until(() => renames(h).length === 2, "both saved");
+  assert.deepEqual(renames(h).map((s) => s.body.about), [IN_CHAPTER, LINKS]);
+  assert.deepEqual(lastChange(h).about, LINKS);
+});
+
 test("every payload matches its schema", () => {
   assert.ok(recorded.length > 0, "the tests above recorded traffic");
   for (const { value, schema } of recorded) {

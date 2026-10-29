@@ -5,6 +5,7 @@ import { icon } from "icons";
 import { machine, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
+import relinked from "./events/conversation.relinked.json" with { type: "json" };
 
 // The gap between a passage's last line and the comment box under it, in px; the box is
 // placed in JS, so the value is not a style (7.4 covers styles).
@@ -37,7 +38,7 @@ class ActorController {
         mint: ulid,
         undoMs,
       },
-      events: { "pin.toggled": pinToggled, "marks.edited": marksEdited },
+      events: { "pin.toggled": pinToggled, "marks.edited": marksEdited, "conversation.relinked": relinked },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

@@ -542,7 +542,7 @@ export const machine = setup({
       "comment box.",
     kind: "view",
     attributes: ["height", "markdown"],
-    emits: ["pin.toggled", "marks.edited"],
+    emits: ["pin.toggled", "marks.edited", "conversation.relinked"],
     asks: ["conversations: open", "conversations: read", "pins: read", "settings: read"],
   },
   context: ({ input }) => ({

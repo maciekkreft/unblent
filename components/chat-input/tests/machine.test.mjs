@@ -122,6 +122,15 @@ test("a new chat's first message carries the subject link and the start text", a
   assert.match(e.conversationId, /^[0-9A-HJKMNP-TV-Z]{26}$/);
 });
 
+test("a new chat's link takes the chapter open in the subject, with its title", async () => {
+  const h = start({ subject: { kind: "book", id: "b1", title: "A Book", view: "book-reader", chapter: "chapter-one", chapterTitle: "Chapter One" } });
+  await ready(h);
+  h.actor.send({ type: "_send", text: "hi" });
+  await flush();
+  const e = emittedOf(h, "turn.submitted").at(-1);
+  assert.deepEqual(e.about, [{ kind: "book", id: "b1", chapter: "chapter-one", chapterTitle: "Chapter One" }]);
+});
+
 test("a new chat with no subject links to nothing", async () => {
   const h = start({ subject: null });
   await ready(h);

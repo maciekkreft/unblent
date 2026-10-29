@@ -329,7 +329,12 @@ for (const engine of ENGINES) {
         stored = notes.find((n) => n.title === "A new note about the open book");
         return Boolean(stored);
       });
-      assert.deepEqual(stored.about, [{ kind: "book", id: first }], "the new note's book link reached the server");
+      // The link also names the chapter open in the book (13, Link), which reaches the server with it.
+      assert.deepEqual(
+        stored.about.map(({ kind, id, chapterTitle }) => ({ kind, id, chapterTitle })),
+        [{ kind: "book", id: first, chapterTitle: "Chapter One" }],
+        "the new note's book link reached the server",
+      );
 
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await page.close();

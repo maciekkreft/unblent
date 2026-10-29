@@ -183,3 +183,19 @@ test("a rename writes the title and keeps the links, start, turns and time", asy
   assert.deepEqual((await (await get(`/${CHAT}`, cookie)).json()).about, [{ kind: "book", id: "b1" }], "a rename without links keeps them");
   assert.deepEqual(await (await put(U("Z8"), { rename: true, title: "x", about: [] }, cookie)).json(), { missing: true });
 });
+
+test("a relink writes the links, a chapter's among them, and keeps the title and time", async () => {
+  const cookie = cookieFor(freshUser());
+  const first = await (await put(CHAT, chat({ title: "Kept" }), cookie)).json();
+  const about = [{ kind: "book", id: "b1", chapter: "chapter-one", chapterTitle: "Chapter One" }];
+  const relinked = await (await put(CHAT, { rename: true, about }, cookie)).json();
+  assert.equal(relinked.updatedAt, first.updatedAt, "a relink is not news");
+  let got = await (await get(`/${CHAT}`, cookie)).json();
+  assert.equal(got.title, "Kept", "a relink without a title keeps it");
+  assert.deepEqual(got.about, about);
+  const listed = (await (await get("", cookie)).json()).conversations;
+  assert.deepEqual(listed[0].about, about);
+  await put(CHAT, { rename: true, about: [{ kind: "book", id: "b1" }] }, cookie);
+  got = await (await get(`/${CHAT}`, cookie)).json();
+  assert.deepEqual(got.about, [{ kind: "book", id: "b1" }], "unlinked to the whole book");
+});
