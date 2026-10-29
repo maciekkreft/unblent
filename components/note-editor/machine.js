@@ -122,6 +122,55 @@ export function aboutTitleOf(snapshot) {
   return fresh ? subject?.title ?? null : null;
 }
 
+// A Journal chapter is a day, named by its date (13, Link); a book's never has that
+// shape, so the date alone tells the Journal apart without the editor learning about books.
+const isDay = (chapter) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chapter ?? "");
+
+// A link's chapter fields, taken from the subject when it has an open chapter.
+const chapterPart = (subject) =>
+  subject?.chapter ? { chapter: subject.chapter, chapterTitle: subject.chapterTitle } : {};
+
+// What the Link or Unlink button would make of the open note's links, or null when it
+// shows none: only on a saved note whose first link is to the subject, while the subject
+// has an open chapter, and never on a highlight, whose place is its own kind of link.
+// Linked to the open chapter, it unlinks to the whole book; otherwise it links to the open
+// chapter, which also moves a note from another chapter. Pure, so it is tested in Node.
+export function relinkOf(context) {
+  const { about, subject, subjecting, id, baseVersion } = context;
+  if (!subjecting || id == null || baseVersion === null || !subject?.chapter) return null;
+  const list = links(about);
+  const first = list[0];
+  if (!first || first.kind !== subject.kind || first.id !== subject.id || list.some((l) => l.place)) return null;
+  const { chapter, chapterTitle, ...whole } = first;
+  const unlink = chapter === subject.chapter;
+  const next = unlink ? whole : { ...whole, ...chapterPart(subject) };
+  return {
+    about: [next, ...list.slice(1)],
+    label: unlink ? "Unlink" : "Link to " + subject.chapterTitle,
+  };
+}
+
+// The chapter label beside the About line: the chapter the note's first link names, as
+// its title read when it was linked, so it shows whichever chapter is open; or the whole
+// book; and the button relinkOf offers. A new note shows the chapter it will be linked to
+// at its first save, without a button, since there is no note yet to change. Null where
+// the About line names nothing, and on a highlight, which keeps the About line alone.
+export function chapterLabelOf(snapshot) {
+  const { about, subject } = snapshot.context;
+  const list = links(about);
+  const whole = (journal) => (journal ? "Whole Journal" : "Whole book");
+  if (aboutTitleOf(snapshot) == null || list.some((l) => l.place)) return null;
+  const link = list[0];
+  if (!link) return { text: subject.chapterTitle ?? whole(isDay(subject.chapter)), linked: Boolean(subject.chapter), action: null };
+  const ofSubject = subject != null && link.kind === subject.kind && link.id === subject.id;
+  const journal = isDay(link.chapter) || (ofSubject && isDay(subject.chapter));
+  return {
+    text: link.chapterTitle ?? whole(journal),
+    linked: Boolean(link.chapter),
+    action: relinkOf(snapshot.context)?.label ?? null,
+  };
+}
+
 // A source link in a note's text, `[label](note:<id>)` (book-reader's Copy link writes
 // it): every one in `text`, by its range in the text and its label with the escapes off.
 // The view draws each as one tag; the text itself stays as stored.
@@ -196,8 +245,9 @@ const mintAndType = {
 };
 
 // note.saved from the current draft. A new note (baseVersion null) written while
-// following the stage carries one link to the subject (D7, D2): about is on it only
-// then, so every other save leaves the note's links as they are.
+// following the stage carries one link to the subject, with its open chapter when it
+// has one (D7, D2): about is on it only then, so every other save leaves the note's
+// links as they are.
 const savedEvent = (context) => {
   const event = {
     type: "note.saved",
@@ -207,7 +257,7 @@ const savedEvent = (context) => {
     baseVersion: context.baseVersion,
   };
   if (context.subjecting && context.baseVersion === null) {
-    event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id }] : [];
+    event.about = context.subject ? [{ kind: context.subject.kind, id: context.subject.id, ...chapterPart(context.subject) }] : [];
   }
   return event;
 };
@@ -347,7 +397,15 @@ export const machine = setup({
       "waiting for a subject and a note tab on the stage start in normal mode. With `subject` it opens " +
       "the most recently edited note about the subject whenever the subject changes, or an " +
       "empty page that a note about the subject arriving later fills; a new note is linked to " +
-      "the subject at its first save, the About line shows that link, and a keystroke made " +
+      "the subject at its first save, and to the chapter open in it (the Journal's open day), " +
+      "the About line names the book, and a rounded label beside it names the chapter the note " +
+      "is linked to, as the chapter's title read when it was linked, or \"Whole book\" " +
+      "(\"Whole Journal\") when it is linked to no chapter. While the note's book is the " +
+      "subject and a chapter is open, the label holds one button: Unlink, when the note is " +
+      "linked to the open chapter, which links it to the whole book, or \"Link to\" and the " +
+      "open chapter's title otherwise, which also moves it from another chapter; the label " +
+      "turns at once, and pressing again reverses it. A change of chapter alone never moves " +
+      "the editor to another note. A keystroke made " +
       "before the subject is known waits for it. The pin is on unless the user turns it off, and " +
       "while it is on the editor stays on its note when the subject changes; picking another " +
       "note still opens it and the pin stays on, now on that note; turned off, the editor " +
@@ -483,6 +541,17 @@ export const machine = setup({
     _stage: {
       guard: ({ context }) => context.subjecting && !context.staged && context.id != null,
       actions: emit(({ context }) => ({ type: "note.staged", id: context.id })),
+    },
+    // The chapter label's button (4.3, fifth rule): a save like any other, with the
+    // draft as it stands and its base version, carrying the new links. The label turns at
+    // once; the echo brings back what notes now holds. Pressed again, it reverses itself.
+    _relink: {
+      guard: ({ context }) => relinkOf(context) != null,
+      actions: enqueueActions(({ context, enqueue }) => {
+        const { about } = relinkOf(context);
+        enqueue.assign({ about, sent: { body: context.body } });
+        enqueue.emit({ ...savedEvent(context), about });
+      }),
     },
     // `:q`, `:tabc` or `:tabclose` in the stage's editor closes the note's tab.
     _quit: {

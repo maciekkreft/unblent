@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, sourceLinksIn, passageOf, linkMissing, isStaged, showing, startsTyping } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, isStaged, showing, startsTyping } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -1190,6 +1190,80 @@ test("signing in shows the same note again without a reload, and signing out hid
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(ctx()), "sign-in");
   assert.equal(ctx().id, ID);
+});
+
+// --- The chapter label (13, Link) ----------------------------------------------
+
+const CH4 = { chapter: "chapter-4-defusion", chapterTitle: "Chapter 4 · Defusion" };
+const CH2 = { chapter: "chapter-2-values", chapterTitle: "Chapter 2 · Values" };
+const IN_CH4 = { ...SUBJECT, ...CH4 };
+
+test("a new note is linked to the subject's open chapter at its first save", async () => {
+  const { actor, clock, saved } = editor({ subjecting: true, ask: asking({ subject: IN_CH4 }) });
+  await settle();
+  const label = chapterLabelOf(actor.getSnapshot());
+  assert.deepEqual(label, { text: "Chapter 4 · Defusion", linked: true, action: null }, "named before it is saved, with no button yet");
+  actor.send({ type: "_typed", body: "fresh" });
+  clock.increment(THROTTLE_MS);
+  assert.deepEqual(saved[0].about, [{ ...LINK_A, ...CH4 }]);
+});
+
+test("a chapter-only change of the subject keeps the open note and its draft", async () => {
+  const list = { notes: [noteAbout(ID, LINK_A)] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: IN_CH4 }) });
+  await settle();
+  actor.send({ type: "_typed", body: "n\nbody draft" });
+  actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH2 } });
+  const s = actor.getSnapshot();
+  assert.equal(s.context.id, ID);
+  assert.equal(s.context.body, "n\nbody draft");
+  assert.equal(s.context.subject.chapter, CH2.chapter);
+});
+
+test("Link to the open chapter, then Unlink, each a save with its base version, reversing the other", async () => {
+  const list = { notes: [noteAbout(ID, LINK_A)] };
+  const { actor, saved } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: IN_CH4 }) });
+  await settle();
+  assert.deepEqual(chapterLabelOf(actor.getSnapshot()), { text: "Whole book", linked: false, action: "Link to Chapter 4 · Defusion" });
+  actor.send({ type: "_relink" });
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].about, [{ ...LINK_A, ...CH4 }]);
+  assert.equal(saved[0].baseVersion, 3);
+  assert.equal(saved[0].body, "n\nbody");
+  assert.deepEqual(chapterLabelOf(actor.getSnapshot()), { text: "Chapter 4 · Defusion", linked: true, action: "Unlink" }, "the label turns at once");
+  actor.send({ type: "note.changed", ...noteAbout(ID, { ...LINK_A, ...CH4 }), version: 4 });
+  actor.send({ type: "_relink" });
+  assert.equal(saved.length, 2);
+  assert.deepEqual(saved[1].about, [LINK_A], "unlinked to the whole book");
+  assert.equal(saved[1].baseVersion, 4);
+  assert.equal(chapterLabelOf(actor.getSnapshot()).text, "Whole book");
+});
+
+test("a note of another chapter shows that chapter and moves to the open one", () => {
+  const context = { subjecting: true, id: ID, baseVersion: 3, subject: IN_CH4, about: [{ ...LINK_A, ...CH2 }], titles: { "book:bookA": "Dune" } };
+  const snapshot = { context, matches: () => false };
+  assert.deepEqual(chapterLabelOf(snapshot), { text: "Chapter 2 · Values", linked: true, action: "Link to Chapter 4 · Defusion" });
+  assert.deepEqual(relinkOf(context).about, [{ ...LINK_A, ...CH4 }]);
+});
+
+test("no button on a highlight, without an open chapter, on another book's note, or before the note exists", () => {
+  const base = { subjecting: true, id: ID, baseVersion: 3, subject: IN_CH4, about: [LINK_A], titles: { "book:bookA": "Dune", "book:bookB": "Emma" } };
+  assert.ok(relinkOf(base));
+  assert.equal(relinkOf({ ...base, about: [{ ...LINK_A, place: PLACE }] }), null, "a highlight");
+  assert.equal(chapterLabelOf({ context: { ...base, about: [{ ...LINK_A, place: PLACE }] }, matches: () => false }), null, "a highlight shows no label");
+  assert.equal(relinkOf({ ...base, subject: SUBJECT }), null, "the subject has no chapter");
+  assert.equal(relinkOf({ ...base, about: [LINK_B] }), null, "a pinned note about another book");
+  assert.deepEqual(chapterLabelOf({ context: { ...base, about: [LINK_B] }, matches: () => false }), { text: "Whole book", linked: false, action: null });
+  assert.equal(relinkOf({ ...base, baseVersion: null }), null, "not saved yet");
+  const { saved, actor } = editor();
+  actor.send({ type: "_relink" });
+  assert.equal(saved.length, 0, "an editor not following the stage ignores it");
+});
+
+test("the Journal reads Whole Journal, told by its days' dates", () => {
+  const day = { kind: "book", id: "jrn", title: "Journal", chapter: "2026-10-29", chapterTitle: "Thursday 29 October" };
+  const context = { subjecting: true, id: ID, baseVersion: 3, subject: day, about: [{ kind: "book", id: "jrn" }], titles: { "book:jrn": "Journal" } };
+  assert.deepEqual(chapterLabelOf({ context, matches: () => false }), { text: "Whole Journal", linked: false, action: "Link to Thursday 29 October" });
 });
 
 test("every payload matches its schema", () => {

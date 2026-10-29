@@ -7,7 +7,7 @@ import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, isStaged, showing, startsTyping, linkMissing } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -331,6 +331,72 @@ class NoteEditor extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    /* The chapter label, on its own line under the About line so the book's name keeps
+       its room: a rounded tag naming the chapter the note is linked to, accent while
+       linked to one, holding the Link or Unlink button. The line keeps the label's height
+       whether or not it shows, and the label is as tall without its button as with it, so
+       the editor below never jumps, not when a button is pressed nor as the label comes and
+       goes. On a narrow panel the chapter's name gives way before the button that acts. */
+    .place {
+      flex: none;
+      display: flex;
+      min-height: calc(var(--text-caption) * var(--leading-tight) + 4 * var(--space-2xs) + 2 * var(--border-width));
+    }
+    .chapter {
+      flex: 0 1 auto;
+      min-width: 0;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: var(--space-2xs);
+      padding-inline-start: var(--space-sm);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-full);
+      background: var(--color-canvas-soft);
+      color: var(--color-body-mid);
+      font-size: var(--text-caption);
+      line-height: var(--leading-tight);
+      white-space: nowrap;
+    }
+    .chapter:not(:has(button)) {
+      padding-inline-end: var(--space-sm);
+    }
+    .chapter.linked {
+      border-color: var(--color-accent);
+      background: var(--color-accent-subtle);
+      color: var(--color-ink);
+    }
+    .chapter > span {
+      flex: 0 10 auto;
+    }
+    .chapter > span,
+    .relink {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .relink {
+      flex: 0 1 auto;
+      appearance: none;
+      border: none;
+      border-radius: var(--radius-full);
+      padding: var(--space-2xs) var(--space-xs);
+      margin: 0;
+      background: var(--color-canvas);
+      color: var(--color-ink);
+      font: inherit;
+      font-weight: var(--weight-semibold);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .relink:hover {
+      background: var(--color-surface-hover);
+    }
+    .relink:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     /* The pin: a toggle, muted while following, accent when pinned (D7). One icon,
        sized by the caption type. */
@@ -716,6 +782,22 @@ class NoteEditor extends LitElement {
     this.#actor.send({ type: "_togglePin" });
   }
 
+  #relink() {
+    this.#actor.send({ type: "_relink" });
+  }
+
+  // The chapter label (machine.js: chapterLabelOf decides what it says and offers).
+  #chapter(label) {
+    if (!label) return nothing;
+    return html`<span class=${label.linked ? "chapter linked" : "chapter"}
+      ><span>${label.text}</span>${label.action
+        ? html`<button class="relink" type="button" title=${label.action} @mousedown=${(e) => e.preventDefault()} @click=${this.#relink}>
+            ${label.action}
+          </button>`
+        : nothing}</span
+    >`;
+  }
+
   // The About line (12): computed by the machine's pure aboutTitleOf, so the rule — a
   // saved note's link, or the stage's subject on a new note — is
   // tested in Node and the view only renders the result.
@@ -723,14 +805,14 @@ class NoteEditor extends LitElement {
     return aboutTitleOf(snapshot);
   }
 
-  // The header shown only while following the stage (D7): the About line, and the pin
-  // toggle. The pin is disabled while the editor holds no note; its label names the
+  // The header shown only while following the stage (D7): the About line with the pin
+  // toggle, and under it the chapter label's line. The pin is disabled while the editor holds no note; its label names the
   // action for assistive tech, and its colour follows the state (accent when pinned).
-  #header(aboutTitle, pinned, id, onStage, vimKeys) {
+  #header(aboutTitle, chapter, pinned, id, onStage, vimKeys) {
     const label = `${onStage ? "Show on stage" : "Open on stage"}${vimKeys ? " (:tab split)" : ""}`;
     return html`
       <div class="header">
-        <span class="about">${aboutTitle ? html`About: ${aboutTitle}` : nothing}</span>
+        <span class="about" title=${aboutTitle ?? nothing}>${aboutTitle ? html`About: ${aboutTitle}` : nothing}</span>
         <button
           class=${this.#mirrored ? "open mirrored" : "open"}
           type="button"
@@ -754,6 +836,7 @@ class NoteEditor extends LitElement {
           ${icon("push-pin")}
         </button>
       </div>
+      <div class="place">${this.#chapter(chapter)}</div>
     `;
   }
 
@@ -776,7 +859,7 @@ class NoteEditor extends LitElement {
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
       <div class="editor">
-        ${subjecting ? this.#header(aboutTitle, pinned, id, isStaged(snapshot.context), vimKeys) : nothing}
+        ${subjecting ? this.#header(aboutTitle, chapterLabelOf(snapshot), pinned, id, isStaged(snapshot.context), vimKeys) : nothing}
         <div class="region" role="textbox" aria-label="Note"></div>
         <div class="footer">
           <p class="status">
