@@ -216,6 +216,8 @@ While anonymous, `notes` mints versions in the browser and the server adopts the
 
 The place of a note, a chat or an evaluator in its list, set by moving it there, is last write wins in all three: it carries no base version, is never refused, and never makes a conflict with an edit of the same item.
 
+The chapter of a note's or a chat's link is last write wins: linking or unlinking it is never refused and never makes a conflict with an edit.
+
 `choice-points` replicates as above, but the last write wins: a write is never refused for a stale version, so it never conflicts, and a delete is still a tombstone that always wins.
 
 `values` replicates as above, but keeps one version of the list per day and the last write wins: only today's version is written, an edit made today replaces today's version, a version never changes after its day, and nothing is deleted. It also keeps, for each day, whether that journal day shows Your values, kept on the server so it is the same on every device; the last write wins.
@@ -668,7 +670,7 @@ The architecture document describes the rules; the checks are what make them rea
 - **Note** (as the user sees it): one page of writing in the Notes panel. A book has its notes and one more note, its Highlights.
 - **Highlight**: one marked passage of a book with the user's comment on it. It is stored as its own note record whose link to the book carries a place (see `notes`), but the user never sees it as a separate note.
 - **Highlights**: the one note, from the user's view, that holds every highlight of a book, the passage and the comment under each, in reading order. `highlight-notes`, the highlights editor, shows and edits it; `note-list` lists it as the "Highlights" row. When the user speaks of a note, the Highlights count as one.
-- **Link**: one entry of a note's `about`, naming something the note is about.
+- **Link**: one entry of a note's or a chat's `about`, naming something it is about. A link to a book may also name the chapter the note or chat was made in, or was linked to by hand: by a short name made from the chapter's title (lowercase letters and digits, accented letters written plainly, everything else a hyphen) and by the title as it read then. For the Journal a chapter is a day, named by its date. A link without a chapter is to the whole book.
 - **Source link**: a link in a note's text to a highlight, `[label](note:<id>)`, drawn as a tag; following it opens the book at the passage. Not to be confused with a **Link**, which is an entry of a note's `about`.
 - **Chat**: a conversation with the language model, owned by `conversations`; it holds its links (`about`), its `start`, and its turns.
 - **Turn**: one message in a chat, immutable once finished — a user turn (text, and any results answering the tool calls before it) or an assistant turn (text, a status, and any tool calls).

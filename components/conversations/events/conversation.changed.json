@@ -11,9 +11,12 @@
         "type": "object",
         "properties": {
           "kind": { "type": "string", "minLength": 1 },
-          "id": { "type": "string", "minLength": 1 }
+          "id": { "type": "string", "minLength": 1 },
+          "chapter": { "type": "string", "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2}|[a-z0-9]+(-[a-z0-9]+)*)$", "description": "Which chapter of the linked book the thing was made in. For the Journal it is the day, as YYYY-MM-DD. For a book it is the chapter's title in lowercase letters a to z and digits 0 to 9, an accented letter written without its accent (ś as s, ł as l), each run of other characters made one hyphen and none at either end, so it survives the chapters being renumbered or the book re-imported. Absent when the link is to the whole book, as on every link made before chapters were recorded." },
+          "chapterTitle": { "type": "string", "minLength": 1, "description": "The chapter's title as it read when the link was made, for display, so it still shows after the book changes or is gone; present exactly when chapter is." }
         },
         "required": ["kind", "id"],
+        "dependentRequired": { "chapter": ["chapterTitle"], "chapterTitle": ["chapter"] },
         "additionalProperties": false
       }
     },
