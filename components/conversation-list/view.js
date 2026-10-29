@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, source, chaptered, chapterOf, placement } from "./machine.js";
+import { machine, shown, apart, source, chaptered, placement } from "./machine.js";
 import selected from "./events/conversation.selected.json" with { type: "json" };
 import discarded from "./events/conversation.discarded.json" with { type: "json" };
 import moved from "./events/conversation.moved.json" with { type: "json" };
@@ -454,10 +454,6 @@ class ConversationList extends LitElement {
     .show-all:hover {
       text-decoration: underline;
     }
-    /* The chapter a row is linked to, a shade stronger than the rest of its second line. */
-    .subtitle .in {
-      color: var(--color-body-mid);
-    }
   `;
 
   #actor = new ActorController(this);
@@ -845,8 +841,6 @@ class ConversationList extends LitElement {
     }
 
     const untitled = !r.title;
-    // The chapter the chat is linked to, before its second line; nothing for the whole book.
-    const chapter = chapterOf(r, subject);
     const trailing = isDiscarding
       ? html`<button class="undo" type="button" aria-label="Undo delete">Undo</button>`
       : isCut
@@ -884,10 +878,7 @@ class ConversationList extends LitElement {
                   @blur=${(e) => this.#commitEdit(r.id, e.target.value)}
                 />`
               : html`<span class="name ${untitled ? "untitled" : ""}">${untitled ? "New chat" : r.title}</span>`}
-            <span class="subtitle"
-              >${chapter ? html`<span class="in">${chapter}</span>${r.subtitle ? " · " : ""}` : nothing}${r.subtitle ||
-              (chapter ? "" : " ")}</span
-            >
+            <span class="subtitle">${r.subtitle || " "}</span>
           </span>
           <span class="trailing">${trailing}</span>
         </span>

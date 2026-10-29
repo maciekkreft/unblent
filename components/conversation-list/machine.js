@@ -69,11 +69,6 @@ const isDay = (chapter) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(chapter ?? "");
 const linkTo = (chat, subject) =>
   subject == null ? undefined : links(chat).find((l) => l.kind === subject.kind && l.id === subject.id);
 
-// The chapter a row names in its second line: its chapter of the subject, or, for a chat
-// not about the subject, the first chapter it is linked to; none for a whole-book chat.
-export const chapterOf = (chat, subject) =>
-  (linkTo(chat, subject) ?? links(chat).find((l) => l.chapter))?.chapterTitle ?? null;
-
 // The chapter switch and its groups, as note-list has them: only while following a
 // subject that has an open chapter; null otherwise, and then the list is `shown` with no
 // switch. `all` is the user's choice, This chapter by default. Under This chapter the chats

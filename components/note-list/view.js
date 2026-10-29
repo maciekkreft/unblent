@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, source, highlights, showing, chaptered, chapterOf, placement } from "./machine.js";
+import { machine, shown, apart, source, highlights, showing, chaptered, placement } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
@@ -468,10 +468,6 @@ class NoteList extends LitElement {
     .show-all:hover {
       text-decoration: underline;
     }
-    /* The chapter a row is linked to, a shade stronger than the rest of its second line. */
-    .subtitle .in {
-      color: var(--color-body-mid);
-    }
     .empty {
       margin: 0;
       padding: var(--space-md);
@@ -848,8 +844,6 @@ class NoteList extends LitElement {
     }
 
     const untitled = !r.title;
-    // The chapter the note is linked to, before its second line; nothing for the whole book.
-    const chapter = chapterOf(r, subject);
     const trailing = isDiscarding
       ? html`<button class="undo" type="button" aria-label="Undo delete">Undo</button>`
       : isCut
@@ -879,10 +873,7 @@ class NoteList extends LitElement {
           <span class="text">
             ${r.apart ? html`<span class="tag">${r.apart}</span>` : nothing}
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "Untitled" : r.title}</span>
-            <span class="subtitle"
-              >${chapter ? html`<span class="in">${chapter}</span>${r.subtitle ? " · " : ""}` : nothing}${r.subtitle ||
-              (chapter ? "" : " ")}</span
-            >
+            <span class="subtitle">${r.subtitle || " "}</span>
           </span>
           <span class="trailing">${trailing}</span>
         </span>

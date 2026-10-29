@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, chaptered, chapterOf, apart, placement, source } from "../machine.js";
+import { machine, chaptered, apart, placement, source } from "../machine.js";
 
 // The chapter switch and its groups (plan step 3), decided from the machine's context
 // alone, so they are tested here without a browser (9).
@@ -66,15 +66,6 @@ test("the switch starts on This chapter, comes back from input, and _chapters tu
   actor.send({ type: "_chapters", all: false });
   assert.equal(actor.getSnapshot().context.allChapters, false);
   assert.equal(start({ allChapters: true }).getSnapshot().context.allChapters, true);
-});
-
-test("a row names its chapter of the subject, and nothing for the whole book", () => {
-  const s = subject("chapter-two", "Chapter Two");
-  assert.equal(chapterOf(notes[2], s), "Chapter One");
-  assert.equal(chapterOf(notes[1], s), null);
-  assert.equal(chapterOf(notes[4], s), null);
-  // Not following, a row names the first chapter it is linked to.
-  assert.equal(chapterOf(notes[0], null), "Chapter Two");
 });
 
 test("under This chapter the open note of another chapter is listed apart and not counted; under All it is in the list", () => {
