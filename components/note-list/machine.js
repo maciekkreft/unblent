@@ -124,7 +124,8 @@ export const chaptered = (context) => {
 
 // The note the editor has open, when it is not among the shown notes (12): a pinned
 // note after the stage moved, or one still open after unpinning, or, under This chapter,
-// a note of another chapter. Only while following a subject; otherwise the open note is
+// a note of another chapter, which the editor keeps open only while it is pinned or the
+// keyboard is in it, or after the user picked it. Only while following a subject; otherwise the open note is
 // always in the shown set, so there is nothing apart. Its row is the same row as any other; the
 // view sets it apart. Computed from context, so no handler decides it: note.opened,
 // subject.changed, note.changed and note.deleted keep the inputs current.

@@ -1208,21 +1208,104 @@ test("a new note is linked to the subject's open chapter at its first save", asy
   assert.deepEqual(saved[0].about, [{ ...LINK_A, ...CH4 }]);
 });
 
-test("a chapter-only change of the subject keeps the open note and its draft", async () => {
-  const list = { notes: [noteAbout(ID, LINK_A)] };
-  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: IN_CH4 }) });
+test("a chapter change while the keyboard is in the note keeps the note and its draft; the next one after it leaves re-follows", async () => {
+  const list = { notes: [noteAbout(ID2, { ...LINK_A, ...CH2 }), noteAbout(ID, { ...LINK_A, ...CH4 })] };
+  const ask = (target, name, payload) =>
+    target === "subject" ? Promise.resolve({ subject: IN_CH4 })
+    : name === "list" ? Promise.resolve(list)
+    : Promise.resolve({ note: list.notes.find((n) => n.id === payload.id) });
+  const { actor, saved } = editor({ subjecting: true, ask });
   await settle();
+  assert.equal(actor.getSnapshot().context.id, ID);
+  actor.send({ type: "_focused" });
   actor.send({ type: "_typed", body: "n\nbody draft" });
   actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH2 } });
-  const s = actor.getSnapshot();
-  assert.equal(s.context.id, ID);
+  let s = actor.getSnapshot();
+  assert.equal(s.context.id, ID, "the note in the user's hands stays");
   assert.equal(s.context.body, "n\nbody draft");
   assert.equal(s.context.subject.chapter, CH2.chapter);
+  actor.send({ type: "_blurred" });
+  assert.equal(saved.length, 1, "leaving saves the draft");
+  actor.send({ type: "subject.changed", subject: IN_CH4 });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID, "back in Chapter 4, its newest note");
+  actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH2 } });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID2, "Chapter 2 opens its own note");
+});
+
+test("a chapter change re-follows to the open chapter's newest note, never a whole-book note, else the empty page", async () => {
+  const CH5 = { chapter: "chapter-5", chapterTitle: "Chapter 5" };
+  const ID3 = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+  const list = { notes: [noteAbout(ID3, LINK_A), noteAbout(ID2, { ...LINK_A, ...CH2 }), { ...noteAbout("01ARZ3NDEKTSV4RRFFQ69G5FB2", { ...LINK_A, ...CH2, place: PLACE }) }, noteAbout(ID, { ...LINK_A, ...CH4 })] };
+  const ask = (target, name, payload) =>
+    target === "subject" ? Promise.resolve({ subject: IN_CH4 })
+    : name === "list" ? Promise.resolve(list)
+    : Promise.resolve({ note: list.notes.find((n) => n.id === payload.id) });
+  const { actor, saved, clock } = editor({ subjecting: true, ask });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID, "the start opens Chapter 4's note, not the newer whole-book one");
+  actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH2 } });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID2, "the newest note of Chapter 2 that is not a highlight");
+  actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH5 } });
+  await settle();
+  assert.ok(actor.getSnapshot().matches("empty"), "a chapter with no notes opens the empty page");
+  actor.send({ type: "_typed", body: "fresh" });
+  clock.increment(THROTTLE_MS);
+  assert.deepEqual(saved.at(-1)?.about, [{ ...LINK_A, ...CH5 }], "typed there, the note is Chapter 5's");
+});
+
+test("moving into a part with no chapter keeps the note", async () => {
+  const list = { notes: [noteAbout(ID2, LINK_A), noteAbout(ID, { ...LINK_A, ...CH4 })] };
+  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: list.notes[1] }, subject: IN_CH4 }) });
+  await settle();
+  actor.send({ type: "subject.changed", subject: SUBJECT });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID);
+});
+
+test("a pinned note stays when the chapter changes", async () => {
+  const list = { notes: [noteAbout(ID2, { ...LINK_A, ...CH2 }), noteAbout(ID, { ...LINK_A, ...CH4 })] };
+  const { actor } = editor({ subjecting: true, pinned: ID, ask: asking({ list, note: { note: list.notes[1] }, subject: IN_CH4 }) });
+  await settle();
+  assert.equal(actor.getSnapshot().context.pinned, true);
+  actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH2 } });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID);
+  assert.equal(actor.getSnapshot().context.subject.chapter, CH2.chapter);
+});
+
+test("on the empty page, a note arriving later fills it only when it is in the open chapter", async () => {
+  const { actor } = editor({ subjecting: true, ask: asking({ subject: IN_CH4 }) });
+  await settle();
+  assert.ok(actor.getSnapshot().matches("empty"));
+  actor.send({ type: "note.changed", ...noteAbout(ID2, { ...LINK_A, ...CH2 }) });
+  actor.send({ type: "note.changed", ...noteAbout(ID2, LINK_A) });
+  await settle();
+  assert.ok(actor.getSnapshot().matches("empty"), "another chapter's note, or a whole-book one, leaves the page empty");
+  const here = noteAbout(ID, { ...LINK_A, ...CH4 });
+  let arrived = false;
+  const filled = editor({
+    subjecting: true,
+    ask: (target, name) =>
+      target === "subject" ? Promise.resolve({ subject: IN_CH4 })
+      : name === "list" ? Promise.resolve({ notes: arrived ? [here] : [] })
+      : Promise.resolve({ note: here }),
+  });
+  await settle();
+  arrived = true;
+  filled.actor.send({ type: "note.changed", ...here });
+  await settle();
+  assert.equal(filled.actor.getSnapshot().context.id, ID, "the open chapter's note fills it");
 });
 
 test("Link to the open chapter, then Unlink, each a save with its base version, reversing the other", async () => {
   const list = { notes: [noteAbout(ID, LINK_A)] };
   const { actor, saved } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: IN_CH4 }) });
+  await settle();
+  // A whole-book note is never opened for a chapter by itself; the user picks it.
+  actor.send({ type: "load", id: ID });
   await settle();
   assert.deepEqual(chapterLabelOf(actor.getSnapshot()), { text: "Whole book", linked: false, action: "Link to Chapter 4 · Defusion" });
   actor.send({ type: "_relink" });

@@ -83,21 +83,35 @@ const isAbout = (note, subject) =>
 const isHighlight = (note, subject) =>
   subject != null && links(note.about).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
 
-// Which note to open from a list reply (D7): the newest note about the subject that is
-// not a highlight of it (the reply is newest first), or — for an editor that does not
-// follow the stage — the newest note overall. Null when there is none, so the editor
-// lands on the empty page. A following editor with nothing on the stage opens none: the
-// note it opens is pinned (`pins` starts every pin on), and the subject is often not
-// known yet at a reload, so a note chosen then would stay open in place of the subject's.
+// A note the editor may open for the subject: about it, not a highlight of it, and, while
+// the subject has an open chapter, linked to that chapter. A note linked to the whole book
+// is not opened for a chapter: the This chapter list shows those in a group of their own,
+// and opening one would put a note of no chapter in front of every chapter.
+const ofSubject = (note, subject) =>
+  isAbout(note, subject) &&
+  !isHighlight(note, subject) &&
+  (!subject.chapter || links(note.about).some((l) => l.kind === subject.kind && l.id === subject.id && l.chapter === subject.chapter));
+
+// Which note to open from a list reply (D7): the newest note for the subject (ofSubject;
+// the reply is newest first), or — for an editor that does not follow the stage — the
+// newest note overall. Null when there is none, so the editor lands on the empty page. A
+// following editor with nothing on the stage opens none: the note it opens is pinned
+// (`pins` starts every pin on), and the subject is often not known yet at a reload, so a
+// note chosen then would stay open in place of the subject's.
 const pickId = (notes, subject, subjecting) => {
   const list = Array.isArray(notes) ? notes : [];
   if (subject == null) return subjecting ? null : list[0]?.id ?? null;
-  return list.find((n) => isAbout(n, subject) && !isHighlight(n, subject))?.id ?? null;
+  return list.find((n) => ofSubject(n, subject))?.id ?? null;
 };
 
 // Two subjects name the same thing when their kind and id match (title aside); both
 // null is the same nothing. A title-only change keeps the note on screen (D7).
 const sameThing = (a, b) => (a == null && b == null) || Boolean(a && b && a.kind === b.kind && a.id === b.id);
+
+// The same thing with another chapter open in it, which re-follows like a change of thing.
+// A move into a part with no chapter (an untitled chapter) keeps the note, since there is
+// no chapter to choose a note by.
+const otherChapter = (a, b) => sameThing(a, b) && b?.chapter != null && b.chapter !== a?.chapter;
 
 // Remember a subject's title so the About line can name a note's link this session
 // (D7, D9): a small kind:id → title table, never a claim about kinds the editor
@@ -396,7 +410,12 @@ export const machine = setup({
       "the keyboard arrives, so the user types at once; an existing note, the empty page " +
       "waiting for a subject and a note tab on the stage start in normal mode. With `subject` it opens " +
       "the most recently edited note about the subject whenever the subject changes, or an " +
-      "empty page that a note about the subject arriving later fills; a new note is linked to " +
+      "empty page that a note about the subject arriving later fills. While a chapter is open " +
+      "(the Journal's open day), it opens the most recently edited note linked to that chapter, " +
+      "never a note linked to the whole book, and the empty page when the chapter has none; " +
+      "turning to another chapter opens that chapter's note the same way, except while the " +
+      "note is pinned or the keyboard is in it, and the next chapter change after the keyboard " +
+      "has left it follows again. Moving into a part with no chapter keeps the note. A new note is linked to " +
       "the subject at its first save, and to the chapter open in it (the Journal's open day), " +
       "the About line names the book, and a rounded label beside it names the chapter the note " +
       "is linked to, as the chapter's title read when it was linked, or \"Whole book\" " +
@@ -404,8 +423,7 @@ export const machine = setup({
       "subject and a chapter is open, the label holds one button: Unlink, when the note is " +
       "linked to the open chapter, which links it to the whole book, or \"Link to\" and the " +
       "open chapter's title otherwise, which also moves it from another chapter; the label " +
-      "turns at once, and pressing again reverses it. A change of chapter alone never moves " +
-      "the editor to another note. A keystroke made " +
+      "turns at once, and pressing again reverses it. A keystroke made " +
       "before the subject is known waits for it. The pin is on unless the user turns it off, and " +
       "while it is on the editor stays on its note when the subject changes; picking another " +
       "note still opens it and the pin stays on, now on that note; turned off, the editor " +
@@ -487,6 +505,8 @@ export const machine = setup({
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
     // otherwise, and off on a page without it (the ask replies no-answerer).
     vimKeys: false,
+    // Whether the keyboard is in the editor (UI state), from the view's focus and blur.
+    focused: false,
     // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
     pinned: false,
     // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
@@ -525,6 +545,10 @@ export const machine = setup({
   ],
   on: {
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
+    // Whether the keyboard is in the note, so a chapter change does not swap the note the
+    // user is writing in. Beside the states, so no state can miss the keyboard leaving.
+    _focused: { actions: assign({ focused: true }) },
+    _blurred: { actions: assign({ focused: false }) },
     "dock.changed": { actions: assign({ layouts: ({ context }) => context.layouts + 1 }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A command addressing this instance (4.4).
@@ -607,15 +631,23 @@ export const machine = setup({
     // never applied before the picture it supersedes. Ignored when not following.
     "subject.changed": [
       {
-        // Pinned (or a remembered pin's note still loading), or the same thing with a
-        // new title only: take the subject and its title but keep the note on screen (D7).
+        // Pinned (or a remembered pin's note still loading), the same thing with a new
+        // title only, or another chapter while the user is in the note: take the subject
+        // and its title but keep the note on screen (D7). The note in the user's hands is
+        // never swapped from under the keyboard; the next chapter change after the keyboard
+        // has left it re-follows.
         guard: ({ context, event }) =>
-          context.subjecting && (context.pinned || context.restoring || sameThing(context.subject, event.subject)),
+          context.subjecting &&
+          (context.pinned ||
+            context.restoring ||
+            (sameThing(context.subject, event.subject) && !otherChapter(context.subject, event.subject)) ||
+            (otherChapter(context.subject, event.subject) && context.focused)),
         actions: "takeSubject",
       },
       {
-        // A different thing on the stage, not pinned: save a dirty draft (its links are
-        // the old subject's, still in context here), take the new subject, and re-follow.
+        // A different thing on the stage, or another chapter of it, not pinned: save a
+        // dirty draft (its links are the old subject's, still in context here), take the
+        // new subject, and re-follow.
         guard: ({ context }) => context.subjecting,
         target: ".refollowing",
         actions: [
@@ -750,11 +782,11 @@ export const machine = setup({
       entry: enqueueActions(({ context, enqueue }) => announceOpened(context, enqueue, null)),
       on: {
         _typed: mintAndType,
-        // A note about the subject arrived after the choice was made (12): from the
-        // load's pull, or another device. Nothing is typed here yet, so choose again.
+        // A note for the subject (in its open chapter, when it has one) arrived after the
+        // choice was made (12): from the load's pull, or another device. Nothing is typed
+        // here yet, so choose again.
         "note.changed": {
-          guard: ({ context, event }) =>
-            context.subjecting && isAbout(event, context.subject) && !isHighlight(event, context.subject),
+          guard: ({ context, event }) => context.subjecting && context.subject != null && ofSubject(event, context.subject),
           target: "refollowing",
           actions: trackChanged,
         },
@@ -826,7 +858,12 @@ export const machine = setup({
             // within it join the one save at its end rather than pushing it back,
             // which is what makes this a throttle, not a debounce (4.3, third rule).
             _typed: { actions: assignTyped },
-            _blurred: [{ guard: "unchanged", target: "clean" }, { target: "clean", actions: "save" }],
+            // The root's _blurred is not taken while this one is, so the keyboard leaving is
+            // noted here too.
+            _blurred: [
+              { guard: "unchanged", target: "clean", actions: assign({ focused: false }) },
+              { target: "clean", actions: ["save", assign({ focused: false })] },
+            ],
           },
           after: {
             [THROTTLE_MS]: [{ guard: "unchanged", target: "clean" }, { target: "clean", actions: "save" }],

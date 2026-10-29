@@ -580,6 +580,7 @@ class NoteEditor extends LitElement {
           this.#actor.send({ type: "_blurred" });
         },
         focus: () => {
+          this.#actor.send({ type: "_focused" });
           this.#startTyping();
         },
         // The page-wide Vim level keys arrive here as a "level" event (setLineLevel).
@@ -665,6 +666,9 @@ class NoteEditor extends LitElement {
     requestAnimationFrame(this.#place);
     const region = this.renderRoot.querySelector(".region");
     if (!region) {
+      // Taking the document away fires no blur, and while the actor thinks the keyboard
+      // is in the note, a chapter change does not move it.
+      if (this.#view?.hasFocus) this.#actor.send({ type: "_blurred" });
       this.#view?.destroy();
       this.#view = null;
       return;
