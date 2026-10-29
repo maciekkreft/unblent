@@ -99,8 +99,15 @@ for (const engine of ENGINES) {
     };
     await put(`/api/books/${SAMPLE_ID}`, "application/epub+zip", SAMPLE);
     await put(`/api/books/${SAMPLE_ID}/opened`, "application/json", "{}");
-    for (const [id, title, book] of [[NOTE_ONE, "Plans", SAMPLE_ID], [NOTE_TWO, "Thoughts", JOURNAL]])
-      await put(`/api/notes/${id}`, "application/json", JSON.stringify({ title, body: title, baseVersion: null, about: [{ kind: "book", id: book }] }));
+    // Each note is linked to the chapter its book opens at, since the editor opens only a
+    // note of the open chapter: the sample book's first, and the Journal's today.
+    const now = new Date();
+    const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
+    for (const [id, title, book, chapter, chapterTitle] of [
+      [NOTE_ONE, "Plans", SAMPLE_ID, "chapter-one", "Chapter One"],
+      [NOTE_TWO, "Thoughts", JOURNAL, today, today],
+    ])
+      await put(`/api/notes/${id}`, "application/json", JSON.stringify({ title, body: title, baseVersion: null, about: [{ kind: "book", id: book, chapter, chapterTitle }] }));
     const browser = await engine.launch();
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     context.setDefaultTimeout(4000);

@@ -39,7 +39,8 @@ const BOOK = "01K00000000000000000000SMP";
 const NOTES = ["Note one", "Note two", "Note three"];
 
 // A user set up straight through the server (5): the sample book open, three notes about it,
-// two chats about it, and the Echo provider so the chat box answers without a key.
+// two chats about its first chapter, where it opens, so a chat asked there lists with them,
+// and the Echo provider so the chat box answers without a key.
 const seedUser = async () => {
   const cookie = forgeCookie("chat");
   const put = async (path, type, body) => {
@@ -58,7 +59,7 @@ const seedUser = async () => {
       { id: ulid(), role: "user", text: `question ${k}` },
       { id: ulid(), role: "assistant", text: `answer ${k}`, status: "done" },
     ];
-    await json(`/api/conversations/${ulid()}`, { title: `Chat ${k}`, about: [{ kind: "book", id: BOOK }], start: "", turns });
+    await json(`/api/conversations/${ulid()}`, { title: `Chat ${k}`, about: [{ kind: "book", id: BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" }], start: "", turns });
   }
   await json(`/api/llm`, { provider: "echo", model: "echo" });
   return cookie;

@@ -36,7 +36,8 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const BOOK = "01K00000000000000000000SMP";
 const NOTES = ["Note one", "Note two", "Note three"];
 
-// A user set up straight through the server (5): the sample book open and three notes about it.
+// A user set up straight through the server (5): the sample book open and three notes about
+// its first chapter, where it opens, so the editor opens the newest of them.
 const seedUser = async () => {
   const cookie = forgeCookie("ring");
   const put = async (path, type, body) => {
@@ -47,7 +48,7 @@ const seedUser = async () => {
   await put(`/api/books/${BOOK}`, "application/epub+zip", readFileSync(SAMPLE));
   await json(`/api/books/${BOOK}/opened`, {});
   for (const [k, title] of NOTES.entries()) {
-    await json(`/api/notes/${ulid()}`, { title, body: `${title} body ${k}`, baseVersion: null, about: [{ kind: "book", id: BOOK }] });
+    await json(`/api/notes/${ulid()}`, { title, body: `${title} body ${k}`, baseVersion: null, about: [{ kind: "book", id: BOOK, chapter: "chapter-one", chapterTitle: "Chapter One" }] });
     await pause(5);
   }
   return cookie;

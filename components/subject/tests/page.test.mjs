@@ -258,13 +258,16 @@ for (const engine of ENGINES) {
       await browser?.close();
     }, { timeout: 15000 });
 
-    // Two books from the one fixture (distinct ids, same title), and a note about each.
+    // Two books from the one fixture (distinct ids, same title), and a note about each,
+    // linked to the chapter each book opens at, since the editor opens only a note of the
+    // open chapter.
+    const CHAPTER_ONE = { chapter: "chapter-one", chapterTitle: "Chapter One" };
     const twoBooks = () =>
       seedUser({
         books: [BOOK_ONE, BOOK_TWO],
         notes: [
-          { id: NOTE_ONE, title: "About one", about: [{ kind: "book", id: BOOK_ONE }] },
-          { id: NOTE_TWO, title: "About two", about: [{ kind: "book", id: BOOK_TWO }] },
+          { id: NOTE_ONE, title: "About one", about: [{ kind: "book", id: BOOK_ONE, ...CHAPTER_ONE }] },
+          { id: NOTE_TWO, title: "About two", about: [{ kind: "book", id: BOOK_TWO, ...CHAPTER_ONE }] },
         ],
       });
 
