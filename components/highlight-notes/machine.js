@@ -80,6 +80,10 @@ export function titleOf(body) {
 // A note's links (12), always an array; an old cached note reads as none.
 const links = (note) => (Array.isArray(note.about) ? note.about : []);
 
+// Two subjects name the same thing when their kind and id match; both null is the same
+// nothing.
+const sameThing = (a, b) => (a == null && b == null) || Boolean(a && b && a.kind === b.kind && a.id === b.id);
+
 // The link that makes a note a highlight of the subject on the stage: kind and id equal
 // (D4: compare kind + id, never learn what kinds exist) and a place (Decision 1). Null
 // when the note is not this subject's highlight.
@@ -290,7 +294,12 @@ export const machine = setup({
     // The stage moved (4.3): a different subject, so a different set of highlights.
     // Held for us until the starting subject: read reply lands, so it is never lost and
     // never applied before the picture it supersedes. Start the set over against it.
-    "subject.changed": { actions: [assign({ subject: ({ event }) => event.subject }), "reload"] },
+    // The same book in another chapter has the same highlights, so only another kind or id
+    // starts over.
+    "subject.changed": [
+      { guard: ({ context, event }) => sameThing(context.subject, event.subject), actions: assign({ subject: ({ event }) => event.subject }) },
+      { actions: [assign({ subject: ({ event }) => event.subject }), "reload"] },
+    ],
     // A subject is known (from the read reply or a change): fetch the notes afresh and
     // rebuild the highlight set for it (start over). Raised, so it runs after the assign.
     _reload: { target: ".loading" },

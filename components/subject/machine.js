@@ -31,29 +31,82 @@ const kindOf = (context) => STAGE_KINDS[viewOf(showing(context))];
 // A staged view takes over as the shower only when it shows a thing.
 const showerAfter = (shower, stage) => (shows(stage) ? stage : shower);
 
+// Letters that NFKD does not split into a plain letter and a mark.
+const PLAIN = { "ł": "l", "ø": "o", "đ": "d", "ß": "ss", "æ": "ae", "œ": "oe" };
+
+// A chapter's title as a link names it: lowercase a–z and 0–9, accented letters written
+// plainly, every other run of characters one hyphen, none at either end. Empty when the
+// title has no letter or digit, and then the chapter has no name. Here alone, so every
+// link names a chapter the same way.
+export const shortName = (title) =>
+  String(title ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[łøđßæœ]/g, (c) => PLAIN[c])
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+// The open chapter of the open book, as { chapter, chapterTitle }, or nothing. The
+// written book (the Journal) keeps its reading place at today, so its open chapter is the
+// day the journal page shows, named by its date; until a page has said which, it is the
+// day of the reading place. Any other book's is the chapter of its reading place, named
+// by its title.
+const chapterOf = (context) => {
+  const chapters = Array.isArray(context.chapters) ? context.chapters : [];
+  const at = chapters[context.at];
+  if (context.written) {
+    const day = context.day ?? at?.day;
+    if (!day) return {};
+    const title = chapters.find((c) => c.day === day)?.title;
+    return { chapter: day, chapterTitle: title || day };
+  }
+  const chapter = shortName(at?.title);
+  return chapter ? { chapter, chapterTitle: at.title } : {};
+};
+
+// What `book.changed` or a `books: read` reply says about the chapters, keeping what we
+// hold for any part it leaves out.
+const bookParts = (context, book) => ({
+  chapters: Array.isArray(book.chapters) ? book.chapters : context.chapters,
+  at: Number.isInteger(book.position?.chapter) ? book.position.chapter : context.at,
+  written: typeof book.written === "boolean" ? book.written : "chapters" in book ? false : context.written,
+});
+
+// Nothing known about the chapters of a book not yet read.
+const noBook = { chapters: [], at: null, written: false };
+
 // The subject the current context makes: an open id and a title we have resolved, of
-// the kind the showing view shows. Missing either is null.
+// the kind the showing view shows, with its open chapter when it has one. Missing either
+// is null.
 const subjectOf = (context) =>
   context.openId != null && context.title != null
-    ? { kind: kindOf(context), id: context.openId, title: context.title, view: showing(context) }
+    ? { kind: kindOf(context), id: context.openId, title: context.title, view: showing(context), ...chapterOf(context) }
     : null;
 
+// A move within one chapter keeps the subject; a move to another chapter changes it.
 const sameSubject = (a, b) =>
-  a === b || Boolean(a && b && a.kind === b.kind && a.id === b.id && a.title === b.title && a.view === b.view);
+  a === b ||
+  Boolean(
+    a && b && a.kind === b.kind && a.id === b.id && a.title === b.title && a.view === b.view &&
+      a.chapter === b.chapter && a.chapterTitle === b.chapterTitle,
+  );
 
 export const machine = setup({
   actors: {
-    // The starting picture (4.3): which view is on the stage, and which book is open.
-    // dock.changed and book.opened that race these asks are held for us until the
-    // replies land (their supersededBy), so nothing is lost.
+    // The starting picture (4.3): which view is on the stage, which book is open, and
+    // which day the journal page shows. dock.changed and book.opened that race these asks
+    // are held for us until the replies land (their supersededBy), so nothing is lost; a
+    // page with no journal answers no-answerer, and the day stays unknown.
     load: fromPromise(async ({ input }) => {
-      const [dock, open] = await Promise.all([
+      const [dock, open, journal] = await Promise.all([
         input.ask("dock", "read", {}),
         input.ask("books", "open", {}),
+        input.ask("journal", "open", {}),
       ]);
-      return { stage: dock?.stage ?? null, openId: open?.id ?? null };
+      return { stage: dock?.stage ?? null, openId: open?.id ?? null, day: journal?.shown?.day ?? null };
     }),
-    // The open book's title. book.changed and book.deleted for it are held until this
+    // The open book's title and chapters. book.changed and book.deleted for it are held until this
     // reply lands (books: read supersededBy), so a change that races it is applied after.
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
   },
@@ -85,28 +138,39 @@ export const machine = setup({
       "view has been in front, the subject is the open item of the first view in its table. The " +
       "table from a view to the kind of thing it shows lives only here, so a new kind of thing " +
       "changes only this component, and a follower compares kind and id without knowing what " +
-      "kinds exist. It announces a change only when the answer differs.",
+      "kinds exist. It also names the open chapter, by a short name and its title: for a book, " +
+      "the chapter of the reading place, its title in lowercase letters, digits and hyphens " +
+      "(none when the title has no letter or digit); for the Journal, the day its page shows, " +
+      "named by its date. It announces a change only when the answer differs, so moving to " +
+      "another chapter is a change and moving within one is not.",
     kind: "fact",
     shape: "local-only",
     owns: "current subject",
     emits: ["subject.changed"],
-    asks: ["dock: read", "books: open", "books: read"],
+    asks: ["dock: read", "books: open", "books: read", "journal: open"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     // The address of the view that last showed a thing in front (memory only, 3.1), the
     // open book id, the title we have resolved for it, and the last subject we announced
-    // (to answer read and to emit only on a change).
+    // (to answer read and to emit only on a change). Then the open book's chapters, the
+    // chapter of its reading place, whether it is the written book, and the day the
+    // journal page last showed.
     shower: null,
     openId: null,
     title: null,
     subject: null,
+    ...noBook,
+    day: null,
   }),
   initial: "starting",
   on: {
     // Query for the starting picture (4.3): honest even before the first asks land,
     // when the answer is null; subject.changed carries every change after.
     "read?": { actions: ({ context, event }) => event.reply({ subject: context.subject }) },
+    // The day is not held for the journal: open ask (journal.changed supersedes it), so a
+    // day.shown that lands while starting is kept here and wins over the older reply.
+    "day.shown": { actions: assign({ day: ({ event }) => event.day }) },
   },
   states: {
     // Ask the stage and the open book before answering anything but null.
@@ -119,6 +183,7 @@ export const machine = setup({
           actions: assign({
             shower: ({ context, event }) => showerAfter(context.shower, event.output.stage),
             openId: ({ event }) => event.output.openId,
+            day: ({ context, event }) => context.day ?? event.output.day,
           }),
         },
         onError: "active",
@@ -135,22 +200,30 @@ export const machine = setup({
         // The open book changed here or on another device. A new id needs its title
         // read; the same id keeps the title we hold.
         "book.opened": {
-          actions: assign({
-            openId: ({ event }) => event.id ?? null,
-            title: ({ context, event }) => (event.id === context.openId ? context.title : null),
-          }),
+          actions: assign(({ context, event }) =>
+            event.id === context.openId ? {} : { openId: event.id ?? null, title: null, ...noBook },
+          ),
           target: ".reconcile",
         },
-        // The open book's row changed (a rename, a re-import): take its new title.
+        // The open book's row changed (a rename, a re-import, the reading place moved):
+        // take its new title and chapter.
         "book.changed": {
           guard: ({ context, event }) => event.id === context.openId,
-          actions: assign({ title: ({ event }) => event.title }),
+          actions: assign(({ context, event }) => ({ title: event.title, ...bookParts(context, event) })),
           target: ".reconcile",
         },
+        // The journal page moved to another day: the Journal's open chapter.
+        "day.shown": {
+          actions: assign({ day: ({ event }) => event.day }),
+          target: ".reconcile",
+        },
+        // Supersedes journal: open, so it is followed (4.3); the day the page shows rides
+        // day.shown, not this, so there is nothing to take from it.
+        "journal.changed": { actions: () => {} },
         // The open book was deleted: nothing open, so no subject.
         "book.deleted": {
           guard: ({ context, event }) => event.id === context.openId,
-          actions: assign({ openId: null, title: null }),
+          actions: assign({ openId: null, title: null, ...noBook }),
           target: ".reconcile",
         },
       },
@@ -169,10 +242,14 @@ export const machine = setup({
             src: "read",
             input: ({ context }) => ({ ask: context.ask, id: context.openId }),
             onDone: [
-              { guard: "found", actions: assign({ title: ({ event }) => event.output.book.title }), target: "reconcile" },
-              { actions: assign({ openId: null, title: null }), target: "reconcile" },
+              {
+                guard: "found",
+                actions: assign(({ context, event }) => ({ title: event.output.book.title, ...bookParts(context, event.output.book) })),
+                target: "reconcile",
+              },
+              { actions: assign({ openId: null, title: null, ...noBook }), target: "reconcile" },
             ],
-            onError: { actions: assign({ openId: null, title: null }), target: "reconcile" },
+            onError: { actions: assign({ openId: null, title: null, ...noBook }), target: "reconcile" },
           },
         },
         ready: {},

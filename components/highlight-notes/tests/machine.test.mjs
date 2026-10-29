@@ -160,6 +160,23 @@ test("a subject change rebuilds the set for the new book", async () => {
   assert.deepEqual(ids(actor), [H2]);
 });
 
+test("another chapter of the same book keeps the set and asks for nothing", async () => {
+  const notes = { [H1]: noteObj(H1, { body: "one" }) };
+  const base = asking({ subject: { kind: "book", id: BOOK, title: "B" }, notes });
+  let lists = 0;
+  const ask = (target, name, payload) => {
+    if (target === "notes" && name === "list") lists += 1;
+    return base(target, name, payload);
+  };
+  const { actor } = view({ ask });
+  await settle();
+  assert.equal(lists, 1);
+  actor.send({ type: "subject.changed", subject: { kind: "book", id: BOOK, title: "B", chapter: "two", chapterTitle: "Two" } });
+  await settle();
+  assert.equal(lists, 1);
+  assert.deepEqual(ids(actor), [H1]);
+});
+
 test("note.changed adds a new highlight, adopts a newer body, and drops one that lost its place", async () => {
   const notes = { [H1]: noteObj(H1, { body: "", version: 1 }) };
   const { actor } = view({ ask: asking({ subject: { kind: "book", id: BOOK, title: "B" }, notes }) });

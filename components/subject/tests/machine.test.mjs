@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine } from "../machine.js";
+import { machine, shortName } from "../machine.js";
 
 // The actor is where decisions live (3.2): it is driven with a fake bus `ask` that
 // answers dock: read, books: open and books: read from a small state object, the
@@ -138,4 +138,90 @@ test("a dock re-arrangement that keeps the staged view announces nothing", async
   });
   await flush();
   assert.equal(changed.length, 0);
+});
+
+test("a chapter's short name: lowercase, digits kept, accents plain, other runs one hyphen", () => {
+  assert.equal(shortName("Chapter 12"), "chapter-12");
+  assert.equal(shortName("1984"), "1984");
+  assert.equal(shortName("Zażółć gęślą jaźń, Łódź"), "zazolc-gesla-jazn-lodz");
+  assert.equal(shortName("Straße, Æsir & Œuvre — Øst"), "strasse-aesir-oeuvre-ost");
+  assert.equal(shortName("  “Hello, World!” (part 2)…  "), "hello-world-part-2");
+  assert.equal(shortName(""), "");
+  assert.equal(shortName("— * —"), "");
+  assert.equal(shortName(undefined), "");
+});
+
+const chaptered = {
+  id: "b1",
+  title: "Dune",
+  chapters: [{ title: "Book One: Dune" }, { title: "Rozdział Ósmy" }, { title: "***" }],
+  position: { chapter: 0, block: 3 },
+};
+
+test("a book's open chapter rides the subject, named by its title", async () => {
+  const { actor, changed } = start({ stage: "book-reader", openId: "b1", books: { b1: chaptered } });
+  await flush();
+  const subject = { kind: "book", id: "b1", title: "Dune", view: "book-reader", chapter: "book-one-dune", chapterTitle: "Book One: Dune" };
+  assert.deepEqual(changed.at(-1).subject, subject);
+  assert.deepEqual(await readSubject(actor), { subject });
+});
+
+test("moving to another chapter is announced; moving within one is not", async () => {
+  const { actor, changed } = start({ stage: "book-reader", openId: "b1", books: { b1: chaptered } });
+  await flush();
+  changed.length = 0;
+  actor.send({ type: "book.changed", ...chaptered, position: { chapter: 0, block: 9 } });
+  await flush();
+  assert.equal(changed.length, 0);
+  actor.send({ type: "book.changed", ...chaptered, position: { chapter: 1, block: 0 } });
+  await flush();
+  assert.equal(changed.length, 1);
+  assert.equal(changed[0].subject.chapter, "rozdzial-osmy");
+  assert.equal(changed[0].subject.chapterTitle, "Rozdział Ósmy");
+  // A title with no letter or digit has no short name, so the subject has no chapter.
+  actor.send({ type: "book.changed", ...chaptered, position: { chapter: 2, block: 0 } });
+  await flush();
+  assert.deepEqual(changed.at(-1).subject, { kind: "book", id: "b1", title: "Dune", view: "book-reader" });
+});
+
+const JRN = "00000000000000000000000JRN";
+const journalBook = {
+  id: JRN,
+  title: "Journal",
+  written: true,
+  chapters: [{ title: "Monday 26 October", day: "2026-10-26" }, { title: "Thursday 29 October", day: "2026-10-29" }],
+  position: { chapter: 1, block: 0 },
+};
+
+test("the Journal's open chapter is the day its page shows, from journal: open and day.shown", async () => {
+  const state = { stage: "book-stage", openId: JRN, books: { [JRN]: journalBook } };
+  const base = fakeAsk(state);
+  const ask = (target, name, payload) =>
+    target === "journal" && name === "open"
+      ? Promise.resolve({ shown: { day: "2026-10-26", text: "", writable: false } })
+      : base(target, name, payload);
+  const changed = [];
+  const actor = createActor(machine, { input: { ask } });
+  actor.on("subject.changed", (e) => changed.push(e));
+  actor.start();
+  await flush();
+  assert.equal(changed.at(-1).subject.chapter, "2026-10-26");
+  assert.equal(changed.at(-1).subject.chapterTitle, "Monday 26 October");
+  actor.send({ type: "day.shown", day: "2026-10-29", writable: true });
+  await flush();
+  assert.equal(changed.at(-1).subject.chapter, "2026-10-29");
+  assert.equal(changed.at(-1).subject.chapterTitle, "Thursday 29 October");
+  // A day the book does not list yet is still named, by its date.
+  actor.send({ type: "day.shown", day: "2026-10-27" });
+  await flush();
+  assert.deepEqual(
+    [changed.at(-1).subject.chapter, changed.at(-1).subject.chapterTitle],
+    ["2026-10-27", "2026-10-27"],
+  );
+});
+
+test("with no journal page the Journal's open chapter is the day of its reading place", async () => {
+  const { changed } = start({ stage: "book-stage", openId: JRN, books: { [JRN]: journalBook } });
+  await flush();
+  assert.equal(changed.at(-1).subject.chapter, "2026-10-29");
 });
