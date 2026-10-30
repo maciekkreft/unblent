@@ -134,6 +134,26 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
+    test("a comment box on the last answer left empty leaves its passage highlighted, with no number, and it is kept", async () => {
+      const { context, page, problems } = await open(browser);
+      try {
+        await drag(page, PHRASE);
+        await until(async () => (await look(page)).box !== null);
+        await page.keyboard.press("Escape");
+        await until(async () => (await look(page)).box === null);
+        const seen = () => inThread(page, (root) => [...root.querySelectorAll(".markable mark.hl")].map((m) => m.textContent).join("|"));
+        assert.equal(await seen(), PHRASE);
+        assert.deepEqual(await look(page).then((l) => [l.numbers, l.list]), ["", []], "no number and no comment");
+        await until(async () => (await (await context.request.get(`${BASE_URL}/api/conversations/${CHAT}`)).json()).highlights?.[0]?.quote === PHRASE);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await seen()) === PHRASE);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a gesture.
     test("a selection in an earlier answer is a highlight with no comment; its bubble removes it with Undo; it is kept", async () => {
       const { context, page, problems } = await open(browser, { later: true });
       const earlier = (root, id) => {

@@ -53,7 +53,7 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
 
 
 def _save_highlights(connection: sqlite3.Connection, conversation_id: str, payload: dict) -> None:
-    # The user's highlights on earlier answers are last write wins, and like a place they
+    # The user's highlights on the answers are last write wins, and like a place they
     # are not news (5): updated_at stays, so highlighting an old answer never moves the chat
     # or makes it the latest about its subject. A body without the key leaves them; null or
     # an empty list clears them.

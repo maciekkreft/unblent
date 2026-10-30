@@ -819,7 +819,7 @@ class ChatThread extends LitElement {
   }
 
   // What the last answer paints: every comment and the one being written, and the
-  // saved ones listed under it, the open one as it is being typed.
+  // saved ones listed under it, the open one as it is being typed; and its highlights.
   #editable(snapshot) {
     const { context } = snapshot;
     const draft = snapshot.matches({ showing: "commenting" }) ? context.draft : null;
@@ -828,9 +828,15 @@ class ChatThread extends LitElement {
     const answerId = lastAnswer(context.conversation)?.id;
     const removed = [...context.discarding.values()].filter((d) => d.answerId === answerId).map((d) => d.mark);
     const byStart = (a, b) => a.start - b.start;
-    const list = [...marks({ conversation: context.conversation, draft }), ...removed].sort(byStart);
+    const unhighlighted = [...context.unhighlighting.values()].filter((h) => h.answerId === answerId);
+    const own = [...highlightsOf(context.conversation, answerId), ...unhighlighted];
+    const list = [...marks({ conversation: context.conversation, draft }), ...removed, ...own].sort(byStart);
     const comments = [...savedMarks(context.conversation).map((m) => (m.id === draft?.id ? { ...m, comment: draft.comment } : m)), ...removed].sort(byStart);
-    return { list, comments, markable: true, selectable: true, draft, discarding: context.discarding };
+    const highlights = new Set(own.map((h) => h.id));
+    const chosen = highlights.has(context.chosen) ? context.chosen : null;
+    // A comment and a highlight each fade in their own undo window.
+    const discarding = new Map([...context.discarding, ...context.unhighlighting]);
+    return { list, comments, markable: true, selectable: true, draft, discarding, highlights, chosen };
   }
 
   // What an earlier answer paints: its highlights, one in its undo window dimmed, beside
@@ -1086,7 +1092,7 @@ class ChatThread extends LitElement {
           class="act remove"
           aria-label="Remove comment"
           title="Remove comment"
-          @click=${() => this.#actor.send({ type: saved ? "_remove" : "_closed", id: draft.id })}
+          @click=${() => this.#actor.send({ type: "_remove", id: draft.id })}
         >
           ${icon("trash-simple")}
         </button>

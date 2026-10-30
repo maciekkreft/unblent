@@ -232,7 +232,7 @@ const callTargets = (turns) => {
 // Unsent comments are tracked apart from unsent turns: they are not a finished turn, so
 // they do not make the chat pending, but a reload must still not replace them.
 const hasUnsentMarks = (context, id) => context.unsentMarks.has(id);
-// The highlights on earlier answers the same way: not a turn, never pending, never news.
+// The highlights on the answers the same way: not a turn, never pending, never news.
 const hasUnsentHighlights = (context, id) => context.unsentHighlights.has(id);
 
 const hasUnsent = (context, id) => {
@@ -1010,7 +1010,7 @@ const onMarksEdited = (context, event, enqueue, self) => {
   enqueue.emit(changedPayload(context, chat));
 };
 
-// The user's highlights on earlier answers (highlights.edited carries the chat's whole
+// The user's highlights on the answers (highlights.edited carries the chat's whole
 // list). Only finished answers with text keep one; the answer being written has none yet.
 const onHighlightsEdited = (context, event, enqueue, self) => {
   const chat = context.chats.get(event.conversationId);
@@ -1338,7 +1338,7 @@ export const machine = setup({
       "The user's comments on the last finished answer are kept with the chat until the next " +
       "message, which carries them; the model gets them as quotes before the message, and the " +
       "answer itself is never changed, so the provider's cache holds. The user's highlights " +
-      "on earlier answers are kept with the chat on the account, last write wins, and never " +
+      "on its answers are kept with the chat on the account, last write wins, and never " +
       "go to the model; like a rename they are not news, so they never move the chat. Each chat has a place " +
       "in the list, kept on the account and the same on every device: a new chat goes first, " +
       "a new message never moves a chat, and a move from the list puts it between its new " +

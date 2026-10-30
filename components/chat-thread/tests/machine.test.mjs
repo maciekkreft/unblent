@@ -471,17 +471,40 @@ test("comments kept for an earlier answer are not shown on the last one", async 
   assert.deepEqual(marks(ctx()), []);
 });
 
-test("closing an empty comment leaves no comment, and removes one emptied", async () => {
-  const { actor, emitted, ctx } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
+test("a comment box left empty leaves its passage highlighted, and an emptied comment becomes a highlight", async () => {
+  const { actor, emitted, highlighted, ctx } = await commenting(answered({ marks: { answerId: ANSWER.id, marks: [SAVED] } }));
   actor.send({ type: "_selected", ...at("path") });
   actor.send({ type: "_closed" });
-  assert.equal(emitted.length, 0, "a new empty comment is dropped");
+  assert.equal(emitted.length, 0, "no comment is made");
+  const path = { id: IDS[0], answerId: ANSWER.id, ...at("path"), quote: "path" };
+  assert.deepEqual(highlighted, [{ conversationId: CHAT, highlights: [path] }]);
+  assert.deepEqual(ctx().conversation.highlights, [path], "shown before the echo");
+  actor.send({ type: "_selected", ...at("path") });
+  assert.equal(ctx().draft, null, "a comment never covers a highlight");
   actor.send({ type: "_opened", id: SAVED.id });
   assert.equal(ctx().draft.comment, "x");
   actor.send({ type: "_typed", text: "" });
   actor.send({ type: "_closed" });
   assert.deepEqual(emitted.at(-1).marks, []);
   assert.equal("marks" in ctx().conversation, false, "no comments, no marks on the chat");
+  assert.deepEqual(highlighted.at(-1).highlights.map((h) => h.quote), ["path", "book"]);
+});
+
+test("the trash on a new comment box drops the selection, leaving no highlight", async () => {
+  const { actor, emitted, highlighted, ctx } = await commenting();
+  actor.send({ type: "_selected", ...at("path") });
+  actor.send({ type: "_remove", id: IDS[0] });
+  assert.equal(ctx().draft, null);
+  assert.equal(emitted.length + highlighted.length, 0);
+});
+
+test("a highlight on the last answer is removed with Undo like any other", async () => {
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const { actor, highlighted } = await commenting(answered({ highlights: [kept] }));
+  actor.send({ type: "_unhighlight", id: kept.id });
+  assert.deepEqual(highlighted.at(-1).highlights, []);
+  actor.send({ type: "_rehighlight", id: kept.id });
+  assert.deepEqual(highlighted.at(-1).highlights, [kept]);
 });
 
 test("selecting elsewhere while writing saves the open comment first", async () => {

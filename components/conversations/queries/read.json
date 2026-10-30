@@ -113,7 +113,7 @@
               "pending": { "type": "boolean" },
               "updatedAt": { "type": "integer" },
               "marks": { "$ref": "#/$defs/unsent" },
-              "highlights": { "description": "The highlights on the chat's earlier answers; absent when there are none.", "type": "array", "items": { "$ref": "#/$defs/highlight" } }
+              "highlights": { "description": "The highlights on the chat's answers; absent when there are none.", "type": "array", "items": { "$ref": "#/$defs/highlight" } }
             },
             "required": ["id", "title", "about", "start", "turns", "pending", "updatedAt"],
             "additionalProperties": false
@@ -137,7 +137,7 @@
     ],
     "$defs": {
       "highlight": {
-        "description": "One highlight on a passage of an earlier answer, the user's own and never sent to the model: `start` and `end` are character positions in the answer's text, `quote` is that passage.",
+        "description": "One highlight on a passage of an answer, the user's own and never sent to the model: `start` and `end` are character positions in the answer's text, `quote` is that passage.",
         "type": "object",
         "properties": {
           "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The user highlighted a passage of one of the chat's earlier answers, or removed a highlight (4, fifth rule). It carries the chat's whole list, empty when the last highlight was removed. `start` and `end` are character positions in the answer's text, so a highlight belongs to the text and not to the page; `quote` is that passage. Highlights are the user's own and never go to the model.",
+  "description": "The user highlighted a passage of one of the chat's answers, or removed a highlight (4, fifth rule). It carries the chat's whole list, empty when the last highlight was removed. `start` and `end` are character positions in the answer's text, so a highlight belongs to the text and not to the page; `quote` is that passage. Highlights are the user's own and never go to the model.",
   "type": "object",
   "properties": {
     "conversationId": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" },

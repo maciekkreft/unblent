@@ -12,8 +12,8 @@ import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 // `pins` moves an "on" pin to whichever chat opens. The comments on the last answer:
 // every change is emitted as the whole list in marks.edited (4.3, fifth rule), and
 // `conversations`, which keeps them with the chat, echoes them in conversation.changed.
-// The highlights on earlier answers the same way, in highlights.edited; they carry no
-// comment and never go to the model.
+// The highlights the same way, in highlights.edited: a selection in an earlier answer, or
+// a comment box on the last one left empty; they carry no comment and never go to the model.
 
 // A conversation.changed payload is the whole conversation with a `type` on it; the
 // read reply is the same shape without the `type`. One helper, so both feed the view
@@ -377,42 +377,69 @@ const asMark = (draft) => ({ id: draft.id, start: draft.start, end: draft.end, q
 const withMark = (list, draft) => [...list.filter((m) => m.id !== draft.id), asMark(draft)].sort((a, b) => a.start - b.start);
 const withoutMark = (list, id) => list.filter((m) => m.id !== id);
 
-// What closing the open comment saves, or null when nothing changes: an empty comment is
-// no comment, so one that was saved is removed and a new one is dropped.
+const asHighlight = (draft) => ({ id: draft.id, answerId: draft.answerId, start: draft.start, end: draft.end, quote: draft.quote });
+
+// What closing the open comment saves, or null when nothing changes: the comments, and
+// a highlight when the box is left empty. An empty comment is no comment, so one that
+// was saved is removed; its passage stays highlighted, kept with the chat and never sent.
 const closing = ({ conversation, draft }) => {
   if (!draft || lastAnswer(conversation)?.id !== draft.answerId) return null;
   const list = savedMarks(conversation);
   const saved = list.find((m) => m.id === draft.id);
-  if (draft.comment.trim() === "") return saved ? withoutMark(list, draft.id) : null;
+  if (draft.comment.trim() === "") return { marks: saved ? withoutMark(list, draft.id) : null, highlight: asHighlight(draft) };
   if (saved && saved.comment === draft.comment) return null;
-  return withMark(list, draft);
+  return { marks: withMark(list, draft), highlight: null };
 };
 
-// The ranges a new comment may not overlap: every saved comment but the open one, and the
-// open one while it holds any text.
-const occupied = ({ conversation, draft, discarding }) => [
-  ...savedMarks(conversation).filter((m) => m.id !== draft?.id),
-  ...[...(discarding?.values() ?? [])].filter((d) => d.answerId === lastAnswer(conversation)?.id).map((d) => d.mark),
-  ...(draft && draft.comment.trim() !== "" ? [draft] : []),
-];
+// The ranges a new comment may not overlap: every saved comment but the open one, the
+// open one while it holds any text, and the answer's highlights.
+const occupied = ({ conversation, draft, discarding, unhighlighting }) => {
+  const answerId = lastAnswer(conversation)?.id;
+  return [
+    ...savedMarks(conversation).filter((m) => m.id !== draft?.id),
+    ...[...(discarding?.values() ?? [])].filter((d) => d.answerId === answerId).map((d) => d.mark),
+    ...(draft && draft.comment.trim() !== "" ? [draft] : []),
+    ...highlightsOf(conversation, answerId),
+    ...[...(unhighlighting?.values() ?? [])].filter((h) => h.answerId === answerId),
+  ];
+};
+
+const markedChat = (conversation, list) => {
+  const answerId = lastAnswer(conversation).id;
+  const { marks: _, ...rest } = conversation;
+  return list.length ? { ...rest, marks: { answerId, marks: list } } : rest;
+};
 
 // The whole list goes to `conversations` (4.3, fifth rule; third rule: self-contained),
 // and the chat on screen takes it at once, so the highlight never waits for the echo.
 const store = (enqueue, context, list) => {
-  const answerId = lastAnswer(context.conversation).id;
-  const { marks: _, ...rest } = context.conversation;
-  enqueue.assign({ conversation: list.length ? { ...rest, marks: { answerId, marks: list } } : rest });
-  enqueue.emit({ type: "marks.edited", conversationId: context.conversation.id, answerId, marks: list });
+  enqueue.assign({ conversation: markedChat(context.conversation, list) });
+  enqueue.emit({ type: "marks.edited", conversationId: context.conversation.id, answerId: lastAnswer(context.conversation).id, marks: list });
 };
 
-const save = enqueueActions(({ context, enqueue }) => {
-  const next = closing(context);
-  if (next) store(enqueue, context, next);
-});
+// What closing saves, in one change of the chat on screen: the comments, then the
+// highlight an empty box leaves, once. While the box is still open (the throttle) only
+// the comments are saved, since an empty box may yet be typed in.
+const keep = (enqueue, context, next, withHighlight = true) => {
+  if (!next) return;
+  let { conversation } = context;
+  if (next.marks) {
+    conversation = markedChat(conversation, next.marks);
+    enqueue.emit({ type: "marks.edited", conversationId: conversation.id, answerId: lastAnswer(conversation).id, marks: next.marks });
+  }
+  const made = withHighlight && next.highlight && !(conversation.highlights ?? []).some((h) => h.id === next.highlight.id);
+  if (made) {
+    const list = [...(conversation.highlights ?? []), next.highlight];
+    conversation = highlightedChat(conversation, list);
+    enqueue.emit({ type: "highlights.edited", conversationId: conversation.id, highlights: list });
+  }
+  enqueue.assign({ conversation });
+};
+
+const save = enqueueActions(({ context, enqueue }) => keep(enqueue, context, closing(context), false));
 // Close the open comment, saving what it holds.
 const closeDraft = enqueueActions(({ context, enqueue }) => {
-  const next = closing(context);
-  if (next) store(enqueue, context, next);
+  keep(enqueue, context, closing(context));
   enqueue.assign({ draft: null });
 });
 const openSelection = assign({
@@ -460,23 +487,24 @@ const undo = enqueueActions(({ context, event, enqueue }) => {
 // Leaving the chat: what is being written is saved and every undo window ends now,
 // because its timer would end on another chat.
 const settle = enqueueActions(({ context, enqueue }) => {
-  if (lastAnswer(context.conversation)) {
-    const next = closing(context);
-    if (next) store(enqueue, context, next);
-  }
+  if (lastAnswer(context.conversation)) keep(enqueue, context, closing(context));
   for (const id of context.discarding.keys()) enqueue.cancel(`undo:${id}`);
   for (const id of context.unhighlighting.keys()) enqueue.cancel(`unhl:${id}`);
   enqueue.assign({ draft: null, discarding: new Map(), chosen: null, unhighlighting: new Map() });
 });
 
-// --- Highlights on earlier answers -----------------------------------------------------------
+// --- Highlights -------------------------------------------------------------------------------
 
-// An answer the user may highlight: a finished answer with text that is not the last
-// one, which takes comments instead.
-export const highlightable = (conversation, answerId) => {
+// An answer that can hold highlights: a finished answer with text.
+const holdsHighlights = (conversation, answerId) => {
   const turn = conversation?.turns?.find((t) => t.id === answerId);
-  return Boolean(turn) && turn.role === "assistant" && turn.status === "done" && Boolean(turn.text) && turn !== lastAnswer(conversation);
+  return Boolean(turn) && turn.role === "assistant" && turn.status === "done" && Boolean(turn.text);
 };
+
+// An answer where a selection is a highlight at once: any but the last one, where a
+// selection opens a comment and a box left empty is the highlight.
+export const highlightable = (conversation, answerId) =>
+  holdsHighlights(conversation, answerId) && answerId !== lastAnswer(conversation)?.id;
 
 export const highlightsOf = (conversation, answerId) => (conversation?.highlights ?? []).filter((h) => h.answerId === answerId);
 
@@ -502,9 +530,12 @@ const canHighlight = ({ context, event }) => {
 
 // The whole list goes to `conversations` (4.3, fifth rule), and the chat on screen takes
 // it at once, as the comments do.
+const highlightedChat = (conversation, list) => {
+  const { highlights: _, ...rest } = conversation;
+  return list.length ? { ...rest, highlights: list } : rest;
+};
 const storeHighlights = (enqueue, context, list) => {
-  const { highlights: _, ...rest } = context.conversation;
-  enqueue.assign({ conversation: list.length ? { ...rest, highlights: list } : rest });
+  enqueue.assign({ conversation: highlightedChat(context.conversation, list) });
   enqueue.emit({ type: "highlights.edited", conversationId: context.conversation.id, highlights: list });
 };
 
@@ -521,7 +552,7 @@ const isUnhighlighting = ({ context, event }) => context.unhighlighting.has(even
 
 // Undo puts a highlight back while its answer is still there to hold it.
 const canRehighlight = ({ context, event }) =>
-  context.unhighlighting.has(event.id) && highlightable(context.conversation, context.unhighlighting.get(event.id).answerId);
+  context.unhighlighting.has(event.id) && holdsHighlights(context.conversation, context.unhighlighting.get(event.id).answerId);
 
 const rehighlight = enqueueActions(({ context, event, enqueue }) => {
   enqueue.cancel(`unhl:${event.id}`);
@@ -662,8 +693,9 @@ export const machine = setup({
       "answer the user selects a passage and writes a comment on it, as in Redline: the " +
       "passage is highlighted with a number and the comments are listed under the answer, " +
       "kept with the chat by `conversations` and sent with the next message, after which they " +
-      "show read only. In every earlier answer the user selects a passage to highlight it, " +
-      "with no comment and no number; the highlights are kept with the chat by `conversations` " +
+      "show read only. A comment box left empty leaves its passage highlighted instead, and " +
+      "in every earlier answer a selection is a highlight at once; a highlight has no comment " +
+      "and no number, and the highlights are kept with the chat by `conversations` " +
       "and never sent to the model. A click on one offers Remove, which waits out the undo window. " +
       "The answer's text never changes; removing a comment waits out the undo window. " +
       "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
