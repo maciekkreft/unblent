@@ -172,9 +172,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await line("Feel calm").locator(".mark").count(), 0, "the line being typed is not checked");
         await page.keyboard.press("ArrowUp");
         await line("Feel calm").locator(".mark.wrong").waitFor();
-        assert.equal(await cards.locator(".status").innerText(), "Behavioral Goal", "the line the cursor is on");
+        assert.equal(await cards.locator(".status").innerText(), "Therapy Goal: Behavioral Goal", "the line the cursor is on");
         await line("Feel calm").locator(".mark").hover();
-        assert.equal(await cards.locator(".status").innerText(), "Emotional Goal · you expect Behavioral Goal", "the line the pointer is over");
+        assert.equal(await cards.locator(".status").innerText(), "Therapy Goal: Emotional Goal, you expect Behavioral Goal", "the line the pointer is over");
         await cards.locator(".done").click();
         await cards.locator(".card .towards .flag").waitFor();
         assert.deepEqual(problems, []);

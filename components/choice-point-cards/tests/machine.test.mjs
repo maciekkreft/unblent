@@ -336,9 +336,10 @@ const COVERT = "01K6TEST0000000000000000O4";
 const EVALUATORS = [
   {
     id: EV,
+    name: "Therapy Goal",
     questions: [
       { id: Q1, kind: "pick", expect: BEH, options: [{ id: BEH, name: "Behavioral Goal", icon: "person-simple-walk" }, { id: EMO, name: "Emotional Goal" }] },
-      { id: Q2, kind: "pick", options: [{ id: OVERT, name: "Overt behavior" }, { id: COVERT, name: "Covert behavior", icon: "brain" }] },
+      { id: Q2, kind: "pick", name: "Behavior", options: [{ id: OVERT, name: "Overt behavior" }, { id: COVERT, name: "Covert behavior", icon: "brain" }] },
       { id: Q3, kind: "yesno", expect: "yes", options: [] },
     ],
   },
@@ -412,9 +413,11 @@ test("a line's marks follow the box's settings: shown, only when, expected; the 
 
 test("the status line names a line's answers, and how sure Jev is shows as the mark's opacity", () => {
   const calm = marksOf(TOWARDS_BOX, done("Feel calm when she doesn't answer", [ans(Q1, EMO, "Emotional Goal", 0.92)]), EVALUATORS);
-  assert.equal(sayMarks(calm), "Emotional Goal · you expect Behavioral Goal");
+  assert.equal(sayMarks(calm), "Therapy Goal: Emotional Goal, you expect Behavioral Goal", "the evaluator's name, then the answer");
   const call = marksOf(TOWARDS_BOX, done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.7), ans(Q2, OVERT, "Overt behavior", 0.97)]), EVALUATORS);
-  assert.equal(sayMarks(call), "Behavioral Goal · Overt behavior");
+  assert.equal(sayMarks(call), "Therapy Goal: Behavioral Goal · Behavior: Overt behavior", "a question's short name before the evaluator's");
+  const unnamed = EVALUATORS.map((e) => ({ ...e, name: " " }));
+  assert.equal(sayMarks(marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.9)]), unnamed)), "Emotional Goal, you expect Behavioral Goal", "nothing to name: the answer alone");
   assert.equal(sayMarks([{ pending: true }]), "Jev is checking…");
   assert.deepEqual(call.map((m) => m.sure), [0.67, 1], "solid when sure, faded when not");
   assert.equal(sureOf(0.5), 0.33);
@@ -441,9 +444,9 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
   actor.send({ type: "_open", id: A });
   assert.equal(statusOf(ctx(), A), "", "saving is not reported");
   actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: CALM });
-  assert.equal(statusOf(ctx(), A), "Emotional Goal · you expect Behavioral Goal");
+  assert.equal(statusOf(ctx(), A), "Therapy Goal: Emotional Goal, you expect Behavioral Goal");
   actor.send({ type: "_point", source: "hover", id: A, field: "towards", text: "Call Anna" });
-  assert.equal(statusOf(ctx(), A), "Behavioral Goal", "the pointer wins over the cursor");
+  assert.equal(statusOf(ctx(), A), "Therapy Goal: Behavioral Goal", "the pointer wins over the cursor");
   actor.send({ type: "_point", source: "hover", id: A, field: null });
   actor.send({ type: "_point", source: "cursor", id: A, field: null });
   actor.send({ type: "lines.checked", ...report(TODAY, [], "no-key") });
@@ -501,7 +504,7 @@ test("Your values draws one compass mark after the box's own marks: green, red o
   const email = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.7), ans(V2, UNRELATED, "Unrelated", 0.99)), evaluators);
   assert.deepEqual([email[1].tone, email[1].name], ["wrong", "Goes against Being a present parent"]);
   assert.ok(email[1].sure < 1, "faded: Jev is not sure the move goes against the value");
-  assert.equal(sayMarks(email), "Behavioral Goal · Goes against Being a present parent", "no 'you expect' for a values mark");
+  assert.equal(sayMarks(email), "Therapy Goal: Behavioral Goal · Goes against Being a present parent", "no 'you expect' for a values mark");
 
   const healthWins = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.9), ans(V2, SERVES, "Serves", 0.9)), evaluators);
   assert.deepEqual([healthWins[1].tone, healthWins[1].name], ["right", "Serves Health"], "serving any value wins over going against another");

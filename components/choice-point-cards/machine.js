@@ -189,6 +189,13 @@ const expectedName = (evaluator, questionId, option) => {
   return optionOf(evaluator, questionId, option)?.name || "another answer";
 };
 
+// What a mark answers, said before its answer so that two evaluators on one box can be
+// told apart ("Thinking traps: None"): the question's short name, else the evaluator's.
+const aboutOf = (evaluator, questionId) => {
+  const named = (x) => (typeof x === "string" && x.trim()) || null;
+  return named(questionOf(evaluator, questionId)?.name) ?? named(evaluator?.name);
+};
+
 // How sure Jev is, as the mark's opacity: solid from 90% up, fading to a third at an even
 // chance, so an unsure answer is seen as one without a number to read.
 export const sureOf = (p) => Math.round((1 / 3 + (2 / 3) * Math.min(1, Math.max(0, (p - 0.5) / 0.4))) * 100) / 100;
@@ -221,6 +228,7 @@ function questionMarks(checker, evaluator, answer) {
     out.push({
       question: q.id,
       name: a.name,
+      about: aboutOf(evaluator, q.id),
       p: a.p,
       tone,
       icon: chosen || (tone === "wrong" ? "warning" : "check"),
@@ -270,13 +278,14 @@ export function marksOf(box, line, evaluators = []) {
   });
 }
 
-// What the status line says about one line's marks, short: the name of each answer, and
-// for one that is not expected, the answer that is; both answers go on the one line. A
-// combined mark already says it in a sentence.
+// What the status line says about one line's marks, short: what each mark answers and its
+// answer, and for one that is not expected, the answer that is, after a comma, so the dots
+// part only the marks. A combined mark already says it in a sentence.
 export function sayMarks(marks) {
   if (!marks.length) return null;
   if (marks[0].pending) return "Jev is checking…";
-  return marks.map((m) => (m.tone === "wrong" && !m.combined ? `${m.name} · you expect ${m.expected}` : m.name)).join(" · ");
+  const said = (m) => (m.combined ? m.name : `${m.about ? `${m.about}: ` : ""}${m.name}${m.tone === "wrong" ? `, you expect ${m.expected}` : ""}`);
+  return marks.map(said).join(" · ");
 }
 
 const reportOf = (context, id) => context.checks.reports[id];
@@ -442,8 +451,10 @@ export const machine = setup({
       "\"Can't tell which of your values this serves\", the first value in the values' order " +
       "when several fit. An earlier day's marks name that day's values. A line edited since it was " +
       "checked has no mark until it is checked again. The marks are not text: they do not " +
-      "move the cursor or count for Vim. The answer's name, and for a red mark the expected " +
-      "answer (\"Emotional Goal · you expect Behavioral Goal\"), is the mark's hint and is said " +
+      "move the cursor or count for Vim. What the mark answers, the question's short name or " +
+      "else the evaluator's name, then the answer, and for a red mark the expected answer " +
+      "(\"Therapy Goal: Emotional Goal, you expect Behavioral Goal · Logical fallacies: None\"), " +
+      "is the mark's hint and is said " +
       "in the status line under the boxes while the pointer is over a mark, after a mark is " +
       "tapped until something else is pressed, or while the text cursor is on a checked line; " +
       "otherwise the status line says why Jev could not check when it could not, and is " +
