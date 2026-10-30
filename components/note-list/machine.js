@@ -70,10 +70,11 @@ const isHighlight = (note, subject) =>
 // The Highlights row (Decision 1, 5, 6), the Highlights note to the user (13): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
 // unless at least one note is a highlight of it. Its count and latest time come from the
 // notes the list already holds (no new query), so it is pure like `shown` and `apart`.
-// None while `flags` reports the highlights feature hidden, or has not answered yet
-// (`hidden` is null), the same as `flags` itself with no answer (3.1).
-export const highlights = ({ notes, following, subject, hidden }) => {
-  if (!following || subject == null) return null;
+// None without the `highlights` attribute, and none while `flags` reports the highlights
+// feature hidden, or has not answered yet (`hidden` is null), the same as `flags` itself
+// with no answer (3.1).
+export const highlights = ({ notes, following, highlightsRow, subject, hidden }) => {
+  if (!following || !highlightsRow || subject == null) return null;
   if (hidden === null || hidden?.includes("highlights")) return null;
   const hs = notes.filter((n) => isHighlight(n, subject));
   return hs.length ? { count: hs.length, updatedAt: Math.max(...hs.map((n) => n.updatedAt)) } : null;
@@ -247,7 +248,7 @@ export const machine = setup({
     // Which features are hidden, for the Highlights row, which only a following list has;
     // flags.changed is held for this ask until its reply lands.
     flags: fromPromise(({ input }) =>
-      input.following ? input.ask("flags", "read", {}) : Promise.resolve({ hidden: [] })),
+      input.following && input.highlightsRow ? input.ask("flags", "read", {}) : Promise.resolve({ hidden: [] })),
   },
 }).createMachine({
   id: "note-list",
@@ -289,7 +290,9 @@ export const machine = setup({
       "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
       "the Highlights are the open row is kept in this browser across a reload, as the panel " +
       "keeps showing them, so the row stays marked and the keyboard comes back to it. " +
-      "Highlights are never listed as separate notes. There is no Highlights row while " +
+      "Highlights are never listed as separate notes. The Highlights row shows only on a page " +
+      "that gives the list the `highlights` attribute, so the Mac page, which leaves it off, " +
+      "lists no Highlights row while the book still shows its highlights. There is no Highlights row while " +
       "`flags` reports the highlights feature hidden, or until it answers; a page without " +
       "`flags` hides nothing. Signed out it shows only \"Sign in to " +
       "see your notes.\": no New note, no Highlights row and no notes. The notes stay kept in " +
@@ -302,7 +305,9 @@ export const machine = setup({
     // no filtering, every note shown. On, the list shows only the notes about the
     // subject on the stage, with the Highlights row above them while the subject has
     // a highlight, and the chapter switch while the subject has an open chapter.
-    attributes: ["subject"],
+    // The highlights attribute: on, the Highlights row is offered while following; off,
+    // highlights are still kept out of the list but nothing stands for them.
+    attributes: ["subject", "highlights"],
     asks: ["notes: list", "subject: read", "settings: read", "session: read", "books: list", "flags: read"],
   },
   context: ({ input }) => ({
@@ -314,6 +319,8 @@ export const machine = setup({
     // Whether the page set the `subject` attribute (D5); it arrives through input so
     // the machine stays importable in Node.
     following: Boolean(input.following),
+    // Whether the page set the `highlights` attribute: the Highlights row is offered.
+    highlightsRow: Boolean(input.highlightsRow),
     // Whether the Highlights row is the picked one (Decision 7). UI state: set when it is
     // picked, cleared by any note.selected, the gesture that puts a note in the panel in
     // their place. The view keeps it in localStorage (3.1) and hands it back through
@@ -366,7 +373,7 @@ export const machine = setup({
   invoke: [
     {
       src: "flags",
-      input: ({ context }) => ({ ask: context.ask, following: context.following }),
+      input: ({ context }) => ({ ask: context.ask, following: context.following, highlightsRow: context.highlightsRow }),
       onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
       onError: { actions: assign({ hidden: [] }) },
     },

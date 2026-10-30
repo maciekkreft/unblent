@@ -24,12 +24,12 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, highlightsOpen = false, tryPage = false } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, highlightsRow = true, highlightsOpen = false, tryPage = false } = {}) {
   const selected = [];
   const discarded = [];
   const highlighted = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following, highlightsOpen, tryPage }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following, highlightsRow, highlightsOpen, tryPage }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.on("highlights.selected", (e) => highlighted.push(e.about));
@@ -422,6 +422,23 @@ test("there is no Highlights row while flags hides the feature, or before it ans
   actor.send({ type: "flags.changed", off: ["highlights"], hidden: [] });
   assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "the admin sees it");
   assert.equal(highlights({ ...actor.getSnapshot().context, hidden: null }), null, "no answer yet");
+});
+
+test("without the highlights attribute there is no Highlights row, flags is not asked, and highlights stay out of the list", async () => {
+  const asked = [];
+  const answer = withHighlight();
+  const { actor } = list({
+    following: true,
+    highlightsRow: false,
+    ask: (target, name, payload) => {
+      asked.push(target + ": " + name);
+      return answer(target, name, payload);
+    },
+  });
+  await tick();
+  assert.equal(hl(actor), null, "no Highlights row");
+  assert.ok(!asked.includes("flags: read"), "flags is not asked");
+  assert.ok(!shownIds(actor).includes(C), "the highlight is not listed as a note");
 });
 
 test("highlights() is null when not following, or with no subject", async () => {

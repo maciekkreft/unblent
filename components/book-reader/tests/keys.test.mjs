@@ -96,7 +96,8 @@ for (const engine of ENGINES) {
 
     // `product` opens the product page, `/`, whose preferences settings keeps under the
     // product profile's name.
-    const open = async (vimKeys, { highlight = false, split = false, touch = false, product = false } = {}) => {
+    // `before` runs in the page ahead of its own scripts.
+    const open = async (vimKeys, { highlight = false, split = false, touch = false, product = false, before } = {}) => {
       const problems = [];
       context = await browser.newContext({ hasTouch: touch });
       context.setDefaultTimeout(4000);
@@ -105,6 +106,7 @@ for (const engine of ENGINES) {
       watch(page, problems);
       await page.addInitScript(([k, v]) => localStorage.setItem(k, v), [product ? "settings:product" : "settings", seed(vimKeys)]);
       await page.addInitScript(recordClipboard);
+      if (before) await page.addInitScript(before);
       await page.goto(product ? `${BASE_URL}/` : PAGE, { waitUntil: "domcontentloaded" });
       await page.waitForFunction((chap) => {
         const r = document.querySelector("book-reader")?.shadowRoot;
@@ -135,6 +137,39 @@ for (const engine of ENGINES) {
       assert.equal(await pending(page), "");
       await drain(page);
       await until(async () => (await serverNotes(page)).some((n) => (n.about ?? []).some((l) => l.place && l.quote?.exact === "Chapter One")), 8000);
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
+    // The Mac app's window is the Mac's own WebKit, and Safari 17 and 18 take
+    // getComposedRanges' shadow roots only as separate arguments, throwing on the
+    // { shadowRoots } form: the page is given that older signature, and a mouse drag
+    // still makes the highlight.
+    // Browser: a gesture.
+    test(`a mouse drag makes a highlight where getComposedRanges takes only shadow roots in ${engine.name}`, async () => {
+      const { page, problems } = await open(false, {
+        before: () => {
+          const real = Selection.prototype.getComposedRanges;
+          Selection.prototype.getComposedRanges = function (...roots) {
+            if (roots.some((r) => !(r instanceof ShadowRoot))) throw new TypeError("getComposedRanges takes shadow roots");
+            return real.call(this, { shadowRoots: roots });
+          };
+        },
+      });
+      const r = await page.evaluate(() => {
+        const strip = document.querySelector("book-reader").shadowRoot.querySelector(".strip");
+        const block = [...strip.children].find((el) => el.textContent.trim().split(/\s+/).length >= 4);
+        const tn = document.createTreeWalker(block, NodeFilter.SHOW_TEXT).nextNode();
+        const range = document.createRange();
+        range.setStart(tn, 2);
+        range.setEnd(tn, Math.min(tn.data.length, 12));
+        const b = range.getBoundingClientRect();
+        return { x1: b.left + 1, x2: b.right - 1, y: b.top + b.height / 2 };
+      });
+      await page.mouse.move(r.x1, r.y);
+      await page.mouse.down();
+      await page.mouse.move(r.x2, r.y, { steps: 8 });
+      await page.mouse.up();
+      await until(async () => (await marks(page)).length === 1);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

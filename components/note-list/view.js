@@ -62,6 +62,8 @@ class ActorController {
         // the notes about it. Parsed by the time hostConnected runs. Off is exactly
         // today's behaviour.
         following: this.host.subject,
+        // The `highlights` attribute: offer the Highlights row.
+        highlightsRow: this.host.highlights,
         highlightsOpen,
         allChapters,
         // A try page (8) shows the list signed out.
@@ -142,11 +144,12 @@ const REVEAL = 0.5; // how far left the row slides open, as a fraction of its wi
 const THRESHOLD = 0.35; // past this fraction, releasing deletes
 
 class NoteList extends LitElement {
-  // The one attribute the tag understands (D5): follow the stage, showing only the
-  // notes about the subject. Reflected so a page's bare `subject` reads as true and the
-  // manifest attribute is visible. Off is exactly today's behaviour.
+  // The attributes the tag understands: `subject` (D5) follows the stage, showing only
+  // the notes about the subject; `highlights` offers the Highlights row there. Reflected
+  // so a page's bare attribute reads as true and the manifest attribute is visible.
   static properties = {
     subject: { type: Boolean, reflect: true },
+    highlights: { type: Boolean, reflect: true },
   };
 
   static styles = css`

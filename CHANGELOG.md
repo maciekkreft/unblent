@@ -6,6 +6,18 @@ All notable changes to Unblent for Mac are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-10-31
+
+### Changed
+
+- The Notes list no longer has a Highlights row. Your highlights stay in the book, where
+  you made them, and you can still copy or remove each one there.
+
+### Fixed
+
+- Highlighting in books works again. On some Macs, dragging over text with the mouse
+  or trackpad made no highlight.
+
 ## [0.4.0] — 2026-10-30
 
 ### Added

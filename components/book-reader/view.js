@@ -988,14 +988,26 @@ class BookReader extends LitElement {
   // none. getComposedRanges is the standard way to reach across the shadow boundary
   // (WebKit); a scoped ShadowRoot.getSelection is the fallback (Chromium).
   #selectionRange() {
-    const doc = document.getSelection();
-    if (doc && typeof doc.getComposedRanges === "function") {
-      const [range] = doc.getComposedRanges({ shadowRoots: [this.renderRoot] });
-      if (range && !(range.startContainer === range.endContainer && range.startOffset === range.endOffset)) return range;
-    }
+    const range = this.#composedRange();
+    if (range && !(range.startContainer === range.endContainer && range.startOffset === range.endOffset)) return range;
     const scoped = this.renderRoot.getSelection?.();
     if (scoped && !scoped.isCollapsed && scoped.rangeCount) return scoped.getRangeAt(0);
     return null;
+  }
+
+  // The document's selection as one range seen from inside this shadow root, or null
+  // where getComposedRanges does not exist. The Mac app's window is the Mac's own WebKit,
+  // and Safari 17 and 18 take the shadow roots only as separate arguments and throw on
+  // the { shadowRoots } form the standard now uses (WebKit bug 265632), so the older form
+  // is the fallback.
+  #composedRange() {
+    const doc = document.getSelection();
+    if (typeof doc?.getComposedRanges !== "function") return null;
+    try {
+      return doc.getComposedRanges({ shadowRoots: [this.renderRoot] })[0] ?? null;
+    } catch {
+      return doc.getComposedRanges(this.renderRoot)[0] ?? null;
+    }
   }
 
   #clearSelection() {
@@ -1202,14 +1214,8 @@ class BookReader extends LitElement {
   // selection the click left is that place, reached across the shadow boundary the way
   // #selectionRange reaches a dragged one.
   #cursorFromClick(x, y) {
-    const doc = document.getSelection();
     const scoped = this.renderRoot.getSelection?.();
-    const range =
-      typeof doc?.getComposedRanges === "function"
-        ? doc.getComposedRanges({ shadowRoots: [this.renderRoot] })[0]
-        : scoped?.rangeCount
-          ? scoped.getRangeAt(0)
-          : null;
+    const range = this.#composedRange() ?? (scoped?.rangeCount ? scoped.getRangeAt(0) : null);
     const p = range && this.#pointOf(range.startContainer, range.startOffset);
     if (!p) return;
     const chapter = this.#chapterText();
