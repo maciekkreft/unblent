@@ -70,6 +70,25 @@ test("it asks only once shown, emits a tick, and follows the facts' news", async
   ]);
 });
 
+// The bus releases what a query holds right after that query's reply (4.2), so news can
+// land while another answer is still on its way; the slower answer must not undo it.
+test("news that lands while another answer is on its way is kept", async () => {
+  let pagesAnswer;
+  const pages = new Promise((resolve) => (pagesAnswer = resolve));
+  const books = { books: [{ id: BOOK, title: "The Happiness Trap" }] };
+  const actor = createActor(machine, {
+    input: { ask: async (target) => (target === "pages" ? pages : target === "books" ? books : { evaluators: [] }) },
+  }).start();
+  actor.send({ type: "_shown" });
+  await flush();
+  actor.send({ type: "evaluator.changed", evaluator: evaluator(E1, JOURNAL, { name: "Kind or harsh" }) });
+  actor.send({ type: "book.changed", id: JOURNAL, title: "Journal" });
+  pagesAnswer(REPLIES.pages);
+  await flush();
+  assert.equal(actor.getSnapshot().matches("ready"), true);
+  assert.deepEqual(groupsOf(actor.getSnapshot().context).map((g) => [g.title, g.evaluators.map((e) => e.name)]), [["Journal", ["Kind or harsh"]]]);
+});
+
 test("coming into view again reads only after a failed read, keeping what is shown", async () => {
   const emitted = [];
   let books = { error: "no-answerer" };

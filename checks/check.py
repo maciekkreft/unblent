@@ -9,6 +9,7 @@ import fcntl
 import glob
 import hashlib
 import http.client
+import http.server
 import json
 import os
 import re
@@ -64,6 +65,54 @@ def _dotenv() -> dict:
                 key, _, value = line.partition("=")
                 env[key.strip()] = value.strip().strip('"').strip("'")
     return env
+
+
+# A provider's key (an Anthropic, OpenAI or typesafe.ai key, and the other services'
+# keys .env holds) never reaches the throwaway server or a test, so no test can spend
+# money or act on the owner's accounts, whatever a test does.
+_SECRET = re.compile(r"_API_(KEY|SECRET|TOKEN)$")
+
+
+def _env_without_keys(*layers: dict) -> dict:
+    env = {}
+    for layer in layers:
+        env.update(layer)
+    return {k: v for k, v in env.items() if not _SECRET.search(k)}
+
+
+class _NoProvider(http.server.BaseHTTPRequestHandler):
+    """Stands where Jev, Anthropic and OpenAI would be for the throwaway server: every
+    request is refused as a bad key, the answer the real providers give the fake keys a
+    test saves, so a test that reaches a provider still sees what it expects and nothing
+    leaves the host."""
+
+    def _refuse(self):
+        length = int(self.headers.get("content-length") or 0)
+        if length:
+            self.rfile.read(length)
+        body = b'{"type": "error", "error": {"type": "authentication_error", "message": "no provider in tests"}}'
+        self.send_response(401)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = do_POST = do_PUT = do_DELETE = _refuse
+
+    def log_message(self, *args):
+        pass
+
+
+@contextlib.contextmanager
+def _no_provider():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _NoProvider)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def fail(file: str, rule: str, detail: str) -> None:
@@ -1546,10 +1595,15 @@ def _throwaway_server(port: int):
     # a throwaway one per run keeps the suite off the real data/ and its passkeys and
     # per-user files disposable. RP_ID=localhost lets WebAuthn accept any port.
     data_dir = tempfile.mkdtemp(prefix="unblent-test-data-")
-    server_env = {
-        **_dotenv(), **os.environ,
+    stack = contextlib.ExitStack()
+    nowhere = stack.enter_context(_no_provider())
+    # Jev and Anthropic are reached only at the stand-in (7.7), and OpenAI's client too
+    # should it ever be given no address. UNBLENT_JEV_URL set by hand, for a stand-in
+    # of one's own while trying `--server`, is kept.
+    server_env = _env_without_keys(_dotenv(), {"UNBLENT_JEV_URL": nowhere}, os.environ, {
+        "ANTHROPIC_BASE_URL": nowhere, "OPENAI_BASE_URL": nowhere,
         "RP_ID": "localhost", "MAX_USERS": "1", "UNBLENT_DATA": data_dir,
-    }
+    })
     server = subprocess.Popen(
         # Warnings only: the access log would drown the per-file progress; an error still prints.
         [str(uvicorn), "server.main:app", "--host", "127.0.0.1", "--port", str(port),
@@ -1567,6 +1621,7 @@ def _throwaway_server(port: int):
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+        stack.close()
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
@@ -2066,7 +2121,7 @@ def run_tests(affected=None, push=False, pages=(), isolate=False) -> None:
         # UNBLENT_DATA travels to the tests too: their cookie-forging helpers refuse
         # to run without it, so a suite pointed by hand at the dev server never writes
         # into the real data/ (architecture.md section 10, Tests row).
-        env = {**_dotenv(), **os.environ, "UNBLENT_URL": f"http://127.0.0.1:{port}", "UNBLENT_DATA": data_dir}
+        env = _env_without_keys(_dotenv(), os.environ, {"UNBLENT_URL": f"http://127.0.0.1:{port}", "UNBLENT_DATA": data_dir})
         if pages:
             env["UNBLENT_PAGES"] = ",".join(sorted(pages))
         if isolate:

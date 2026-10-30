@@ -55,14 +55,7 @@ const upsert = (list, item) => (list.some((x) => x.id === item.id) ? list.map((x
 
 export const machine = setup({
   actors: {
-    read: fromPromise(async ({ input }) => {
-      const [pages, evaluators, books] = await Promise.all([
-        input.ask("pages", "list", {}),
-        input.ask("evaluators", "list", {}),
-        input.ask("books", "list", {}),
-      ]);
-      return { pages, evaluators, books };
-    }),
+    read: fromPromise(({ input }) => input.ask(input.target, "list", {})),
   },
 }).createMachine({
   id: "evaluator-starters",
@@ -82,29 +75,57 @@ export const machine = setup({
   },
   // `read` turns true at the first answer: a later read, after one that failed, keeps
   // what is shown, so the sheet never shrinks under a scrolling finger.
-  context: ({ input }) => ({ ask: input.ask, read: false, title: null, books: [], evaluators: [], failed: false }),
+  context: ({ input }) => ({ ask: input.ask, read: false, title: null, books: [], evaluators: [], failed: false, waiting: 0, failing: false }),
   initial: "hidden",
   states: {
     hidden: { on: { _shown: "reading" } },
+    // Each answer is taken as it lands, never all three together: the bus releases the
+    // events a query holds right after that query's reply (4.2), so an evaluator.changed
+    // or book.changed that comes while a slower answer is still on its way is applied
+    // on top of its own starting picture instead of being overwritten by it.
     reading: {
-      invoke: {
-        src: "read",
-        input: ({ context }) => ({ ask: context.ask }),
-        onDone: {
-          target: "ready",
-          actions: assign(({ event }) => {
-            const { pages, evaluators, books } = event.output;
-            if (!ok(evaluators) || !ok(books)) return { read: true, failed: true };
-            return {
-              read: true,
-              failed: false,
-              title: ok(pages) ? (pages.pages.find((p) => p.path === PATH)?.title ?? null) : null,
-              evaluators: evaluators.evaluators,
-              books: books.books.map((b) => ({ id: b.id, title: b.title })),
-            };
-          }),
+      entry: assign({ waiting: 3, failing: false }),
+      invoke: [
+        {
+          src: "read",
+          input: ({ context }) => ({ ask: context.ask, target: "pages" }),
+          onDone: {
+            actions: assign(({ context, event }) => ({
+              waiting: context.waiting - 1,
+              title: ok(event.output) ? (event.output.pages.find((p) => p.path === PATH)?.title ?? null) : context.title,
+            })),
+          },
+          onError: { actions: assign({ waiting: ({ context }) => context.waiting - 1 }) },
         },
-        onError: { target: "ready", actions: assign({ read: true, failed: true }) },
+        {
+          src: "read",
+          input: ({ context }) => ({ ask: context.ask, target: "evaluators" }),
+          onDone: {
+            actions: assign(({ context, event }) =>
+              ok(event.output)
+                ? { waiting: context.waiting - 1, evaluators: event.output.evaluators }
+                : { waiting: context.waiting - 1, failing: true },
+            ),
+          },
+          onError: { actions: assign({ waiting: ({ context }) => context.waiting - 1, failing: true }) },
+        },
+        {
+          src: "read",
+          input: ({ context }) => ({ ask: context.ask, target: "books" }),
+          onDone: {
+            actions: assign(({ context, event }) =>
+              ok(event.output)
+                ? { waiting: context.waiting - 1, books: event.output.books.map((b) => ({ id: b.id, title: b.title })) }
+                : { waiting: context.waiting - 1, failing: true },
+            ),
+          },
+          onError: { actions: assign({ waiting: ({ context }) => context.waiting - 1, failing: true }) },
+        },
+      ],
+      always: {
+        guard: ({ context }) => context.waiting === 0,
+        target: "ready",
+        actions: assign(({ context }) => ({ read: true, failed: context.failing })),
       },
     },
     // The first answer is the starting picture and the events keep it current (4.3), so

@@ -10,6 +10,11 @@ const { ENGINES, until, watch } = await import(process.env.UNBLENT_KIT);
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
+// The try page copies the admin's starters (8), and the check's one server keeps those
+// another test ticked, so this visitor is answered that there are none.
+const noStarters = (context) =>
+  context.route(/\/api\/evaluators\/starters\/evaluators$/, (route) => route.fulfill({ json: { evaluators: [] } }));
+
 const listText = (page) => page.evaluate(() => document.querySelector("evaluator-list").shadowRoot.textContent);
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
@@ -25,6 +30,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // Browser: a page's composition.
     test("a visitor writes an evaluator for the Journal, and the first line finished makes the guest", async () => {
       const context = await browser.newContext();
+      await noStarters(context);
       context.setDefaultTimeout(4000);
       try {
         const page = await context.newPage();
@@ -65,6 +71,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // Browser: a reload against real storage.
     test("the list starts folded here, and the visitor's own fold is kept across a reload", async () => {
       const context = await browser.newContext();
+      await noStarters(context);
       context.setDefaultTimeout(4000);
       try {
         const page = await context.newPage();
