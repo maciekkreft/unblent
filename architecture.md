@@ -751,7 +751,6 @@ Where the product is heading. Nothing here is designed or built; each line is on
 - Shared packages: a small marketplace where people share with each other book-scoped things, such as sheets, evaluators and generators, each package linked to one specific book and made available to others only after the owner, or an agent working for the owner, has checked that it does not break the app, that it belongs to its book, and that it respects copyright.
 - Mac features released one per version, not by feature flags, because a Mac that is not connected never asks the website for its flags; each feature is labeled "Works offline" (on the Mac, no account) or "Uses an AI service" (needs an account and the user's own key), and the features that work offline come first (plan: `~/.claude/plans/choice-point-release.md`).
 - Usage by feature: the admin sees in Settings which features each account and all accounts use and where time goes, counted from the names and times of events on the bus, never their contents, grouped into features; off by default in the Mac app, where the user may turn it on to help the developer (sketch: `~/.claude/plans/usage-stats.md`).
-- The folded Your values panel listing every value with its example under it, in smaller type and read only, with an Edit link beside the heading on today's page, and + Your values showing that list first instead of opening the editor, or the editor at once when no values are written yet (plan, with its open questions: https://claude.ai/artifact/6k2NJVrTb3SdVfoyn3YuZ6).
 
 ---
 

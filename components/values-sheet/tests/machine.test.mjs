@@ -68,7 +68,7 @@ after(() => {
   for (const { type, ...rest } of placedRecorded) assert.ok(new Validator(PLACED, "2020-12").validate(rest).valid, JSON.stringify(rest));
 });
 
-test("today without the panel opens only by + Your values, which adds it and opens the sheet", async () => {
+test("today without the panel opens only by + Your values, which adds it folded to be read first", async () => {
   const { actor, places, ctx } = await start({ [EARLIER]: [v(1, "Honest")] }, { placed: {} });
   assert.equal(isPlaced(ctx()), false);
   actor.send({ type: "_open" });
@@ -77,10 +77,19 @@ test("today without the panel opens only by + Your values, which adds it and ope
   placedRecorded.push(...places);
   assert.deepEqual(places, [{ type: "values.placed", day: TODAY, placed: true }]);
   assert.equal(isPlaced(ctx()), true);
-  assert.equal(ctx().open, true);
-  assert.deepEqual(ctx().drafts, [v(1, "Honest")], "the account's values, as they stand");
+  assert.equal(ctx().open, false, "the values are read before they are edited");
+  assert.deepEqual(shownValues(ctx()), [v(1, "Honest")], "the account's values, as they stand");
   actor.send({ type: "_place" });
   assert.equal(places.length, 1, "added once");
+  actor.send({ type: "_open" });
+  assert.deepEqual(ctx().drafts, [v(1, "Honest")]);
+});
+
+test("+ Your values with no values written yet opens the sheet, as there is nothing to read", async () => {
+  const { actor, ctx } = await start({}, { placed: {} });
+  actor.send({ type: "_place" });
+  assert.equal(ctx().open, true);
+  assert.equal(ctx().drafts.length, 1, "one empty row to write in");
 });
 
 test("Remove from this day folds the sheet, saves what was typed, and leaves the values alone", async () => {
@@ -95,8 +104,8 @@ test("Remove from this day folds the sheet, saves what was typed, and leaves the
   assert.equal(isPlaced(ctx()), false);
   actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest and kind")], placed: false });
   actor.send({ type: "_place" });
-  assert.equal(ctx().open, true, "+ Your values is the one step back");
-  assert.deepEqual(ctx().drafts.map((d) => d.name), ["Honest and kind"]);
+  assert.equal(isPlaced(ctx()), true, "+ Your values is the one step back");
+  assert.deepEqual(shownValues(ctx()).map((d) => d.name), ["Honest and kind"]);
 });
 
 test("Done on an added panel with no values takes it off the day; with values it keeps it", async () => {

@@ -189,12 +189,33 @@ class ValuesSheet extends LitElement {
       cursor: pointer;
     }
     h3 {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--space-sm);
       margin: 0;
       font-size: var(--text-caption);
       font-weight: var(--weight-semibold);
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--color-body-mid);
+    }
+    /* Edit is a word in the heading's line, not a button's frame, so the list stays first. */
+    h3 .edit {
+      padding: 0;
+      border: 0;
+      background: none;
+      font-size: var(--text-caption);
+      font-weight: var(--weight-normal);
+      letter-spacing: normal;
+      text-transform: none;
+      color: var(--color-body);
+      text-decoration: underline;
+      text-decoration-color: var(--color-mute);
+      text-underline-offset: 0.2em;
+    }
+    h3 .edit:hover {
+      color: var(--color-ink);
     }
     button {
       appearance: none;
@@ -238,20 +259,33 @@ class ValuesSheet extends LitElement {
     .remove svg {
       display: block;
     }
+    /* The folded list: every value on its own line and its example under it, whole, so
+       nothing the user wrote is cut off; read, not typed into. */
     .card {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
       width: 100%;
       box-sizing: border-box;
       text-align: left;
       padding: var(--space-sm) var(--space-md);
       border-color: var(--color-border);
       border-radius: var(--radius-md);
+      overflow-wrap: anywhere;
+    }
+    .card .item,
+    .card .line,
+    .card .example {
+      display: block;
+    }
+    .card .value {
       font-size: var(--text-body);
       font-weight: var(--weight-semibold);
       color: var(--color-ink);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    }
+    .card .example {
+      font-size: var(--text-sm);
+      color: var(--color-body);
     }
     .card:hover {
       border-color: var(--color-border-strong);
@@ -791,9 +825,10 @@ class ValuesSheet extends LitElement {
     this.#send({ type: "_open" }, writable(context) ? ".box[data-key]" : ".sheet .close");
   }
 
-  // + Your values: the panel joins today's page, open with the keyboard in the first name.
+  // + Your values: the panel joins today's page, folded with the keyboard on the list, or
+  // open in the first name when there are no values to read yet.
   #place() {
-    this.#send({ type: "_place" }, ".box[data-key]");
+    this.#send({ type: "_place" }, ".box[data-key], section > .card");
   }
 
   #done() {
@@ -1065,6 +1100,7 @@ class ValuesSheet extends LitElement {
     }
     const shown = shownValues(context);
     const names = shown.map((v) => v.name.trim() || "A value");
+    const writes = !failed && writable(context);
     // An earlier day without values has nothing to show.
     if (!failed && !context.open && !names.length && !writable(context)) return nothing;
     let body;
@@ -1075,7 +1111,13 @@ class ValuesSheet extends LitElement {
       const flag = (v) =>
         warned(context, v) ? html`<span class="flag" role="img" aria-label="Not the answer you expect">${icon("warning")}</span>` : nothing;
       body = html`<button type="button" class="card" @click=${() => this.#open()}>
-        ${shown.map((v, i) => html`${i ? " · " : ""}<span class="value">${names[i]}</span>${flag(v)}`)}
+        ${shown.map(
+          (v, i) =>
+            html`<span class="item"
+              ><span class="line"><span class="value">${names[i]}</span>${flag(v)}</span
+              >${v.meaning.trim() ? html`<span class="example">${v.meaning}</span>` : nothing}</span
+            >`,
+        )}
       </button>`;
     }
     else body = html`<button type="button" class="new" @click=${() => this.#open()}><span class="plus">${icon("plus")}</span>Write your values</button>`;
@@ -1085,7 +1127,9 @@ class ValuesSheet extends LitElement {
       if (folded && !e.composedPath().some((n) => n.localName === "button")) this.#open();
     };
     return html`<section tabindex="-1" class=${folded ? "folded" : ""} aria-labelledby="heading" @click=${open}>
-      <h3 id="heading">Your values</h3>
+      <h3><span id="heading">Your values</span>${folded && writes && names.length
+          ? html`<button type="button" class="edit" aria-label="Edit your values" @click=${() => this.#open()}>Edit</button>`
+          : nothing}</h3>
       ${body}
     </section>`;
   }

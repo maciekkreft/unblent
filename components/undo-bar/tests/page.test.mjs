@@ -14,8 +14,12 @@ const PAGE = `${BASE_URL}/workshop/design/undo`;
 const VIM_ON = JSON.stringify({ nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: true });
 
 const button = (page, which) => page.locator(`undo-bar button.${which}`);
+// The folded list's values, joined so one string says them in order.
 const card = (page) =>
-  page.evaluate(() => document.querySelector("values-sheet").shadowRoot.querySelector(".card")?.innerText.trim() ?? null);
+  page.evaluate(() => {
+    const root = document.querySelector("values-sheet").shadowRoot;
+    return root.querySelector(".card") ? [...root.querySelectorAll(".card .value")].map((n) => n.textContent.trim()).join(" · ") : null;
+  });
 
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
   describe(`undo-bar in ${engine.name}`, { timeout: 30000 }, () => {

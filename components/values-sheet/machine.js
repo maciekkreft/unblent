@@ -69,7 +69,7 @@ const save = (enqueue, context, values, finished = []) => {
   enqueue.emit({ type: "values.saved", day: context.day, values, ...(left.length ? { finished: left } : {}) });
 };
 
-// The values the folded card names: the sheet's own while it is open, otherwise the
+// The values the folded list shows: the sheet's own while it is open, otherwise the
 // version the fact said.
 export function shownValues(context) {
   const list = context.open && writable(context) ? context.drafts : (context.version?.values ?? []);
@@ -232,7 +232,7 @@ export function boxMarks(context, id, field) {
 // The marks a box of a value shows for its text now.
 export const marksFor = (context, value, field) => boxMarks(context, value.id, field).find((l) => l.text === value[field])?.marks ?? [];
 
-// Whether the folded card warns beside a value: a line of it as written now has a red mark.
+// Whether the folded list warns beside a value: a line of it as written now has a red mark.
 export const warned = (context, value) => FIELDS.some((f) => marksFor(context, value, f).some((m) => m.tone === "wrong"));
 
 // The values the sheet shows now: what is being looked at, the drafts, or the version.
@@ -444,12 +444,14 @@ export const machine = setup({
   meta: {
     description:
       "Shows the client's values on the journal days the user added them to, under the day's " +
-      "text and above the choice points, in a section headed \"Your values\": a folded card " +
-      "that lists the values' names on one line; pressing it, or anywhere on the folded " +
-      "section, opens the sheet. Whether a day shows the panel is the values fact's (values: " +
+      "text and above the choice points, in a section headed \"Your values\": folded, a " +
+      "read-only list of every value on its own line with its example under it in smaller " +
+      "type, whole however long; pressing it, anywhere on the folded section, or the Edit " +
+      "link beside the heading, shown on today's page only, opens the sheet. Whether a day shows the panel is the values fact's (values: " +
       "read's placed, and values.changed after, also from another device). Today's page " +
       "without it shows a muted + Your values row, which adds the panel to the day " +
-      "(values.placed) and opens the sheet; the open sheet's Remove from this day folds it and " +
+      "(values.placed) and shows the folded list with the keyboard on it, or, with no values " +
+      "written yet, opens the sheet; the open sheet's Remove from this day folds it and " +
       "takes it off the day again, leaving the values untouched, so + Your values is the one " +
       "step back, and Done on an added panel with no values takes it off too. An earlier day " +
       "shows the panel, read only, only if it was added on that day, and never offers + Your " +
@@ -478,7 +480,7 @@ export const machine = setup({
       "What is written is saved a short time into typing and at once when a box loses focus " +
       "or the sheet folds; a save made as the user leaves a row they typed in (Enter or Tab " +
       "on to the next row, the box losing focus, or Done) names that row as finished, so its " +
-      "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded card, " +
+      "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded list, " +
       "the + Your values row or the Write your values row, or, open, on the first box, or on a button when the " +
       "sheet is only read. When Settings names an evaluator to check the values or the " +
       "examples, and the account has its own Jev key, Jev's marks stand at the right end of " +
@@ -492,7 +494,7 @@ export const machine = setup({
       "over a mark, after a mark is tapped until something else is pressed, or while the text " +
       "cursor is in a checked line; otherwise it says why Jev could not check, or nothing. A " +
       "read-only row, on an earlier day, shows its marks after " +
-      "the text. The folded card shows a red warning beside a value whose value or example " +
+      "the text. The folded list shows a red warning beside a value whose value or example " +
       "has a red mark. Today's values can be put in another order: each row has up and down " +
       "buttons, shown while the pointer or the keyboard is on the row and always on a phone, " +
       "and Alt+Up or Alt+Down in a box moves its row and keeps the cursor where it was; the " +
@@ -732,13 +734,16 @@ export const machine = setup({
           guard: ({ context }) => !context.open && isPlaced(context),
           actions: openSheet,
         },
-        // + Your values adds the panel to today's page and opens it.
+        // + Your values adds the panel to today's page, folded so the values are read before
+        // they are edited; with none written yet there is nothing to read, so it opens.
         _place: {
           guard: ({ context }) => !context.open && !isPlaced(context) && placeable(context),
           actions: [
             emit(({ context }) => ({ type: "values.placed", day: context.day, placed: true })),
             assign({ placed: true }),
-            openSheet,
+            enqueueActions(({ context, enqueue }) => {
+              if (!(context.version?.values ?? []).some((v) => !isEmpty(v))) enqueue(openSheet);
+            }),
           ],
         },
         // Remove from this day folds the sheet and takes the panel off today's page; the
