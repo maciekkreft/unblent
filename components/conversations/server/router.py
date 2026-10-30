@@ -43,11 +43,27 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.executescript("ALTER TABLE conversations ADD COLUMN marks TEXT")
     if "position" not in columns:
         connection.executescript("ALTER TABLE conversations ADD COLUMN position TEXT")
+    if "highlights" not in columns:
+        connection.executescript("ALTER TABLE conversations ADD COLUMN highlights TEXT")
     try:
         with connection:
             yield connection
     finally:
         connection.close()
+
+
+def _save_highlights(connection: sqlite3.Connection, conversation_id: str, payload: dict) -> None:
+    # The user's highlights on earlier answers are last write wins, and like a place they
+    # are not news (5): updated_at stays, so highlighting an old answer never moves the chat
+    # or makes it the latest about its subject. A body without the key leaves them; null or
+    # an empty list clears them.
+    if "highlights" not in payload:
+        return
+    highlights = payload["highlights"] or None
+    connection.execute(
+        "UPDATE conversations SET highlights = ? WHERE id = ?",
+        (json.dumps(highlights) if highlights is not None else None, conversation_id),
+    )
 
 
 def _tools(connection: sqlite3.Connection) -> dict:
@@ -132,6 +148,8 @@ def read_conversation(conversation_id: str, user_id: str = Depends(require_user)
     # Absent rather than null when there are none, so the reply keeps to read.json.
     if row["marks"] is not None:
         conversation["marks"] = json.loads(row["marks"])
+    if row["highlights"] is not None:
+        conversation["highlights"] = json.loads(row["highlights"])
     return conversation
 
 
@@ -146,7 +164,7 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
     payload = await request.json()
     # A place is last write wins (5): saved whatever else the body holds, and it does not
     # bump updated_at, so a move never reads as news. A body without a title only moves
-    # the chat; for a chat the server does not have, there is nothing to move.
+    # the chat or sets its highlights; for a chat the server does not have, there is nothing to change.
     position = payload.get("position")
     if position is not None and not (isinstance(position, str) and _POSITION.fullmatch(position)):
         return JSONResponse({"error": "invalid-position"}, status_code=422)
@@ -175,6 +193,7 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
                 return {"missing": True}
             if position is not None:
                 connection.execute("UPDATE conversations SET position = ? WHERE id = ?", (position, conversation_id))
+            _save_highlights(connection, conversation_id, payload)
         return {"updatedAt": row["updated_at"]}
     title = str(payload.get("title", ""))
     about = payload.get("about") or []
@@ -207,6 +226,7 @@ async def save_conversation(conversation_id: str, request: Request, user_id: str
                 (json.dumps(marks) if marks is not None else None, conversation_id),
             )
             changed = True
+        _save_highlights(connection, conversation_id, payload)
         for turn in turns:
             cursor = connection.execute(
                 "INSERT OR IGNORE INTO turns (id, conversation_id, body) VALUES (?, ?, ?)",

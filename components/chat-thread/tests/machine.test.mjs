@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -17,6 +17,7 @@ const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
 const PIN_TOGGLED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "pin.toggled.json"), "utf8"));
 const MARKS_EDITED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "marks.edited.json"), "utf8"));
+const HIGHLIGHTS_EDITED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "highlights.edited.json"), "utf8"));
 const RELINKED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "conversation.relinked.json"), "utf8"));
 
 const CHAT = "01HQ8ZK7M4N5P6Q7R8S9T0V1W4";
@@ -405,9 +406,15 @@ async function commenting(chat = answered(), more = {}) {
     const { type, ...rest } = e;
     see(rest, MARKS_EDITED);
   });
+  const highlighted = [];
+  actor.on("highlights.edited", (e) => {
+    const { type, ...rest } = e;
+    highlighted.push(rest);
+    see(rest, HIGHLIGHTS_EDITED);
+  });
   actor.start();
   await until(() => actor.getSnapshot().matches("showing"), "showing");
-  return { actor, emitted, clock, state: () => actor.getSnapshot(), ctx: () => actor.getSnapshot().context };
+  return { actor, emitted, highlighted, clock, state: () => actor.getSnapshot(), ctx: () => actor.getSnapshot().context };
 }
 
 test("only a finished last answer with text and no lookups takes comments", () => {
@@ -523,6 +530,84 @@ test("opening another chat saves the comment being written and carries out a wai
   actor.send({ type: "_typed", text: "yes" });
   actor.send({ type: "conversation.opened", id: CHAT2 });
   assert.deepEqual(emitted.at(-1).marks, [{ ...other, comment: "yes" }]);
+});
+
+// An earlier answer takes highlights: no comment, no number, never sent to the model.
+const ASK2 = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1Q2", role: "user", text: "more" };
+const LATER = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1A2", role: "assistant", text: "Later words.", status: "done" };
+const twice = (over = {}) => answered({ turns: [ASK, ANSWER, ASK2, LATER], ...over });
+const earlier = (word) => ({ answerId: ANSWER.id, ...at(word) });
+
+test("only a finished answer before the last one takes highlights", () => {
+  const chat = twice();
+  assert.equal(highlightable(chat, ANSWER.id), true);
+  assert.equal(highlightable(chat, LATER.id), false, "the last answer takes comments instead");
+  assert.equal(highlightable(chat, ASK.id), false, "never the user's own message");
+  assert.equal(highlightable(answered({ turns: [ASK, ANSWER, ASK2, { ...LATER, status: "pending" }] }), ANSWER.id), true);
+  assert.equal(highlightable(answered({ turns: [ASK, { ...ANSWER, status: "stopped" }, ASK2, LATER] }), ANSWER.id), false);
+});
+
+test("a selection in an earlier answer becomes a highlight at once, with the whole list emitted", async () => {
+  const { actor, highlighted, emitted, state, ctx } = await commenting(twice());
+  actor.send({ type: "_selected", answerId: ANSWER.id, start: at("book").start - 1, end: at("book").end + 1 });
+  const made = { id: IDS[0], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  assert.deepEqual(highlighted, [{ conversationId: CHAT, highlights: [made] }]);
+  assert.deepEqual(ctx().conversation.highlights, [made], "shown before the echo");
+  assert.ok(state().matches({ showing: "idle" }), "no comment box opens");
+  assert.equal(emitted.length, 0, "no comment is made");
+  actor.send({ type: "_selected", answerId: ANSWER.id, ...at("path") });
+  assert.deepEqual(highlighted.at(-1).highlights.map((h) => h.quote), ["book", "path"]);
+});
+
+test("a selection in the last answer still opens a comment", async () => {
+  const { actor, highlighted, state } = await commenting(twice());
+  actor.send({ type: "_selected", answerId: LATER.id, start: 0, end: 5 });
+  assert.ok(state().matches({ showing: "commenting" }));
+  assert.equal(highlighted.length, 0);
+});
+
+test("no highlight on white space, over another highlight, over a sent comment, or on a user message", async () => {
+  const sent = { id: IDS[2], ...at("box"), quote: "box", comment: "why?" };
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const { actor, highlighted } = await commenting(twice({ turns: [ASK, ANSWER, { ...ASK2, marks: [sent] }, LATER], highlights: [kept] }));
+  actor.send({ type: "_selected", answerId: ANSWER.id, start: 7, end: 9 });
+  actor.send({ type: "_selected", answerId: ANSWER.id, start: at("A book").start, end: at("was").end });
+  actor.send({ type: "_selected", ...earlier("box") });
+  actor.send({ type: "_selected", answerId: ASK.id, start: 0, end: 4 });
+  assert.equal(highlighted.length, 0);
+});
+
+test("Remove takes a highlight off at once; Undo or a click on it puts it back until the window ends", async () => {
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const { actor, highlighted, clock, ctx } = await commenting(twice({ highlights: [kept] }));
+  actor.send({ type: "_highlightOpened", id: kept.id });
+  assert.equal(ctx().chosen, kept.id, "its bubble opens");
+  actor.send({ type: "_unhighlight", id: kept.id });
+  assert.deepEqual(highlighted.at(-1).highlights, []);
+  assert.ok(ctx().unhighlighting.has(kept.id), "dimmed for the undo window");
+  assert.equal(ctx().chosen, kept.id, "the bubble stays to offer Undo");
+  actor.send({ type: "_rehighlight", id: kept.id });
+  assert.deepEqual(highlighted.at(-1).highlights, [kept]);
+  actor.send({ type: "_unhighlight", id: kept.id });
+  actor.send({ type: "_highlightOpened", id: kept.id });
+  assert.deepEqual(highlighted.at(-1).highlights, [kept], "a click on the dimmed highlight is the undo");
+  actor.send({ type: "_unhighlight", id: kept.id });
+  clock.increment(UNDO_MS);
+  assert.equal(ctx().unhighlighting.size, 0, "the window ends");
+  assert.equal(ctx().chosen, null, "and the bubble closes");
+  const count = highlighted.length;
+  actor.send({ type: "_rehighlight", id: kept.id });
+  assert.equal(highlighted.length, count, "too late to undo");
+});
+
+test("opening another chat ends a highlight's undo window and closes its bubble", async () => {
+  const kept = { id: IDS[1], answerId: ANSWER.id, ...at("book"), quote: "book" };
+  const { actor, highlighted, ctx } = await commenting(twice({ highlights: [kept] }));
+  actor.send({ type: "_unhighlight", id: kept.id });
+  actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.equal(ctx().unhighlighting.size, 0);
+  assert.equal(ctx().chosen, null);
+  assert.deepEqual(highlighted.at(-1).highlights, [], "the removal stands");
 });
 
 const BOOK = { kind: "book", id: "b1", title: "ACT Made Simple", view: "book-reader" };

@@ -1,8 +1,9 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// Comments on the last answer, on the conversations stem page: what only a browser has,
-// a mouse selection over the drawn answer mapped back to the answer's characters. Which
+// Comments on the last answer and highlights on earlier ones, on the conversations stem
+// page: what only a browser has, a mouse selection over the drawn answer mapped back to
+// the answer's characters. Which
 // selections may become a comment, the throttle and the undo window are decisions of the
 // machine, tested in Node (9).
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
@@ -19,7 +20,8 @@ const MARK = { id: U("M1"), start: ANSWER.indexOf(PHRASE), end: ANSWER.indexOf(P
 
 // A fresh account on the Echo test provider holding one chat whose last answer is done,
 // with `marks` when given, opened on the stem page (in the phone preview when asked).
-async function open(browser, { marks = null, phone = false } = {}) {
+// `later` adds a second question and answer, so the first answer is an earlier one.
+async function open(browser, { marks = null, phone = false, later = false } = {}) {
   const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
   context.setDefaultTimeout(4000);
   await shortUndo(context);
@@ -32,6 +34,7 @@ async function open(browser, { marks = null, phone = false } = {}) {
     turns: [
       { id: U("Q1"), role: "user", text: "Plan the box" },
       { id: U("A1"), role: "assistant", text: ANSWER, status: "done" },
+      ...(later ? [{ id: U("Q2"), role: "user", text: "And then?" }, { id: U("A2"), role: "assistant", text: "Later words.", status: "done" }] : []),
     ],
     ...(marks ? { marks: { answerId: U("A1"), marks } } : {}),
   };
@@ -48,12 +51,14 @@ async function open(browser, { marks = null, phone = false } = {}) {
 const inThread = (page, fn, arg) =>
   page.evaluate(([fn, arg]) => new Function("root", "arg", `return (${fn})(root, arg)`)(document.querySelector("chat-thread").shadowRoot, arg), [fn.toString(), arg]);
 
-// The screen box of a phrase inside one drawn run, for a mouse drag across it.
-const drag = async (page, phrase) => {
+// The screen box of a phrase inside one drawn run, for a mouse drag across it; in the
+// last answer unless `answer` names another.
+const drag = async (page, phrase, answer = null) => {
   const { x0, x1, y } = await inThread(
     page,
-    (root, phrase) => {
-      const span = [...root.querySelectorAll(".markable [data-s]")].find((s) => s.textContent.includes(phrase));
+    (root, [phrase, answer]) => {
+      const scope = answer ? `[data-answer="${answer}"] [data-s]` : ".markable [data-s]";
+      const span = [...root.querySelectorAll(scope)].find((s) => s.textContent.includes(phrase));
       const node = [...span.childNodes].find((n) => n.nodeType === 3);
       const range = document.createRange();
       range.setStart(node, node.data.indexOf(phrase));
@@ -61,7 +66,7 @@ const drag = async (page, phrase) => {
       const r = range.getBoundingClientRect();
       return { x0: r.left + 1, x1: r.right - 1, y: r.top + r.height / 2 };
     },
-    phrase,
+    [phrase, answer],
   );
   await page.mouse.move(x0, y);
   await page.mouse.down();
@@ -122,6 +127,49 @@ for (const engine of ENGINES) {
         await until(async () => (await look(page)).marked === PHRASE);
         seen = await look(page);
         assert.deepEqual(seen.list, [{ n: "1", quote: PHRASE, text: "Say why.", removing: false }]);
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a gesture.
+    test("a selection in an earlier answer is a highlight with no comment; its bubble removes it with Undo; it is kept", async () => {
+      const { context, page, problems } = await open(browser, { later: true });
+      const earlier = (root, id) => {
+        const answer = root.querySelector(`[data-answer="${id}"]`);
+        const bubble = root.querySelector(".bubble");
+        return {
+          marked: [...(answer?.querySelectorAll("mark.hl") ?? [])].map((m) => m.textContent).join("|"),
+          removing: Boolean(answer?.querySelector("mark.hl.removing")),
+          numbers: answer?.closest(".turn").querySelectorAll("sup.num").length ?? -1,
+          box: Boolean(root.querySelector(".popover textarea")),
+          bubble: bubble ? bubble.textContent.replace(/\s+/g, " ").trim() : null,
+        };
+      };
+      const see = () => inThread(page, earlier, U("A1"));
+      const stored = async () => (await (await context.request.get(`${BASE_URL}/api/conversations/${CHAT}`)).json()).highlights ?? [];
+      try {
+        await until(async () => (await see()).numbers === 0);
+        await drag(page, PHRASE, U("A1"));
+        await until(async () => (await see()).marked === PHRASE);
+        let seen = await see();
+        assert.equal(seen.box, false, "no comment box opens");
+        assert.equal(seen.numbers, 0, "a highlight carries no number");
+        await until(async () => (await stored())[0]?.quote === PHRASE);
+
+        await page.locator(`chat-thread mark.hl`).first().click();
+        await until(async () => (await see()).bubble === "Remove highlight");
+        await page.locator("chat-thread .bubble .remove").click();
+        await until(async () => (await see()).removing);
+        assert.equal((await see()).bubble, "Removed.Undo", "the removal can be taken back");
+        await page.locator("chat-thread .bubble .undo").click();
+        await until(async () => !(await see()).removing && (await see()).bubble === "Remove highlight");
+        await page.keyboard.press("Escape");
+        await until(async () => (await see()).bubble === null);
+
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await until(async () => (await see()).marked === PHRASE);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

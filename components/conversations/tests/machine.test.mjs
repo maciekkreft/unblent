@@ -976,6 +976,27 @@ test("Continue drops the unsent comments", async () => {
   await until(() => h.calls.saved.some((s) => s.body.marks === null), "cleared on the server");
 });
 
+// --- highlights on earlier answers ---------------------------------------------------
+
+test("highlights are kept and saved alone, on finished answers only, and never reach the model", async () => {
+  const h = await answered();
+  const kept = { id: MARK1, answerId: ANSWER2, start: 18, end: 28, quote: "Dogs bark." };
+  h.actor.send({ type: "highlights.edited", conversationId: CHAT, highlights: [kept, { ...kept, id: MARK2, answerId: USER }] });
+  await flush();
+  assert.deepEqual(lastChange(h).highlights, [kept], "one on the user's message is dropped");
+  assert.equal(lastChange(h).pending, false, "unsent highlights do not make the chat pending");
+  await until(() => h.calls.saved.some((s) => s.body.highlights), "highlights saved");
+  const body = h.calls.saved.find((s) => s.body.highlights).body;
+  assert.deepEqual(body, { highlights: [kept] }, "sent alone, so the chat's time and title stay");
+  submit(h, { turn: { id: U("Y3"), text: "next" } });
+  await until(() => h.calls.completes.length === 1, "the model is asked");
+  assert.ok(!JSON.stringify(h.calls.completes[0]).includes(MARK1), "the model's request holds no highlight");
+  assert.deepEqual(lastChange(h).highlights, [kept], "a new message keeps them");
+  h.actor.send({ type: "highlights.edited", conversationId: CHAT, highlights: [] });
+  await until(() => h.calls.saved.some((s) => s.body.highlights === null), "cleared on the server");
+  assert.equal(lastChange(h).highlights, undefined, "an empty list removes them");
+});
+
 test("commentsBlock numbers the comments in reading order, with the sentence only for a repeated quote", () => {
   const block = commentsBlock(ANSWER_TEXT, [mark(MARK2, 29, 33, "Cats", "And these?"), mark(MARK1, 18, 28, "Dogs bark.", "Loudly?")]);
   assert.equal(

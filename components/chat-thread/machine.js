@@ -12,6 +12,8 @@ import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 // `pins` moves an "on" pin to whichever chat opens. The comments on the last answer:
 // every change is emitted as the whole list in marks.edited (4.3, fifth rule), and
 // `conversations`, which keeps them with the chat, echoes them in conversation.changed.
+// The highlights on earlier answers the same way, in highlights.edited; they carry no
+// comment and never go to the model.
 
 // A conversation.changed payload is the whole conversation with a `type` on it; the
 // read reply is the same shape without the `type`. One helper, so both feed the view
@@ -429,6 +431,7 @@ const openComment = assign({
 const canSelect = ({ context, event }) => {
   const answer = lastAnswer(context.conversation);
   if (!answer) return false;
+  if (event.answerId != null && event.answerId !== answer.id) return false;
   const range = trimRange(answer.text, event.start, event.end);
   return range != null && !overlaps(occupied(context), range.start, range.end);
 };
@@ -462,7 +465,69 @@ const settle = enqueueActions(({ context, enqueue }) => {
     if (next) store(enqueue, context, next);
   }
   for (const id of context.discarding.keys()) enqueue.cancel(`undo:${id}`);
-  enqueue.assign({ draft: null, discarding: new Map() });
+  for (const id of context.unhighlighting.keys()) enqueue.cancel(`unhl:${id}`);
+  enqueue.assign({ draft: null, discarding: new Map(), chosen: null, unhighlighting: new Map() });
+});
+
+// --- Highlights on earlier answers -----------------------------------------------------------
+
+// An answer the user may highlight: a finished answer with text that is not the last
+// one, which takes comments instead.
+export const highlightable = (conversation, answerId) => {
+  const turn = conversation?.turns?.find((t) => t.id === answerId);
+  return Boolean(turn) && turn.role === "assistant" && turn.status === "done" && Boolean(turn.text) && turn !== lastAnswer(conversation);
+};
+
+export const highlightsOf = (conversation, answerId) => (conversation?.highlights ?? []).filter((h) => h.answerId === answerId);
+
+// The comments that went to the model with the message after an answer, read only.
+export const sentMarks = (conversation, answerId) => {
+  const turns = conversation?.turns ?? [];
+  const k = turns.findIndex((t) => t.id === answerId);
+  const next = k >= 0 ? turns[k + 1] : null;
+  return next?.role === "user" ? (next.marks ?? []) : [];
+};
+
+const answerText = (conversation, answerId) => conversation.turns.find((t) => t.id === answerId).text;
+
+// A highlight never overlaps another one, one in its undo window, or a sent comment.
+const canHighlight = ({ context, event }) => {
+  const { conversation } = context;
+  if (!highlightable(conversation, event.answerId)) return false;
+  const range = trimRange(answerText(conversation, event.answerId), event.start, event.end);
+  if (!range) return false;
+  const removed = [...context.unhighlighting.values()].filter((h) => h.answerId === event.answerId);
+  return !overlaps([...highlightsOf(conversation, event.answerId), ...removed, ...sentMarks(conversation, event.answerId)], range.start, range.end);
+};
+
+// The whole list goes to `conversations` (4.3, fifth rule), and the chat on screen takes
+// it at once, as the comments do.
+const storeHighlights = (enqueue, context, list) => {
+  const { highlights: _, ...rest } = context.conversation;
+  enqueue.assign({ conversation: list.length ? { ...rest, highlights: list } : rest });
+  enqueue.emit({ type: "highlights.edited", conversationId: context.conversation.id, highlights: list });
+};
+
+const highlight = enqueueActions(({ context, event, enqueue }) => {
+  const text = answerText(context.conversation, event.answerId);
+  const range = trimRange(text, event.start, event.end);
+  const made = { id: context.mint(), answerId: event.answerId, ...range, quote: text.slice(range.start, range.end) };
+  enqueue.assign({ chosen: null });
+  storeHighlights(enqueue, context, [...(context.conversation.highlights ?? []), made]);
+});
+
+const isHighlight = ({ context, event }) => (context.conversation?.highlights ?? []).some((h) => h.id === event.id);
+const isUnhighlighting = ({ context, event }) => context.unhighlighting.has(event.id);
+
+// Undo puts a highlight back while its answer is still there to hold it.
+const canRehighlight = ({ context, event }) =>
+  context.unhighlighting.has(event.id) && highlightable(context.conversation, context.unhighlighting.get(event.id).answerId);
+
+const rehighlight = enqueueActions(({ context, event, enqueue }) => {
+  enqueue.cancel(`unhl:${event.id}`);
+  const back = context.unhighlighting.get(event.id);
+  enqueue.assign({ unhighlighting: without(context.unhighlighting, event.id) });
+  storeHighlights(enqueue, context, [...(context.conversation.highlights ?? []), back]);
 });
 
 // Whether the open chat can be pinned: only once it has its first message, because
@@ -597,7 +662,10 @@ export const machine = setup({
       "answer the user selects a passage and writes a comment on it, as in Redline: the " +
       "passage is highlighted with a number and the comments are listed under the answer, " +
       "kept with the chat by `conversations` and sent with the next message, after which they " +
-      "show read only. The answer's text never changes; removing a comment waits out the undo window. " +
+      "show read only. In every earlier answer the user selects a passage to highlight it, " +
+      "with no comment and no number; the highlights are kept with the chat by `conversations` " +
+      "and never sent to the model. A click on one offers Remove, which waits out the undo window. " +
+      "The answer's text never changes; removing a comment waits out the undo window. " +
       "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
       "while it does, j and k scroll it a line, gg and G go to the top and the bottom, Ctrl+d " +
       "and Ctrl+u scroll half the box, and i moves the keyboard into the chat box under it in " +
@@ -606,7 +674,7 @@ export const machine = setup({
       "comment box.",
     kind: "view",
     attributes: ["height", "markdown"],
-    emits: ["pin.toggled", "marks.edited", "conversation.relinked"],
+    emits: ["pin.toggled", "marks.edited", "highlights.edited", "conversation.relinked"],
     asks: ["conversations: open", "conversations: read", "pins: read", "settings: read", "subject: read"],
   },
   context: ({ input }) => ({
@@ -629,6 +697,9 @@ export const machine = setup({
     // The comment being written on the last answer, and the comments in their undo window.
     draft: null,
     discarding: new Map(),
+    // The highlight whose bubble is open, and the highlights in their undo window.
+    chosen: null,
+    unhighlighting: new Map(),
   }),
   initial: "starting",
   invoke: [
@@ -699,7 +770,7 @@ export const machine = setup({
     "conversation.deleted": {
       guard: ({ context, event }) => event.id === context.openId,
       target: ".empty",
-      actions: assign({ openId: null, conversation: null, draft: null, discarding: new Map() }),
+      actions: assign({ openId: null, conversation: null, draft: null, discarding: new Map(), chosen: null, unhighlighting: new Map() }),
     },
   },
   states: {
@@ -772,6 +843,35 @@ export const machine = setup({
           { guard: isDiscarding, actions: assign({ discarding: ({ context, event }) => without(context.discarding, event.id) }) },
         ],
         _elapsed: { guard: isDiscarding, actions: assign({ discarding: ({ context, event }) => without(context.discarding, event.id) }) },
+        // A selection in an earlier answer: a highlight at once. The last answer's
+        // selections are taken by the comment states below before they reach here.
+        _selected: { guard: canHighlight, actions: highlight },
+        // A click on a highlight opens its bubble; on a dimmed one, it is the undo.
+        _highlightOpened: [
+          { guard: canRehighlight, actions: rehighlight },
+          { guard: isHighlight, actions: assign({ chosen: ({ event }) => event.id }) },
+        ],
+        _highlightClosed: { actions: assign({ chosen: null }) },
+        // Remove: the highlight leaves the list at once and stays dimmed, its bubble
+        // offering Undo, until the undo window ends.
+        _unhighlight: {
+          guard: isHighlight,
+          actions: enqueueActions(({ context, event, enqueue }) => {
+            const list = context.conversation.highlights;
+            const gone = list.find((h) => h.id === event.id);
+            enqueue.assign({ chosen: event.id, unhighlighting: new Map(context.unhighlighting).set(event.id, gone) });
+            storeHighlights(enqueue, context, list.filter((h) => h.id !== event.id));
+            enqueue.raise({ type: "_highlightElapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `unhl:${event.id}` });
+          }),
+        },
+        _rehighlight: { guard: canRehighlight, actions: rehighlight },
+        _highlightElapsed: {
+          guard: isUnhighlighting,
+          actions: assign({
+            unhighlighting: ({ context, event }) => without(context.unhighlighting, event.id),
+            chosen: ({ context, event }) => (context.chosen === event.id ? null : context.chosen),
+          }),
+        },
       },
       states: {
         idle: {

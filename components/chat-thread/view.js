@@ -2,9 +2,10 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks } from "./machine.js";
+import { machine, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
+import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
 
 // The gap between a passage's last line and the comment box under it, in px; the box is
@@ -23,6 +24,9 @@ const toMs = (text, fallback = 3000) => {
   return t.endsWith("ms") ? n : n * 1000;
 };
 
+// The comments of an answer, numbered in reading order; its highlights carry no number.
+const numberedOf = (marking) => (marking.highlights ? marking.list.filter((m) => !marking.highlights.has(m.id)) : marking.list);
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -38,7 +42,7 @@ class ActorController {
         mint: ulid,
         undoMs,
       },
-      events: { "pin.toggled": pinToggled, "marks.edited": marksEdited, "conversation.relinked": relinked },
+      events: { "pin.toggled": pinToggled, "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -358,8 +362,8 @@ class ChatThread extends LitElement {
       font-weight: var(--weight-semibold);
       color: var(--color-ink);
     }
-    /* The last answer, the one that takes comments; the box is placed inside it. */
-    .turn.assistant.last {
+    /* An answer holds its comment box or its highlight's bubble, placed inside it. */
+    .turn.assistant {
       position: relative;
     }
     /* A commented passage: the marker yellow books use (7.4), with its number raised
@@ -372,7 +376,8 @@ class ChatThread extends LitElement {
       box-decoration-break: clone;
       -webkit-box-decoration-break: clone;
     }
-    .markable mark {
+    .markable mark,
+    mark.hl {
       cursor: pointer;
     }
     mark.open {
@@ -515,6 +520,23 @@ class ChatThread extends LitElement {
       display: inline-flex;
       padding: var(--space-2xs);
       color: var(--color-mute);
+    }
+    /* A highlight's bubble: one action, Remove, then Undo for the undo window. */
+    .popover.bubble {
+      width: auto;
+      align-items: center;
+      padding: var(--space-2xs);
+      font-size: var(--text-sm);
+    }
+    .bubble .act {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2xs);
+      padding: var(--space-2xs) var(--space-xs);
+    }
+    .bubble .removed {
+      padding-left: var(--space-xs);
+      color: var(--color-body-mid);
     }
     /* A message sent with comments says so above its text. */
     .turn.user .sent-marks {
@@ -789,6 +811,7 @@ class ChatThread extends LitElement {
         // An answer whose comments went with the next message shows them read only.
         const next = turns[k + 1];
         const sent = next?.role === "user" && next.marks?.length ? [...next.marks].sort((a, b) => a.start - b.start) : null;
+        if (snapshot.matches("showing") && highlightable(chat, turn.id)) return this.#assistant(turn, this.#highlighting(snapshot, turn.id, sent ?? []));
         return this.#assistant(turn, sent ? { list: sent, comments: sent, markable: false } : null);
       })}
       ${chat?.pending ? html`<p class="unsaved">Not saved yet</p>` : nothing}
@@ -807,7 +830,18 @@ class ChatThread extends LitElement {
     const byStart = (a, b) => a.start - b.start;
     const list = [...marks({ conversation: context.conversation, draft }), ...removed].sort(byStart);
     const comments = [...savedMarks(context.conversation).map((m) => (m.id === draft?.id ? { ...m, comment: draft.comment } : m)), ...removed].sort(byStart);
-    return { list, comments, markable: true, draft, discarding: context.discarding };
+    return { list, comments, markable: true, selectable: true, draft, discarding: context.discarding };
+  }
+
+  // What an earlier answer paints: its highlights, one in its undo window dimmed, beside
+  // the comments that went with the next message, which stay numbered and read only.
+  #highlighting(snapshot, answerId, sent) {
+    const { context } = snapshot;
+    const removed = [...context.unhighlighting.values()].filter((h) => h.answerId === answerId);
+    const own = [...highlightsOf(context.conversation, answerId), ...removed];
+    const list = [...sent, ...own].sort((a, b) => a.start - b.start);
+    const chosen = own.some((h) => h.id === context.chosen) ? context.chosen : null;
+    return { list, comments: sent, markable: false, selectable: true, highlights: new Set(own.map((h) => h.id)), chosen, discarding: context.unhighlighting };
   }
 
   // The reader's own message. A turn that only carries tool results has no text (7.7): it
@@ -837,9 +871,10 @@ class ChatThread extends LitElement {
         : nothing;
     this.#marking = marking;
     const markable = Boolean(marking?.markable);
+    const selectable = Boolean(marking?.selectable);
     const cls = `answer${this.markdown ? " prose" : ""}${markable ? " markable" : ""}`;
     const answer = hasText
-      ? html`<div class=${cls}>
+      ? html`<div class=${cls} data-answer=${selectable ? turn.id : nothing}>
           ${this.markdown ? this.#parse(turn.text).map((block) => this.#block(block)) : this.#run(turn.text, 0)}
         </div>`
       : nothing;
@@ -852,6 +887,7 @@ class ChatThread extends LitElement {
         ${this.#foot(turn)}
         ${marking ? this.#comments(marking) : nothing}
         ${marking?.draft ? this.#popover(marking.draft, marking) : nothing}
+        ${marking?.chosen ? this.#bubble(marking) : nothing}
       </div>
     `;
     this.#marking = null;
@@ -953,10 +989,16 @@ class ChatThread extends LitElement {
     if (!marking) return value;
     const list = marking.list;
     return pieces(value, s, list).map((p) => {
-      const text = marking.markable ? html`<span data-s=${p.s}>${p.text}</span>` : p.text;
+      const text = marking.selectable ? html`<span data-s=${p.s}>${p.text}</span>` : p.text;
       if (!p.id) return text;
-      const n = list.findIndex((m) => m.id === p.id);
-      const end = p.s + p.text.length >= list[n].end;
+      // A highlight carries no number; it is the user's own, not a comment.
+      if (marking.highlights?.has(p.id)) {
+        const state = p.id === marking.chosen ? " open" : "";
+        return html`<mark data-id=${p.id} class=${`hl${state}${marking.discarding.has(p.id) ? " removing" : ""}`}>${text}</mark>`;
+      }
+      const numbered = numberedOf(marking);
+      const n = numbered.findIndex((m) => m.id === p.id);
+      const end = p.s + p.text.length >= numbered[n].end;
       const cls = p.id === marking.draft?.id ? "open" : marking.discarding?.has(p.id) ? "removing" : "";
       return html`<mark data-id=${p.id} class=${cls}>${text}</mark>${end ? html`<sup class="num">${n + 1}</sup>` : nothing}`;
     });
@@ -968,7 +1010,7 @@ class ChatThread extends LitElement {
   #comments(marking) {
     const { list, comments, markable } = marking;
     if (!comments.length) return nothing;
-    const number = (id) => list.findIndex((m) => m.id === id) + 1;
+    const number = (id) => numberedOf(marking).findIndex((m) => m.id === id) + 1;
     return html`<ol class="comments" aria-label="Comments on this answer">
       ${comments.map((m) => {
         const removing = markable && marking.discarding.has(m.id);
@@ -989,6 +1031,33 @@ class ChatThread extends LitElement {
         </li>`;
       })}
     </ol>`;
+  }
+
+  // A highlight's bubble: Remove, and while the removal can be taken back, Undo.
+  #bubble(marking) {
+    const id = marking.chosen;
+    const removing = marking.discarding.has(id);
+    return html`
+      <div
+        class="popover bubble"
+        data-for=${id}
+        @mousedown=${(e) => e.preventDefault()}
+        @keydown=${(e) => {
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          this.#actor.send({ type: "_highlightClosed" });
+          this.renderRoot.querySelector(".transcript")?.focus({ preventScroll: true });
+        }}
+      >
+        ${removing
+          ? html`<span class="removed">Removed.</span
+              ><button class="act undo" @click=${() => this.#actor.send({ type: "_rehighlight", id })}>Undo</button>`
+          : html`<button class="act remove" @click=${() => this.#actor.send({ type: "_unhighlight", id })}>
+              ${icon("trash-simple")} Remove highlight
+            </button>`}
+      </div>
+    `;
   }
 
   #popover(draft, marking) {
@@ -1032,37 +1101,45 @@ class ChatThread extends LitElement {
     clearTimeout(this.#settle);
   }
 
-  // A selection in the last answer ends: its comment box opens. A click on a highlight
-  // there opens its comment.
+  // A selection in the last answer ends: its comment box opens; in an earlier answer it
+  // becomes a highlight. A click on a comment's passage opens the comment, on a
+  // highlight its bubble; a click anywhere else closes the bubble.
   #pointerup(e) {
     if (e.composedPath().some((el) => el.classList?.contains("popover"))) return;
     if (this.#sendSelection()) return;
-    const mark = e.composedPath().find((el) => el.localName === "mark" && el.closest?.(".markable"));
+    const path = e.composedPath();
+    const hl = path.find((el) => el.localName === "mark" && el.classList?.contains("hl"));
+    if (hl) return this.#actor.send({ type: "_highlightOpened", id: hl.dataset.id });
+    if (this.#actor.snapshot?.context.chosen) this.#actor.send({ type: "_highlightClosed" });
+    const mark = path.find((el) => el.localName === "mark" && el.closest?.(".markable"));
     if (mark) this.#actor.send({ type: "_opened", id: mark.dataset.id });
   }
 
-  // The selection as offsets into the answer, sent as _selected; false when there is
-  // none in the last answer. The machine decides whether it may become a comment.
+  // The selection as offsets into one answer, sent as _selected with that answer; false
+  // when there is none in an answer. A selection across answers keeps to the first one.
+  // The machine decides whether it becomes a comment, a highlight, or nothing.
   #sendSelection() {
     const range = this.#selectionRange();
     if (!range) return false;
-    const start = this.#offsetOf(range, "start");
-    const end = this.#offsetOf(range, "end");
+    const answer = [...this.renderRoot.querySelectorAll("[data-answer]")].find((el) => range.intersectsNode(el));
+    if (!answer) return false;
+    const start = this.#offsetOf(range, "start", answer);
+    const end = this.#offsetOf(range, "end", answer);
     if (start == null || end == null || end <= start) return false;
     this.#clearSelection();
-    this.#actor.send({ type: "_selected", start, end });
+    this.#actor.send({ type: "_selected", answerId: answer.dataset.answer, start, end });
     return true;
   }
 
   // A boundary of the range as an offset into the answer. Inside a text run it is exact;
   // elsewhere (a line break, a list item, a number, outside the answer) it is the edge
   // of the first or last run the range touches.
-  #offsetOf(range, edge) {
+  #offsetOf(range, edge, answer) {
     const node = edge === "start" ? range.startContainer : range.endContainer;
     const offset = edge === "start" ? range.startOffset : range.endOffset;
     const span = node.nodeType === Node.TEXT_NODE ? node.parentElement : null;
-    if (span?.dataset?.s != null && span.closest(".markable")) return Number(span.dataset.s) + offset;
-    const spans = [...this.renderRoot.querySelectorAll(".markable [data-s]")].filter((el) => range.intersectsNode(el));
+    if (span?.dataset?.s != null && answer.contains(span)) return Number(span.dataset.s) + offset;
+    const spans = [...answer.querySelectorAll("[data-s]")].filter((el) => range.intersectsNode(el));
     if (!spans.length) return null;
     if (edge === "start") return Number(spans[0].dataset.s);
     const last = spans[spans.length - 1];
@@ -1101,12 +1178,13 @@ class ChatThread extends LitElement {
   // the keys, its caret at the end of what it holds.
   #afterComment() {
     const snapshot = this.#actor.snapshot;
+    this.#afterBubble(snapshot);
     const draft = snapshot?.matches({ showing: "commenting" }) ? snapshot.context.draft : null;
     if (!draft) {
       this.#focused = null;
       return;
     }
-    this.#positionPopover(draft.id);
+    this.#positionPopover(draft.id, ".popover:not(.bubble)");
     if (this.#focused === draft.id) return;
     this.#focused = draft.id;
     const box = this.renderRoot.querySelector(".popover textarea");
@@ -1123,12 +1201,29 @@ class ChatThread extends LitElement {
     box.style.setProperty("--h", `${box.scrollHeight}px`);
   }
 
+  // A highlight's bubble is placed under it too, and takes the keys when it opens, so
+  // Escape closes it and Enter removes.
+  #bubbleFor = null;
+  #afterBubble(snapshot) {
+    const chosen = snapshot?.matches("showing") ? snapshot.context.chosen : null;
+    if (!chosen) {
+      this.#bubbleFor = null;
+      return;
+    }
+    this.#positionPopover(chosen, ".bubble");
+    // Remove and Undo replace each other, so the keys follow to the new button.
+    const shown = `${chosen}:${snapshot.context.unhighlighting.has(chosen)}`;
+    if (this.#bubbleFor === shown) return;
+    this.#bubbleFor = shown;
+    this.renderRoot.querySelector(".bubble button")?.focus({ preventScroll: true });
+  }
+
   // Under the passage's last line, aligned with that line's start, clamped inside the
   // answer; placed with custom properties so no length is a literal style (7.4).
-  #positionPopover(id) {
-    const popover = this.renderRoot.querySelector(".popover");
-    const turn = this.renderRoot.querySelector(".turn.assistant.last");
-    const marked = this.renderRoot.querySelectorAll(`.markable mark[data-id="${id}"]`);
+  #positionPopover(id, selector) {
+    const marked = this.renderRoot.querySelectorAll(`[data-answer] mark[data-id="${id}"]`);
+    const turn = marked[0]?.closest(".turn.assistant");
+    const popover = turn?.querySelector(selector);
     if (!popover || !turn || !marked.length) return;
     const last = marked[marked.length - 1];
     const rects = last.getClientRects();

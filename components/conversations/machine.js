@@ -232,6 +232,8 @@ const callTargets = (turns) => {
 // Unsent comments are tracked apart from unsent turns: they are not a finished turn, so
 // they do not make the chat pending, but a reload must still not replace them.
 const hasUnsentMarks = (context, id) => context.unsentMarks.has(id);
+// The highlights on earlier answers the same way: not a turn, never pending, never news.
+const hasUnsentHighlights = (context, id) => context.unsentHighlights.has(id);
 
 const hasUnsent = (context, id) => {
   const chat = context.chats.get(id);
@@ -256,6 +258,7 @@ const changedPayload = (context, chat) => {
     position: positionOf(chat),
   };
   if (chat.marks) payload.marks = chat.marks;
+  if (chat.highlights && chat.highlights.length) payload.highlights = chat.highlights;
   return payload;
 };
 
@@ -271,7 +274,7 @@ const heading = (chat) => {
   return h;
 };
 
-const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0, marks: null });
+const emptyChat = (id) => ({ id, title: "", about: [], start: "", turns: [], updatedAt: 0, marks: null, highlights: null });
 
 // The one answer the user may comment on: the chat's last turn when it is a finished
 // answer with text and no lookups. Only this one, so everything sent before the next
@@ -598,7 +601,7 @@ const findTurn = (context, turnId) => {
 
 const chatsWithUnsent = (context) => {
   const ids = new Set();
-  for (const chat of context.chats.values()) if (chat.turns.some((t) => context.unsent.has(t.id)) || hasUnsentMarks(context, chat.id)) ids.add(chat.id);
+  for (const chat of context.chats.values()) if (chat.turns.some((t) => context.unsent.has(t.id)) || hasUnsentMarks(context, chat.id) || hasUnsentHighlights(context, chat.id)) ids.add(chat.id);
   for (const id of context.unsentPosition) ids.add(id);
   return [...ids];
 };
@@ -624,22 +627,28 @@ const fireSave = (context, self, chatId) => {
   const chat = context.chats.get(chatId);
   const turns = chat ? chat.turns.filter((t) => context.unsent.has(t.id)) : [];
   const sendMarks = Boolean(chat) && hasUnsentMarks(context, chatId) && !context.marksInFlight.has(chatId);
+  const sendHighlights = Boolean(chat) && hasUnsentHighlights(context, chatId) && !context.highlightsInFlight.has(chatId);
   // A save that changes the chat bumps its time on the server, so its place is written
   // down first (settle).
   if (chat && (turns.length || sendMarks)) settle(context, chat);
   const sendPosition = context.unsentPosition.has(chatId) && !context.positionInFlight.has(chatId);
-  if (!turns.length && !sendMarks && !sendPosition) return;
+  if (!turns.length && !sendMarks && !sendHighlights && !sendPosition) return;
   const body = chat && (turns.length || sendMarks) ? { title: chat.title, about: chat.about, start: chat.start, turns } : {};
   const marks = sendMarks ? chat.marks ?? null : undefined;
   if (sendMarks) {
     body.marks = chat.marks ?? null;
     context.marksInFlight.add(chatId);
   }
+  const highlights = sendHighlights ? chat.highlights ?? null : undefined;
+  if (sendHighlights) {
+    body.highlights = chat.highlights ?? null;
+    context.highlightsInFlight.add(chatId);
+  }
   const position = sendPosition ? context.headings.find((h) => h.id === chatId)?.position ?? chat?.position : undefined;
   if (sendPosition && isPosition(position)) {
     body.position = position;
     context.positionInFlight.add(chatId);
-  } else if (!turns.length && !sendMarks) {
+  } else if (!turns.length && !sendMarks && !sendHighlights) {
     context.unsentPosition.delete(chatId);
     return;
   }
@@ -648,9 +657,9 @@ const fireSave = (context, self, chatId) => {
   context
     .saveChat(chatId, body)
     .then((r) =>
-      self.send({ type: "_saved", chatId, turnIds, sendMarks, marks, sendPosition: sentPosition, position, missing: Boolean(r && r.missing), updatedAt: r ? r.updatedAt : undefined }),
+      self.send({ type: "_saved", chatId, turnIds, sendMarks, marks, sendHighlights, highlights, sendPosition: sentPosition, position, missing: Boolean(r && r.missing), updatedAt: r ? r.updatedAt : undefined }),
     )
-    .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks, sendPosition: sentPosition }));
+    .catch(() => self.send({ type: "_saveFailed", chatId, sendMarks, sendHighlights, sendPosition: sentPosition }));
 };
 
 // A title and the links are last write wins (5), so one rename is in flight per chat; a
@@ -762,7 +771,7 @@ const onSubmit = (context, event, enqueue, self) => {
     // A new chat goes first (5); a listed chat not yet read keeps its place. The place
     // rides the first save.
     const listed = context.headings.find((h) => h.id === conversationId);
-    chat = { id: conversationId, title: firstLine(turn.text), about: about ?? [], start: start ?? "", turns: [], updatedAt: context.now(), marks: null, position: listed ? positionOf(listed) : firstPosition(context) };
+    chat = { id: conversationId, title: firstLine(turn.text), about: about ?? [], start: start ?? "", turns: [], updatedAt: context.now(), marks: null, highlights: null, position: listed ? positionOf(listed) : firstPosition(context) };
     if (!listed || !isPosition(listed.position)) context.unsentPosition.add(conversationId);
     context.chats.set(conversationId, chat);
   }
@@ -1001,10 +1010,24 @@ const onMarksEdited = (context, event, enqueue, self) => {
   enqueue.emit(changedPayload(context, chat));
 };
 
+// The user's highlights on earlier answers (highlights.edited carries the chat's whole
+// list). Only finished answers with text keep one; the answer being written has none yet.
+const onHighlightsEdited = (context, event, enqueue, self) => {
+  const chat = context.chats.get(event.conversationId);
+  if (!chat) return;
+  const answers = new Set(chat.turns.filter((t) => t.role === "assistant" && t.status === "done" && t.text).map((t) => t.id));
+  const list = event.highlights.filter((h) => answers.has(h.answerId));
+  chat.highlights = list.length ? list : null;
+  context.unsentHighlights.add(chat.id);
+  enqueue(() => fireSave(context, self, chat.id));
+  enqueue.emit(changedPayload(context, chat));
+};
+
 const onDiscard = (context, event, enqueue) => {
   const { id } = event;
   const chat = context.chats.get(id);
   context.unsentMarks.delete(id);
+  context.unsentHighlights.delete(id);
   context.unsentPosition.delete(id);
   if (chat) for (const turn of chat.turns) context.unsent.delete(turn.id);
   context.chats.delete(id);
@@ -1100,7 +1123,7 @@ const answerRead = (context, event, enqueue, self) => {
 const onLoaded = (context, event, enqueue, self) => {
   context.loading.delete(event.id);
   const c = event.conversation;
-  const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0, marks: c.marks ?? null };
+  const chat = { id: c.id, title: c.title, about: c.about ?? [], start: c.start ?? "", turns: c.turns ?? [], updatedAt: c.updatedAt ?? 0, marks: c.marks ?? null, highlights: c.highlights ?? null };
   // The place this device holds wins over the server's while a move is unsent (5).
   const held = context.headings.find((h) => h.id === event.id)?.position;
   const position = context.unsentPosition.has(event.id) || !isPosition(c.position) ? held : c.position;
@@ -1178,6 +1201,11 @@ const onSaved = (context, event, enqueue, self) => {
     if (!chat || (chat.marks ?? null) === event.marks) context.unsentMarks.delete(event.chatId);
     else enqueue(() => fireSave(context, self, chat.id));
   }
+  if (event.sendHighlights) {
+    context.highlightsInFlight.delete(event.chatId);
+    if (!chat || (chat.highlights ?? null) === event.highlights) context.unsentHighlights.delete(event.chatId);
+    else enqueue(() => fireSave(context, self, chat.id));
+  }
   if (!chat) return;
   if (event.updatedAt != null) chat.updatedAt = event.updatedAt;
   upsertHeading(context, chat);
@@ -1214,7 +1242,7 @@ const onFocus = (context, enqueue, self) => {
   // server's copy is missing them, so replacing memory with it would drop turns that can
   // never be sent (5: nothing that was completed is lost). A round in flight (running) is
   // not reloaded either, so it is not replaced under itself. Retry the save instead.
-  if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && !hasUnsentMarks(context, context.openId) && context.headings.some((h) => h.id === context.openId))
+  if (context.openId != null && !context.running && !hasUnsent(context, context.openId) && !hasUnsentMarks(context, context.openId) && !hasUnsentHighlights(context, context.openId) && context.headings.some((h) => h.id === context.openId))
     enqueue(() => fireLoad(context, self, context.openId));
   for (const chatId of chatsWithUnsent(context)) enqueue(() => fireSave(context, self, chatId));
   for (const id of new Set([...context.renaming.keys(), ...context.relinking.keys()])) enqueue(() => fireRename(context, self, id));
@@ -1234,7 +1262,7 @@ const onOnline = (context, enqueue, self) => {
 // views ask for (4.3), so it announces nothing.
 const applyBoot = (context, out, enqueue, self) => {
   const before = context.openId;
-  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), relinking: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
+  const base = { chats: new Map(), unsent: new Set(), unsentMarks: new Set(), marksInFlight: new Set(), unsentHighlights: new Set(), highlightsInFlight: new Set(), unsentPosition: new Set(), positionInFlight: new Set(), renaming: new Map(), relinking: new Map(), titleInFlight: new Set(), retitle: new Map(), reading: new Map(), loading: new Set(), running: null };
   if (out.userId == null) {
     Object.assign(context, base, { userId: null, signedIn: false, unavailable: false, headings: [], openId: null, lastSubject: null, tools: {}, approval: "auto" });
   } else if (out.failed) {
@@ -1309,7 +1337,9 @@ export const machine = setup({
       "its first message; a new chat with none follows the subject like an unpinned one. " +
       "The user's comments on the last finished answer are kept with the chat until the next " +
       "message, which carries them; the model gets them as quotes before the message, and the " +
-      "answer itself is never changed, so the provider's cache holds. Each chat has a place " +
+      "answer itself is never changed, so the provider's cache holds. The user's highlights " +
+      "on earlier answers are kept with the chat on the account, last write wins, and never " +
+      "go to the model; like a rename they are not news, so they never move the chat. Each chat has a place " +
       "in the list, kept on the account and the same on every device: a new chat goes first, " +
       "a new message never moves a chat, and a move from the list puts it between its new " +
       "neighbours. A place is last write wins and changes nothing else. A chat from before " +
@@ -1353,6 +1383,8 @@ export const machine = setup({
     unsent: new Set(), // finished turn ids not yet confirmed by the server; pending is derived from this
     unsentMarks: new Set(), // chat ids whose comments the server does not have yet
     marksInFlight: new Set(), // chat ids with a save carrying comments on its way
+    unsentHighlights: new Set(), // chat ids whose highlights the server does not have yet
+    highlightsInFlight: new Set(), // chat ids with a save carrying highlights on its way
     unsentPosition: new Set(), // chat ids whose place the server does not have yet (5)
     positionInFlight: new Set(), // chat ids with a save carrying a place on its way
     renaming: new Map(), // chat id -> a title the server does not have yet (5)
@@ -1407,6 +1439,7 @@ export const machine = setup({
         "removal.settled": { guard: ({ event }) => event.kind === "conversation", actions: queue },
         "tools.edited": { actions: queue },
         "marks.edited": { actions: queue },
+        "highlights.edited": { actions: queue },
         "generation.changed": { guard: ({ event }) => event.result.generator === "chat-title", actions: queue },
         "conversation.renamed": { actions: queue },
         "conversation.relinked": { actions: queue },
@@ -1438,6 +1471,7 @@ export const machine = setup({
         },
         "tools.edited": { actions: enqueueActions(({ context, event, enqueue }) => onToolsEdited(context, event, enqueue)) },
         "marks.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onMarksEdited(context, event, enqueue, self)) },
+        "highlights.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onHighlightsEdited(context, event, enqueue, self)) },
         "subject.changed": { actions: enqueueActions(({ context, event, enqueue, self }) => onSubjectChanged(context, event, enqueue, self)) },
         // A chat's title (12): written by the chat-title generator, or by the user in the list.
         "generation.changed": {
@@ -1460,6 +1494,7 @@ export const machine = setup({
         _saveFailed: {
           actions: ({ context, event }) => {
             if (event.sendMarks) context.marksInFlight.delete(event.chatId);
+            if (event.sendHighlights) context.highlightsInFlight.delete(event.chatId);
             if (event.sendPosition) context.positionInFlight.delete(event.chatId);
           },
         },

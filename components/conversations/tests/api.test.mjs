@@ -151,6 +151,21 @@ test("the unsent comments are last write wins, kept until cleared with null", as
   assert.equal((await (await get(`/${CHAT}`, cookie)).json()).marks, undefined, "null clears them");
 });
 
+test("highlights are last write wins, saved alone or with the chat, and never move the chat's time", async () => {
+  const cookie = cookieFor(freshUser());
+  const highlights = [{ id: U("H1"), answerId: U("A2"), start: 0, end: 5, quote: "first" }];
+  const first = await (await put(CHAT, chat({ turns: [turn(U("A1"), "user", "q"), turn(U("A2"), "assistant", "first answer", { status: "done" })] }), cookie)).json();
+  assert.equal((await (await get(`/${CHAT}`, cookie)).json()).highlights, undefined, "absent while there are none");
+  const alone = await (await put(CHAT, { highlights }, cookie)).json();
+  assert.equal(alone.updatedAt, first.updatedAt, "a highlight is not news");
+  assert.deepEqual((await (await get(`/${CHAT}`, cookie)).json()).highlights, highlights, "read back as saved");
+  await put(CHAT, chat({ turns: [] }), cookie);
+  assert.deepEqual((await (await get(`/${CHAT}`, cookie)).json()).highlights, highlights, "kept by a write without the key");
+  await put(CHAT, chat({ turns: [], highlights: [] }), cookie);
+  assert.equal((await (await get(`/${CHAT}`, cookie)).json()).highlights, undefined, "an empty list clears them");
+  assert.deepEqual(await (await put(U("C9"), { highlights }, cookie)).json(), { missing: true }, "nothing to highlight in a chat the server does not have");
+});
+
 test("a place is last write wins: saved alone or with a turn, never moves the chat's time, and listed", async () => {
   const cookie = cookieFor(freshUser());
   const first = await (await put(CHAT, chat(), cookie)).json();
