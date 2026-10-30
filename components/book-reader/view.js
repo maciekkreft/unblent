@@ -1303,6 +1303,8 @@ class BookReader extends LitElement {
   // highlight's quote, y i s and y i p the sentence or paragraph; #yInner once i came.
   #yAt = 0;
   #yInner = false;
+  // d and a second d within a second, as gg: d d removes the highlight at the cursor.
+  #dAt = 0;
   #vimKey(e) {
     if (this.#actor.snapshot?.context.vimKeys !== true || e.metaKey || e.altKey) return false;
     const target = e.composedPath()[0];
@@ -1319,6 +1321,8 @@ class BookReader extends LitElement {
     } else {
       const second = key === "g" && Date.now() - this.#gAt < 1000;
       this.#gAt = key === "g" && !second ? Date.now() : 0;
+      const dHeld = !this.#visual && Date.now() - this.#dAt < 1000;
+      this.#dAt = 0;
       if (this.#cursor == null) this.#placeCursor();
       const yHeld = !this.#visual && Date.now() - this.#yAt < 1000;
       const inner = this.#yInner;
@@ -1344,6 +1348,12 @@ class BookReader extends LitElement {
       else if (key === "y") {
         this.#yAt = Date.now();
         this.#yankLink();
+      } else if (key === "d" && !this.#visual) {
+        if (dHeld) this.#removeAtCursor();
+        else this.#dAt = Date.now();
+      } else if (key === "u") {
+        // With nothing counting down here, u is the global Undo's (12), so it passes on.
+        if (!this.#undoKey()) return false;
       }
       else if (key === "Enter" && this.#visual) this.#endVisual(true);
       else if (key === "Escape" && this.#visual) this.#endVisual(false);
@@ -1404,6 +1414,25 @@ class BookReader extends LitElement {
     if (!h?.quote?.exact) return;
     this.#openBubble(h.id);
     this.#copyText(h.quote.exact, "text");
+  }
+
+  // d d: Remove on the highlight holding the cursor, its bubble opened so Removed · Undo
+  // is seen. With no highlight there, d d does nothing.
+  #removeAtCursor() {
+    const h = this.#highlightAtCursor();
+    if (!h) return;
+    this.#openBubble(h.id);
+    this.#removeActive();
+  }
+
+  // u: brings back the open bubble's highlight while it counts down, or else the one
+  // holding the cursor. False when neither is counting down.
+  #undoKey() {
+    const discarding = this.#actor.snapshot.context.discarding;
+    const id = [this.#active, this.#highlightAtCursor()?.id].find((x) => x != null && discarding.has(x));
+    if (id == null) return false;
+    this.#actor.send({ type: "_undo", id });
+    return true;
   }
 
   // y on a passage marked with v or Ctrl+v copies it and makes no highlight; Enter

@@ -343,6 +343,23 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
+    // d d inside a highlight does Remove, and u brings it back while it counts down.
+    // Browser: focus and keys.
+    test(`d d removes a highlight and u brings it back in ${engine.name}`, async () => {
+      const { page, problems } = await open(true, { highlight: true });
+      await until(async () => (await marks(page)).join(" ") === "Chapter One");
+      // Vim arrives with the settings reply; d d acts only once it has.
+      await until(async () => {
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        return (await bubble(page)).join(" · ") === "Undo";
+      });
+      await page.keyboard.press("u");
+      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Remove");
+      assert.equal((await marks(page)).join(" "), "Chapter One");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+    });
+
     // A click on a source link in a note opens the page holding the passage, in another
     // chapter, and its highlight glows for about a second.
     // Browser: rendering and layout.

@@ -577,7 +577,8 @@ export const machine = setup({
       "Remove; Copy link puts a link to the highlight, its quote's first words as the label, " +
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
       "the cursor inside a highlight opens its bubble and does the same, and y y does Copy, " +
-      "its quote's text. With Vim keys on, y copies instead of highlighting: on a passage " +
+      "its quote's text; d d there does Remove, and u brings the highlight back while its " +
+      "bubble reads Removed · Undo. With Vim keys on, y copies instead of highlighting: on a passage " +
       "marked with v or Ctrl+v it copies the passage and makes no highlight, and y i s and " +
       "y i p copy the sentence or the paragraph holding the cursor; the text goes on the " +
       "clipboard and into the Vim register of any editor, blocks a blank line apart, and " +
@@ -876,8 +877,8 @@ export const machine = setup({
         // _undo cancels it, and only _elapsed makes the removal a fact — note.discarded,
         // which notes tombstones and echoes back as note.deleted, dropping the mark.
         // Nothing is emitted until the window ends, so an undone removal never touched
-        // the note. The mouse is only one producer of _remove; a later Vim keymap sends
-        // the same message.
+        // the note. The bubble's Remove and, with Vim keys, d d send it; the bubble's Undo
+        // and u send _undo.
         _remove: {
           guard: ({ context, event }) =>
             context.highlights.some((h) => h.id === event.id) && !context.discarding.has(event.id),
