@@ -29,11 +29,11 @@ const idsOf = (rows) => rows.map((n) => n.id);
 test("under This chapter the chats linked to no chapter come first, then the open chapter's, and the rest are counted", () => {
   const g = chaptered(context());
   assert.equal(g.unit, "chapter");
-  assert.equal(g.title, "Chapter Two");
   assert.equal(g.all, false);
   assert.deepEqual(idsOf(g.loose), [LOOSE]);
   assert.deepEqual(idsOf(g.here), [TWO, TWO_B]);
   assert.equal(g.more, 1, "Chapter One's chat; the other book's is not about the subject");
+  assert.deepEqual(idsOf(g.rest), [TWO, ONE, TWO_B], "every chapter's, in the user's order");
 });
 
 test("a chapter with no chats yet has an empty group and counts every other chapter's", () => {

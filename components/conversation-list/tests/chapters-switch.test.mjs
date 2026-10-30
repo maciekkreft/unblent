@@ -61,10 +61,10 @@ for (const engine of ENGINES) {
         await until(
           async () =>
             (await reads(page)) ===
-            "This chapter | New chat | Not linked to a chapter | Loose chat | Chapter One | First chapter chat | 1 more in other chapters · Show all",
+            "This chapter | New chat | Loose chat |  | First chapter chat | 1 more in other chapters · Show all",
         );
         await page.locator("conversation-list .show-all").click();
-        const all = "All chapters | New chat | First chapter chat | Second chapter chat | Loose chat";
+        const all = "All chapters | New chat | Loose chat |  | First chapter chat | Second chapter chat";
         await until(async () => (await reads(page)) === all);
         assert.equal(await page.evaluate(() => localStorage.getItem("conversation-list:chapters")), "all");
         assert.deepEqual(problems, []);

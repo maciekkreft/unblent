@@ -57,10 +57,10 @@ for (const engine of ENGINES) {
         await until(
           async () =>
             (await reads(page)) ===
-            "This chapter | New note | Not linked to a chapter | Loose note | Chapter One | First chapter note | 1 more in other chapters · Show all",
+            "This chapter | New note | Loose note |  | First chapter note | 1 more in other chapters · Show all",
         );
         await page.locator("note-list .show-all").click();
-        const all = "All chapters | New note | First chapter note | Second chapter note | Loose note";
+        const all = "All chapters | New note | Loose note |  | First chapter note | Second chapter note";
         await until(async () => (await reads(page)) === all);
         // Kept for the next load; a reload here would cost more than half the budget.
         assert.equal(await page.evaluate(() => localStorage.getItem("note-list:chapters")), "all");

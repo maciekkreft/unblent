@@ -424,15 +424,10 @@ class ConversationList extends LitElement {
       font-weight: var(--weight-semibold);
       background: var(--color-surface-active);
     }
-    /* A group's heading under This chapter: small and muted, so the rows lead. */
-    .group {
-      padding: var(--space-sm) var(--space-sm) var(--space-2xs);
-      font-size: var(--text-caption);
-      font-weight: var(--weight-semibold);
-      color: var(--color-body-mid);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    /* The line between the items linked to no chapter and the rest. */
+    .line {
+      margin: var(--space-xs) var(--space-sm);
+      border-top: var(--border-width) solid var(--color-border);
     }
     .none,
     .more {
@@ -480,10 +475,11 @@ class ConversationList extends LitElement {
   #swallowClick = false;
 
   #rows(snapshot) {
-    // Under This chapter only the chats linked to no chapter and the open chapter's show,
-    // in that order (render draws the group headings between them).
+    // While the subject has an open chapter the chats linked to no chapter come first, then
+    // the open chapter's (This chapter) or every chapter's (All chapters); render draws a
+    // line between them.
     const groups = chaptered(snapshot.context);
-    const chats = groups && !groups.all ? [...groups.loose, ...groups.here] : shown(snapshot.context);
+    const chats = groups ? [...groups.loose, ...(groups.all ? groups.rest : groups.here)] : shown(snapshot.context);
     const { draft } = snapshot.context;
     // The open chat, when it is not about the subject (12), leads the list set apart, so
     // its highlighted row is never missing; then the "New chat" row, the fresh chat to
@@ -758,7 +754,7 @@ class ConversationList extends LitElement {
         : html`
             ${groups ? this.#switch(groups) : nothing}
             <ul class="list" role="listbox" aria-label="Chats" @keydown=${(e) => this.#keydown(e, rows)}>
-              ${groups && !groups.all ? this.#grouped(rows, groups, row) : rows.map(row)}
+              ${groups ? this.#grouped(rows, groups, row) : rows.map(row)}
             </ul>
           `}
     `;
@@ -776,24 +772,24 @@ class ConversationList extends LitElement {
     `;
   }
 
-  // Under This chapter: the fixed rows, then the chats linked to no chapter under their
-  // heading (only when there are any), then the open chapter's under its title, or a line
-  // saying it has none, then how many chats the other chapters hold, with Show all. The
-  // headings and lines are not options, so the keyboard moves over the rows alone.
-  #grouped(rows, { unit, title, loose, here, more }, row) {
+  // While the subject has an open chapter: the fixed rows, then the chats linked to no
+  // chapter, then a line and the rest. Under This chapter the rest is the open chapter's
+  // chats, or a text saying it has none, then how many chats the other chapters hold, with
+  // Show all; under All chapters it is every chapter's. The line shows only with something on
+  // both sides. The line and the texts are not options, so the keyboard moves over the rows alone.
+  #grouped(rows, { unit, all, loose, here, rest, more }, row) {
     const day = unit === "day";
-    const lead = rows.slice(0, rows.length - loose.length - here.length);
+    const linked = all ? rest : here;
+    const lead = rows.slice(0, rows.length - loose.length - linked.length);
     return html`
-      ${lead.map(row)}
-      ${loose.length
-        ? html`<li class="group" role="presentation">Not linked to a ${unit}</li>
-            ${rows.slice(lead.length, lead.length + loose.length).map(row)}`
-        : nothing}
-      <li class="group" role="presentation">${title}</li>
-      ${here.length
+      ${rows.slice(0, lead.length + loose.length).map(row)}
+      ${loose.length && (linked.length || !all) ? html`<li class="line" role="presentation"></li>` : nothing}
+      ${linked.length
         ? rows.slice(lead.length + loose.length).map(row)
-        : html`<li class="none" role="presentation">No chats ${day ? "on this day" : "in this chapter"} yet.</li>`}
-      ${more
+        : all
+          ? nothing
+          : html`<li class="none" role="presentation">No chats ${day ? "on this day" : "in this chapter"} yet.</li>`}
+      ${more && !all
         ? html`<li class="more" role="presentation">
             ${more} more ${day ? "on other days" : "in other chapters"} ·
             <button type="button" class="show-all" @click=${() => this.#actor.send({ type: "_chapters", all: true })}>Show all</button>

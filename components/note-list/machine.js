@@ -102,10 +102,11 @@ const linkTo = (note, subject) =>
 
 // The chapter switch and its groups (plan step 3): only while following a subject that has
 // an open chapter; null otherwise, and then the list is `shown` with no switch. `all` is
-// the user's choice, This chapter by default. Under This chapter the notes linked to no
-// chapter come first, so they are easy to link, then the open chapter's; `more` counts the
-// notes about the subject that stay out of sight in other chapters. The open note, if it is
-// one of those, is listed apart instead (`apart`), and not counted.
+// the user's choice, This chapter by default. Under either choice the notes linked to no
+// chapter come first, because they belong to every chapter, then the open chapter's
+// (`here`) or every chapter's (`rest`); `more` counts the notes about the subject that stay
+// out of sight in other chapters. The open note, if it is one of those, is listed apart
+// instead (`apart`), and not counted.
 export const chaptered = (context) => {
   const { following, subject, allChapters, open } = context;
   if (!following || !subject?.chapter) return null;
@@ -113,8 +114,9 @@ export const chaptered = (context) => {
   const chapter = (n) => linkTo(n, subject)?.chapter ?? null;
   const loose = notes.filter((n) => chapter(n) == null);
   const here = notes.filter((n) => chapter(n) === subject.chapter);
+  const rest = notes.filter((n) => chapter(n) != null);
   const more = notes.filter((n) => chapter(n) != null && chapter(n) !== subject.chapter && n.id !== open).length;
-  return { unit: isDay(subject.chapter) ? "day" : "chapter", title: subject.chapterTitle, all: Boolean(allChapters), loose, here, more };
+  return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest, more };
 };
 
 // The note the editor has open, when it is not among the shown notes (12): a pinned

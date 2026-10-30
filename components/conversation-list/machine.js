@@ -71,10 +71,11 @@ const linkTo = (chat, subject) =>
 
 // The chapter switch and its groups, as note-list has them: only while following a
 // subject that has an open chapter; null otherwise, and then the list is `shown` with no
-// switch. `all` is the user's choice, This chapter by default. Under This chapter the chats
-// linked to no chapter come first, so they are easy to link, then the open chapter's;
-// `more` counts the chats about the subject that stay out of sight in other chapters. The
-// open chat, if it is one of those, is listed apart instead (`apart`), and not counted.
+// switch. `all` is the user's choice, This chapter by default. Under either choice the
+// chats linked to no chapter come first, because they belong to every chapter, then the
+// open chapter's (`here`) or every chapter's (`rest`); `more` counts the chats about the
+// subject that stay out of sight in other chapters. The open chat, if it is one of those,
+// is listed apart instead (`apart`), and not counted.
 export const chaptered = (context) => {
   const { following, subject, allChapters, open } = context;
   if (!following || !subject?.chapter) return null;
@@ -82,8 +83,9 @@ export const chaptered = (context) => {
   const chapter = (c) => linkTo(c, subject)?.chapter ?? null;
   const loose = chats.filter((c) => chapter(c) == null);
   const here = chats.filter((c) => chapter(c) === subject.chapter);
+  const rest = chats.filter((c) => chapter(c) != null);
   const more = chats.filter((c) => chapter(c) != null && chapter(c) !== subject.chapter && c.id !== open).length;
-  return { unit: isDay(subject.chapter) ? "day" : "chapter", title: subject.chapterTitle, all: Boolean(allChapters), loose, here, more };
+  return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest, more };
 };
 
 // The open chat, when it is not among the shown chats (12): a pinned chat after the stage
