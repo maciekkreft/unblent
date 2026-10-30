@@ -1,7 +1,7 @@
 # Privacy
 
-This note covers Unblent for Mac. The hosted web app at app.unblent.com is a separate
-service and is not described here.
+This note covers Unblent for Mac and, in the last section, the website unblent.com. The
+hosted web app at app.unblent.com is a separate service and is not described here.
 
 ## Where your data lives
 
@@ -39,3 +39,27 @@ Nothing else leaves your Mac. There is no analytics, no crash reporting and no
 advertising. The font, the icons and every library are inside the app, and
 *Meditations*, the book on the shelf at first start, comes with the app; none of them
 is downloaded.
+
+## This website
+
+The website unblent.com is separate from the app, and it does keep a log of its visits.
+For every page or file it serves, the site's own server writes down the time, the
+address asked for (including a `?ref=` that says which link you came from), your IP
+address, and the headers your browser sent: its name and version, your system, your
+languages and the page you came from. The site is served through Cloudflare, which adds
+your country and city as it estimates them from your IP address, and which also sees
+every request.
+
+A small script on the page also reports, once, when you leave it: how long the page was
+open, how far you scrolled, which parts you saw, which links you clicked, your screen
+and window size, your language, time zone and light or dark setting, and how fast the
+page loaded. It sets no cookie and no identifier, so one visit cannot be linked to
+another.
+
+This is used to count visits, to see which links bring people and to tell people from
+robots. It stays in a file on the site's own server, is shared with no one and is not
+sent to any analytics or advertising service.
+
+The email form for news of the AI features sends your address to Kit (kit.com), which
+sends the mails; Kit's privacy statement applies to it. Nothing else on the page loads
+from another site.
