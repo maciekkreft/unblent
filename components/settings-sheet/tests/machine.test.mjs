@@ -320,10 +320,10 @@ const OLLAMA_PICTURE = {
     { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
     { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
   ],
-  model: "lfm3:latest",
+  model: "gemma4:e2b-mlx",
   models: [
     { id: "gemma3:latest", label: "gemma3" },
-    { id: "lfm3:latest", label: "lfm3" },
+    { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" },
   ],
   effort: "on",
   efforts: ["on", "off"],
@@ -331,13 +331,13 @@ const OLLAMA_PICTURE = {
   ollama: { address: "http://localhost:11434", running: true },
 };
 
-test("the Ollama rows say running, not running, or that lfm3 is missing (3.4)", () => {
+test("the Ollama rows say running, not running, or that the default model is missing (3.4)", () => {
   assert.equal(ollamaView(LLM_PICTURE), null, "no ollama in the picture, no rows");
-  assert.deepEqual(ollamaView(OLLAMA_PICTURE), { address: "localhost:11434", running: true, lfm3Missing: false });
+  assert.deepEqual(ollamaView(OLLAMA_PICTURE), { address: "localhost:11434", running: true, defaultMissing: false });
   const off = { ...OLLAMA_PICTURE, models: [], model: "", ollama: { address: "http://localhost:11434", running: false } };
   assert.equal(ollamaView(off).running, false);
-  assert.equal(ollamaView(off).lfm3Missing, false, "not running says only that");
-  assert.equal(ollamaView({ ...OLLAMA_PICTURE, models: [{ id: "gemma3:latest", label: "gemma3" }] }).lfm3Missing, true);
+  assert.equal(ollamaView(off).defaultMissing, false, "not running says only that");
+  assert.equal(ollamaView({ ...OLLAMA_PICTURE, models: [{ id: "gemma3:latest", label: "gemma3" }] }).defaultMissing, true);
 });
 
 test("Change address saves the typed address with its scheme, and Try again re-sends the current one", async () => {

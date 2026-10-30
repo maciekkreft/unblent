@@ -95,7 +95,7 @@ Chats need a language model. Unblent uses [Ollama](https://ollama.com), which ru
 model on your own Mac, free and offline.
 
 1. Install Ollama from [ollama.com](https://ollama.com) and open it.
-2. In Terminal, run `ollama pull lfm3`.
+2. In Terminal, run `ollama pull gemma4:e2b-mlx`.
 3. In Unblent, open the Chats panel and ask a question.
 
 Settings › Your account shows whether Ollama is running and which model answers. Any

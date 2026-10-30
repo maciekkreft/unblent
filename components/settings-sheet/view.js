@@ -24,7 +24,7 @@ const EFFORT_LABELS = {
 };
 // Ollama runs on the user's own Mac (3.4), so its name says where the answers come from.
 const PROVIDER_LABELS = { ollama: "Ollama (on this Mac)" };
-const PULL = "ollama pull lfm3";
+const PULL = "ollama pull gemma4:e2b-mlx";
 // How long Copy reads Copied, so the click visibly did something (Don Norman: feedback).
 const COPIED_MS = 2000;
 const FEEDBACK_URL = "https://github.com/maciekkreft/unblent/issues/new/choose";
@@ -805,7 +805,7 @@ class SettingsSheet extends LitElement {
           : ollama
           ? nothing
           : html`<div class="field"><span>Model</span><span class="help">Add your API key to choose a model.</span></div>`}
-        ${ollama?.lfm3Missing ? this.#pullHint() : nothing}
+        ${ollama?.defaultMissing ? this.#pullHint() : nothing}
         <label class="field">
           <span>${ollama ? "Thinking" : "Thinking effort"}</span>
           <select @change=${(e) => this.#actor.send({ type: "_setEffort", effort: e.target.value })}>
@@ -897,7 +897,7 @@ class SettingsSheet extends LitElement {
       <div class="field">
         <span></span>
         <div class="ollama pull">
-          <span class="status">lfm3 isn't downloaded. In Terminal: <code>${PULL}</code></span>
+          <span class="status">gemma4:e2b-mlx isn't downloaded. In Terminal: <code>${PULL}</code></span>
           <button class="act" @click=${copy}>${this.copied ? "Copied" : "Copy"}</button>
           <button class="act" @click=${() => this.#actor.send({ type: "_retryOllama" })}>Try again</button>
         </div>

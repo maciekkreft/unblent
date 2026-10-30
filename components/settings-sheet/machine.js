@@ -200,14 +200,14 @@ export const valueChecksShown = ({ valueChecks, hidden, llm }) =>
 // cannot be checked against the values themselves.
 // What the Ollama rows say (3.4, local edition only): null when the picture has no
 // `ollama`, else whether it answered and whether the default model is downloaded, which
-// the server picks by the id prefix `lfm3`.
+// the server picks by the id prefix `gemma4:e2b-mlx`.
 export const ollamaView = (llm) => {
   if (!llm?.ollama) return null;
   const { address, running } = llm.ollama;
   return {
     address: address.replace(/^https?:\/\//, "").replace(/\/$/, ""),
     running,
-    lfm3Missing: running && !llm.models.some((m) => m.id.startsWith("lfm3")),
+    defaultMissing: running && !llm.models.some((m) => m.id.startsWith("gemma4:e2b-mlx")),
   };
 };
 
@@ -246,8 +246,8 @@ export const machine = setup({
       "Ollama (on this Mac) has no key box: a row says Running at its address, or that Ollama isn't " +
       "running with a link to ollama.com and Try again, and Change address opens a box where Enter or " +
       "leaving saves, Escape keeps the old one and an empty address brings back the default. The Model " +
-      "list shows the models downloaded in Ollama; when lfm3 is not among them a line gives the " +
-      "Terminal command ollama pull lfm3 with Copy and Try again. Thinking is On or Off, and the " +
+      "list shows the models downloaded in Ollama; when gemma4:e2b-mlx is not among them a line gives the " +
+      "Terminal command ollama pull gemma4:e2b-mlx with Copy and Try again. Thinking is On or Off, and the " +
       "cache lifetime is not shown for Ollama. The Evaluating group is shown only where `llm` " +
       "offers Jev, so the Mac app never shows it. Your account also holds the " +
       "choice point checks, which `choice-point-checks` keeps, in a fold that starts closed: " +

@@ -30,7 +30,7 @@ const freePort = () =>
     });
   });
 
-const chunk = (delta, extra = {}) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "lfm3:latest", choices: [{ index: 0, delta, finish_reason: null, ...extra }] })}\n\n`;
+const chunk = (delta, extra = {}) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "gemma4:e2b-mlx", choices: [{ index: 0, delta, finish_reason: null, ...extra }] })}\n\n`;
 
 // The first round thinks, writes, and asks for one call whose arguments arrive in two
 // fragments; the round that brings the result back answers in text.
@@ -47,7 +47,7 @@ const answer = (body) => {
     out.push(chunk({ tool_calls: [{ index: 0, function: { arguments: '"b1"}' } }] }));
     out.push(chunk({}, { finish_reason: "tool_calls" }));
   }
-  out.push(`data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "lfm3:latest", choices: [], usage: { prompt_tokens: 120, completion_tokens: 9, total_tokens: 129 } })}\n\n`);
+  out.push(`data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "gemma4:e2b-mlx", choices: [], usage: { prompt_tokens: 120, completion_tokens: 9, total_tokens: 129 } })}\n\n`);
   out.push("data: [DONE]\n\n");
   return out.join("");
 };
@@ -56,7 +56,7 @@ const fakeOllama = () =>
   createHttp(async (req, res) => {
     if (req.method === "GET" && req.url === "/v1/models") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ object: "list", data: [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "lfm3:latest", object: "model", created: 1, owned_by: "library" }] }));
+      res.end(JSON.stringify({ object: "list", data: [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "gemma4:e2b-mlx", object: "model", created: 1, owned_by: "library" }] }));
       return;
     }
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
@@ -107,7 +107,7 @@ after(async () => {
   rmSync(data, { recursive: true, force: true });
 });
 
-test("the Mac app offers Ollama first, at its default address, with no Jev; lfm3 is the default model once Ollama answers", async () => {
+test("the Mac app offers Ollama first, at its default address, with no Jev; gemma4:e2b-mlx is the default model once Ollama answers", async () => {
   const fresh = await read();
   assert.equal(fresh.provider, "ollama");
   assert.equal(fresh.providers[0].id, "ollama");
@@ -117,8 +117,8 @@ test("the Mac app offers Ollama first, at its default address, with no Jev; lfm3
   assert.equal("jev" in fresh, false);
   const picture = await (await edit({ address: `${ollama}/` })).json();
   assert.deepEqual(picture.ollama, { address: ollama, running: true }, "kept without the trailing slash");
-  assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "lfm3:latest", label: "lfm3" }]);
-  assert.equal(picture.model, "lfm3:latest");
+  assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" }]);
+  assert.equal(picture.model, "gemma4:e2b-mlx");
   assert.equal((await edit({ address: "ftp://nowhere" })).status, 400, "only an http or https address");
   assert.equal((await read()).ollama.address, ollama);
 });
@@ -145,7 +145,7 @@ test("an answer streams thinking, text and one joined call, and the result goes 
     { type: "call", id: "call_1", target: "books", name: "chapter", payload: { book: "b1" } },
   ]);
   const end = first.at(-1);
-  assert.deepEqual([end.status, end.provider, end.model], ["done", "ollama", "lfm3:latest"]);
+  assert.deepEqual([end.status, end.provider, end.model], ["done", "ollama", "gemma4:e2b-mlx"]);
   assert.deepEqual(end.usage, { input_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 9 });
   assert.equal(received[0].reasoning_effort, "medium", "thinking on");
   assert.deepEqual(received[0].tools, [{ type: "function", function: { name: "books__chapter", description: "Read a chapter.", parameters: TOOL.payload } }]);
