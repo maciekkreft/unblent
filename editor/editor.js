@@ -36,11 +36,34 @@ export function deleteAt(text, pos) {
   return { from: pos, to, insert: "", cursor: pos };
 }
 
-// A gap is a blank line the cursor is not on. The blank line the cursor is on is a
-// paragraph being started, so it is drawn as a full line to type into; once the cursor
-// leaves it empty it is a gap again. A run of blank lines is a run of gaps, so extra
-// blank lines show as extra space rather than vanish.
-export const isGap = (line, cursorLine) => line.text === "" && line.number !== cursorLine;
+// A gap is the blank line right after a paragraph, when the cursor is not on it. The
+// blank line the cursor is on is a paragraph being started, so it is drawn as a full line
+// to type into; once the cursor leaves it empty it is a gap again. A blank line under
+// another blank line, or at the very top, is no gap: it is drawn as an empty line and the
+// cursor stops on it, so an extra blank line is seen and can be removed like any line.
+// The blank line the cursor is on counts as text for the line under it (`aboveBlank`
+// false), so a paragraph opened between two others shows one line, not two.
+export const isGap = (line, cursorLine, aboveBlank) => line.text === "" && !aboveBlank && line.number > 1 && line.number !== cursorLine;
+
+// Vim's J: the line holding pos joined with the next one, the next one's leading spaces
+// dropped and one space between, none when either side is empty or the line already ends
+// in a space. With `overGap`, a gap under the line goes with every blank line after it, so
+// J joins the next paragraph, the way Backspace at its start does. Null on the last line.
+export function joinAt(text, pos, overGap = false) {
+  const end = text.indexOf("\n", pos);
+  if (end < 0) return null;
+  let from = end + 1;
+  if (overGap && end > 0 && text[end - 1] !== "\n" && text[from] === "\n") {
+    while (text[from] === "\n") from++;
+    if (from >= text.length) return null;
+  }
+  let to = from;
+  while (text[to] === " ") to++;
+  const lineFrom = text.lastIndexOf("\n", end - 1) + 1;
+  const next = text.slice(to, text.indexOf("\n", to) < 0 ? text.length : text.indexOf("\n", to));
+  const space = end > lineFrom && text[end - 1] !== " " && next !== "" ? " " : "";
+  return { from: end, to, insert: space, cursor: end };
+}
 
 // Where a move that lands on a blank line should end instead, so the cursor never rests
 // on a gap. `blank(n)` says whether 0-based line n is a gap, `count` is how many lines
@@ -387,6 +410,36 @@ for (const [key, after] of [["o", true], ["O", false]]) {
   Vim.mapCommand(key, "action", "openParagraph", { after }, { isEdit: true, interlaceInsertRepeat: true, context: "normal" });
 }
 
+// Vim's J joins a paragraph to the next across the gap (joinAt) in an editor using
+// paragraphs(), which says how through this facet; anywhere else it joins as Vim's own J
+// does. One dispatch, isolated, so one u takes it back; a count joins that many lines.
+export const paragraphsJoiner = Facet.define();
+Vim.defineAction("joinParagraph", (cm, args) => {
+  const view = cm.cm6;
+  if (!view || view.state.readOnly) return;
+  const join = view.state.facet(paragraphsJoiner)[0] ?? ((state, pos) => joinAt(state.doc.toString(), pos));
+  let state = view.state;
+  const changes = [];
+  let cursor = state.selection.main.head;
+  for (let i = 0; i < Math.max(1, (args.repeat ?? 1) - 1); i++) {
+    const edit = join(state, cursor);
+    if (!edit) break;
+    const change = state.changes({ from: edit.from, to: edit.to, insert: edit.insert });
+    changes.push(change);
+    state = state.update({ changes: change }).state;
+    cursor = edit.cursor;
+  }
+  if (!changes.length) return;
+  view.dispatch({
+    changes: changes.reduce((all, c) => all.compose(c)),
+    selection: EditorSelection.cursor(cursor),
+    scrollIntoView: true,
+    userEvent: "delete",
+    annotations: isolateHistory.of("full"),
+  });
+});
+Vim.mapCommand("J", "action", "joinParagraph", {}, { isEdit: true, context: "normal" });
+
 // The shared setup. Put first in an editor's extensions: the Vim plugin must see a key
 // before any keymap does. The standard and history keys are low precedence, so an
 // editor's own keymap (and paragraphs()) wins over them. `history: false` is for an
@@ -584,7 +637,8 @@ const itemTheme = EditorView.theme({
 // into the element (Mark). A numbered list is renumbered after every edit the user
 // makes to it, in the same undo step.
 export function paragraphs({ enter = true, keepBlank = never, lists = true, notList = never, box = null } = {}) {
-  const gapAt = (state, line) => line.length === 0 && !keepBlank(state, line);
+  const gapAt = (state, line) =>
+    line.length === 0 && line.number > 1 && state.doc.line(line.number - 1).length > 0 && !keepBlank(state, line);
 
   // A field rather than a computed facet, so a keepBlank reading another field of the
   // editor's is followed whatever changed it.
@@ -593,7 +647,10 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     const builder = new RangeSetBuilder();
     for (let n = 1; n <= state.doc.lines; n++) {
       const line = state.doc.line(n);
-      if (isGap({ text: line.text, number: n }, cursorLine) && !keepBlank(state, line)) {
+      // The cursor's blank line is a paragraph being started, so the gap under it, which
+      // o and O make, stays a gap.
+      const aboveBlank = n > 1 && state.doc.line(n - 1).length === 0 && n - 1 !== cursorLine;
+      if (isGap({ text: line.text, number: n }, cursorLine, aboveBlank) && !keepBlank(state, line)) {
         builder.add(line.from, line.from, gapLine);
       }
     }
@@ -684,7 +741,19 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     return openAt(text, head, below, itemLineAt(state, head) ? itemAt(text, head) : null);
   });
 
-  if (!lists) return [gaps, overGaps, gapTheme, opener, insertRuns, keymap.of(keys)];
+  // What Vim's J does here (see paragraphsJoiner): joinAt across a gap, refused where it
+  // would remove a blank line kept as a place to type.
+  const joiner = paragraphsJoiner.of((state, pos) => {
+    const edit = joinAt(state.doc.toString(), pos, true);
+    if (!edit) return null;
+    for (let n = state.doc.lineAt(edit.from).number + 1; n <= state.doc.lineAt(edit.to).number; n++) {
+      const line = state.doc.line(n);
+      if (line.length === 0 && line.to < edit.to && keepBlank(state, line)) return null;
+    }
+    return edit;
+  });
+
+  if (!lists) return [gaps, overGaps, gapTheme, opener, joiner, insertRuns, keymap.of(keys)];
 
   const buildItems = (state) => {
     const found = [];
@@ -756,7 +825,7 @@ export function paragraphs({ enter = true, keepBlank = never, lists = true, notL
     { key: "Ctrl-Enter", run: (view) => itemLineAt(view.state, view.state.selection.main.head) !== null && tick(view, view.state.selection.main.head) },
   ];
 
-  return [keyWatch, items, numbering, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, insertRuns, keymap.of([...listKeys, ...keys])];
+  return [keyWatch, items, numbering, itemTheme, gaps, overMarkers, overGaps, gapTheme, opener, joiner, insertRuns, keymap.of([...listKeys, ...keys])];
 }
 
 // --- Source links -------------------------------------------------------------------

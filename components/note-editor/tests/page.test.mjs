@@ -680,6 +680,53 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
+    test("with Vim keys j stops on an extra blank line, dd removes it, and J joins two paragraphs in one u", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      const problems = [];
+      const page = await context.newPage();
+      watch(page, problems);
+      await page.addInitScript((v) => localStorage.setItem("settings", v), VIM);
+      await page.goto(`${BASE_URL}${STEM}`);
+      await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-content"));
+      await vimReady(page);
+      await page.locator("note-editor .cm-content").click();
+      await page.keyboard.press("i");
+      await page.keyboard.type("One");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("o");
+      await page.keyboard.type("Two");
+      await page.keyboard.press("Escape");
+      // O left empty between two paragraphs leaves two blank lines past the gap.
+      await page.keyboard.press("O");
+      await page.keyboard.press("Escape");
+      await until(async () => (await docText(page)) === "One\n\n\n\nTwo");
+      // A Heading under the blank lines keeps its level while the lines above it go.
+      await page.keyboard.press("Shift+G");
+      await page.keyboard.type("\\2");
+      const heading = async () => (await lines(page)).find((l) => l.text === "Two")?.className.includes("cm-level-heading");
+      await until(heading);
+      await page.keyboard.press("g");
+      await page.keyboard.press("g");
+      await page.keyboard.press("j");
+      await until(async () => (await caretLine(page)) === 2);
+      for (const want of ["One\n\n\nTwo", "One\n\nTwo"]) {
+        await page.keyboard.press("d");
+        await page.keyboard.press("d");
+        await until(async () => (await docText(page)) === want);
+        assert.ok(await heading(), `Two is still a Heading after dd, in ${JSON.stringify(want)}`);
+      }
+      await page.keyboard.press("g");
+      await page.keyboard.press("g");
+      await page.keyboard.press("Shift+J");
+      await until(async () => (await docText(page)) === "One Two");
+      await page.keyboard.press("u");
+      await until(async () => (await docText(page)) === "One\n\nTwo");
+      assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
+      await context.close();
+    });
+
+    // Browser: focus and keys.
     test("with Vim keys one u takes back o and what was typed after it, and Ctrl+r brings it back", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);

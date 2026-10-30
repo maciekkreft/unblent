@@ -13,6 +13,7 @@ import {
   backspaceAt,
   deleteAt,
   isGap,
+  joinAt,
   pastGap,
   itemAt,
   nextItemAt,
@@ -22,6 +23,7 @@ import {
   markerStop,
   openAt,
   paragraphsOpener,
+  paragraphsJoiner,
   insertRun,
   sourceLinksIn,
   sourceLinks,
@@ -69,10 +71,26 @@ test("Delete at a paragraph's end removes the gap forwards", () => {
   assert.equal(deleteAt("One", 3), null);
 });
 
-test("a blank line is a gap unless the cursor is on it", () => {
-  assert.equal(isGap({ text: "", number: 2 }, 3), true);
-  assert.equal(isGap({ text: "", number: 2 }, 2), false);
-  assert.equal(isGap({ text: "One", number: 1 }, 3), false);
+test("a blank line after a paragraph is a gap unless the cursor is on it; one after a blank line is not", () => {
+  assert.equal(isGap({ text: "", number: 2 }, 3, false), true);
+  assert.equal(isGap({ text: "", number: 2 }, 2, false), false);
+  assert.equal(isGap({ text: "One", number: 1 }, 3, false), false);
+  assert.equal(isGap({ text: "", number: 3 }, 5, true), false);
+  assert.equal(isGap({ text: "", number: 1 }, 3, false), false);
+});
+
+test("J joins the next line with one space, or the next paragraph across its gap", () => {
+  assert.equal(run("One\n\nTwo", joinAt("One\n\nTwo", 1, true)), "One Two");
+  assert.equal(joinAt("One\n\nTwo", 1, true).cursor, 3);
+  assert.equal(run("One\n\n\n\nTwo", joinAt("One\n\n\n\nTwo", 0, true)), "One Two");
+  // Without the gap rule, J is Vim's own: the blank line is the line joined.
+  assert.equal(run("One\n\nTwo", joinAt("One\n\nTwo", 0)), "One\nTwo");
+  assert.equal(run("One\n   two", joinAt("One\n   two", 0, true)), "One two");
+  assert.equal(run("One \ntwo", joinAt("One \ntwo", 0, true)), "One two");
+  // An extra blank line joins the line under it, as in Vim.
+  assert.equal(run("One\n\n\nTwo", joinAt("One\n\n\nTwo", 5, true)), "One\n\nTwo");
+  assert.equal(joinAt("One", 0, true), null);
+  assert.equal(joinAt("One\n\n", 0, true), null);
 });
 
 test("a move landing on a gap carries on to text, or stops at the first or last line", () => {
@@ -247,12 +265,18 @@ test("blank lines are drawn as gaps except the cursor's and the ones kept blank"
   assert.deepEqual(gapLines(kept.state), [4]);
 });
 
-test("a keyboard move steps over a gap; a click and a kept blank line stay", () => {
+test("a keyboard move steps over a gap onto an extra blank line; a click and a kept blank line stay", () => {
   const t = target("One\n\n\nTwo", 1, [paragraphs()]);
-  move(t, 4); // onto line 2, a gap
-  assert.equal(t.state.doc.lineAt(t.state.selection.main.head).number, 4);
-  move(t, 4); // back up onto a gap
+  move(t, 4); // onto line 2, a gap, so on to line 3, an extra blank line
+  assert.equal(t.state.doc.lineAt(t.state.selection.main.head).number, 3);
+  move(t, 7); // on to Two
+  move(t, 5); // up onto the extra blank line, which holds the cursor
+  assert.equal(t.state.doc.lineAt(t.state.selection.main.head).number, 3);
+  move(t, 4); // up onto the gap, so on to One
   assert.equal(t.state.doc.lineAt(t.state.selection.main.head).number, 1);
+  assert.deepEqual(gapLines(target("One\n\n\nTwo", 0, [paragraphs()]).state), [2]);
+  // A paragraph opened between two others, the cursor on it: the gap under it stays one.
+  assert.deepEqual(gapLines(target("One\n\n\n\nTwo", 5, [paragraphs()]).state), [2, 4]);
   move(t, 4, "select.pointer");
   assert.equal(t.state.selection.main.head, 4);
   const kept = target("One\n\n\nTwo", 1, [paragraphs({ keepBlank: (_s, line) => line.number === 2 })]);
@@ -374,6 +398,15 @@ test("o and O open a paragraph, an item on an item, but never on a named line or
   assert.equal(off.state.doc.toString(), "- a\n\n");
   // An editor without paragraphs() has no opener, so Vim's own o runs there.
   assert.deepEqual(target("a", 0, baseExtensions()).state.facet(paragraphsOpener), []);
+});
+
+test("J's joiner joins across a gap, but never removes a blank line kept to type on", () => {
+  const t = target("One\n\nTwo", 0, [...baseExtensions(), paragraphs()]);
+  assert.equal(run("One\n\nTwo", t.state.facet(paragraphsJoiner)[0](t.state, 0)), "One Two");
+  const kept = target("One\n\nTwo", 0, [paragraphs({ keepBlank: (_s, line) => line.number === 2 })]);
+  assert.equal(kept.state.facet(paragraphsJoiner)[0](kept.state, 0), null);
+  // An editor without paragraphs() has no joiner, so J joins as Vim's own does there.
+  assert.deepEqual(target("a", 0, baseExtensions()).state.facet(paragraphsJoiner), []);
 });
 
 // A stand-in for Vim on the stand-in view: getCM reads `cm` off the view, and the kit

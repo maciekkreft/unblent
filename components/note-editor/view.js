@@ -109,13 +109,21 @@ const levelField = StateField.define({
 // A level rides with its line's text. Mapped alone, a line decoration stays put when
 // text is inserted at its line's start, so Enter before a Title would leave the level
 // on the blank line and the Title text bare; a level whose line had text and is now
-// blank moves to the line its text went to.
+// blank moves to the line its text went to. Mapped alone, a level is also dropped when
+// the line break before its line goes, as when the blank line above a Heading is
+// deleted; it stays while its text is kept and still starts a line, and goes only when
+// its line is joined onto the one above.
 function follow(deco, tr) {
   const moved = [];
   for (const it = deco.iter(); it.value; it.next()) {
     if (tr.startState.doc.lineAt(it.from).length === 0) continue;
     const stays = tr.changes.mapPos(it.from, -1, MapMode.TrackBefore);
-    if (stays === null || tr.state.doc.lineAt(stays).length > 0) continue;
+    if (stays === null) {
+      const kept = tr.changes.mapPos(it.from, 1, MapMode.TrackAfter);
+      if (kept !== null && tr.state.doc.lineAt(kept).from === kept) moved.push({ from: null, to: kept, value: it.value });
+      continue;
+    }
+    if (tr.state.doc.lineAt(stays).length > 0) continue;
     const to = tr.state.doc.lineAt(tr.changes.mapPos(it.from, 1));
     if (to.length > 0) moved.push({ from: stays, to: to.from, value: it.value });
   }
