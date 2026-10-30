@@ -99,6 +99,7 @@ function start(options = {}) {
   const lists = listValues ? [...listValues] : null;
 
   const input = {
+    answered: options.answered,
     session: () => {
       see({}, SESSION_READ.payload);
       const who = typeof userId === "function" ? userId() : userId;
@@ -573,6 +574,14 @@ const chapterCall = (callId) => ({ id: callId, target: "books", name: "chapter",
 const subjectCall = (callId) => ({ id: callId, target: "subject", name: "read", payload: {} });
 const plainAnswer = (id, text) => ({ type: "completion.progressed", id, text, calls: [], done: true, status: "done", raw: [{ type: "text", text }], provider: "echo", model: "echo", usage: { input_tokens: 1, output_tokens: 1 } });
 const CHAPTER = "<h1>One</h1><p>A <em>short</em> chapter.</p>";
+
+test("only the tools whose owner is on this page are offered (7.7)", async () => {
+  const h = start({ contracts: TOOLS, answered: (target) => target !== "subject" });
+  await ready(h);
+  submit(h);
+  await flush();
+  assert.deepEqual(h.calls.completes[0].tools.map((t) => `${t.target}: ${t.name}`), ["books: chapter"]);
+});
 
 test("a tool round asks the lookup and feeds its result back to the model (7.7)", async () => {
   const h = start({ ids: [ANSWER, ANSWER2, RESULT1], contracts: TOOLS, askTool: () => Promise.resolve({ title: "One", html: CHAPTER }) });

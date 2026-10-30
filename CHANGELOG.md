@@ -6,6 +6,19 @@ All notable changes to Unblent for Mac are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-30
+
+### Added
+
+- Chats. Ask questions about the book you are reading, your notes, your highlights and
+  your journal, and the answer can look up the chapter, the note or the day it needs.
+  Answers come from [Ollama](https://ollama.com) running on your own Mac, with the lfm3
+  model by default: no account, no key, no cost, and nothing leaves your Mac, so it
+  works offline. Install Ollama, run `ollama pull lfm3`, and open Chats.
+- Settings › Your account chooses where answers come from: Ollama on this Mac, with
+  any model you downloaded, or Anthropic with your own API key. When Ollama is not
+  running, Settings and the chat say so and offer Try again.
+
 ## [0.3.0] — 2026-10-29
 
 ### Added

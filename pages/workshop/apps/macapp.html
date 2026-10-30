@@ -43,11 +43,14 @@
     <script type="module" src="/static/components/session/fact.js"></script>
     <script type="module" src="/static/components/pins/fact.js"></script>
     <script type="module" src="/static/components/undo/fact.js"></script>
+    <script type="module" src="/static/components/catalog/fact.js"></script>
     <script type="module" src="/static/components/dock/fact.js"></script>
     <script type="module" src="/static/components/notes/fact.js"></script>
     <script type="module" src="/static/components/journal/fact.js"></script>
     <script type="module" src="/static/components/books/fact.js"></script>
     <script type="module" src="/static/components/subject/fact.js"></script>
+    <script type="module" src="/static/components/llm/fact.js"></script>
+    <script type="module" src="/static/components/conversations/fact.js"></script>
     <script type="module" src="/static/components/choice-points/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
@@ -67,6 +70,9 @@
     <script type="module" src="/static/components/journal-entry/view.js"></script>
     <script type="module" src="/static/components/choice-point-cards/view.js"></script>
     <script type="module" src="/static/components/book-stage/view.js"></script>
+    <script type="module" src="/static/components/conversation-list/view.js"></script>
+    <script type="module" src="/static/components/chat-thread/view.js"></script>
+    <script type="module" src="/static/components/chat-input/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/composer/composer.js"></script>
   </head>
@@ -83,10 +89,14 @@
         <note-editor id="notes-editor" follows subject height="fill" shows-on="note.selected"></note-editor>
         <highlight-notes shows-on="highlights.selected" height="fill"></highlight-notes>
       </list-then-item>
+      <list-then-item id="chats" label="Chats" side="right" height="fill" shows-on="conversation.selected">
+        <conversation-list subject label="Chats"></conversation-list>
+        <chat-thread shows-on="conversation.selected" height="fill" markdown><chat-input></chat-input></chat-thread>
+      </list-then-item>
       <layout-switch control></layout-switch>
       <undo-bar control></undo-bar>
       <settings-tabs label="Settings" button="gear">
-        <settings-sheet label="Settings"></settings-sheet>
+        <settings-sheet label="Settings" account></settings-sheet>
         <mac-account label="Account"></mac-account>
       </settings-tabs>
     </dock-desk>

@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS settings (
     provider TEXT NOT NULL,
     model    TEXT NOT NULL,
     effort   TEXT NOT NULL,
-    ttl      TEXT NOT NULL
+    ttl      TEXT NOT NULL,
+    -- Ollama's address on the user's Mac (3.4); NULL is the default, localhost:11434.
+    address  TEXT
 );
 CREATE TABLE IF NOT EXISTS keys (
     provider TEXT PRIMARY KEY,

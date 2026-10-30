@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
-import { mount, unmount, ask } from "bus";
+import { mount, unmount, ask, answers } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, valueCheckers } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, valueCheckers, ollamaView } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
@@ -19,7 +19,14 @@ const EFFORT_LABELS = {
   high: "High",
   xhigh: "Extra high",
   max: "Maximum",
+  on: "On",
+  off: "Off",
 };
+// Ollama runs on the user's own Mac (3.4), so its name says where the answers come from.
+const PROVIDER_LABELS = { ollama: "Ollama (on this Mac)" };
+const PULL = "ollama pull lfm3";
+// How long Copy reads Copied, so the click visibly did something (Don Norman: feedback).
+const COPIED_MS = 2000;
 const FEEDBACK_URL = "https://github.com/maciekkreft/unblent/issues/new/choose";
 const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
@@ -47,6 +54,7 @@ class ActorController {
       // machine only ever receives the value, so it stays importable in Node.
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        answered: answers,
         current: location.pathname,
         // The `account` attribute (7.7): read from the host's light DOM, so the
         // machine learns it through input and stays importable in Node.
@@ -86,6 +94,9 @@ class SettingsSheet extends LitElement {
     replacingKey: { state: true },
     jevDraft: { state: true },
     replacingJev: { state: true },
+    // Ollama's address box: open while the user changes it, and whether Copy just copied.
+    editingAddress: { state: true },
+    copied: { state: true },
   };
 
   constructor() {
@@ -94,6 +105,8 @@ class SettingsSheet extends LitElement {
     this.replacingKey = false;
     this.jevDraft = "";
     this.replacingJev = false;
+    this.editingAddress = false;
+    this.copied = false;
   }
 
   static styles = css`
@@ -172,6 +185,51 @@ class SettingsSheet extends LitElement {
     input[type="checkbox"] {
       margin: 0;
       accent-color: var(--color-accent);
+    }
+    /* Ollama's status and the pull hint wrap under their buttons at phone width. */
+    .ollama {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-xs);
+    }
+    .ollama .status {
+      color: var(--color-body);
+    }
+    .ollama .status.off {
+      color: var(--color-body-mid);
+    }
+    .ollama .dot {
+      display: inline-block;
+      width: var(--space-sm);
+      height: var(--space-sm);
+      margin-right: var(--space-xs);
+      vertical-align: middle;
+      border-radius: var(--radius-full);
+      background: var(--color-success);
+    }
+    .ollama code {
+      font-family: var(--font-mono);
+    }
+    /* Drawn as the feedback link is, so a link reads the same throughout the sheet. */
+    .ollama a {
+      color: var(--color-ink);
+      text-decoration: underline;
+      text-underline-offset: var(--space-2xs);
+    }
+    .ollama input {
+      flex: 1;
+      min-width: 0;
+      font: inherit;
+      color: var(--color-body);
+      background: var(--color-canvas-soft);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-xs);
+    }
+    .ollama input:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
     }
     .key {
       display: flex;
@@ -707,7 +765,8 @@ class SettingsSheet extends LitElement {
     // account left on it in the product keeps it, named "Echo (test)", so it can be
     // switched away from.
     const providers = llm.providers.filter((p) => p.id !== "echo" || profile !== "product" || llm.provider === "echo");
-    const providerLabel = (p) => (p.id === "echo" && profile === "product" ? "Echo (test)" : p.label);
+    const providerLabel = (p) => (p.id === "echo" && profile === "product" ? "Echo (test)" : PROVIDER_LABELS[p.id] ?? p.label);
+    const ollama = llm.provider === "ollama" ? ollamaView(llm) : null;
     return html`
       <div class="account">
         <label class="field">
@@ -718,6 +777,7 @@ class SettingsSheet extends LitElement {
             )}
           </select>
         </label>
+        ${ollama ? this.#ollama(ollama) : nothing}
         ${current?.needsKey
           ? this.#keyField({
               field: "key",
@@ -729,7 +789,9 @@ class SettingsSheet extends LitElement {
               remove: () => this.#actor.send({ type: "_removeKey" }),
             })
           : nothing}
-        ${llm.models.length
+        ${ollama && !ollama.running
+          ? nothing
+          : llm.models.length
           ? html`
               <label class="field">
                 <span>Model</span>
@@ -740,22 +802,112 @@ class SettingsSheet extends LitElement {
                 </select>
               </label>
             `
+          : ollama
+          ? nothing
           : html`<div class="field"><span>Model</span><span class="help">Add your API key to choose a model.</span></div>`}
+        ${ollama?.lfm3Missing ? this.#pullHint() : nothing}
         <label class="field">
-          <span>Thinking effort</span>
+          <span>${ollama ? "Thinking" : "Thinking effort"}</span>
           <select @change=${(e) => this.#actor.send({ type: "_setEffort", effort: e.target.value })}>
             ${llm.efforts.map(
               (e) => html`<option value=${e} ?selected=${e === llm.effort}>${EFFORT_LABELS[e] ?? this.#label(e)}</option>`,
             )}
           </select>
         </label>
-        <label class="field">
-          <span>Cache lifetime</span>
-          <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
-            ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
-          </select>
-          <span class="help">${TTL_NOTE}</span>
-        </label>
+        ${ollama
+          ? nothing
+          : html`
+              <label class="field">
+                <span>Cache lifetime</span>
+                <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
+                  ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
+                </select>
+                <span class="help">${TTL_NOTE}</span>
+              </label>
+            `}
+        ${llm.jev ? this.#judging(llm, evaluators) : nothing}
+        ${this.#checks(checks, evaluators)}
+        ${this.#tools(toolList, tools, profile)}
+      </div>
+    `;
+  }
+
+  // Ollama's row (3.4): whether it answered at its address, with the address changeable
+  // in place. Enter or leaving the box saves, Escape closes it unchanged, and an empty
+  // address brings back the default, so every change is undone by typing the old one.
+  #ollama({ address, running }) {
+    const save = (value) => {
+      this.editingAddress = false;
+      if (value.trim() !== address) this.#actor.send({ type: "_setAddress", address: value });
+    };
+    const edit = async () => {
+      this.editingAddress = true;
+      await this.updateComplete;
+      this.renderRoot.querySelector(".ollama input")?.focus();
+    };
+    return html`
+      <div class="field">
+        <span>Ollama</span>
+        <div class="ollama">
+          ${this.editingAddress
+            ? html`
+                <input
+                  type="text"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  aria-label="Ollama address"
+                  placeholder="localhost:11434"
+                  .value=${address}
+                  @keydown=${(e) => {
+                    if (e.key === "Enter") save(e.target.value);
+                    if (e.key === "Escape") this.editingAddress = false;
+                  }}
+                  @blur=${(e) => this.editingAddress && save(e.target.value)}
+                />
+              `
+            : running
+            ? html`<span class="status running"><span class="dot" aria-hidden="true"></span>Running at ${address}</span>`
+            : html`
+                <span class="status off">
+                  Ollama isn't running. Open the Ollama app, or get it at
+                  <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>.
+                </span>
+                <button class="act" @click=${() => this.#actor.send({ type: "_retryOllama" })}>Try again</button>
+              `}
+          ${this.editingAddress ? nothing : html`<button class="act" @click=${edit}>Change address</button>`}
+        </div>
+      </div>
+    `;
+  }
+
+  // The default model is missing: the one Terminal line that downloads it, with Copy,
+  // and Try again to read the models once it is downloaded.
+  #pullHint() {
+    const copy = async () => {
+      try {
+        await navigator.clipboard.writeText(PULL);
+        this.copied = true;
+        setTimeout(() => (this.copied = false), COPIED_MS);
+      } catch {
+        // No clipboard (an insecure page): the command stays on screen to copy by hand.
+      }
+    };
+    return html`
+      <div class="field">
+        <span></span>
+        <div class="ollama pull">
+          <span class="status">lfm3 isn't downloaded. In Terminal: <code>${PULL}</code></span>
+          <button class="act" @click=${copy}>${this.copied ? "Copied" : "Copy"}</button>
+          <button class="act" @click=${() => this.#actor.send({ type: "_retryOllama" })}>Try again</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // Evaluating (Jev): only where the picture carries `jev`, which the Mac app's does not.
+  #judging(llm, evaluators) {
+    return html`
         <div class="judging">
           <span class="group">Evaluating</span>
           ${this.#keyField({
@@ -769,9 +921,6 @@ class SettingsSheet extends LitElement {
           })}
           ${this.#valueChecks(llm, evaluators)}
         </div>
-        ${this.#checks(checks, evaluators)}
-        ${this.#tools(toolList, tools, profile)}
-      </div>
     `;
   }
 

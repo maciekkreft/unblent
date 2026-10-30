@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
 
-from . import anthropic_adapter, echo_adapter
+from . import anthropic_adapter, echo_adapter, openai_adapter
 
 
 def provider_tool_name(target: str, name: str) -> str:
@@ -39,7 +39,7 @@ async def complete(provider: str, settings: dict, key: str | None, request: dict
         forward.append({"name": pname, "description": tool.get("description", ""), "input_schema": tool["payload"]})
         back[pname] = tool
         validators[pname] = Draft202012Validator(tool["payload"])
-    stream = echo_adapter.stream if provider == "echo" else anthropic_adapter.stream
+    stream = {"echo": echo_adapter.stream, "ollama": openai_adapter.stream}.get(provider, anthropic_adapter.stream)
     # The adapter maps a replayed call back to the provider's tool name; give it the
     # mapping, since this module imports the adapter and the adapter cannot import back.
     async for piece in stream(settings, key, request, forward, provider_tool_name):

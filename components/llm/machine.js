@@ -39,7 +39,7 @@ const needsKey = (picture) => {
 // The key rides through to the server from here and never enters context.
 const patchOf = (event) => {
   const patch = {};
-  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey"]) if (field in event) patch[field] = event[field];
+  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey", "address"]) if (field in event) patch[field] = event[field];
   return patch;
 };
 
@@ -229,7 +229,11 @@ export const machine = setup({
       "saved. When the admin deletes a guest, what it spent stops counting toward every limit. The settings belong to the account, so they are the " +
       "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
-      "network call.",
+      "network call. In the Mac app that is not connected, Ollama, a model server on the user's own Mac, is the first " +
+      "provider: it needs no key, costs nothing and is not counted, its address is kept with the account (empty brings " +
+      "back http://localhost:11434), and the picture says whether it answered there just now and lists only the models " +
+      "downloaded in it, preferring lfm3; its thinking is On or Off, and an answer it cannot give because it is not " +
+      "running fails as local-off. The Mac app's picture has no Jev; the website never offers Ollama.",
     kind: "fact",
     shape: "remote-only",
     owns: "access to the models: the language models that write, and Jev, which decides",

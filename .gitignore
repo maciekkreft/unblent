@@ -24,3 +24,4 @@ mac/build/
 mac/src-tauri/target/
 mac/src-tauri/gen/
 mac/build-local.log
+components/catalog/server/manifests.json

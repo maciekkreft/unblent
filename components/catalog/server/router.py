@@ -20,8 +20,15 @@ COMPONENTS = ROOT / "components"
 _cache: tuple[tuple, dict] | None = None
 
 
+# A Mac has no Node, so the Mac app's build runs the reader once and ships its output
+# here (7.3, mac/freeze.sh); the repository never holds it.
+BUILT = Path(__file__).with_name("manifests.json")
+
+
 def _read_manifests() -> dict:
     global _cache
+    if BUILT.is_file():
+        return json.loads(BUILT.read_text())
     machines = sorted(str(p.relative_to(ROOT)) for p in COMPONENTS.glob("*/machine.js"))
     stamp = tuple((m, (ROOT / m).stat().st_mtime_ns) for m in machines)
     if _cache is not None and _cache[0] == stamp:

@@ -52,6 +52,16 @@
         "required": ["keySet"],
         "additionalProperties": false
       },
+      "ollama": {
+        "type": "object",
+        "description": "Only in the local edition (3.4): the address of Ollama on this Mac and whether it answered just now.",
+        "properties": {
+          "address": { "type": "string" },
+          "running": { "type": "boolean" }
+        },
+        "required": ["address", "running"],
+        "additionalProperties": false
+      },
       "freeUse": {
         "type": "object",
         "description": "Only for a guest (7.7): the share of the guest's own allowance left, whether the guest is blocked, and the providers no guest may use now because a limit for all guests is reached. Never an amount.",

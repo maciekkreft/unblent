@@ -74,6 +74,9 @@ const errorText = (error) => {
       return "Sign in to chat.";
     case "no-key":
       return "Add your API key in Settings.";
+    // Ollama on the user's own Mac did not answer (3.4); chat-input offers Try again.
+    case "local-off":
+      return "Ollama isn't running. Open the Ollama app, or get it at ollama.com.";
     case "busy":
       return "The model is finishing another answer — try again in a moment.";
     case "truncated":

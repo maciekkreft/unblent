@@ -1,4 +1,4 @@
-import { mount, ask } from "bus";
+import { mount, ask, answers } from "bus";
 import { monotonicFactory } from "ulid";
 import { machine } from "./machine.js";
 import { openStore } from "./store.js";
@@ -60,6 +60,7 @@ mount(machine, {
     // The tool list (catalog: contracts) and each tool call (the `*: tool` wildcard, 7.7).
     contracts: () => ask(machine, "catalog", "contracts", {}),
     askTool: (target, name, payload) => ask(machine, target, name, payload),
+    answered: answers,
     list: () => getJson(BASE),
     read: (id) => getJson(`${BASE}/${id}`),
     saveChat: (id, body) => putJson(`${BASE}/${id}`, body),

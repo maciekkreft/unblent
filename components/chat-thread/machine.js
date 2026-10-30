@@ -698,6 +698,8 @@ export const machine = setup({
       "and no number, and the highlights are kept with the chat by `conversations` " +
       "and never sent to the model. A click on one offers Remove, which waits out the undo window. " +
       "The answer's text never changes; removing a comment waits out the undo window. " +
+      "A failed answer says why in plain words under it; when Ollama on the user's Mac did not " +
+      "answer, it reads \"Ollama isn't running. Open the Ollama app, or get it at ollama.com.\" " +
       "The conversation can hold the keyboard, with the focus ring on it. With Vim keys on, " +
       "while it does, j and k scroll it a line, gg and G go to the top and the bottom, Ctrl+d " +
       "and Ctrl+u scroll half the box, and i moves the keyboard into the chat box under it in " +

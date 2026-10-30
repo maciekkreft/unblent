@@ -15,6 +15,9 @@ Python server; your books, notes and journal are stored as files on your Mac.
   stays open until 1 a.m.); past days are read-only.
 - **Highlights with links.** You can mark a passage and paste a link to it into a
   note or a journal day. The link opens the book at that passage.
+- **Chats about what you read.** Ask about the open book, your notes, highlights and
+  journal. Answers come from [Ollama](https://ollama.com) on your own Mac, so nothing
+  leaves it and no key is needed. See [Chats with Ollama](#chats-with-ollama).
 - **Vim-style keys.** With Vim keys turned on, reading, moving between panels,
   highlighting and writing all work from the keyboard.
 
@@ -67,8 +70,6 @@ middle panel, then tick Vim keys. "Show the keys" under the switch lists them to
 These are not built yet:
 
 - Short summaries of past journal days.
-- Chats that can access your books, notes and journal, and help you understand
-  what you read.
 - Exercises from psychology books placed inside a journal day, so you practise a
   technique and do not only write about it.
 
@@ -88,6 +89,19 @@ Before you open Unblent, read the next section,
 [Required: read before you open the app](#required-read-before-you-open-the-app).
 Without it, the app will not open.
 
+## Chats with Ollama
+
+Chats need a language model. Unblent uses [Ollama](https://ollama.com), which runs the
+model on your own Mac, free and offline.
+
+1. Install Ollama from [ollama.com](https://ollama.com) and open it.
+2. In Terminal, run `ollama pull lfm3`.
+3. In Unblent, open the Chats panel and ask a question.
+
+Settings › Your account shows whether Ollama is running and which model answers. Any
+model you download with `ollama pull` appears there. If you prefer, choose Anthropic
+and enter your own API key instead.
+
 ## Required: read before you open the app
 
 - **The first open is blocked.** The app is not signed with a paid Apple developer
@@ -106,7 +120,8 @@ Without it, the app will not open.
 - **One person per Mac.** There is no account and no sync between devices.
 - **Your books, notes and journal stay on your Mac**, in
   `~/Library/Application Support/Unblent`. The only thing the app sends over the
-  network is a check on GitHub for a new version.
+  network is a check on GitHub for a new version, unless you choose Anthropic for
+  chats (see [PRIVACY.md](PRIVACY.md)).
 - **The app updates itself.** When a new version is ready it asks you to
   *Restart to update* or *Later*. Because of this, `brew upgrade` does not track
   Unblent's versions.

@@ -56,6 +56,9 @@ test("a fresh account reads default settings", async () => {
   assert.equal(picture.ttl, "1h");
   assert.deepEqual(picture.models, [], "no key, so no models to choose");
   assert.equal(picture.providers.find((p) => p.id === "anthropic").keySet, false);
+  // Ollama runs on the user's own Mac, so the website never offers it (3.4).
+  assert.ok(!picture.providers.some((p) => p.id === "ollama") && !("ollama" in picture) && "jev" in picture);
+  assert.equal((await edit({ provider: "ollama" }, cookie)).status, 400);
 });
 
 test("settings round trip: provider, model and effort are kept", async () => {

@@ -9,7 +9,9 @@ adds); PUT "" changes settings and the keys; POST "/complete" streams one answer
 newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
 questions and returns its answers, on the account's own Jev key; POST "/generate"
 writes one short text in one go on the account's own Anthropic key, whichever
-provider the chat uses, and model "echo" answers with Echo. A request body that fails validation is answered
+provider the chat uses, and model "echo" answers with Echo. In the local edition (3.4)
+the picture also offers Ollama on the user's own Mac, at an address the account keeps,
+and leaves out Jev. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
 
 A guest (3.4) spends only on the guest keys, within the limits, counted in
@@ -24,6 +26,7 @@ import json
 import logging
 import sqlite3
 import time
+from urllib.parse import urlparse
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,9 +35,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from server.user import require_user, session_of, user_dir
+from server.user import local_user, require_user, session_of, user_dir
 
-from . import anthropic_adapter, crypto, echo_adapter, jev_adapter, spending
+from . import anthropic_adapter, crypto, echo_adapter, jev_adapter, openai_adapter, spending
 from .adapters import complete
 
 _log = logging.getLogger("uvicorn.error")
@@ -55,8 +58,11 @@ router = APIRouter()
 
 _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
-_PROVIDERS = ("anthropic", "echo")
+_PROVIDERS = ("anthropic", "echo", "ollama")
 _EFFORTS = ("default", "low", "medium", "high", "xhigh", "max")
+# A model on the user's Mac is offered thinking on or off, never an effort (3.4).
+_OLLAMA_EFFORTS = ("on", "off")
+_OLLAMA_ADDRESS = "http://localhost:11434"
 _TTLS = ("5m", "1h")
 _DEFAULT_MODEL = "claude-opus-5"
 
@@ -73,6 +79,7 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(user_dir(user_id) / "llm.db")
     connection.row_factory = sqlite3.Row
     connection.executescript(_SCHEMA)
+    _migrate(connection)
     try:
         with connection:
             yield connection
@@ -80,11 +87,43 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def _migrate(connection: sqlite3.Connection) -> None:
+    # A file made before Ollama was offered (3.4) has no address column yet.
+    if "address" not in {row["name"] for row in connection.execute("PRAGMA table_info(settings)")}:
+        connection.executescript("ALTER TABLE settings ADD COLUMN address TEXT")
+
+
 def _settings(connection: sqlite3.Connection) -> dict:
-    row = connection.execute("SELECT provider, model, effort, ttl FROM settings WHERE one = 1").fetchone()
+    row = connection.execute("SELECT provider, model, effort, ttl, address FROM settings WHERE one = 1").fetchone()
     if row is None:
-        return {"provider": "anthropic", "model": "", "effort": "default", "ttl": "1h"}
-    return {"provider": row["provider"], "model": row["model"], "effort": row["effort"], "ttl": row["ttl"]}
+        # The Mac app answers from Ollama on the user's own Mac unless they choose
+        # otherwise (3.4); the website from Anthropic.
+        provider = "ollama" if local_user() else "anthropic"
+        return {"provider": provider, "model": "", "effort": "default", "ttl": "1h", "address": _OLLAMA_ADDRESS}
+    return {
+        "provider": row["provider"], "model": row["model"], "effort": row["effort"], "ttl": row["ttl"],
+        "address": row["address"] or _OLLAMA_ADDRESS,
+    }
+
+
+def _efforts(provider: str) -> tuple:
+    return _OLLAMA_EFFORTS if provider == "ollama" else _EFFORTS
+
+
+def _effort(provider: str, effort: str) -> str:
+    # One stored effort serves every provider; one the provider does not offer reads as
+    # that provider's first (thinking on for Ollama, the model's default for Anthropic).
+    efforts = _efforts(provider)
+    return effort if effort in efforts else efforts[0]
+
+
+def _ollama_models(address: str) -> list[dict] | None:
+    """The models downloaded in Ollama, or None when it does not answer. Never cached,
+    so a model pulled a moment ago shows on the next read."""
+    try:
+        return openai_adapter.list_models(f"{address}/v1", "ollama")
+    except Exception:
+        return None
 
 
 def _key(connection: sqlite3.Connection, provider: str) -> str | None:
@@ -92,9 +131,11 @@ def _key(connection: sqlite3.Connection, provider: str) -> str | None:
     return crypto.decrypt(row["cipher"]) if row else None
 
 
-def _models(user_id: str, provider: str, key: str | None) -> list[dict]:
+def _models(user_id: str, provider: str, key: str | None, address: str = _OLLAMA_ADDRESS) -> list[dict]:
     if provider == "echo":
         return [{"id": "echo", "label": "Echo"}]
+    if provider == "ollama":
+        return _ollama_models(address) or []
     if not key:
         return []
     cached = _models_cache.get(user_id)
@@ -113,6 +154,10 @@ def _pick_default(models: list[dict]) -> str:
     ids = {model["id"] for model in models}
     if _DEFAULT_MODEL in ids:
         return _DEFAULT_MODEL
+    # lfm3 is the model the Mac app is made for (3.4), under any tag Ollama gives it.
+    for model in models:
+        if model["id"].startswith("lfm3"):
+            return model["id"]
     return models[0]["id"] if models else ""
 
 
@@ -124,26 +169,38 @@ def _key_for(connection: sqlite3.Connection, provider: str, guest: bool) -> str 
 
 def _picture(user_id: str, connection: sqlite3.Connection, guest: bool = False) -> dict:
     settings = _settings(connection)
+    local = bool(local_user())
     providers = [
         {"id": "anthropic", "label": "Anthropic", "keySet": _key_for(connection, "anthropic", guest) is not None, "needsKey": True},
         {"id": "echo", "label": "Echo", "keySet": True, "needsKey": False},
     ]
+    if local:
+        # Ollama runs on the user's own Mac, so only the Mac app offers it (3.4).
+        providers.insert(0, {"id": "ollama", "label": "Ollama", "keySet": True, "needsKey": False})
     if guest:
         # A provider without a guest key is not offered to guests (7.7).
-        providers = [p for p in providers if p["keySet"]]
+        providers = [p for p in providers if p["keySet"] and p["id"] != "ollama"]
     provider = settings["provider"] if any(p["id"] == settings["provider"] for p in providers) else providers[0]["id"]
-    models = _models(user_id, provider, _key_for(connection, provider, guest))
+    ollama = _ollama_models(settings["address"]) if local else None
+    if provider == "ollama":
+        models = ollama or []
+    else:
+        models = _models(user_id, provider, _key_for(connection, provider, guest))
     ids = {model["id"] for model in models}
     picture = {
         "provider": provider,
         "providers": providers,
         "model": settings["model"] if settings["model"] in ids else _pick_default(models),
         "models": models,
-        "effort": settings["effort"],
-        "efforts": list(_EFFORTS),
+        "effort": _effort(provider, settings["effort"]),
+        "efforts": list(_efforts(provider)),
         "ttl": settings["ttl"],
-        "jev": {"keySet": _key_for(connection, "jev", guest) is not None},
     }
+    if local:
+        picture["ollama"] = {"address": settings["address"], "running": ollama is not None}
+    else:
+        # Jev answers only on the website; the Mac app has no Evaluating (3.4, 8).
+        picture["jev"] = {"keySet": _key_for(connection, "jev", guest) is not None}
     if guest:
         picture["freeUse"] = spending.free_use(user_id)
     return picture
@@ -190,9 +247,12 @@ def _valid(payload) -> dict | None:
     jev_key = payload.get("jevKey")
     if jev_key is not None and not isinstance(jev_key, str):
         return None
-    if provider is not None and provider not in _PROVIDERS:
+    if provider is not None and (provider not in _PROVIDERS or (provider == "ollama" and not local_user())):
         return None
-    if effort is not None and effort not in _EFFORTS:
+    if effort is not None and effort not in _EFFORTS + _OLLAMA_EFFORTS:
+        return None
+    address = payload.get("address")
+    if address is not None and _address(address) is None:
         return None
     if ttl is not None and ttl not in _TTLS:
         return None
@@ -200,7 +260,24 @@ def _valid(payload) -> dict | None:
         return None
     if key is not None and not isinstance(key, str):
         return None
-    return {"provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key}
+    return {
+        "provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key,
+        "address": None if address is None else _address(address),
+    }
+
+
+def _address(value) -> str | None:
+    """Ollama's address as stored: "" brings back the default; otherwise an http or
+    https URL with a host, without a trailing slash. None when it is not one."""
+    if not isinstance(value, str) or len(value) > 500:
+        return None
+    value = value.strip().rstrip("/")
+    if value == "":
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.query or parsed.fragment:
+        return None
+    return value
 
 
 def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
@@ -208,14 +285,16 @@ def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
         current = _settings(connection)
         provider = fields["provider"] or current["provider"]
         connection.execute(
-            "INSERT INTO settings (one, provider, model, effort, ttl) VALUES (1, ?, ?, ?, ?)"
+            "INSERT INTO settings (one, provider, model, effort, ttl, address) VALUES (1, ?, ?, ?, ?, ?)"
             " ON CONFLICT(one) DO UPDATE SET provider = excluded.provider, model = excluded.model,"
-            " effort = excluded.effort, ttl = excluded.ttl",
+            " effort = excluded.effort, ttl = excluded.ttl, address = excluded.address",
             (
                 provider,
                 fields["model"] if fields["model"] is not None else current["model"],
                 fields["effort"] or current["effort"],
                 fields["ttl"] or current["ttl"],
+                # NULL is the default address, so a later change of default reaches it.
+                (fields["address"] or None) if fields["address"] is not None else (None if current["address"] == _OLLAMA_ADDRESS else current["address"]),
             ),
         )
         key = fields["key"]
@@ -248,8 +327,15 @@ def _for_completion(user_id: str, guest: bool = False) -> tuple[dict, str | None
     # uses the default the account sees rather than an unset stored model.
     with _connect(user_id) as connection:
         settings = _settings(connection)
+        if settings["provider"] == "ollama" and not local_user():
+            # Only the Mac app reaches Ollama (3.4); the website answers as its picture does.
+            settings["provider"] = "anthropic"
         key = _key_for(connection, settings["provider"], guest)
-    models = _models(user_id, settings["provider"], key)
+    if settings["provider"] == "ollama":
+        key = "ollama"
+        settings["base_url"] = f"{settings['address']}/v1"
+    settings["effort"] = _effort(settings["provider"], settings["effort"])
+    models = _models(user_id, settings["provider"], key, settings["address"])
     if settings["model"] not in {model["id"] for model in models}:
         settings["model"] = _pick_default(models)
     return settings, key

@@ -503,6 +503,7 @@ const buildTools = (context, reply) => {
     const key = `${q.target}: ${q.name}`;
     meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
     if (q.tool.switch !== false && context.tools[key] === false) continue;
+    if (!context.answered(q.target, q.name)) continue; // its owner is not on this page (7.7)
     offered.push({ key, target: q.target, name: q.name, description: q.tool.description, payload: q.payload });
   }
   offered.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -1366,6 +1367,7 @@ export const machine = setup({
     complete: input.complete,
     contracts: input.contracts,
     askTool: input.askTool,
+    answered: input.answered ?? (() => true),
     list: input.list,
     read: input.read,
     saveChat: input.saveChat,

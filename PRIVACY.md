@@ -35,6 +35,13 @@ to *Restart to update* or *Later*. Nothing is installed until you choose
 itself, and an image a book points to on the internet is left out. If you click such a
 link, that web page opens in your own browser, not in Unblent.
 
+**Chats.** With Ollama, the default, a chat goes only to Ollama on your own Mac
+(`localhost`, or the address you set in Settings), so it stays on your Mac. If you choose
+Anthropic in Settings and enter your own API key, each question is sent to Anthropic
+together with the chat so far and whatever the chat looked up in your books, notes and
+journal to answer it. Anthropic's privacy policy applies to it, and the key is stored
+encrypted on your Mac.
+
 Nothing else leaves your Mac. There is no analytics, no crash reporting and no
 advertising. The font, the icons and every library are inside the app, and
 *Meditations*, the book on the shelf at first start, comes with the app; none of them

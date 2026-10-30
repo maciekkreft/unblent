@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createMachine, emit, setup, fromPromise } from "xstate";
-import { mount, unmount, ask, send, tap } from "bus";
+import { mount, unmount, ask, send, tap, answers } from "bus";
 import { compile } from "../validate.js";
 
 // The bus is infrastructure, not a component, so it is tested here rather than
@@ -1278,4 +1278,13 @@ test("a command the target's state passes on is recorded as ignored", () => {
   assert.equal(records[0].outcome, "ignored");
   assert.deepEqual(records[0].ignored, ["gate"]);
   unmount(a);
+});
+
+test("answers says whether a mounted fact answers a query on this page (7.7)", () => {
+  assert.equal(answers("ansq", "read"), false, "nobody mounted");
+  const f = mount(fact("ansq"), { queries: { read: QSCHEMA, twice: QSCHEMA } });
+  assert.equal(answers("ansq", "read"), true);
+  assert.equal(answers("ansq", "other"), false, "a query the fact does not answer");
+  unmount(f);
+  assert.equal(answers("ansq", "read"), false, "unmounted");
 });

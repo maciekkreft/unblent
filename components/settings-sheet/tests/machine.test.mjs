@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, merge, checksShown } from "../machine.js";
+import { machine, merge, checksShown, ollamaView, addressOf } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMAS = {
@@ -310,6 +310,47 @@ test("llm.changed is adopted after the starting ask (4.3)", async () => {
   const next = { ...LLM_PICTURE, provider: "anthropic", model: "claude-opus-5", models: [{ id: "claude-opus-5", label: "Claude Opus 5" }] };
   actor.send({ type: "llm.changed", ...next });
   assert.deepEqual(actor.getSnapshot().context.llm, next);
+});
+
+// The Mac app's picture (3.4): Ollama chosen, running, with the address it answered at.
+const OLLAMA_PICTURE = {
+  signedIn: true,
+  provider: "ollama",
+  providers: [
+    { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
+    { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
+  ],
+  model: "lfm3:latest",
+  models: [
+    { id: "gemma3:latest", label: "gemma3" },
+    { id: "lfm3:latest", label: "lfm3" },
+  ],
+  effort: "on",
+  efforts: ["on", "off"],
+  ttl: "1h",
+  ollama: { address: "http://localhost:11434", running: true },
+};
+
+test("the Ollama rows say running, not running, or that lfm3 is missing (3.4)", () => {
+  assert.equal(ollamaView(LLM_PICTURE), null, "no ollama in the picture, no rows");
+  assert.deepEqual(ollamaView(OLLAMA_PICTURE), { address: "localhost:11434", running: true, lfm3Missing: false });
+  const off = { ...OLLAMA_PICTURE, models: [], model: "", ollama: { address: "http://localhost:11434", running: false } };
+  assert.equal(ollamaView(off).running, false);
+  assert.equal(ollamaView(off).lfm3Missing, false, "not running says only that");
+  assert.equal(ollamaView({ ...OLLAMA_PICTURE, models: [{ id: "gemma3:latest", label: "gemma3" }] }).lfm3Missing, true);
+});
+
+test("Change address saves the typed address with its scheme, and Try again re-sends the current one", async () => {
+  assert.equal(addressOf(" localhost:9999 "), "http://localhost:9999");
+  assert.equal(addressOf("https://box.local:11434"), "https://box.local:11434");
+  assert.equal(addressOf(""), "", "empty brings back the default");
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, llm: OLLAMA_PICTURE });
+  actor.send({ type: "_setAddress", address: "localhost:9999" });
+  assert.deepEqual(emittedLlm[0], { type: "llm.edited", address: "http://localhost:9999" });
+  actor.send({ type: "_retryOllama" });
+  assert.deepEqual(emittedLlm[1], { type: "llm.edited", address: "http://localhost:11434" });
+  actor.send({ type: "llm.changed", ...OLLAMA_PICTURE, ollama: { address: "http://localhost:9999", running: false } });
+  assert.deepEqual(actor.getSnapshot().context.llm.ollama, { address: "http://localhost:9999", running: false }, "adopted");
 });
 
 test("without the account attribute the tools are never loaded", async () => {

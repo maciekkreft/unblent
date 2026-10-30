@@ -77,6 +77,59 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: a gesture.
+    test("the Mac app's Ollama rows: running, a changed address that does not answer, no key box", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("ollama-rows"));
+        const ollama = (address, running) => ({
+          provider: "ollama",
+          providers: [
+            { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
+            { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
+          ],
+          model: running ? "lfm3:latest" : "",
+          models: running ? [{ id: "lfm3:latest", label: "lfm3" }] : [],
+          effort: "on",
+          efforts: ["on", "off"],
+          ttl: "1h",
+          ollama: { address, running },
+        });
+        const saved = [];
+        await context.route("**/api/llm", async (route) => {
+          if (route.request().method() === "PUT") {
+            saved.push(route.request().postDataJSON());
+            return route.fulfill({ json: ollama("http://localhost:9", false) });
+          }
+          return route.fulfill({ json: ollama("http://localhost:11434", true) });
+        });
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/llm`, { waitUntil: "domcontentloaded" });
+        const account = () =>
+          page.evaluate(() => document.querySelector("settings-sheet")?.shadowRoot?.querySelector(".account")?.textContent.replace(/\s+/g, " ").trim() ?? "");
+
+        await until(async () => (await account()).includes("Running at localhost:11434"));
+        const text = await account();
+        assert.ok(text.includes("Ollama (on this Mac)"), text);
+        for (const gone of ["API key", "Cache lifetime", "Evaluating"]) assert.ok(!text.includes(gone), `${gone} is hidden: ${text}`);
+
+        await page.locator("settings-sheet .ollama button", { hasText: "Change address" }).click();
+        await page.locator('settings-sheet input[aria-label="Ollama address"]').fill("localhost:9");
+        await page.keyboard.press("Enter");
+        await until(async () => (await account()).includes("Ollama isn't running"));
+        assert.deepEqual(saved, [{ address: "http://localhost:9" }]);
+        assert.ok(!(await account()).includes("Model"), "no model to choose while it is not running");
+        await page.locator("settings-sheet .ollama button", { hasText: "Try again" }).click();
+        await until(() => saved.length === 2);
+        assert.deepEqual(saved[1], { address: "http://localhost:9" });
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: rendering and layout.
     test("the Vim keys list is folded away until asked for, with the switch on or off", async () => {
       const context = await browser.newContext();

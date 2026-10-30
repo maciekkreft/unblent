@@ -2,6 +2,7 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.4
 webauthn==2.7.0
 anthropic==1.7.0
+openai==3.41.0
 cryptography==50.0.1
 jsonschema==4.26.0
 httpx==0.28.1

@@ -26,6 +26,12 @@ fi
 for dir in server components vendor tokens bus store editor composer pages; do
   rsync -a --exclude tests/ --exclude __pycache__/ --exclude '*.pyc' "$repo/$dir/" "$stage/$dir/"
 done
+# A Mac has no Node, so catalog's manifests are read here, by the same reader the
+# check uses, and shipped beside its server module (architecture.md 7.3). Without them
+# the chat on a user's Mac would have no tools.
+(cd "$repo" && node --import ./checks/register.mjs checks/manifests.mjs components/*/machine.js) \
+  > "$stage/components/catalog/server/manifests.json"
+
 mkdir -p "$stage/mac/books"
 cp "$repo/mac/books/meditations.epub" "$stage/mac/books/"
 

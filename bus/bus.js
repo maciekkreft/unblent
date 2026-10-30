@@ -390,6 +390,13 @@ export function mount(machine, { input, events = {}, queries = {}, commands = {}
   return actor;
 }
 
+// Whether a query has an answerer on this page now: a mounted fact that registered it.
+// The chat offers the model only the tools it can ask here (7.7), so a page that leaves a
+// fact out, such as the Mac page without Values, never offers that fact's lookups.
+export function answers(target, name) {
+  return mounted.has(target) && queryRegistry.has(`${target}: ${name}`);
+}
+
 export function unmount(actor) {
   actor.stop();
   for (const [id, a] of mounted) {

@@ -61,11 +61,12 @@ const toolsEdited = (key, on) => ({ type: "tools.edited", tools: { [key]: on } }
 // tools, from `catalog: contracts`. Each is one switch: its key `"target: name"`, the
 // person's label and the description. Sorted by key so the list is stable, matching the
 // order `conversations` offers them in. A tool whose owner set `switch: false` is always
-// on (7.7), so it gets no switch here.
-const toolsFrom = (contracts) => {
+// on (7.7), so it gets no switch here. A tool whose owner is not on this page, such as
+// Values on the Mac page, is left out, since the chat never offers it there.
+const toolsFrom = (contracts, answered) => {
   const queries = (contracts && contracts.queries) || [];
   return queries
-    .filter((q) => q.tool && q.tool.switch !== false)
+    .filter((q) => q.tool && q.tool.switch !== false && answered(q.target, q.name))
     .map((q) => ({ key: `${q.target}: ${q.name}`, label: q.tool.label, description: q.tool.description }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 };
@@ -197,6 +198,26 @@ export const valueChecksShown = ({ valueChecks, hidden, llm }) =>
 
 // The evaluators a values check can use: not a derived one (Your values), since a value
 // cannot be checked against the values themselves.
+// What the Ollama rows say (3.4, local edition only): null when the picture has no
+// `ollama`, else whether it answered and whether the default model is downloaded, which
+// the server picks by the id prefix `lfm3`.
+export const ollamaView = (llm) => {
+  if (!llm?.ollama) return null;
+  const { address, running } = llm.ollama;
+  return {
+    address: address.replace(/^https?:\/\//, "").replace(/\/$/, ""),
+    running,
+    lfm3Missing: running && !llm.models.some((m) => m.id.startsWith("lfm3")),
+  };
+};
+
+// The address as typed, given the scheme the row leaves out ("localhost:11434"), since
+// the server takes only an http(s) address; empty stays empty, the default.
+export const addressOf = (text) => {
+  const t = text.trim();
+  return t && !/^https?:\/\//i.test(t) ? `http://${t}` : t;
+};
+
 export const valueCheckers = (evaluators) => evaluators.filter((e) => !e.removing && !e.derivedFrom);
 
 export const machine = setup({
@@ -221,7 +242,14 @@ export const machine = setup({
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps. Every change is saved at " +
       "once by the fact that owns it. Your account also holds the Jev key, which `llm` keeps. " +
-      "Echo is offered as a provider only in the workshop profile. Your account also holds the " +
+      "Echo is offered as a provider only in the workshop profile. In the Mac app the provider " +
+      "Ollama (on this Mac) has no key box: a row says Running at its address, or that Ollama isn't " +
+      "running with a link to ollama.com and Try again, and Change address opens a box where Enter or " +
+      "leaving saves, Escape keeps the old one and an empty address brings back the default. The Model " +
+      "list shows the models downloaded in Ollama; when lfm3 is not among them a line gives the " +
+      "Terminal command ollama pull lfm3 with Copy and Try again. Thinking is On or Off, and the " +
+      "cache lifetime is not shown for Ollama. The Evaluating group is shown only where `llm` " +
+      "offers Jev, so the Mac app never shows it. Your account also holds the " +
       "choice point checks, which `choice-point-checks` keeps, in a fold that starts closed: " +
       "for each box of a choice point, the evaluator whose questions Jev answers about each " +
       "line, and per question whether its answer is shown, when (always, or only when an " +
@@ -244,7 +272,7 @@ export const machine = setup({
       "while `flags` reports evaluators hidden or has not answered. The choice point checks part is " +
       "hidden on a page without `choice-point-checks`, and while `flags` reports choice " +
       "points or evaluators hidden, or has not answered (a page without `flags` hides nothing). The Vim keys list names the chat box " +
-      "only on a page where `conversations` answers, so the Mac page never mentions it. Remove on the API key or the Jev key " +
+      "only on a page where `conversations` answers. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +
       "bar, and the key is removed only when the window ends; leaving the page before then " +
       "keeps it. The last line of the sheet, on every page, reads \"Something not working, or an " +
@@ -274,6 +302,7 @@ export const machine = setup({
   // picture (7.7), asked only when the account section is shown, null otherwise.
   context: ({ input }) => ({
     ask: input.ask,
+    answered: input.answered ?? (() => true),
     current: input.current,
     account: Boolean(input.account),
     pages: [],
@@ -390,7 +419,7 @@ export const machine = setup({
         input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           { guard: ({ event }) => Boolean(event.output.error), target: "loadingTools" },
-          { target: "loadingTools", actions: assign({ toolList: ({ event }) => toolsFrom(event.output) }) },
+          { target: "loadingTools", actions: assign({ toolList: ({ context, event }) => toolsFrom(event.output, context.answered) }) },
         ],
         onError: { target: "loadingTools" },
       },
@@ -519,6 +548,14 @@ export const machine = setup({
         _removeJevKey: { guard: ({ context }) => !context.removing.includes("jevKey"), actions: startRemoval("jevKey") },
         _setEffort: { actions: emit(({ event }) => llmEdited({ effort: event.effort })) },
         _setTtl: { actions: emit(({ event }) => llmEdited({ ttl: event.ttl })) },
+        // Ollama's address (3.4): an empty one brings back the default. Try again sends
+        // the current address once more, because every save makes `llm` read the
+        // models from Ollama again and announce what it found.
+        _setAddress: { actions: emit(({ event }) => llmEdited({ address: addressOf(event.address) })) },
+        _retryOllama: {
+          guard: ({ context }) => Boolean(context.llm?.ollama),
+          actions: emit(({ context }) => llmEdited({ address: context.llm.ollama.address })),
+        },
         // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
         // it and announces tools.changed, adopted below (4.3). Reversible by flipping back.
         _toggleTool: { actions: emit(({ event }) => toolsEdited(event.key, event.on)) },
@@ -604,6 +641,7 @@ export const machine = setup({
           efforts: event.efforts,
           ttl: event.ttl,
           ...(event.jev ? { jev: event.jev } : {}),
+          ...(event.ollama ? { ollama: event.ollama } : {}),
         }),
       }),
     },
