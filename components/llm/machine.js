@@ -39,9 +39,13 @@ const needsKey = (picture) => {
 // The key rides through to the server from here and never enters context.
 const patchOf = (event) => {
   const patch = {};
-  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey", "address"]) if (field in event) patch[field] = event[field];
+  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey", "address", "decider"]) if (field in event) patch[field] = event[field];
   return patch;
 };
+
+// Jev answers decide unless the picture names Ollama on the user's Mac (3.4); a
+// picture from before deciders were offered names none and means Jev.
+const jevDecides = (picture) => (picture.decider?.provider ?? "jev") === "jev";
 
 // Why a guest's request to this provider is refused before it reaches the server, or
 // null (7.7): blocked, its own allowance used up, or paused for every guest. The server
@@ -213,7 +217,7 @@ export const machine = setup({
       "thinking effort, cache lifetime, and the API keys, which are kept encrypted on the " +
       "server and never sent back to the browser. A chat answer streams back piece by piece as " +
       "events, one answer at a time; `decide` asks Jev yes-or-no and pick-one questions and " +
-      "returns the answers in the reply, on the account's own Jev key. `generate` writes one short text in one go " +
+      "returns the answers in the reply, on the account's own Jev key, and refuses as no-key at once when Jev decides and no Jev key is saved. `generate` writes one short text in one go " +
       "for a generator, the generator's prompt as the instruction and the item's content as the message, on the account's " +
       "own Anthropic key whichever provider the chat uses, one at a time and beside a chat answer; a model the key does not " +
       "offer is refused as unavailable, guests and signed-out visitors are refused as signed-out, and the model \"echo\" " +
@@ -233,7 +237,11 @@ export const machine = setup({
       "provider: it needs no key, costs nothing and is not counted, its address is kept with the account (empty brings " +
       "back http://localhost:11434), and the picture says whether it answered there just now and lists only the models " +
       "downloaded in it, preferring gemma4:e2b-mlx; its thinking is On or Off, and an answer it cannot give because it is not " +
-      "running fails as local-off. The Mac app's picture has no Jev; the website never offers Ollama.",
+      "running fails as local-off. In the Mac app `decide` is answered by default by the decision model nimble-v3 in Ollama, " +
+      "with no key and no cost; the user may choose Jev on their own Jev key instead. The picture names who decides, its " +
+      "model, and whether it can answer now (a Jev key is saved, or Ollama answered and has nimble-v3 downloaded); a " +
+      "decision Ollama cannot give fails as local-off when it is not running and as no-model when nimble-v3 is not " +
+      "downloaded. The website never offers Ollama, for chats or for decisions.",
     kind: "fact",
     shape: "remote-only",
     owns: "access to the models: the language models that write, and Jev, which decides",
@@ -380,7 +388,12 @@ export const machine = setup({
                 guard: ({ context }) => Boolean(context.picture.freeUse) && !context.picture.jev?.keySet,
                 actions: ({ event }) => event.reply({ error: "paused" }),
               },
-              { guard: ({ context }) => !context.picture.jev?.keySet, actions: ({ event }) => event.reply({ error: "no-key" }) },
+              // With Ollama deciding, only the server can tell whether it is running
+              // and has the model, so the request goes through (local-off, no-model).
+              {
+                guard: ({ context }) => jevDecides(context.picture) && !context.picture.jev?.keySet,
+                actions: ({ event }) => event.reply({ error: "no-key" }),
+              },
               {
                 target: "running",
                 actions: assign({ decided: ({ event }) => event.reply, asked: ({ event }) => event.payload }),

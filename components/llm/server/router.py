@@ -7,11 +7,12 @@ SQLite file, so isolation holds by construction.
 Routes: GET "" returns the account's picture (without signedIn, which the browser
 adds); PUT "" changes settings and the keys; POST "/complete" streams one answer as
 newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
-questions and returns its answers, on the account's own Jev key; POST "/generate"
+questions and returns its answers, on the account's own Jev key or, in the local edition
+with the ollama decider, from nimble-v3 in Ollama on the user's Mac; POST "/generate"
 writes one short text in one go on the account's own Anthropic key, whichever
 provider the chat uses, and model "echo" answers with Echo. In the local edition (3.4)
 the picture also offers Ollama on the user's own Mac, at an address the account keeps,
-and leaves out Jev. A request body that fails validation is answered
+for chats and, by default, for decisions. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
 
 A guest (3.4) spends only on the guest keys, within the limits, counted in
@@ -65,6 +66,9 @@ _OLLAMA_EFFORTS = ("on", "off")
 _OLLAMA_ADDRESS = "http://localhost:11434"
 _TTLS = ("5m", "1h")
 _DEFAULT_MODEL = "claude-opus-5"
+# The decision model the Mac app asks in Ollama (3.4), under any tag it was pulled with.
+_NIMBLE = "nimble-v3"
+_NIMBLE_DEFAULT = "nimble-v3:latest"
 
 # The models a provider offers, cached per user for ten minutes so a read does not
 # call the provider on every mount; cleared for a user when their settings change.
@@ -89,20 +93,40 @@ def _connect(user_id: str) -> Iterator[sqlite3.Connection]:
 
 def _migrate(connection: sqlite3.Connection) -> None:
     # A file made before Ollama was offered (3.4) has no address column yet.
-    if "address" not in {row["name"] for row in connection.execute("PRAGMA table_info(settings)")}:
+    columns = {row["name"] for row in connection.execute("PRAGMA table_info(settings)")}
+    if "address" not in columns:
         connection.executescript("ALTER TABLE settings ADD COLUMN address TEXT")
+    # A file made before Ollama could decide has no decider column yet.
+    if "decider" not in columns:
+        connection.executescript("ALTER TABLE settings ADD COLUMN decider TEXT")
+
+
+def _deciders() -> list[str]:
+    # Ollama runs on the user's own Mac, so only the local edition offers it (3.4), and
+    # there it comes first because it needs no key and costs nothing.
+    return ["ollama", "jev"] if local_user() else ["jev"]
+
+
+def _decider(stored) -> str:
+    # NULL, or a choice this edition does not offer, reads as the edition's default.
+    deciders = _deciders()
+    return stored if stored in deciders else deciders[0]
 
 
 def _settings(connection: sqlite3.Connection) -> dict:
-    row = connection.execute("SELECT provider, model, effort, ttl, address FROM settings WHERE one = 1").fetchone()
+    row = connection.execute("SELECT provider, model, effort, ttl, address, decider FROM settings WHERE one = 1").fetchone()
     if row is None:
         # The Mac app answers from Ollama on the user's own Mac unless they choose
         # otherwise (3.4); the website from Anthropic.
         provider = "ollama" if local_user() else "anthropic"
-        return {"provider": provider, "model": "", "effort": "default", "ttl": "1h", "address": _OLLAMA_ADDRESS}
+        return {
+            "provider": provider, "model": "", "effort": "default", "ttl": "1h", "address": _OLLAMA_ADDRESS,
+            "decider": _decider(None), "deciderSet": False,
+        }
     return {
         "provider": row["provider"], "model": row["model"], "effort": row["effort"], "ttl": row["ttl"],
         "address": row["address"] or _OLLAMA_ADDRESS,
+        "decider": _decider(row["decider"]), "deciderSet": row["decider"] is not None,
     }
 
 
@@ -124,6 +148,11 @@ def _ollama_models(address: str) -> list[dict] | None:
         return openai_adapter.list_models(f"{address}/v1", "ollama")
     except Exception:
         return None
+
+
+def _nimble(models: list[dict] | None) -> str | None:
+    """The id of nimble-v3 among Ollama's downloaded models, or None."""
+    return next((m["id"] for m in models or [] if m["id"].startswith(_NIMBLE)), None)
 
 
 def _key(connection: sqlite3.Connection, provider: str) -> str | None:
@@ -196,11 +225,16 @@ def _picture(user_id: str, connection: sqlite3.Connection, guest: bool = False) 
         "efforts": list(_efforts(provider)),
         "ttl": settings["ttl"],
     }
+    jev_set = _key_for(connection, "jev", guest) is not None
+    picture["jev"] = {"keySet": jev_set}
     if local:
         picture["ollama"] = {"address": settings["address"], "running": ollama is not None}
+    if settings["decider"] == "ollama":
+        nimble = _nimble(ollama)
+        picture["decider"] = {"provider": "ollama", "model": nimble or _NIMBLE_DEFAULT, "ready": nimble is not None}
     else:
-        # Jev answers only on the website; the Mac app has no Evaluating (3.4, 8).
-        picture["jev"] = {"keySet": _key_for(connection, "jev", guest) is not None}
+        picture["decider"] = {"provider": "jev", "model": "jev-latest", "ready": jev_set}
+    picture["deciders"] = _deciders()
     if guest:
         picture["freeUse"] = spending.free_use(user_id)
     return picture
@@ -254,6 +288,9 @@ def _valid(payload) -> dict | None:
     address = payload.get("address")
     if address is not None and _address(address) is None:
         return None
+    decider = payload.get("decider")
+    if decider is not None and decider not in _deciders():
+        return None
     if ttl is not None and ttl not in _TTLS:
         return None
     if model is not None and not isinstance(model, str):
@@ -263,6 +300,7 @@ def _valid(payload) -> dict | None:
     return {
         "provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key,
         "address": None if address is None else _address(address),
+        "decider": decider,
     }
 
 
@@ -285,9 +323,9 @@ def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
         current = _settings(connection)
         provider = fields["provider"] or current["provider"]
         connection.execute(
-            "INSERT INTO settings (one, provider, model, effort, ttl, address) VALUES (1, ?, ?, ?, ?, ?)"
+            "INSERT INTO settings (one, provider, model, effort, ttl, address, decider) VALUES (1, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(one) DO UPDATE SET provider = excluded.provider, model = excluded.model,"
-            " effort = excluded.effort, ttl = excluded.ttl, address = excluded.address",
+            " effort = excluded.effort, ttl = excluded.ttl, address = excluded.address, decider = excluded.decider",
             (
                 provider,
                 fields["model"] if fields["model"] is not None else current["model"],
@@ -295,6 +333,8 @@ def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
                 fields["ttl"] or current["ttl"],
                 # NULL is the default address, so a later change of default reaches it.
                 (fields["address"] or None) if fields["address"] is not None else (None if current["address"] == _OLLAMA_ADDRESS else current["address"]),
+                # NULL is the edition's default decider, until the user chooses one.
+                fields["decider"] or (current["decider"] if current["deciderSet"] else None),
             ),
         )
         key = fields["key"]
@@ -388,11 +428,27 @@ def _decide(user_id: str, state: dict, questions: list, guest: bool = False) -> 
             spending.add(user_id, "jev", spending.jev_cost(reply["inputTokens"]))
         return reply
     with _connect(user_id) as connection:
+        settings = _settings(connection)
         key = _key(connection, "jev")
+    if settings["decider"] == "ollama":
+        return _decide_local(settings["address"], state, questions)
     if key is None:
         # The error rides the reply, as complete's does, so the asker shows it.
         return {"error": "no-key"}
     return jev_adapter.decide(key, state, questions)
+
+
+def _decide_local(address: str, state: dict, questions: list) -> dict:
+    # nimble-v3 on the user's own Mac needs no key, costs nothing and is not counted
+    # (3.4, 7.7). Asking Ollama for its models first tells "not running" from "not
+    # downloaded" and finds the tag the model was pulled with.
+    models = _ollama_models(address)
+    if models is None:
+        return {"error": "local-off"}
+    nimble = _nimble(models)
+    if nimble is None:
+        return {"error": "no-model"}
+    return jev_adapter.decide_local(address, nimble, state, questions)
 
 
 def _options_ok(options) -> bool:

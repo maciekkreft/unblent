@@ -436,6 +436,43 @@ test("llm.edited carries the Jev key through to the server and never into contex
   assert.ok(!JSON.stringify(h.actor.getSnapshot().context).includes("jev-secret-value"));
 });
 
+// The Mac app's picture with Ollama deciding (3.4): no Jev key is needed.
+const onMac = (ready) => ({
+  ...PICTURE,
+  jev: { keySet: false },
+  decider: { provider: "ollama", model: "nimble-v3:latest", ready },
+  deciders: ["ollama", "jev"],
+});
+
+test("decide? with Ollama deciding goes to the server without a Jev key, whose error rides the reply", async () => {
+  const answer = { answers: [{ id: "a/b", p: 0.8 }], inputTokens: 0, ms: 40 };
+  const h = start({ picture: onMac(true), decide: () => Promise.resolve(answer) });
+  await ready(h.actor);
+  assert.deepEqual(await query(h.actor, "decide?", DECISION, DECIDE.reply), answer);
+  assert.deepEqual(h.calls.decide, [DECISION]);
+
+  const off = start({ picture: onMac(false), decide: () => Promise.resolve({ error: "local-off" }) });
+  await ready(off.actor);
+  assert.deepEqual(await query(off.actor, "decide?", DECISION, DECIDE.reply), { error: "local-off" });
+  assert.equal(off.calls.decide.length, 1, "only the server knows whether Ollama answers");
+});
+
+test("decide? with Jev chosen on the Mac and no Jev key is refused at once with no-key", async () => {
+  const h = start({ picture: { ...onMac(false), decider: { provider: "jev", model: "jev-latest", ready: false } } });
+  await ready(h.actor);
+  assert.deepEqual(await query(h.actor, "decide?", DECISION, DECIDE.reply), { error: "no-key" });
+  assert.equal(h.calls.decide.length, 0);
+});
+
+test("llm.edited carries the chosen decider through to the server", async () => {
+  const h = start({ picture: onMac(true), save: () => ({ ...onMac(false), decider: { provider: "jev", model: "jev-latest", ready: false } }) });
+  await ready(h.actor);
+  h.actor.send({ type: "llm.edited", decider: "jev" });
+  await until(() => h.emitted.some((e) => e.type === "llm.changed"));
+  assert.deepEqual(h.calls.save[0], { decider: "jev" });
+  assert.equal(h.emitted.filter((e) => e.type === "llm.changed").at(-1).decider.provider, "jev");
+});
+
 const WANTED = { model: "echo", prompt: "Name this chat.", text: "First message:\nhello" };
 
 test("generate? passes the payload to the server and replies its text", async () => {
