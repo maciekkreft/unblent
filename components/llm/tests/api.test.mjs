@@ -61,7 +61,7 @@ test("a fresh account reads default settings", async () => {
   assert.equal((await edit({ provider: "ollama" }, cookie)).status, 400);
   // Jev is the website's only decider.
   assert.deepEqual(picture.deciders, ["jev"]);
-  assert.deepEqual(picture.decider, { provider: "jev", model: "jev-latest", ready: false });
+  assert.deepEqual(picture.decider, { provider: "jev", model: "jev-latest", ready: false, models: [{ id: "jev-latest", label: "Jev" }] });
   assert.equal((await edit({ decider: "ollama" }, cookie)).status, 400);
 });
 

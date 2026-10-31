@@ -131,20 +131,20 @@ test("the model choice shows the stored model even when the key does not offer i
   assert.deepEqual(changed(GENERATORS[0], { name: "Chat title", prompt: "x" }), { prompt: "x" });
 });
 
-// The Mac's picture (3.4): Ollama is the chat's provider, gemma4:e2b-mlx its model.
+// The Mac's picture (3.4): Ollama is the chat's provider, gemma4:e4b-mlx its model.
 const MAC = {
   provider: "ollama",
   providers: [
     { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
     { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
   ],
-  model: "gemma4:e2b-mlx",
-  models: [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" }],
+  model: "gemma4:e4b-mlx",
+  models: [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e4b-mlx", label: "gemma4:e4b-mlx" }],
   ollama: { address: "http://localhost:11434", running: true },
 };
 
 test("on the Mac a generator shows the chat model while its own is not offered, and its own when it is", () => {
-  assert.equal(modelOf(MAC, "claude-haiku-5-5"), "gemma4:e2b-mlx");
+  assert.equal(modelOf(MAC, "claude-haiku-5-5"), "gemma4:e4b-mlx");
   assert.deepEqual(modelsFor(MAC, "claude-haiku-5-5"), MAC.models, "the website's default is not offered as a choice");
   assert.equal(modelOf(MAC, "gemma3:latest"), "gemma3:latest");
   assert.equal(modelOf({ ...MAC, models: [], model: "" }, "claude-haiku-5-5"), "claude-haiku-5-5", "Ollama off: the stored model stays");

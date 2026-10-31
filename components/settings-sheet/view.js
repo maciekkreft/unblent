@@ -24,7 +24,7 @@ const EFFORT_LABELS = {
 };
 // Ollama runs on the user's own Mac (3.4), so its name says where the answers come from.
 const PROVIDER_LABELS = { ollama: "Ollama (on this Mac)" };
-const PULL = "ollama pull gemma4:e2b-mlx";
+const PULL = "ollama pull gemma4:e4b-mlx";
 // Who answers the checks in the Mac app (3.4): each name says where the answers come from
 // and what they cost.
 const DECIDER_LABELS = { ollama: "Ollama (on this Mac)", jev: "Jev (your own key)" };
@@ -831,7 +831,7 @@ class SettingsSheet extends LitElement {
           ? nothing
           : html`<div class="field"><span>Model</span><span class="help">Add your API key to choose a model.</span></div>`}
         ${ollama?.defaultMissing
-          ? this.#pullHint(PULL, html`gemma4:e2b-mlx isn't downloaded. In Terminal: <code>${PULL}</code>`)
+          ? this.#pullHint(PULL, html`gemma4:e4b-mlx isn't downloaded. In Terminal: <code>${PULL}</code>`)
           : nothing}
         <label class="field">
           <span>${ollama ? "Thinking" : "Thinking effort"}</span>

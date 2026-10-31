@@ -19,7 +19,7 @@ const LOCAL = "e".repeat(32);
 const data = mkdtempSync(join(tmpdir(), "unblent-test-ollama-"));
 const received = [];
 const decided = [];
-const MODELS = [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "gemma4:e2b-mlx", object: "model", created: 1, owned_by: "library" }];
+const MODELS = [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "gemma4:e4b-mlx", object: "model", created: 1, owned_by: "library" }];
 const KEV = { id: "kev:0.8b-mlx-bf16", object: "model", created: 1, owned_by: "library" };
 // What the fake lists as downloaded, and the status its systemone answers with.
 const fakeState = { kev: false, systemone: 200 };
@@ -37,7 +37,7 @@ const freePort = () =>
     });
   });
 
-const chunk = (delta, extra = {}) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "gemma4:e2b-mlx", choices: [{ index: 0, delta, finish_reason: null, ...extra }] })}\n\n`;
+const chunk = (delta, extra = {}) => `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "gemma4:e4b-mlx", choices: [{ index: 0, delta, finish_reason: null, ...extra }] })}\n\n`;
 
 // The first round thinks, writes, and asks for one call whose arguments arrive in two
 // fragments; the round that brings the result back answers in text.
@@ -54,7 +54,7 @@ const answer = (body) => {
     out.push(chunk({ tool_calls: [{ index: 0, function: { arguments: '"b1"}' } }] }));
     out.push(chunk({}, { finish_reason: "tool_calls" }));
   }
-  out.push(`data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "gemma4:e2b-mlx", choices: [], usage: { prompt_tokens: 120, completion_tokens: 9, total_tokens: 129 } })}\n\n`);
+  out.push(`data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "gemma4:e4b-mlx", choices: [], usage: { prompt_tokens: 120, completion_tokens: 9, total_tokens: 129 } })}\n\n`);
   out.push("data: [DONE]\n\n");
   return out.join("");
 };
@@ -155,7 +155,7 @@ after(async () => {
   rmSync(data, { recursive: true, force: true });
 });
 
-test("the Mac app offers Ollama first, at its default address; gemma4:e2b-mlx is the default model once Ollama answers", async () => {
+test("the Mac app offers Ollama first, at its default address; gemma4:e4b-mlx is the default model once Ollama answers", async () => {
   const fresh = await read();
   assert.equal(fresh.provider, "ollama");
   assert.equal(fresh.providers[0].id, "ollama");
@@ -167,8 +167,8 @@ test("the Mac app offers Ollama first, at its default address; gemma4:e2b-mlx is
   assert.equal(fresh.decider.provider, "ollama", "Ollama decides by default");
   const picture = await (await edit({ address: `${ollama}/` })).json();
   assert.deepEqual(picture.ollama, { address: ollama, running: true }, "kept without the trailing slash");
-  assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" }]);
-  assert.equal(picture.model, "gemma4:e2b-mlx");
+  assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e4b-mlx", label: "gemma4:e4b-mlx" }]);
+  assert.equal(picture.model, "gemma4:e4b-mlx");
   assert.equal((await edit({ address: "ftp://nowhere" })).status, 400, "only an http or https address");
   assert.equal((await read()).ollama.address, ollama);
 });
@@ -195,7 +195,7 @@ test("an answer streams thinking, text and one joined call, and the result goes 
     { type: "call", id: "call_1", target: "books", name: "chapter", payload: { book: "b1" } },
   ]);
   const end = first.at(-1);
-  assert.deepEqual([end.status, end.provider, end.model], ["done", "ollama", "gemma4:e2b-mlx"]);
+  assert.deepEqual([end.status, end.provider, end.model], ["done", "ollama", "gemma4:e4b-mlx"]);
   assert.deepEqual(end.usage, { input_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 9 });
   assert.equal(received[0].reasoning_effort, "medium", "thinking on");
   assert.deepEqual(received[0].tools, [{ type: "function", function: { name: "books__chapter", description: "Read a chapter.", parameters: TOOL.payload } }]);
@@ -220,7 +220,10 @@ test("Ollama decides by default: kev:0.8b-mlx-bf16 answers yes/no and pick-one a
   fakeState.kev = true;
   try {
     const picture = await (await edit({ address: ollama })).json();
-    assert.deepEqual(picture.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true });
+    assert.deepEqual(picture.decider, {
+      provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true,
+      models: ["kev:0.8b-mlx-bf16", "gemma3:latest", "gemma4:e4b-mlx"].map((id) => ({ id, label: id })),
+    }, "every downloaded model may make the checks, Kev first");
     decided.length = 0;
     const reply = await decide(DECISION);
     assert.deepEqual(reply.answers, [
@@ -238,7 +241,7 @@ test("Ollama decides by default: kev:0.8b-mlx-bf16 answers yes/no and pick-one a
 test("a decision Ollama cannot give is local-off when nothing listens and no-model when kev:0.8b-mlx-bf16 is missing", async () => {
   try {
     const off = await (await edit({ address: dead })).json();
-    assert.deepEqual(off.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: false });
+    assert.deepEqual(off.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: false, models: [] });
     assert.deepEqual(await decide(DECISION), { error: "local-off" });
 
     const missing = await (await edit({ address: ollama })).json();
@@ -258,7 +261,7 @@ test("a decision Ollama cannot give is local-off when nothing listens and no-mod
 test("with Jev chosen, a decision needs the Jev key and is sent to Jev with it", async () => {
   try {
     const chosen = await (await edit({ decider: "jev" })).json();
-    assert.deepEqual(chosen.decider, { provider: "jev", model: "jev-latest", ready: false });
+    assert.deepEqual(chosen.decider, { provider: "jev", model: "jev-latest", ready: false, models: [{ id: "jev-latest", label: "Jev" }] });
     assert.deepEqual(await decide(DECISION), { error: "no-key" });
     assert.equal((await edit({ decider: "anthropic" })).status, 400);
     const keyed = await (await edit({ jevKey: "jev-local-key" })).json();
@@ -278,7 +281,7 @@ test("a generator runs on the chat model in Ollama, in one go and with no key, w
   await edit({ address: ollama });
   received.length = 0;
   assert.deepEqual(await generate(WANTED), { text: "Stoic evenings" }, "the website's default runs on Gemma");
-  assert.deepEqual([received[0].model, received[0].stream ?? false, received[0].reasoning_effort], ["gemma4:e2b-mlx", false, "none"]);
+  assert.deepEqual([received[0].model, received[0].stream ?? false, received[0].reasoning_effort], ["gemma4:e4b-mlx", false, "none"]);
   assert.deepEqual(received[0].messages, [{ role: "system", content: WANTED.prompt }, { role: "user", content: WANTED.text }]);
   assert.deepEqual(await generate({ ...WANTED, model: "gemma3:latest" }), { text: "Stoic evenings" });
   assert.equal(received[1].model, "gemma3:latest", "a model Ollama has runs as chosen");

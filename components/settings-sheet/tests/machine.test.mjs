@@ -323,10 +323,10 @@ const OLLAMA_PICTURE = {
     { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
     { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
   ],
-  model: "gemma4:e2b-mlx",
+  model: "gemma4:e4b-mlx",
   models: [
     { id: "gemma3:latest", label: "gemma3" },
-    { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" },
+    { id: "gemma4:e4b-mlx", label: "gemma4:e4b-mlx" },
   ],
   effort: "on",
   efforts: ["on", "off"],

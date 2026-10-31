@@ -203,9 +203,9 @@ def _pick_default(models: list[dict]) -> str:
     ids = {model["id"] for model in models}
     if _DEFAULT_MODEL in ids:
         return _DEFAULT_MODEL
-    # gemma4:e2b-mlx is the model the Mac app is made for (3.4), under any tag Ollama gives it.
+    # gemma4:e4b-mlx is the model the Mac app is made for (3.4), under any tag Ollama gives it.
     for model in models:
-        if model["id"].startswith("gemma4:e2b-mlx"):
+        if model["id"].startswith("gemma4:e4b-mlx"):
             return model["id"]
     return models[0]["id"] if models else ""
 

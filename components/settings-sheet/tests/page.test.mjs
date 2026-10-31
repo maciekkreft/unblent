@@ -89,8 +89,8 @@ for (const engine of ENGINES) {
             { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
             { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
           ],
-          model: running ? "gemma4:e2b-mlx" : "",
-          models: running ? [{ id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" }] : [],
+          model: running ? "gemma4:e4b-mlx" : "",
+          models: running ? [{ id: "gemma4:e4b-mlx", label: "gemma4:e4b-mlx" }] : [],
           effort: "on",
           efforts: ["on", "off"],
           ttl: "1h",
@@ -131,7 +131,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("the Mac app's Decisions: Kev not downloaded shows the pull line, choosing Jev shows its key", async () => {
+    test("the Mac app's checks: Kev not downloaded shows the pull line, choosing Jev shows its key", async () => {
       const context = await browser.newContext();
       context.setDefaultTimeout(4000);
       try {
@@ -158,7 +158,7 @@ for (const engine of ENGINES) {
         const before = await judging(page);
         assert.ok(before.text.includes("Ollama 0.40.4 or later"), before.text);
         assert.equal(before.input, false, "no Jev key box while Kev decides");
-        assert.deepEqual(before.buttons, ["Copy", "Try again"]);
+        assert.deepEqual(before.buttons, ["Change address", "Copy", "Try again"], "the Ollama row, as the chat has it, then the pull line");
 
         await page.locator("settings-sheet .judging select").selectOption("jev");
         await until(async () => (await judging(page))?.input);
