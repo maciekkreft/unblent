@@ -10,12 +10,19 @@ import { fileURLToPath } from "node:url";
 
 // Ollama in the Mac app (3.4): a local-edition server of this file's own, on a
 // throwaway data directory, answered by a fake OpenAI-compatible server in this process
-// that streams thinking, text and a tool call as Ollama does. The local edition needs
+// that streams thinking, text and a tool call as Ollama does, and answers decisions at
+// /v1/systemone as Ollama does for nimble-v3. The same fake stands in for Jev under
+// /jev, so choosing Jev is tried without reaching typesafe.ai. The local edition needs
 // no cookie: every request belongs to its one account.
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 const LOCAL = "e".repeat(32);
 const data = mkdtempSync(join(tmpdir(), "unblent-test-ollama-"));
 const received = [];
+const decided = [];
+const MODELS = [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "gemma4:e2b-mlx", object: "model", created: 1, owned_by: "library" }];
+const NIMBLE = { id: "nimble-v3:latest", object: "model", created: 1, owned_by: "library" };
+// What the fake lists as downloaded, and the status its systemone answers with.
+const fakeState = { nimble: false, systemone: 200 };
 let server;
 let fake;
 let base;
@@ -56,7 +63,31 @@ const fakeOllama = () =>
   createHttp(async (req, res) => {
     if (req.method === "GET" && req.url === "/v1/models") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ object: "list", data: [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "gemma4:e2b-mlx", object: "model", created: 1, owned_by: "library" }] }));
+      res.end(JSON.stringify({ object: "list", data: fakeState.nimble ? [...MODELS, NIMBLE] : MODELS }));
+      return;
+    }
+    if (req.method === "POST" && (req.url === "/v1/systemone" || req.url === "/jev")) {
+      let raw = "";
+      for await (const part of req) raw += part;
+      const body = JSON.parse(raw);
+      decided.push({ url: req.url, authorization: req.headers.authorization ?? null, body });
+      if (req.url === "/v1/systemone" && fakeState.systemone !== 200) {
+        res.writeHead(fakeState.systemone, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `model "${body.model}" not found, try pulling it first` }));
+        return;
+      }
+      // No confidence and no usage, as Ollama's systemone documents neither.
+      const answers = {};
+      for (const [id, q] of Object.entries(body.questions)) {
+        if (q.type === "noul") answers[id] = { type: "noul", noul: 0.75 };
+        else {
+          const names = Object.keys(q.criteria);
+          answers[id] = { type: "choice", choice: names[1], probabilities: Object.fromEntries(names.map((n, i) => [n, i === 1 ? 0.9 : 0.1 / (names.length - 1)])) };
+        }
+      }
+      if (req.url === "/jev") Object.values(answers).forEach((a) => a.type === "choice" && (a.confidence = 0.8));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(req.url === "/jev" ? { answers, usage: { input_tokens: 12 } } : { answers }));
       return;
     }
     if (req.method === "POST" && req.url === "/v1/chat/completions") {
@@ -64,6 +95,12 @@ const fakeOllama = () =>
       for await (const part of req) raw += part;
       const body = JSON.parse(raw);
       received.push(body);
+      if (!body.stream) {
+        // A generator's one text in one go (llm: generate), not streamed.
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "c2", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: " Stoic evenings " }, finish_reason: "stop" }], usage: { prompt_tokens: 30, completion_tokens: 3, total_tokens: 33 } }));
+        return;
+      }
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(answer(body));
       return;
@@ -73,7 +110,18 @@ const fakeOllama = () =>
 
 const read = async () => (await fetch(`${base}/api/llm`)).json();
 const edit = (body) => fetch(`${base}/api/llm`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const decide = async (body) => (await fetch(`${base}/api/llm/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+const DECISION = {
+  state: { text: "I want to be kind." },
+  questions: [
+    { id: "q", instructions: "Is it a value?", yes: "an ongoing way of acting", no: "something finished" },
+    { id: "k", kind: "pick", instructions: "Goal or value?", options: [{ id: "g", name: "Goal" }, { id: "v", name: "Value", description: "never finished" }] },
+  ],
+};
 const complete = async (body) => (await (await fetch(`${base}/api/llm/complete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).text()).trim().split("\n").map((line) => JSON.parse(line));
+
+const generate = async (body) => (await fetch(`${base}/api/llm/generate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+const WANTED = { model: "claude-haiku-5-5", prompt: "Name this chat.", text: "What did the Stoics do at night?" };
 
 const ulid = (n) => `01TEST${String(n).padStart(20, "0")}`;
 const TOOL = { target: "books", name: "chapter", description: "Read a chapter.", payload: { type: "object", properties: { book: { type: "string" } }, required: ["book"] } };
@@ -86,7 +134,7 @@ before(async () => {
   dead = `http://127.0.0.1:${await freePort()}`;
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
-  const env = { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "ollama-test-secret", UNBLENT_LOCAL_USER: LOCAL };
+  const env = { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "ollama-test-secret", UNBLENT_LOCAL_USER: LOCAL, UNBLENT_JEV_URL: `${ollama}/jev` };
   delete env.UNBLENT_REMOTE;
   server = spawn(join(ROOT, ".venv/bin/uvicorn"), ["server.main:app", "--host", "127.0.0.1", "--port", String(port), "--log-level", "warning"], { cwd: ROOT, env, stdio: ["ignore", "ignore", "inherit"] });
   for (let i = 0; i < 200; i++) {
@@ -107,14 +155,16 @@ after(async () => {
   rmSync(data, { recursive: true, force: true });
 });
 
-test("the Mac app offers Ollama first, at its default address, with no Jev; gemma4:e2b-mlx is the default model once Ollama answers", async () => {
+test("the Mac app offers Ollama first, at its default address; gemma4:e2b-mlx is the default model once Ollama answers", async () => {
   const fresh = await read();
   assert.equal(fresh.provider, "ollama");
   assert.equal(fresh.providers[0].id, "ollama");
   assert.deepEqual(fresh.efforts, ["on", "off"]);
   assert.equal(fresh.effort, "on");
   assert.equal(fresh.ollama.address, "http://localhost:11434");
-  assert.equal("jev" in fresh, false);
+  assert.deepEqual(fresh.jev, { keySet: false }, "Jev can be chosen to decide");
+  assert.deepEqual(fresh.deciders, ["ollama", "jev"]);
+  assert.equal(fresh.decider.provider, "ollama", "Ollama decides by default");
   const picture = await (await edit({ address: `${ollama}/` })).json();
   assert.deepEqual(picture.ollama, { address: ollama, running: true }, "kept without the trailing slash");
   assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" }]);
@@ -164,4 +214,84 @@ test("an answer streams thinking, text and one joined call, and the result goes 
     { role: "assistant", content: "Checking.", tool_calls: [{ id: "call_1", type: "function", function: { name: "books__chapter", arguments: '{"book": "b1"}' } }] },
     { role: "tool", tool_call_id: "call_1", content: "Stoics." },
   ]);
+});
+
+test("Ollama decides by default: nimble-v3 answers yes/no and pick-one at /v1/systemone, with no key and no confidence", async () => {
+  fakeState.nimble = true;
+  try {
+    const picture = await (await edit({ address: ollama })).json();
+    assert.deepEqual(picture.decider, { provider: "ollama", model: "nimble-v3:latest", ready: true });
+    decided.length = 0;
+    const reply = await decide(DECISION);
+    assert.deepEqual(reply.answers, [
+      { id: "q", p: 0.75 },
+      { id: "k", p: 0.9, choice: "v", probabilities: [{ id: "g", p: 0.1 }, { id: "v", p: 0.9 }] },
+    ]);
+    assert.equal(reply.inputTokens, 0, "Ollama reports no usage");
+    assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/v1/systemone", null, "nimble-v3:latest"]);
+    assert.deepEqual(decided[0].body.questions.k.criteria, { Goal: null, Value: "never finished" });
+  } finally {
+    fakeState.nimble = false;
+  }
+});
+
+test("a decision Ollama cannot give is local-off when nothing listens and no-model when nimble-v3 is missing", async () => {
+  try {
+    const off = await (await edit({ address: dead })).json();
+    assert.deepEqual(off.decider, { provider: "ollama", model: "nimble-v3:latest", ready: false });
+    assert.deepEqual(await decide(DECISION), { error: "local-off" });
+
+    const missing = await (await edit({ address: ollama })).json();
+    assert.equal(missing.decider.ready, false, "Ollama answers but has no nimble-v3");
+    assert.deepEqual(await decide(DECISION), { error: "no-model" });
+
+    // Listed, yet Ollama's systemone says the model is not found.
+    fakeState.nimble = true;
+    fakeState.systemone = 404;
+    assert.deepEqual(await decide(DECISION), { error: "no-model" });
+  } finally {
+    Object.assign(fakeState, { nimble: false, systemone: 200 });
+    await edit({ address: ollama });
+  }
+});
+
+test("with Jev chosen, a decision needs the Jev key and is sent to Jev with it", async () => {
+  try {
+    const chosen = await (await edit({ decider: "jev" })).json();
+    assert.deepEqual(chosen.decider, { provider: "jev", model: "jev-latest", ready: false });
+    assert.deepEqual(await decide(DECISION), { error: "no-key" });
+    assert.equal((await edit({ decider: "anthropic" })).status, 400);
+    const keyed = await (await edit({ jevKey: "jev-local-key" })).json();
+    assert.equal(keyed.decider.ready, true);
+    decided.length = 0;
+    const reply = await decide(DECISION);
+    assert.equal(reply.answers[1].confidence, 0.8);
+    assert.equal(reply.inputTokens, 12);
+    assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/jev", "Bearer jev-local-key", "jev-latest"]);
+    assert.equal((await read()).decider.provider, "jev", "the choice is kept");
+  } finally {
+    await edit({ decider: "ollama", jevKey: "" });
+  }
+});
+
+test("a generator runs on the chat model in Ollama, in one go and with no key, when Ollama lacks its own model", async () => {
+  await edit({ address: ollama });
+  received.length = 0;
+  assert.deepEqual(await generate(WANTED), { text: "Stoic evenings" }, "the website's default runs on Gemma");
+  assert.deepEqual([received[0].model, received[0].stream ?? false, received[0].reasoning_effort], ["gemma4:e2b-mlx", false, "none"]);
+  assert.deepEqual(received[0].messages, [{ role: "system", content: WANTED.prompt }, { role: "user", content: WANTED.text }]);
+  assert.deepEqual(await generate({ ...WANTED, model: "gemma3:latest" }), { text: "Stoic evenings" });
+  assert.equal(received[1].model, "gemma3:latest", "a model Ollama has runs as chosen");
+  assert.deepEqual(await generate({ ...WANTED, model: "echo" }), { text: "Echo: What did the Stoics do at night?" });
+});
+
+test("a generator on the Mac is unavailable while Ollama does not answer, and needs the key when the chat uses Anthropic", async () => {
+  try {
+    await edit({ address: dead });
+    assert.deepEqual(await generate(WANTED), { error: "unavailable" });
+    await edit({ address: ollama, provider: "anthropic" });
+    assert.deepEqual(await generate(WANTED), { error: "no-key" });
+  } finally {
+    await edit({ address: ollama, provider: "ollama" });
+  }
 });

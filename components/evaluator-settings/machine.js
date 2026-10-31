@@ -404,6 +404,10 @@ export function boxEdge(e, vim, line, lines, vimOn) {
 // counts as signed in, so a page that cannot tell never hides the tab.
 export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
 
+// The Mac app (3.4): its session picture carries `connect`. The try page shares evaluators
+// with guests of the website, so the Mac does not link to it.
+export const onMac = (reply) => Boolean(reply?.connect);
+
 export const machine = setup({
   actors: {
     load: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
@@ -422,7 +426,8 @@ export const machine = setup({
     description:
       "The Evaluators tab of the gear's sheet, before Generators. At the top a link, Try " +
       "evaluators, opens the Evaluators try page in a new tab, where lines written in its " +
-      "Evaluate box are checked by the evaluators switched on there. Under it, + New evaluator " +
+      "Evaluate box are checked by the evaluators switched on there; the Mac app has no " +
+      "such link, since the try page shares evaluators with the website's guests. Under it, + New evaluator " +
       "adds an empty evaluator at the top, kept with the Journal and saved once something is " +
       "written in it. Then every evaluator of the account, one under the other, in the order " +
       "the user set: whichever book it " +
@@ -475,6 +480,8 @@ export const machine = setup({
     folded: new Set(input.folded ?? []),
     // Whether someone is signed in (3.4): null until session answers.
     signedIn: null,
+    // Whether the page runs in the Mac app (onMac).
+    mac: false,
   }),
   invoke: [
     {
@@ -486,13 +493,13 @@ export const machine = setup({
     {
       src: "session",
       input: ({ context }) => ({ ask: context.ask }),
-      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output) }) },
+      onDone: { actions: assign({ signedIn: ({ event }) => signedIn(event.output), mac: ({ event }) => onMac(event.output) }) },
       onError: { actions: assign({ signedIn: true }) },
     },
   ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
+    "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null, mac: ({ event }) => onMac(event) }) },
     // A press on an evaluator's heading, or Enter on it: fold it, or unfold it.
     _fold: {
       actions: assign({

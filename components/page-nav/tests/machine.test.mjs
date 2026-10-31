@@ -175,7 +175,7 @@ test("a pages error fails the view and keeps the reason", async () => {
 test("a pages error still reads the profile, so the product can show nothing", async () => {
   const ask = (target) =>
     target === "pages" ? Promise.resolve({ error: "unavailable" }) : Promise.resolve({ nav: [], profile: "product" });
-  const s = await settle(createActor(machine, { input: { ask, current: "/mac" } }));
+  const s = await settle(createActor(machine, { input: { ask, current: "/" } }));
   assert.equal(s.value, "failed");
   assert.equal(s.context.profile, "product");
 });

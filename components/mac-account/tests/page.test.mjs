@@ -41,7 +41,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         );
         const page = await context.newPage();
         const problems = watch(page);
-        await page.goto(`${BASE_URL}/workshop/apps/macapp`, { waitUntil: "domcontentloaded" });
+        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await page.locator("dock-desk .controls button.pill").click();
         await page.locator('settings-tabs [role="tab"]', { hasText: "Account" }).click();
         const tab = page.locator("mac-account");

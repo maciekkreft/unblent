@@ -268,6 +268,7 @@ test("error replies come in the kinds the user tells apart", () => {
   for (const e of ["no-key", "bad-key", "paused"]) assert.equal(errorKind(e, true), "paused");
   assert.equal(errorKind("blocked", true), "blocked", "a blocked guest is told the trial has ended");
   assert.equal(errorKind("busy", true), "busy", "a guest is told busy like anyone");
+  for (const e of ["local-off", "no-model"]) assert.equal(errorKind(e), e, "Nimble v3 in Ollama says what to do");
 });
 
 const ANSWERS = {
@@ -614,7 +615,7 @@ const run = (at, line, status, answers = []) => ({ at, line, status, error: null
 
 test("a line's marks: a dot while asked, then one per answer, its icon or a check or warning, faded when unsure", () => {
   assert.deepEqual(marksOf(run(1, "A", "waiting")), []);
-  assert.deepEqual(marksOf(run(1, "A", "asking")), [{ pending: true, label: "Asking Jev" }]);
+  assert.deepEqual(marksOf(run(1, "A", "asking")), [{ pending: true, label: "Checking" }]);
   assert.deepEqual(marksOf({ ...run(1, "A", "failed"), error: "busy" }), []);
   const wrong = said([{ id: O(3), p: 0.5 }, { id: O(2), p: 0.4 }]);
   const plain = results([{ id: id(9), questions: [yesno(22, "Kind?"), yesno(23, "Short?")] }], [

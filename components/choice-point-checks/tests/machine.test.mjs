@@ -337,6 +337,19 @@ test("a failure ends the queue and is announced; busy waits and asks again", asy
   assert.equal(checked.at(-1).error, "unavailable", "a bus refusal is announced as unavailable");
 });
 
+for (const error of ["local-off", "no-model"]) {
+  test(`${error} from llm: decide is announced as itself`, async () => {
+    const { actor, checked, decides } = await start();
+    actor.send(edited());
+    actor.send({ type: "choice-point.changed", choicePoint: cp() });
+    actor.send(finishAll(cp()));
+    await flush();
+    decides[0].answer({ error });
+    await flush();
+    assert.equal(checked.at(-1).error, error);
+  });
+}
+
 test("read answers the settings and the day's checked choice points", async () => {
   const asks = fakeAsk({ choicePoints: [cp({ towards: "Call mum" }), cp({ id: CP2, day: "2026-10-13" })] });
   const { actor, changed, decides } = await start({ asks });

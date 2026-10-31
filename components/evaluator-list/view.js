@@ -327,8 +327,10 @@ const ERRORS = {
   "used-up": "You have used all your free use.",
   paused: "Free trials are paused for now.",
   blocked: "This trial has ended.",
-  busy: "Jev is busy. Try again in a moment.",
-  failed: "Jev could not answer. Try again.",
+  busy: "Busy. Try again in a moment.",
+  failed: "Could not answer. Try again.",
+  "local-off": "Ollama isn't running on this Mac. Open Ollama, then try again.",
+  "no-model": "Nimble v3 isn't downloaded. In Terminal, run ollama pull nimble-v3, then try again.",
 };
 
 class EvaluatorList extends LitElement {

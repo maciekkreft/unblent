@@ -59,6 +59,10 @@ test("a fresh account reads default settings", async () => {
   // Ollama runs on the user's own Mac, so the website never offers it (3.4).
   assert.ok(!picture.providers.some((p) => p.id === "ollama") && !("ollama" in picture) && "jev" in picture);
   assert.equal((await edit({ provider: "ollama" }, cookie)).status, 400);
+  // Jev is the website's only decider.
+  assert.deepEqual(picture.deciders, ["jev"]);
+  assert.deepEqual(picture.decider, { provider: "jev", model: "jev-latest", ready: false });
+  assert.equal((await edit({ decider: "ollama" }, cookie)).status, 400);
 });
 
 test("settings round trip: provider, model and effort are kept", async () => {

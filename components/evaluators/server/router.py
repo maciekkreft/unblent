@@ -12,8 +12,10 @@ from it.
 """
 
 import json
+import os
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,7 +24,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from server.user import DATA, require_user, session_of, user_dir
+from server.user import DATA, local_user, require_user, session_of, user_dir
 
 router = APIRouter()
 
@@ -259,11 +261,69 @@ def _place(connection: sqlite3.Connection, evaluator_id: str, position: str) -> 
     return _reread(connection, evaluator_id)
 
 
+# The evaluators the local edition (3.4) starts with: the Mac launcher sets
+# UNBLENT_FIRST_CHECKS to the bundled mac/checks/, which mac/export-checks.py wrote from
+# the owner's own. This component reads only its own file there. The ids are the
+# exported ones, so the box settings that choice-point-checks and value-checks bring
+# from the same folder name these evaluators without any mapping, and a second import
+# could only find the same rows. The lock keeps two first pulls from both importing.
+_first_lock = threading.Lock()
+# Given once per Mac (11.1): a disconnect moves the account's directory to the backup
+# (5), and the list found empty after it must not get the evaluators again.
+FIRST_GIVEN = DATA / "first-evaluators"
+
+
+def _bundled() -> list[dict] | None:
+    """The bundle's evaluators that are well formed, or None when there is no bundle."""
+    folder = os.environ.get("UNBLENT_FIRST_CHECKS")
+    path = Path(folder) / "evaluators.json" if folder else None
+    if path is None or not path.is_file():
+        return None
+    try:
+        listed = json.loads(path.read_text()).get("evaluators")
+    except (ValueError, AttributeError):
+        return []
+    return [
+        e for e in (listed if isinstance(listed, list) else [])
+        if isinstance(e, dict) and _is_id(e.get("id")) and _is_id(e.get("book"))
+        and isinstance(e.get("name"), str) and isinstance(e.get("on"), bool)
+        and isinstance(e.get("questions"), list) and all(isinstance(q, dict) for q in e["questions"])
+        and isinstance(e.get("description", ""), str)
+        and (e.get("position") is None or (isinstance(e["position"], str) and _POSITION.fullmatch(e["position"])))
+    ]
+
+
+def _first_evaluators(user_id: str) -> None:
+    """Import the bundled evaluators into the local account's empty list, before the
+    first pull answers, so the browser sees them on first load. Only while the list has
+    no row at all and the Mac never had them: a deleted one stays a tombstone and does
+    not come back, and a Mac that already had evaluators is marked as given on its next
+    pull. On the web, or without a bundle, nothing happens."""
+    if user_id != local_user() or FIRST_GIVEN.exists():
+        return
+    bundled = _bundled()
+    if bundled is None:
+        return
+    with _first_lock, _connect(user_id) as connection:
+        if FIRST_GIVEN.exists():
+            return
+        if connection.execute("SELECT 1 FROM evaluators LIMIT 1").fetchone() is None:
+            now = _now()
+            for e in bundled:
+                connection.execute(
+                    'INSERT OR IGNORE INTO evaluators (id, book, name, description, "on", journal, questions, version, seq, deleted, updated_at, starter_for, position)'
+                    " VALUES (?, ?, ?, ?, ?, 0, ?, 1, ?, 0, ?, '[]', ?)",
+                    (e["id"], e["book"], e["name"], e.get("description", ""), int(e["on"]), json.dumps(e["questions"]), _next_seq(connection), now, e.get("position")),
+                )
+    FIRST_GIVEN.touch()
+
+
 @router.get("")
 def list_evaluators(since: str = "0", user_id: str = Depends(require_user)):
     if not since.isdigit():
         return JSONResponse(_BAD, status_code=400)
     after = int(since)
+    _first_evaluators(user_id)
     with _connect(user_id) as connection:
         rows = connection.execute("SELECT * FROM evaluators WHERE seq > ? ORDER BY seq", (after,)).fetchall()
     cursor = rows[-1]["seq"] if rows else after

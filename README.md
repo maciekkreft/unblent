@@ -18,6 +18,9 @@ Python server; your books, notes and journal are stored as files on your Mac.
 - **Chats about what you read.** Ask about the open book, your notes, highlights and
   journal. Answers come from [Ollama](https://ollama.com) on your own Mac, so nothing
   leaves it and no key is needed. See [Chats with Ollama](#chats-with-ollama).
+- **Checks on your writing.** A Choice Point worksheet, your own list of values, and
+  evaluators: questions you write that check each line. The checks come from Nimble v3
+  in Ollama on your own Mac. See [Checks with Nimble](#checks-with-nimble).
 - **Vim-style keys.** With Vim keys turned on, reading, moving between panels,
   highlighting and writing all work from the keyboard.
 
@@ -101,6 +104,19 @@ model on your own Mac, free and offline.
 Settings › Your account shows whether Ollama is running and which model answers. Any
 model you download with `ollama pull` appears there. If you prefer, choose Anthropic
 and enter your own API key instead.
+
+## Checks with Nimble
+
+The marks on a Choice Point and on your values come from
+Nimble v3, a decision model that runs in [Ollama](https://ollama.com) on your own Mac.
+It answers yes or no, or picks one option, in a fraction of a second, free and offline.
+
+1. Install Ollama 0.40.4 or later from [ollama.com](https://ollama.com) and open it.
+2. In Terminal, run `ollama pull nimble-v3` (about 9 GB).
+3. In Unblent, choose the evaluators in Settings, then write a line in a Choice Point.
+
+Settings › Your account › Decisions shows whether Nimble v3 is ready. If you prefer,
+choose Jev and enter your own Jev key instead.
 
 ## Required: read before you open the app
 

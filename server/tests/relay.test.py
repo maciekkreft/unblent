@@ -321,7 +321,7 @@ class Relay(unittest.TestCase):
         self.assertEqual(self.call("GET", "/api/session/me", {"Origin": f"http://localhost:{self.port}"})[0], 200)
         # The app's window opening its page from the bundled loading page.
         opened = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}
-        self.assertEqual(self.call("GET", "/workshop/apps/macapp", opened)[0], 200)
+        self.assertEqual(self.call("GET", "/", opened)[0], 200)
         # Safari sent back from the web connect page: refused only for its stale state.
         status, _, body = self.call("GET", "/api/session/connect/finish?state=x&code=y", opened)
         self.assertEqual(status, 400)

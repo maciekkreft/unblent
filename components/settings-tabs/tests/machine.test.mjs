@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, adminOf, tabsOf, shownOf, slottedOf } from "../machine.js";
+import { machine, adminOf, editionOf, tabsOf, shownOf, slottedOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -84,4 +84,24 @@ test("a flagged tab shows only while flags reports its feature shown", async () 
   const bare = createActor(machine, { input: { ask: async () => ({ error: "no-answerer" }), children } }).start();
   await flush();
   assert.deepEqual(bare.getSnapshot().context.hidden, [], "a page without flags hides nothing");
+});
+
+// One page for the website and the Mac app (8): People is marked `web`, the Mac's
+// Account tab `mac`; the session picture carries `connect` only on a Mac.
+test("a tab marked web or mac is offered only there, and neither before session answers", async () => {
+  const children = [
+    { label: "Settings", admin: false },
+    { label: "People", admin: true, edition: "web" },
+    { label: "Account", admin: false, edition: "mac" },
+  ];
+  assert.deepEqual(tabsOf(children, true, [], null), ["Settings"]);
+  assert.deepEqual(tabsOf(children, true, [], "web"), ["Settings", "People"]);
+  assert.deepEqual(tabsOf(children, true, [], "mac"), ["Settings", "Account"], "the Mac's own account is the admin, and still has no People");
+  assert.deepEqual(slottedOf(children, true, "Account", [], "mac"), [2]);
+  const actor = createActor(machine, {
+    input: { ask: async (target) => (target === "session" ? { userId: "a", admin: true, connect: "off" } : { hidden: [] }), children },
+  }).start();
+  await flush();
+  assert.equal(actor.getSnapshot().context.edition, "mac");
+  assert.equal(editionOf({ userId: "a" }), "web");
 });

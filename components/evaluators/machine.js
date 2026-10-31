@@ -338,7 +338,7 @@ function replyActive(context, reply) {
 
 // What llm: decide may answer instead of answers; anything else (a bus refusal) counts
 // as unavailable.
-const DECIDE_ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable", "used-up", "paused", "blocked"]);
+const DECIDE_ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable", "used-up", "paused", "blocked", "local-off", "no-model"]);
 // How long a text waits when Jev is busy with another request (llm answers a second one
 // busy), and how many times it is asked before busy is the answer: value-checks' pause.
 export const CHECK_PAUSE_MS = 1500;

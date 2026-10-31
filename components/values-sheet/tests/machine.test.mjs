@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isPlaced, placeable, dateOf, dayName, writable, shownValues, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
+import { machine, ERROR_SENTENCES, isPlaced, placeable, dateOf, dayName, writable, shownValues, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/values.saved.json", import.meta.url), "utf8"));
 const PLACED = JSON.parse(readFileSync(new URL("../events/values.placed.json", import.meta.url), "utf8"));
@@ -583,4 +583,10 @@ test("earlier days take no Use", async () => {
   const saves = emitted.length;
   actor.send({ type: "_use", id: id(1) });
   assert.equal(emitted.length, saves);
+});
+
+test("Ollama off and Nimble v3 not downloaded each say what to do", () => {
+  assert.match(ERROR_SENTENCES["local-off"], /Ollama isn't running on this Mac\. Open Ollama/);
+  assert.match(ERROR_SENTENCES["no-model"], /run ollama pull nimble-v3/);
+  for (const sentence of Object.values(ERROR_SENTENCES)) assert.doesNotMatch(sentence, /^Jev /, "true for either decider");
 });

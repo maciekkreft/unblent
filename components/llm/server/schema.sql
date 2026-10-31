@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS settings (
     effort   TEXT NOT NULL,
     ttl      TEXT NOT NULL,
     -- Ollama's address on the user's Mac (3.4); NULL is the default, localhost:11434.
-    address  TEXT
+    address  TEXT,
+    -- Who answers llm: decide, jev or ollama (3.4); NULL is the edition's default.
+    decider  TEXT
 );
 CREATE TABLE IF NOT EXISTS keys (
     provider TEXT PRIMARY KEY,

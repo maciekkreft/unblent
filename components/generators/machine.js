@@ -450,7 +450,8 @@ export const machine = setup({
       "from the value, its example and what the check found it reads as; a value line no longer " +
       "red makes no item, and its old result is kept but not shown. Each " +
       "has a name, on or off, a model and a prompt; `generators: list` answers all three, with the " +
-      "approved defaults (Haiku 5.5, on) for one the account never changed. A change made in the " +
+      "approved defaults (Haiku 5.5, on) for one the account never changed; on the Mac, `llm` runs a generator whose model " +
+      "the chat's provider does not offer on the chat model, so Haiku 5.5 there means Gemma in Ollama. A change made in the " +
       "Generators tab (generator.edited) carries only the fields changed; it is kept and announced " +
       "as generator.changed. While an account signed in with a passkey has a page open (never a " +
       "guest, never on a try page), it finds the items that are ready and have no text from their " +

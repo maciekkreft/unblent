@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry, canMove, offersMove, visible } from "./machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, sameEntry, canMove, offersMove, visible, editionShows } from "./machine.js";
 import arranged from "./events/dock.arranged.json" with { type: "json" };
 import tabPicked from "./events/tab.picked.json" with { type: "json" };
 import tabClosed from "./events/tab.closed.json" with { type: "json" };
@@ -44,6 +44,9 @@ const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([di
 // one so two instances of a view on one page are distinct tabs.
 const addressOf = (child) =>
   (child.getAttribute("data-role") ?? child.localName) + (child.id ? "#" + child.id : "");
+
+// The edition a child is marked for (8): `web`, `mac`, or undefined for both.
+const markedFor = (child) => (child.hasAttribute("web") ? "web" : child.hasAttribute("mac") ? "mac" : undefined);
 
 // The header button left pressed, kept across reloads (3.1): the view's own UI state,
 // so it follows the browser, not the account, and losing it loses nothing. Wrapped like
@@ -93,6 +96,7 @@ class ActorController {
         showsOn: child.getAttribute("shows-on") ?? undefined,
         flag: child.getAttribute("flag") ?? undefined,
         admin: child.hasAttribute("admin"),
+        edition: markedFor(child),
       }));
     // A remembered button the page no longer has is dropped.
     const recalled = memory.recall();
@@ -1015,7 +1019,9 @@ class DockDesk extends LitElement {
     // order: a `control` is slotted as it is; a `button` names the child the desk
     // shows from a header button it draws itself. Read from this element's own light
     // DOM, like `views`.
-    const extras = [...this.children].filter((c) => c.hasAttribute("control") || c.hasAttribute("button"));
+    const extras = [...this.children].filter(
+      (c) => (c.hasAttribute("control") || c.hasAttribute("button")) && editionShows(markedFor(c), snapshot.context.edition),
+    );
     const buttons = extras.filter((c) => c.hasAttribute("button"));
     const tabs = tabsOf(snapshot.context, "stage");
     const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);

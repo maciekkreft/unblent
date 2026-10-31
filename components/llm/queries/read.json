@@ -62,6 +62,8 @@
         "required": ["address", "running"],
         "additionalProperties": false
       },
+      "decider": { "type": "object", "description": "Who answers llm: decide for this account: jev, on the account's own Jev key, or, only in the local edition (3.4), ollama, the decision model nimble-v3 in Ollama on this Mac, with no key and no cost. ready says whether that decider can answer now: a Jev key is saved, or Ollama answered just now and has the model downloaded.", "properties": { "provider": { "enum": ["jev", "ollama"] }, "model": { "type": "string" }, "ready": { "type": "boolean" } }, "required": ["provider", "model", "ready"], "additionalProperties": false },
+      "deciders": { "type": "array", "description": "The deciders offered: jev always, ollama only in the local edition.", "items": { "enum": ["jev", "ollama"] } },
       "freeUse": {
         "type": "object",
         "description": "Only for a guest (7.7): the share of the guest's own allowance left, whether the guest is blocked, and the providers no guest may use now because a limit for all guests is reached. Never an amount.",

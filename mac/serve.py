@@ -23,7 +23,7 @@ from pathlib import Path
 # Fixed for good: the browser's storage for the Mac page is tied to it.
 DEFAULT_PORT = 47321
 HOST = "127.0.0.1"
-PAGE = "/workshop/apps/macapp"
+PAGE = "/"
 
 
 def bundle_root() -> Path:
@@ -118,6 +118,9 @@ def main() -> None:
     import certifi
     os.environ.setdefault("SSL_CERT_FILE", certifi.where())
     os.environ["UNBLENT_FIRST_BOOK"] = str(root / "mac" / "books" / "meditations.epub")
+    # The owner's evaluators and box settings (mac/export-checks.py); a build without
+    # them ships no folder, and then nothing is given.
+    os.environ["UNBLENT_FIRST_CHECKS"] = str(root / "mac" / "checks")
     sys.path.insert(0, str(root))
 
     import uvicorn

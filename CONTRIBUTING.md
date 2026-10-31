@@ -26,7 +26,7 @@ python3 -m venv .venv
 .venv/bin/python mac/serve.py
 ```
 
-Then open the address it prints, `http://127.0.0.1:47321/workshop/apps/macapp`, in a
+Then open the address it prints, `http://127.0.0.1:47321/`, in a
 browser. This is the same server and page the Mac app shows. On a Mac it uses the same
 data folder as the app, `~/Library/Application Support/Unblent`, and the same port, so
 quit the app first. To keep your own books apart, set another folder with

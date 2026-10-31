@@ -191,11 +191,27 @@ export const checksShown = ({ checks, hidden }) =>
 // The two lines of a value the values checks name, as value-checks.edited carries them.
 export const VALUE_LINES = ["values", "examples"];
 
+// Whether a decider can answer `llm: decide` now: the picture says so when it names one;
+// a picture from before deciders were offered means Jev, ready once its key is saved.
+export const deciderReady = (llm) => (llm?.decider ? llm.decider.ready === true : llm?.jev?.keySet === true);
+
+// The Decisions choice (3.4): null where only one decider is offered (the website), so
+// nothing new shows there; else who decides and, with Ollama, what the status line says:
+// whether Ollama answered and whether nimble-v3 is downloaded.
+export const deciderView = (llm) => {
+  const offered = Array.isArray(llm?.deciders) ? llm.deciders : [];
+  if (offered.length < 2) return null;
+  const provider = llm.decider?.provider ?? "jev";
+  if (provider !== "ollama") return { provider, offered };
+  const running = llm.ollama?.running === true;
+  return { provider, offered, running, ready: running && llm.decider.ready === true };
+};
+
 // Whether the values checks part is shown: a page whose `value-checks` answered, for an
-// account with its own Jev key (nothing is checked without one), while `flags` reports
+// account whose decider can answer (nothing is checked otherwise), while `flags` reports
 // evaluators shown.
 export const valueChecksShown = ({ valueChecks, hidden, llm }) =>
-  valueChecks !== null && llm?.jev?.keySet === true && hidden !== null && !hidden.includes("evaluators");
+  valueChecks !== null && deciderReady(llm) && hidden !== null && !hidden.includes("evaluators");
 
 // The evaluators a values check can use: not a derived one (Your values), since a value
 // cannot be checked against the values themselves.
@@ -252,8 +268,12 @@ export const machine = setup({
       "leaving saves, Escape keeps the old one and an empty address brings back the default. The Model " +
       "list shows the models downloaded in Ollama; when gemma4:e2b-mlx is not among them a line gives the " +
       "Terminal command ollama pull gemma4:e2b-mlx with Copy and Try again. Thinking is On or Off, and the " +
-      "cache lifetime is not shown for Ollama. The Evaluating group is shown only where `llm` " +
-      "offers Jev, so the Mac app never shows it. Your account also holds the " +
+      "cache lifetime is not shown for Ollama. The Evaluating group holds the Jev key on the website. In the Mac app " +
+      "it starts with Decisions, which chooses who answers the checks: Nimble v3 in Ollama (on this Mac, free), the " +
+      "default, or Jev (your own key); choosing the other one again is the undo. With Nimble v3 a line says it is ready, " +
+      "or that Ollama isn't running with Try again, or that nimble-v3 is not downloaded, with the Terminal command " +
+      "ollama pull nimble-v3, Copy, Try again and a note that it needs Ollama 0.40.4 or later. With Jev the Jev key " +
+      "field shows. Your account also holds the " +
       "choice point checks, which `choice-point-checks` keeps, in a fold that starts closed: " +
       "for each box of a choice point, the evaluator whose questions Jev answers about each " +
       "line, and per question whether its answer is shown, when (always, or only when an " +
@@ -266,7 +286,7 @@ export const machine = setup({
       "it has no per-question settings, since every value of Your values counts toward its one " +
       "mark, and None takes it away again. Your values chosen as a box's own evaluator has no " +
       "per-question settings either. It stays when the box's evaluator is switched, and " +
-      "Not checked clears it with the rest. Once a Jev key is saved, the Evaluating group " +
+      "Not checked clears it with the rest. Once the chosen decider can answer, the Evaluating group " +
       "also holds the values checks, which `value-checks` keeps, in a fold that starts closed: " +
       "Check values with and Check examples with each choose the evaluator Jev uses for the " +
       "value lines and for the examples of the Your values sheet, or Not checked, from the " +
@@ -555,6 +575,15 @@ export const machine = setup({
         _removeJevKey: { guard: ({ context }) => !context.removing.includes("jevKey"), actions: startRemoval("jevKey") },
         _setEffort: { actions: emit(({ event }) => llmEdited({ effort: event.effort })) },
         _setTtl: { actions: emit(({ event }) => llmEdited({ ttl: event.ttl })) },
+        // Who answers decide (3.4): only a decider the picture offers and not the current
+        // one, so choosing the previous one again is the undo.
+        _setDecider: {
+          guard: ({ context, event }) => {
+            const view = deciderView(context.llm);
+            return Boolean(view) && view.offered.includes(event.decider) && view.provider !== event.decider;
+          },
+          actions: emit(({ event }) => llmEdited({ decider: event.decider })),
+        },
         // Ollama's address (3.4): an empty one brings back the default. Try again sends
         // the current address once more, because every save makes `llm` read the
         // models from Ollama again and announce what it found.
@@ -649,6 +678,8 @@ export const machine = setup({
           ttl: event.ttl,
           ...(event.jev ? { jev: event.jev } : {}),
           ...(event.ollama ? { ollama: event.ollama } : {}),
+          ...(event.decider ? { decider: event.decider } : {}),
+          ...(event.deciders ? { deciders: event.deciders } : {}),
         }),
       }),
     },

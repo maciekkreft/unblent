@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, changed, modelsFor, keySet, signedIn, IDS, RUN } from "../machine.js";
+import { machine, changed, modelsFor, modelOf, keySet, note, signedIn, IDS, RUN } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -129,4 +129,33 @@ test("the model choice shows the stored model even when the key does not offer i
   assert.equal(keySet(LLM), true);
   assert.equal(keySet({ ...LLM, providers: [{ id: "anthropic", label: "Anthropic", keySet: false, needsKey: true }] }), false);
   assert.deepEqual(changed(GENERATORS[0], { name: "Chat title", prompt: "x" }), { prompt: "x" });
+});
+
+// The Mac's picture (3.4): Ollama is the chat's provider, gemma4:e2b-mlx its model.
+const MAC = {
+  provider: "ollama",
+  providers: [
+    { id: "ollama", label: "Ollama", keySet: true, needsKey: false },
+    { id: "anthropic", label: "Anthropic", keySet: false, needsKey: true },
+  ],
+  model: "gemma4:e2b-mlx",
+  models: [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e2b-mlx", label: "gemma4:e2b-mlx" }],
+  ollama: { address: "http://localhost:11434", running: true },
+};
+
+test("on the Mac a generator shows the chat model while its own is not offered, and its own when it is", () => {
+  assert.equal(modelOf(MAC, "claude-haiku-5-5"), "gemma4:e2b-mlx");
+  assert.deepEqual(modelsFor(MAC, "claude-haiku-5-5"), MAC.models, "the website's default is not offered as a choice");
+  assert.equal(modelOf(MAC, "gemma3:latest"), "gemma3:latest");
+  assert.equal(modelOf({ ...MAC, models: [], model: "" }, "claude-haiku-5-5"), "claude-haiku-5-5", "Ollama off: the stored model stays");
+  assert.equal(modelOf(LLM, "claude-sonnet-5"), "claude-sonnet-5", "the website always shows the stored model");
+});
+
+test("the line above the generators: Ollama on the Mac, the Anthropic key elsewhere when it is missing", () => {
+  assert.equal(note(MAC), "ollama");
+  assert.equal(note(null), null);
+  assert.equal(note(LLM), null);
+  const noKey = { ...LLM, providers: [{ id: "anthropic", label: "Anthropic", keySet: false, needsKey: true }] };
+  assert.equal(note(noKey), "key");
+  assert.equal(note({ ...MAC, provider: "anthropic", models: [], model: "" }), "key", "a Mac chatting on Anthropic needs its key");
 });

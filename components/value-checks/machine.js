@@ -28,8 +28,8 @@ export const LINES = [
   { line: "example", setting: "examples" },
 ];
 // What llm: decide may answer instead of answers; anything else (a bus refusal, a thrown
-// ask) is announced as unavailable, the one kind values.checked has for "Jev cannot be reached".
-const ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable"]);
+// ask) is announced as unavailable, the one kind values.checked has for "the decider cannot be reached".
+const ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable", "local-off", "no-model"]);
 
 // The pause after a settings or evaluator change before the day on screen is checked
 // again, so a run of edits in Settings asks once; also how long a busy line waits.
@@ -147,8 +147,8 @@ const evaluatorOf = (context, id) => {
 };
 
 // Every line with words of every value held for the day, whose line has an evaluator with
-// questions to ask, with each question and the key its answer is kept under. Without a Jev
-// key there is nothing to check, so nothing is asked and nothing is reported.
+// questions to ask, with each question and the key its answer is kept under. Without a
+// decider that can answer there is nothing to check, so nothing is asked and nothing is reported.
 function planOf(context, day) {
   const held = context.days.get(day);
   if (!context.keySet || !held) return [];
@@ -399,12 +399,17 @@ function replyRead(context, enqueue, day, reply) {
   reply(readReply(context, day));
 }
 
-function keyChanged(context, enqueue, jev) {
-  const keySet = jev?.keySet === true;
+// Whether a decider can answer llm: decide for this account: the picture's decider is
+// ready, or, in a picture from before deciders were offered, a Jev key is saved.
+const canDecide = (picture) =>
+  picture?.decider ? picture.decider.ready === true : picture?.jev?.keySet === true;
+
+function keyChanged(context, enqueue, picture) {
+  const keySet = canDecide(picture);
   if (keySet === context.keySet) return;
   context.keySet = keySet;
   enqueue.assign({ keySet });
-  // With a key the day on screen is checked; without one every mark goes.
+  // With a decider the day on screen is checked; without one every mark goes.
   if (keySet) checkDay(context, enqueue);
   announceAll(context, enqueue);
 }
@@ -417,7 +422,7 @@ function handle(context, message, enqueue) {
     case "value-checks.edited":
       return commitSettings(context, enqueue, message);
     case "llm.changed":
-      return keyChanged(context, enqueue, message.jev);
+      return keyChanged(context, enqueue, message);
     case "values.changed":
       if (!isDay(message.day)) return;
       return follow(context, enqueue, { day: message.day, values: valuesOf(message.values) });
@@ -574,7 +579,7 @@ export const machine = setup({
         storedUserId: userId ?? null,
         userId: session?.error ? (userId ?? null) : (session?.userId ?? null),
         evaluators: listed(evaluators, "evaluators"),
-        keySet: llm?.jev?.keySet === true,
+        keySet: canDecide(llm),
       };
     }),
     // decide is superseded by nothing, so nothing is held for it.
@@ -618,8 +623,9 @@ export const machine = setup({
       "value itself, which Jev reads alone, and its example, which Jev reads together with " +
       "the value as \"<value>. For example: <example>\". A line without words (no letter or " +
       "digit in any script) is never asked. Nothing is asked and nothing is reported unless " +
-      "the account has its own Jev key, as `llm` says. The settings are one row, chosen in " +
-      "Settings under Your account, where they show only once a Jev key is saved; the last " +
+      "a decider can answer, as `llm` says: the account's own Jev key, or, on the Mac, Nimble v3 " +
+      "in Ollama. The settings are one row, chosen in Settings under Your account, where " +
+      "they show only once a decider can answer; the last " +
       "write wins, so two devices never conflict. Which questions are asked, and which answer " +
       "each expects, are the evaluator's own; every line's report lists the names of the " +
       "answers that are not the expected one. Each answer is kept per question, under a key " +
@@ -649,7 +655,7 @@ export const machine = setup({
     answers: new Map(), // key -> { key, answers }
     outbox: new Map(),
     evaluators: new Map(), // as evaluators announced them
-    keySet: false, // the account has its own Jev key (llm)
+    keySet: false, // a decider can answer llm: decide (a Jev key, or Nimble v3 on the Mac)
     days: new Map(), // day -> { day: the version's own day, values }
     latest: null, // the last values.changed, today's version
     fetching: new Set(), // days whose values: read is on its way

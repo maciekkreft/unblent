@@ -827,8 +827,10 @@ class EvaluatorSettings extends LitElement {
     this.#wanted.clear();
     return html`
       <div class="top" @focusin=${(e) => (this.#last = e.composedPath()[0])}>
-        <a class="try" href=${TRY_PATH} target="_blank" rel="noopener">Try evaluators ${icon("arrow-square-out")}</a>
-        <p class="note">Write a few lines there and see what each evaluator says about them.</p>
+        ${context.mac
+          ? nothing
+          : html`<a class="try" href=${TRY_PATH} target="_blank" rel="noopener">Try evaluators ${icon("arrow-square-out")}</a>
+              <p class="note">Write a few lines there and see what each evaluator says about them.</p>`}
         <button type="button" class="new" @mousedown=${(e) => this.#pressed(e)} @click=${() => this.#send({ type: "_new" })}>
           ${icon("plus")}New evaluator
         </button>

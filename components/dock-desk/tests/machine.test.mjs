@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove, visible, adminOf } from "../machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove, visible, adminOf, editionOf } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -919,4 +919,30 @@ test("a child marked admin is drawn only for the admin's own session", async () 
   assert.deepEqual(names(), ["list-then-item#evaluators", "evaluator-starters"], "the way back");
   const context = { views, docks: {}, stage: "evaluator-starters", hidden: [], admin: false };
   assert.equal(visible(context).stage, "list-then-item#evaluators", "before session answers it is hidden too");
+});
+
+// One page for the website and the Mac app (8): passkey sign-in is marked `web`, the
+// Mac's account control `mac`; the session picture carries `connect` only on a Mac.
+test("a child marked web or mac is drawn only there, and neither before session answers", async () => {
+  const views = [
+    { name: "note-list", label: "Notes" },
+    { name: "people-list", label: "People", edition: "web" },
+    { name: "mac-account", label: "Account", edition: "mac" },
+  ];
+  assert.equal(editionOf({ userId: "a" }), "web");
+  assert.equal(editionOf({ userId: "a", connect: "off" }), "mac");
+  assert.equal(editionOf({ userId: null, connect: "on" }), "mac", "a connected Mac signed out is still a Mac");
+  assert.equal(editionOf({ error: "no-answerer" }), null);
+  const names = (context) => visible(context).views.map((v) => v.name);
+  const base = { views, docks: {}, stage: "note-list", hidden: [], admin: false };
+  assert.deepEqual(names({ ...base, edition: null }), ["note-list"]);
+  assert.deepEqual(names({ ...base, edition: "web" }), ["note-list", "people-list"]);
+  assert.deepEqual(names({ ...base, edition: "mac" }), ["note-list", "mac-account"]);
+  const ask = (target) =>
+    target === "session" ? Promise.resolve({ userId: "a", connect: "off" }) : target === "flags" ? Promise.resolve({ off: [], hidden: [] }) : stored({ stage: null, docks: {} })(target);
+  const { actor } = await settle(ask, { views });
+  await new Promise((r) => setTimeout(r));
+  assert.equal(actor.getSnapshot().context.edition, "mac");
+  actor.send({ type: "session.changed", userId: "a", connect: "on", remote: "Maciek" });
+  assert.equal(actor.getSnapshot().context.edition, "mac", "connecting keeps the Mac a Mac");
 });

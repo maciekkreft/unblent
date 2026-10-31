@@ -36,7 +36,7 @@ const judging = (page) =>
   });
 
 for (const engine of ENGINES) {
-  describe(`Settings in ${engine.name}`, () => {
+  describe(`Settings in ${engine.name}`, { timeout: 30000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -124,6 +124,46 @@ for (const engine of ENGINES) {
         await page.locator("settings-sheet .ollama button", { hasText: "Try again" }).click();
         await until(() => saved.length === 2);
         assert.deepEqual(saved[1], { address: "http://localhost:9" });
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: a gesture.
+    test("the Mac app's Decisions: Nimble v3 not downloaded shows the pull line, choosing Jev shows its key", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("decider-rows"));
+        const mac = (decider) => ({
+          ...picture({ keySet: false }),
+          ollama: { address: "http://localhost:11434", running: true },
+          decider,
+          deciders: ["ollama", "jev"],
+        });
+        const saved = [];
+        await context.route("**/api/llm", async (route) => {
+          if (route.request().method() === "PUT") {
+            saved.push(route.request().postDataJSON());
+            return route.fulfill({ json: mac({ provider: "jev", model: "jev-latest", ready: false }) });
+          }
+          return route.fulfill({ json: mac({ provider: "ollama", model: "nimble-v3:latest", ready: false }) });
+        });
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/llm`, { waitUntil: "domcontentloaded" });
+
+        await until(async () => (await judging(page))?.text.includes("ollama pull nimble-v3"));
+        const before = await judging(page);
+        assert.ok(before.text.includes("Ollama 0.40.4 or later"), before.text);
+        assert.equal(before.input, false, "no Jev key box while Nimble v3 decides");
+        assert.deepEqual(before.buttons, ["Copy", "Try again"]);
+
+        await page.locator("settings-sheet .judging select").selectOption("jev");
+        await until(async () => (await judging(page))?.input);
+        assert.deepEqual(saved, [{ decider: "jev" }]);
+        assert.ok(!(await judging(page)).text.includes("ollama pull"), "the pull line goes with Nimble v3");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

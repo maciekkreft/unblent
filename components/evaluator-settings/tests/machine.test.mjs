@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, shownOf, stopKey, boxEdge, JOURNAL, isEmpty } from "../machine.js";
+import { machine, shownOf, stopKey, boxEdge, JOURNAL, isEmpty, onMac } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -226,4 +226,12 @@ test("the keys of the path: arrows always, Vim's letters only with Vim keys and 
   assert.equal(boxEdge(k("ArrowDown"), null, 1, 1, false), "down");
   assert.equal(boxEdge(k("ArrowUp"), null, 2, 2, false), null);
   assert.equal(boxEdge(k("j"), null, 1, 1, false), null);
+});
+
+// The try page shares evaluators with the website's guests, so the Mac app has no link to it.
+test("the Mac app is told by connect in the session picture", () => {
+  assert.equal(onMac({ userId: "a", connect: "off" }), true);
+  assert.equal(onMac({ userId: null, connect: "on" }), true);
+  assert.equal(onMac({ userId: "a" }), false);
+  assert.equal(onMac({ error: "no-answerer" }), false);
 });

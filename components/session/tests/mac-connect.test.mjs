@@ -216,21 +216,20 @@ test("another site cannot begin, commit or disconnect; the web edition has none 
   assert.equal((await (await fetch(`${web}/api/session/me`)).json()).connect, undefined);
 });
 
-test("/mac opens the connected Mac page while connected; disconnect also drops the disk copy of book files", async () => {
+test("the Mac shows the account only once connected; disconnect also drops the disk copy of book files", async () => {
   // A Mac that left an account before may connect again, from the start.
-  const title = async () => (await (await fetch(`${mac}/mac`)).text()).match(/<title>(.*)<\/title>/)[1];
-  assert.equal(await title(), "MacApp");
+  assert.notEqual((await me()).connect, "on");
   const { state, code } = await begin();
   assert.equal((await finish({ code, state })).status, 200);
-  assert.equal(await title(), "MacApp", "a sign-in waiting for the hand-over is not connected yet");
+  assert.equal((await me()).connect, "ready", "a sign-in waiting for the hand-over is not connected yet");
   assert.equal((await onMac("POST", "/connect/commit")).status, 200);
-  assert.equal(await title(), "MacSync");
+  assert.equal((await me()).connect, "on");
   const cache = join(macData, "remote-cache");
   mkdirSync(cache, { recursive: true });
   writeFileSync(join(cache, "chapter"), "the account's book");
   await onMac("POST", "/connect/disconnect");
   assert.equal(existsSync(cache), false, "nothing of the account stays on the Mac (5)");
-  assert.equal(await title(), "MacApp");
+  assert.notEqual((await me()).connect, "on");
 });
 
 test("Can sync turned off on the web: the connected Mac is signed out but still connected, and back on it is the account", async () => {

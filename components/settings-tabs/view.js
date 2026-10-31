@@ -3,12 +3,13 @@ import { mount, unmount, ask } from "bus";
 import { machine, tabsOf, shownOf, slottedOf } from "./machine.js";
 
 // The children as the machine reads them: each one's tab label, whether it is the admin's
-// alone, and the feature flag that hides it (8). Read from this element's own light DOM,
+// alone, the edition it is marked for (`web` or `mac`), and the feature flag that hides it (8). Read from this element's own light DOM,
 // never written to.
 const childrenOf = (host) =>
   [...host.children].map((c) => ({
     label: c.getAttribute("label") ?? c.localName,
     admin: c.hasAttribute("admin"),
+    ...(c.hasAttribute("web") ? { edition: "web" } : c.hasAttribute("mac") ? { edition: "mac" } : {}),
     ...(c.hasAttribute("flag") ? { flag: c.getAttribute("flag") } : {}),
   }));
 
@@ -124,11 +125,11 @@ class SettingsTabs extends LitElement {
   #state() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return null;
-    const { children, admin, picked, hidden } = snapshot.context;
+    const { children, admin, picked, hidden, edition } = snapshot.context;
     return {
-      tabs: tabsOf(children, admin, hidden),
-      shown: shownOf(children, admin, picked, hidden),
-      slotted: slottedOf(children, admin, picked, hidden),
+      tabs: tabsOf(children, admin, hidden, edition),
+      shown: shownOf(children, admin, picked, hidden, edition),
+      slotted: slottedOf(children, admin, picked, hidden, edition),
     };
   }
 

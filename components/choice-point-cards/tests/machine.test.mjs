@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable, rowAction, rowTarget, boxEdge } from "../machine.js";
+import { machine, ERROR_SENTENCES, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable, rowAction, rowTarget, boxEdge } from "../machine.js";
 
 const json = (name) => JSON.parse(readFileSync(new URL(`../events/${name}.json`, import.meta.url), "utf8"));
 const SCHEMAS = { "choice-point.saved": json("choice-point.saved") };
@@ -418,7 +418,7 @@ test("a hint names what was checked and its answer, and how sure Jev is shows as
   assert.equal(sayMarks(call), "Therapy Goal: Behavioral Goal · Behavior: Overt behavior", "a question's short name before the evaluator's");
   const unnamed = EVALUATORS.map((e) => ({ ...e, name: " " }));
   assert.equal(sayMarks(marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.9)]), unnamed)), "Jev: Emotional Goal, you expect Behavioral Goal", "nothing else to name: Jev, so the form stays");
-  assert.equal(sayMarks([{ pending: true }]), "Jev is checking…");
+  assert.equal(sayMarks([{ pending: true }]), "Checking…");
   assert.deepEqual(call.map((m) => m.sure), [0.67, 1], "solid when sure, faded when not");
   assert.equal(sureOf(0.5), 0.33);
 });
@@ -450,11 +450,11 @@ test("the checks are asked by day, followed after, and pointed lines fill the st
   actor.send({ type: "_point", source: "hover", id: A, field: null });
   actor.send({ type: "_point", source: "cursor", id: A, field: null });
   actor.send({ type: "lines.checked", ...report(TODAY, [], "no-key") });
-  assert.equal(statusOf(ctx(), A), "Jev could not check: add your Jev key in Settings.");
+  assert.equal(statusOf(ctx(), A), "Could not check: add your Jev key in Settings.");
 
   actor.send({ type: "_edit", id: A, field: "towards", value: "Call Anna and ask" });
   actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: "Call Anna and ask" });
-  assert.equal(statusOf(ctx(), A), "Jev could not check: add your Jev key in Settings.", "an edited line has no answer to say");
+  assert.equal(statusOf(ctx(), A), "Could not check: add your Jev key in Settings.", "an edited line has no answer to say");
 
   actor.send({ type: "day.shown", day: EARLIER });
   await flush();
@@ -615,3 +615,8 @@ test("j on a box's last line and k on its first move on, only in Vim's normal mo
   assert.equal(boxEdge({ key: "j" }, null, 3, { first: 1, last: 3 }), null);
 });
 
+test("Ollama off and Nimble v3 not downloaded each say what to do", () => {
+  assert.match(ERROR_SENTENCES["local-off"], /Ollama isn't running on this Mac\. Open Ollama/);
+  assert.match(ERROR_SENTENCES["no-model"], /run ollama pull nimble-v3/);
+  for (const sentence of Object.values(ERROR_SENTENCES)) assert.doesNotMatch(sentence, /^Jev /, "true for either decider");
+});

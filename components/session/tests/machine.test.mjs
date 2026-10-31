@@ -488,7 +488,7 @@ for (const keep of [false, true]) {
     await flush(12);
     assert.deepEqual(h.events, [{ type: "session.changed", ...READY, leaving: true, keep }]);
     assert.equal(h.calls.connectCommit, 1);
-    assert.deepEqual(h.went, ["/mac"]);
+    assert.deepEqual(h.went, ["/"]);
     assert.equal(h.saved.at(-1).userId, "a1", "the reloaded page starts as the account");
     assert.equal(h.saved.at(-1).connect, "on");
   });
@@ -512,7 +512,7 @@ test("Connect is refused when nothing is ready, and offline after commit starts 
   const h = handing(READY, { connectCommit: { connect: "on", remote: "Maciek" } });
   h.actor.send({ type: "connect.confirmed", keep: true });
   await flush(12);
-  assert.deepEqual(h.went, ["/mac"]);
+  assert.deepEqual(h.went, ["/"]);
   assert.equal(h.saved.at(-1).userId, null);
   assert.equal(h.saved.at(-1).connect, "on");
 });
@@ -523,7 +523,7 @@ test("Disconnect uploads to the account first, then turns the relay off and open
   await flush(12);
   assert.deepEqual(h.events, [{ type: "session.changed", ...ACCOUNT, leaving: true, keep: true }], "the facts keep what they show");
   assert.equal(h.calls.disconnect, 1);
-  assert.deepEqual(h.went, ["/mac"]);
+  assert.deepEqual(h.went, ["/"]);
   assert.equal(h.saved.at(-1).userId, "d1");
   assert.equal(h.saved.at(-1).connect, "off");
 });

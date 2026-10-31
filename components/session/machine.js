@@ -98,7 +98,7 @@ async function switchOf(api, change) {
     if (picture?.error || !picture?.userId) return { error: "unavailable" };
     return { picture, path: picture.guest ? "/try/evaluators" : "/" };
   }
-  // Connect and Disconnect (3.4): /mac serves the page of whichever copy the Mac now
+  // Connect and Disconnect (3.4): the product page shows whichever copy the Mac now
   // shows. /me is asked after the switch, so the reloaded page starts as the account it
   // will show; offline, it starts signed out and the next revalidation says who.
   const done = change.type === "connect.confirmed" ? await api.connectCommit() : await api.disconnect();
@@ -110,7 +110,7 @@ async function switchOf(api, change) {
   if (done?.error) return { error: "unavailable" };
   const me = await api.me();
   const picture = me?.error ? { userId: null, registrationOpen: false, ...done } : me;
-  return { picture, path: "/mac" };
+  return { picture, path: "/" };
 }
 
 export const machine = setup({

@@ -312,7 +312,7 @@ const answersOf = (run) => Object.values(run.results).flatMap((v) => v.questions
 // line with no answer has none.
 export const marksOf = (run) =>
   run.status === "asking"
-    ? [{ pending: true, label: "Asking Jev" }]
+    ? [{ pending: true, label: "Checking" }]
     : answersOf(run).map((a) => ({ icon: a.glyph ?? "check", tone: a.tone, sure: a.sure, label: a.question ? `${a.question} ${a.words}` : a.words }));
 
 // Whether a line came out as expected: at least one of its answers expects one, and every
@@ -368,9 +368,10 @@ export const foldedAtStart = (attribute, stored) => (stored === "true" ? true : 
 // own and no Settings to add one in (8): a guest whose own allowance is spent is told
 // so, a guest the admin blocked is told the trial has ended, and any other refusal about
 // free use or the guest key is told as free trials being paused, which is true for them
-// and asks nothing they cannot do.
+// and asks nothing they cannot do. Nimble v3 in Ollama on the user's Mac (3.4) is told
+// apart, since each has its own remedy: open Ollama, or download the model.
 export const errorKind = (error, guest = false) =>
-  error === "used-up" || error === "blocked"
+  error === "used-up" || error === "blocked" || error === "local-off" || error === "no-model"
     ? error
     : error === "paused" || (guest && (error === "no-key" || error === "bad-key"))
       ? "paused"

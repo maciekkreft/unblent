@@ -154,7 +154,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.route("**/api/llm", async (route) => {
           const res = await route.fetch();
           const json = await res.json();
-          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true }, decider: { ...json.decider, ready: true } } });
         });
         await page.route("**/api/llm/decide", (route) => {
           const calm = /calm/.test(route.request().postDataJSON().state.text);
@@ -209,7 +209,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.route("**/api/llm", async (route) => {
           const res = await route.fetch();
           const json = await res.json();
-          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true } } });
+          await route.fulfill({ response: res, json: { ...json, jev: { ...json.jev, keySet: true }, decider: { ...json.decider, ready: true } } });
         });
         await page.route("**/api/llm/decide", (route) => {
           const { state, questions } = route.request().postDataJSON();

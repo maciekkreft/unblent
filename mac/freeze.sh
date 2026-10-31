@@ -34,6 +34,12 @@ done
 
 mkdir -p "$stage/mac/books"
 cp "$repo/mac/books/meditations.epub" "$stage/mac/books/"
+# The owner's evaluators and box settings that every new Mac starts with, written by
+# mac/export-checks.py and committed; a checkout without them ships none.
+if [ -d "$repo/mac/checks" ]; then
+  mkdir -p "$stage/mac/checks"
+  cp "$repo"/mac/checks/*.json "$stage/mac/checks/"
+fi
 
 # Because the routers are loaded from files, PyInstaller cannot see what they import:
 # every module they and the server entry import is named here, read from their source.

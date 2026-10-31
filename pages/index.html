@@ -70,6 +70,7 @@
     <script type="module" src="/static/components/settings-tabs/view.js"></script>
     <script type="module" src="/static/components/feature-flags/view.js"></script>
     <script type="module" src="/static/components/people-list/view.js"></script>
+    <script type="module" src="/static/components/mac-account/view.js"></script>
     <script type="module" src="/static/components/guest-limits/view.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
     <script type="module" src="/static/components/viewas-bar/view.js"></script>
@@ -105,18 +106,19 @@
         <conversation-list subject label="Chats"></conversation-list>
         <chat-thread id="chats-thread" shows-on="conversation.selected" height="fill" markdown><chat-input id="chats-input"></chat-input></chat-thread>
       </list-then-item>
-      <profile-switch control></profile-switch>
+      <profile-switch control web></profile-switch>
       <layout-switch control></layout-switch>
       <undo-bar control></undo-bar>
       <settings-tabs label="Settings" button="gear">
         <settings-sheet label="Settings" account></settings-sheet>
         <evaluator-settings label="Evaluators" flag="evaluators"></evaluator-settings>
         <generator-settings label="Generators"></generator-settings>
-        <people-list label="People" admin></people-list>
-        <guest-limits label="People" admin></guest-limits>
-        <feature-flags label="Feature flags" admin></feature-flags>
+        <people-list label="People" admin web></people-list>
+        <guest-limits label="People" admin web></guest-limits>
+        <feature-flags label="Feature flags" admin web></feature-flags>
+        <mac-account label="Account" mac></mac-account>
       </settings-tabs>
-      <session-switch control></session-switch>
+      <session-switch control web></session-switch>
     </dock-desk>
     <viewport-switch></viewport-switch>
     <notice-stack></notice-stack>

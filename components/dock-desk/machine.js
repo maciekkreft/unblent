@@ -146,13 +146,26 @@ const shown = (context, type) => {
 // hidden. Until `flags` answers (`hidden` is null) every flagged child is hidden, the
 // same as `flags` itself with no answer yet (3.1). A child marked `admin` is hidden from
 // everyone but the admin, and from the admin while viewing as someone (12), as the gear's
-// sheet hides its admin tabs.
+// sheet hides its admin tabs. A child marked `web` or `mac` is shown only there (8).
 const hiddenNames = (context) =>
   new Set(
     context.views
-      .filter((v) => (v.flag && (context.hidden === null || context.hidden.includes(v.flag))) || (v.admin && !context.admin))
+      .filter(
+        (v) =>
+          (v.flag && (context.hidden === null || context.hidden.includes(v.flag))) ||
+          (v.admin && !context.admin) ||
+          !editionShows(v.edition, context.edition),
+      )
       .map((v) => v.name),
   );
+
+// Where the page runs (8): the Mac app when the session picture carries `connect`, which
+// `session` reports only in the local edition (3.4), else the website; null until
+// `session` answers, so a child marked for one never shows in the other first.
+export const editionOf = (picture) => (picture && !picture.error ? (picture.connect ? "mac" : "web") : null);
+
+// Whether a child marked for an edition (`web`, `mac`, or neither) is shown in this one.
+export const editionShows = (marked, edition) => !marked || marked === edition;
 
 // Whether a session picture is the admin's own: signed in as the admin and not viewing as
 // someone (12).
@@ -355,7 +368,9 @@ export const machine = setup({
       "`flags` answers, while the stored layout keeps its place for when the feature comes " +
       "back on (a page without `flags` hides nothing); and `admin`, which draws that child only for " +
       "the admin, and not while the admin views as someone, as the gear's sheet does with its " +
-      "People and Feature flags tabs. These are read from each child and are not attributes of `dock-desk` itself. While " +
+      "People and Feature flags tabs; and `web` or `mac`, which draws that child, a header control " +
+      "included, only on the website or only in the Mac app, told apart by whether `session` " +
+      "reports `connect`, and neither until it answers. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. " +
       "A child that announces tabs of its own (`tabs.shown`) is drawn, wherever it sits and " +
@@ -417,6 +432,8 @@ export const machine = setup({
     // Whether the account is the admin's own, for a child marked `admin`; false until
     // `session` answers, so such a child never shows to anyone else first.
     admin: false,
+    // Where the page runs, for a child marked `web` or `mac` (editionOf).
+    edition: null,
   }),
   // Which children a flag hides, and whether the account is the admin, are asked once at
   // mount, beside the layout, and followed through flags.changed and session.changed
@@ -431,8 +448,8 @@ export const machine = setup({
     {
       src: "session",
       input: ({ context }) => ({ ask: context.ask }),
-      onDone: { actions: assign({ admin: ({ event }) => adminOf(event.output) }) },
-      onError: { actions: [] },
+      onDone: { actions: assign({ admin: ({ event }) => adminOf(event.output), edition: ({ event }) => editionOf(event.output) ?? "web" }) },
+      onError: { actions: assign({ edition: "web" }) },
     },
   ],
   initial: "loading",
@@ -600,7 +617,7 @@ export const machine = setup({
       actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
     },
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
-    "session.changed": { actions: assign({ admin: ({ event }) => adminOf(event) }) },
+    "session.changed": { actions: assign({ admin: ({ event }) => adminOf(event), edition: ({ event }) => editionOf(event) }) },
     // A child announces its own tabs: kept by its address, for a child on this desk only.
     "tabs.shown": {
       guard: ({ context, event }) => names(context.views).includes(event.view),

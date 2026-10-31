@@ -11,8 +11,10 @@ value-checks.changed carries them, the answers as values.checked carries a line'
 """
 
 import json
+import os
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,7 +23,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from jsonschema import Draft202012Validator
 
-from server.user import require_user, user_dir
+from server.user import DATA, local_user, require_user, user_dir
 
 router = APIRouter()
 
@@ -127,11 +129,59 @@ async def put_answer(key: str, request: Request, user_id: str = Depends(require_
         return _answer(connection.execute("SELECT * FROM answers WHERE key = ?", (key,)).fetchone())
 
 
+# The settings the local edition (3.4) starts with: the Mac launcher sets
+# UNBLENT_FIRST_CHECKS to the bundled mac/checks/, which mac/export-checks.py wrote from
+# the owner's own. This component reads only its own file there; the evaluators it
+# names are the ids evaluators brings from the same folder. The lock keeps two first
+# pulls from both importing.
+_first_lock = threading.Lock()
+# Given once per Mac (11.1): a disconnect moves the account's directory to the backup
+# (5), and the settings found empty after it must not be given again.
+FIRST_GIVEN = DATA / "first-value-checks"
+
+
+def _bundled() -> dict | None:
+    """The bundle's settings, or None when there is no bundle or they are not well formed."""
+    folder = os.environ.get("UNBLENT_FIRST_CHECKS")
+    path = Path(folder) / "value-checks.json" if folder else None
+    if path is None or not path.is_file():
+        return None
+    try:
+        given = json.loads(path.read_text()).get("settings")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(given, dict):
+        return None
+    settings = {"values": given.get("values"), "examples": given.get("examples")}
+    return settings if _SETTINGS.is_valid(settings) else None
+
+
+def _first_settings(user_id: str) -> None:
+    """Import the bundled settings into the local account while it has none, before the
+    first pull answers. Only once per Mac; a Mac that already had settings is marked as
+    given on its next pull. On the web, or without a bundle, nothing happens."""
+    if user_id != local_user() or FIRST_GIVEN.exists():
+        return
+    settings = _bundled()
+    if settings is None:
+        return
+    with _first_lock, _connect(user_id) as connection:
+        if FIRST_GIVEN.exists():
+            return
+        if connection.execute("SELECT 1 FROM settings WHERE key = ?", (_ROW,)).fetchone() is None:
+            connection.execute(
+                "INSERT INTO settings (key, values_ev, examples_ev, version, seq) VALUES (?, ?, ?, 1, ?)",
+                (_ROW, settings["values"], settings["examples"], _next_seq(connection)),
+            )
+    FIRST_GIVEN.touch()
+
+
 @router.get("")
 def pull(since: str = "0", user_id: str = Depends(require_user)):
     if not since.isdigit():
         return JSONResponse(_BAD, status_code=400)
     after = int(since)
+    _first_settings(user_id)
     with _connect(user_id) as connection:
         settings = connection.execute("SELECT * FROM settings WHERE key = ? AND seq > ?", (_ROW, after)).fetchone()
         answers = connection.execute("SELECT * FROM answers WHERE seq > ? ORDER BY seq", (after,)).fetchall()

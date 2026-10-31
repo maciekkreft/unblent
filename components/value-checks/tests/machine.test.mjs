@@ -86,12 +86,12 @@ function fakeStore() {
 }
 
 // `days` maps a day to the values as they stood on it; every decide waits for the test.
-function fakeAsk({ keySet = true, userId = null, days = { [DAY]: [] } } = {}) {
+function fakeAsk({ keySet = true, picture = { jev: { keySet } }, userId = null, days = { [DAY]: [] } } = {}) {
   const decides = [];
   const reads = [];
   const ask = (target, name, payload) => {
     if (target === "session") return Promise.resolve({ userId, registrationOpen: false });
-    if (target === "llm" && name === "read") return Promise.resolve({ jev: { keySet } });
+    if (target === "llm" && name === "read") return Promise.resolve(picture);
     if (target === "evaluators") return Promise.resolve({ evaluators: [isValue, fits] });
     if (target === "values") {
       reads.push(payload.day);
@@ -286,6 +286,40 @@ test("a failure ends the queue and is announced; busy waits and asks again", asy
   await flush();
   assert.equal(decides.length, 3);
 });
+
+test("with a decider named, its readiness decides, not the Jev key", async () => {
+  const ollama = (ready) => ({ jev: { keySet: false }, decider: { provider: "ollama", model: "nimble-v3:latest", ready } });
+  const days = { [DAY]: [val(V1, "Honesty")] };
+  const { actor, decides } = await start({ asks: fakeAsk({ picture: ollama(false), days }) });
+  actor.send(choose(EV, null));
+  actor.send({ type: "day.shown", day: DAY });
+  await flush();
+  assert.equal(decides.length, 0, "Nimble not ready: nothing is asked");
+  assert.equal((await read(actor)).keySet, false);
+
+  actor.send({ type: "llm.changed", ...ollama(true) });
+  await flush();
+  assert.equal(decides.length, 1, "Nimble ready, no Jev key: the day is checked");
+
+  // A Jev key alone does not count while the named decider is not ready.
+  actor.send({ type: "llm.changed", jev: { keySet: true }, decider: { provider: "jev", model: "jev", ready: false } });
+  await flush();
+  assert.equal((await read(actor)).keySet, false);
+});
+
+for (const error of ["local-off", "no-model"]) {
+  test(`${error} from llm: decide is announced as itself`, async () => {
+    const days = { [DAY]: [val(V1, "Honesty")] };
+    const { actor, decides, checked } = await start({ asks: fakeAsk({ days }) });
+    actor.send(choose(EV, null));
+    actor.send({ type: "day.shown", day: DAY });
+    await flush();
+    decides[0].answer({ error });
+    await flush();
+    assert.equal(checked.at(-1).error, error);
+    assert.equal((await read(actor)).values[0].lines[0].status, "failed");
+  });
+}
 
 test("a past day is checked with that day's values when it is shown, and read waits for them", async () => {
   const days = { [DAY]: [val(V1, "Honesty")], [PAST]: [val(V2, "Courage")] };

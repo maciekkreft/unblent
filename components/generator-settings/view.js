@@ -4,7 +4,7 @@ import { mount, unmount, ask } from "bus";
 import { EditorState, Annotation } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { baseExtensions, setVim, paragraphs } from "editor";
-import { machine, IDS, RUN, shown, modelsFor, keySet } from "./machine.js";
+import { machine, IDS, RUN, shown, modelsFor, modelOf, note } from "./machine.js";
 import edited from "./events/generator.edited.json" with { type: "json" };
 import requested from "./events/generation.requested.json" with { type: "json" };
 
@@ -232,9 +232,11 @@ class GeneratorSettings extends LitElement {
     if (context.failed) return html`<p class="note">Generators unavailable.</p>`;
     if (!context.generators) return nothing;
     return html`
-      ${keySet(context.llm) === false
+      ${note(context.llm) === "key"
         ? html`<p class="note key">Generators run on your Anthropic key. Add it in the Settings tab, under Your account.</p>`
-        : nothing}
+        : note(context.llm) === "ollama"
+          ? html`<p class="note key">Generators run on the chat model in Ollama on this Mac, with no key and no cost.</p>`
+          : nothing}
       ${IDS.map((id) => shown(context, id))
         .filter(Boolean)
         .map((g) => this.#generator(g, context))}
@@ -262,7 +264,7 @@ class GeneratorSettings extends LitElement {
         <label class="field">
           <span>Model</span>
           <select @change=${(e) => this.#send({ type: "_model", id: g.id, model: e.target.value })}>
-            ${modelsFor(context.llm, g.model).map((m) => html`<option value=${m.id} ?selected=${m.id === g.model}>${m.label}</option>`)}
+            ${modelsFor(context.llm, g.model).map((m) => html`<option value=${m.id} ?selected=${m.id === modelOf(context.llm, g.model)}>${m.label}</option>`)}
           </select>
         </label>
         <div class="ask">
