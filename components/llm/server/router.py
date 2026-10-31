@@ -100,6 +100,9 @@ def _migrate(connection: sqlite3.Connection) -> None:
     # A file made before Ollama could decide has no decider column yet.
     if "decider" not in columns:
         connection.executescript("ALTER TABLE settings ADD COLUMN decider TEXT")
+    # A file made before the decision model could be chosen has no decider_model column yet.
+    if "decider_model" not in columns:
+        connection.executescript("ALTER TABLE settings ADD COLUMN decider_model TEXT")
 
 
 def _deciders() -> list[str]:
@@ -115,19 +118,20 @@ def _decider(stored) -> str:
 
 
 def _settings(connection: sqlite3.Connection) -> dict:
-    row = connection.execute("SELECT provider, model, effort, ttl, address, decider FROM settings WHERE one = 1").fetchone()
+    row = connection.execute("SELECT provider, model, effort, ttl, address, decider, decider_model FROM settings WHERE one = 1").fetchone()
     if row is None:
         # The Mac app answers from Ollama on the user's own Mac unless they choose
         # otherwise (3.4); the website from Anthropic.
         provider = "ollama" if local_user() else "anthropic"
         return {
             "provider": provider, "model": "", "effort": "default", "ttl": "1h", "address": _OLLAMA_ADDRESS,
-            "decider": _decider(None), "deciderSet": False,
+            "decider": _decider(None), "deciderSet": False, "deciderModel": None,
         }
     return {
         "provider": row["provider"], "model": row["model"], "effort": row["effort"], "ttl": row["ttl"],
         "address": row["address"] or _OLLAMA_ADDRESS,
         "decider": _decider(row["decider"]), "deciderSet": row["decider"] is not None,
+        "deciderModel": row["decider_model"],
     }
 
 
@@ -154,6 +158,21 @@ def _ollama_models(address: str) -> list[dict] | None:
 def _kev(models: list[dict] | None) -> str | None:
     """The id of kev:0.8b-mlx-bf16 among Ollama's downloaded models, or None."""
     return next((m["id"] for m in models or [] if m["id"] == _KEV), None)
+
+
+def _decision_model(models: list[dict] | None, chosen: str | None) -> str | None:
+    """The model the checks use: the one the user chose while it is downloaded, else Kev
+    while it is, else None."""
+    if chosen and any(m["id"] == chosen for m in models or []):
+        return chosen
+    return _kev(models)
+
+
+def _decision_models(models: list[dict] | None) -> list[dict]:
+    """Every model downloaded in Ollama, Kev first: Ollama does not say which can make
+    checks, so the user picks among all of them and Kev is the one that surely can."""
+    listed = [{"id": m["id"], "label": m["id"]} for m in models or []]
+    return sorted(listed, key=lambda m: m["id"] != _KEV)
 
 
 def _key(connection: sqlite3.Connection, provider: str) -> str | None:
@@ -231,10 +250,13 @@ def _picture(user_id: str, connection: sqlite3.Connection, guest: bool = False) 
     if local:
         picture["ollama"] = {"address": settings["address"], "running": ollama is not None}
     if settings["decider"] == "ollama":
-        kev = _kev(ollama)
-        picture["decider"] = {"provider": "ollama", "model": kev or _KEV, "ready": kev is not None}
+        chosen = _decision_model(ollama, settings["deciderModel"])
+        picture["decider"] = {
+            "provider": "ollama", "model": chosen or settings["deciderModel"] or _KEV, "ready": chosen is not None,
+            "models": _decision_models(ollama),
+        }
     else:
-        picture["decider"] = {"provider": "jev", "model": "jev-latest", "ready": jev_set}
+        picture["decider"] = {"provider": "jev", "model": "jev-latest", "ready": jev_set, "models": [{"id": "jev-latest", "label": "Jev"}]}
     picture["deciders"] = _deciders()
     if guest:
         picture["freeUse"] = spending.free_use(user_id)
@@ -292,6 +314,9 @@ def _valid(payload) -> dict | None:
     decider = payload.get("decider")
     if decider is not None and decider not in _deciders():
         return None
+    decider_model = payload.get("deciderModel")
+    if decider_model is not None and (not isinstance(decider_model, str) or len(decider_model) > 200):
+        return None
     if ttl is not None and ttl not in _TTLS:
         return None
     if model is not None and not isinstance(model, str):
@@ -302,6 +327,7 @@ def _valid(payload) -> dict | None:
         "provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key,
         "address": None if address is None else _address(address),
         "decider": decider,
+        "deciderModel": decider_model,
     }
 
 
@@ -324,9 +350,10 @@ def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
         current = _settings(connection)
         provider = fields["provider"] or current["provider"]
         connection.execute(
-            "INSERT INTO settings (one, provider, model, effort, ttl, address, decider) VALUES (1, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO settings (one, provider, model, effort, ttl, address, decider, decider_model) VALUES (1, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(one) DO UPDATE SET provider = excluded.provider, model = excluded.model,"
-            " effort = excluded.effort, ttl = excluded.ttl, address = excluded.address, decider = excluded.decider",
+            " effort = excluded.effort, ttl = excluded.ttl, address = excluded.address, decider = excluded.decider,"
+            " decider_model = excluded.decider_model",
             (
                 provider,
                 fields["model"] if fields["model"] is not None else current["model"],
@@ -336,6 +363,8 @@ def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
                 (fields["address"] or None) if fields["address"] is not None else (None if current["address"] == _OLLAMA_ADDRESS else current["address"]),
                 # NULL is the edition's default decider, until the user chooses one.
                 fields["decider"] or (current["decider"] if current["deciderSet"] else None),
+                # NULL is Kev, until the user chooses another downloaded model.
+                (fields["deciderModel"] or None) if fields["deciderModel"] is not None else current["deciderModel"],
             ),
         )
         key = fields["key"]
@@ -432,24 +461,24 @@ def _decide(user_id: str, state: dict, questions: list, guest: bool = False) -> 
         settings = _settings(connection)
         key = _key(connection, "jev")
     if settings["decider"] == "ollama":
-        return _decide_local(settings["address"], state, questions)
+        return _decide_local(settings["address"], settings["deciderModel"], state, questions)
     if key is None:
         # The error rides the reply, as complete's does, so the asker shows it.
         return {"error": "no-key"}
     return jev_adapter.decide(key, state, questions)
 
 
-def _decide_local(address: str, state: dict, questions: list) -> dict:
-    # kev:0.8b-mlx-bf16 on the user's own Mac needs no key, costs nothing and is not counted
+def _decide_local(address: str, chosen: str | None, state: dict, questions: list) -> dict:
+    # A model on the user's own Mac needs no key, costs nothing and is not counted
     # (3.4, 7.7). Asking Ollama for its models first tells "not running" from "not
-    # downloaded" and finds the tag the model was pulled with.
+    # downloaded".
     models = _ollama_models(address)
     if models is None:
         return {"error": "local-off"}
-    kev = _kev(models)
-    if kev is None:
+    model = _decision_model(models, chosen)
+    if model is None:
         return {"error": "no-model"}
-    return jev_adapter.decide_local(address, kev, state, questions)
+    return jev_adapter.decide_local(address, model, state, questions)
 
 
 def _options_ok(options) -> bool:

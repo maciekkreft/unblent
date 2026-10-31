@@ -21,9 +21,10 @@ All notable changes to Unblent for Mac are listed here. The format follows
   pick-one questions.
 - Generators, written by the chat model in Ollama: a suggested value under a value that
   was marked red, a one-sentence summary of each past journal day, and a title for each chat.
-- Settings › Your account › Decisions chooses who makes the checks: Kev in Ollama
-  on this Mac, or Jev with your own key. Settings says when Ollama is not running or
-  Kev is not downloaded, and how to fix it.
+- Settings › Your account › Evaluating chooses who makes the checks, the same way the chat
+  is set up: Provider (Ollama on this Mac, or Jev with your own key), then Model, any model
+  downloaded in Ollama, Kev first. Settings says when Ollama is not running or Kev is not
+  downloaded, and how to fix it.
 
 ## [0.4.1] — 2026-10-31
 

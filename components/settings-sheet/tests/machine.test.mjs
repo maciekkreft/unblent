@@ -545,21 +545,22 @@ test("evaluator.changed and evaluator.deleted keep the list to choose from (4.3)
 const KEV_PICTURE = {
   ...OLLAMA_PICTURE,
   jev: { keySet: false },
-  decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true },
+  decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true, models: [{ id: "kev:0.8b-mlx-bf16", label: "kev:0.8b-mlx-bf16" }] },
   deciders: ["ollama", "jev"],
 };
+const KEV_MODELS = KEV_PICTURE.decider.models;
 
-test("Decisions shows only where two deciders are offered, with Ollama's state (3.4)", () => {
+test("the checks' provider and model show only where two deciders are offered, with Ollama's state (3.4)", () => {
   assert.equal(deciderView(LLM_PICTURE), null, "a picture without deciders: nothing new");
   assert.equal(deciderView({ ...LLM_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: true }, deciders: ["jev"] }), null, "the website");
-  assert.deepEqual(deciderView(KEV_PICTURE), { provider: "ollama", offered: ["ollama", "jev"], running: true, ready: true });
+  assert.deepEqual(deciderView(KEV_PICTURE), { provider: "ollama", offered: ["ollama", "jev"], models: KEV_MODELS, model: "kev:0.8b-mlx-bf16", running: true, ready: true });
   const off = { ...KEV_PICTURE, ollama: { address: "http://localhost:11434", running: false }, decider: { ...KEV_PICTURE.decider, ready: false } };
-  assert.deepEqual(deciderView(off), { provider: "ollama", offered: ["ollama", "jev"], running: false, ready: false });
+  assert.deepEqual(deciderView(off), { provider: "ollama", offered: ["ollama", "jev"], models: KEV_MODELS, model: "kev:0.8b-mlx-bf16", running: false, ready: false });
   const missing = { ...KEV_PICTURE, decider: { ...KEV_PICTURE.decider, ready: false } };
   assert.equal(deciderView(missing).running, true);
   assert.equal(deciderView(missing).ready, false, "running, but kev:0.8b-mlx-bf16 is not downloaded");
   const jev = { ...KEV_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } };
-  assert.deepEqual(deciderView(jev), { provider: "jev", offered: ["ollama", "jev"] });
+  assert.deepEqual(deciderView(jev), { provider: "jev", offered: ["ollama", "jev"], models: [], model: "jev-latest" });
 });
 
 test("a decider can answer: the picture's word, else a saved Jev key", () => {

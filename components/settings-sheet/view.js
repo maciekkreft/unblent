@@ -27,7 +27,7 @@ const PROVIDER_LABELS = { ollama: "Ollama (on this Mac)" };
 const PULL = "ollama pull gemma4:e2b-mlx";
 // Who answers the checks in the Mac app (3.4): each name says where the answers come from
 // and what they cost.
-const DECIDER_LABELS = { ollama: "Kev in Ollama (on this Mac, free)", jev: "Jev (your own key)" };
+const DECIDER_LABELS = { ollama: "Ollama (on this Mac)", jev: "Jev (your own key)" };
 const PULL_KEV = "ollama pull kev:0.8b-mlx-bf16";
 // How long Copy reads Copied, so the click visibly did something (Don Norman: feedback).
 const COPIED_MS = 2000;
@@ -858,21 +858,24 @@ class SettingsSheet extends LitElement {
   // Ollama's row (3.4): whether it answered at its address, with the address changeable
   // in place. Enter or leaving the box saves, Escape closes it unchanged, and an empty
   // address brings back the default, so every change is undone by typing the old one.
-  #ollama({ address, running }) {
+  // The chat and the checks each draw this row (`row`), and only the row the user
+  // pressed opens its box; both read and change the one address.
+  #ollama({ address, running }, row = "chat") {
+    const editing = this.editingAddress === row;
     const save = (value) => {
       this.editingAddress = false;
       if (value.trim() !== address) this.#actor.send({ type: "_setAddress", address: value });
     };
     const edit = async () => {
-      this.editingAddress = true;
+      this.editingAddress = row;
       await this.updateComplete;
-      this.renderRoot.querySelector(".ollama input")?.focus();
+      this.renderRoot.querySelector(`.ollama[data-row="${row}"] input`)?.focus();
     };
     return html`
       <div class="field">
         <span>Ollama</span>
-        <div class="ollama">
-          ${this.editingAddress
+        <div class="ollama" data-row=${row}>
+          ${editing
             ? html`
                 <input
                   type="text"
@@ -886,7 +889,7 @@ class SettingsSheet extends LitElement {
                     if (e.key === "Enter") save(e.target.value);
                     if (e.key === "Escape") this.editingAddress = false;
                   }}
-                  @blur=${(e) => this.editingAddress && save(e.target.value)}
+                  @blur=${(e) => this.editingAddress === row && save(e.target.value)}
                 />
               `
             : running
@@ -898,7 +901,7 @@ class SettingsSheet extends LitElement {
                 </span>
                 <button class="act" @click=${() => this.#actor.send({ type: "_retryOllama" })}>Try again</button>
               `}
-          ${this.editingAddress ? nothing : html`<button class="act" @click=${edit}>Change address</button>`}
+          ${editing ? nothing : html`<button class="act" @click=${edit}>Change address</button>`}
         </div>
       </div>
     `;
@@ -938,7 +941,7 @@ class SettingsSheet extends LitElement {
     return html`
         <div class="judging">
           <span class="group">Evaluating</span>
-          ${decider ? this.#decider(decider) : nothing}
+          ${decider ? this.#decider(decider, llm) : nothing}
           ${decider && decider.provider !== "jev" ? nothing : this.#keyField({
             field: "jevKey",
             keySet: llm.jev?.keySet === true,
@@ -954,47 +957,38 @@ class SettingsSheet extends LitElement {
     `;
   }
 
-  // Decisions (3.4): the choice of who answers, and with Kev one line saying whether
-  // it can answer now, worded as the Ollama row for the chat is, with what to do when not.
-  #decider({ provider, offered, running, ready }) {
-    const status =
-      provider !== "ollama"
+  // The checks' rows (3.4), the same as the chat's: Provider, with Ollama its Ollama row,
+  // then Model, the models downloaded there with Kev first, and the pull line while the
+  // chosen model is missing.
+  #decider({ provider, offered, models, model, running, ready }, llm) {
+    const ollama = provider === "ollama" ? ollamaView(llm) : null;
+    return html`
+      <label class="field decider">
+        <span>Provider</span>
+        <select @change=${(e) => this.#actor.send({ type: "_setDecider", decider: e.target.value })}>
+          ${offered.map((d) => html`<option value=${d} ?selected=${d === provider}>${DECIDER_LABELS[d] ?? d}</option>`)}
+        </select>
+      </label>
+      ${ollama ? this.#ollama(ollama, "checks") : nothing}
+      ${ollama && !running
         ? nothing
-        : !running
+        : models.length
         ? html`
-            <div class="field">
-              <span></span>
-              <div class="ollama decider">
-                <span class="status off">
-                  Ollama isn't running. Open the Ollama app, or get it at
-                  <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>.
-                </span>
-                <button class="act" @click=${() => this.#actor.send({ type: "_retryOllama" })}>Try again</button>
-              </div>
-            </div>
+            <label class="field decider-model">
+              <span>Model</span>
+              <select @change=${(e) => this.#actor.send({ type: "_setDeciderModel", model: e.target.value })}>
+                ${models.map((m) => html`<option value=${m.id} ?selected=${m.id === model}>${m.label}</option>`)}
+              </select>
+            </label>
           `
-        : !ready
+        : nothing}
+      ${ollama && running && !ready
         ? this.#pullHint(
             PULL_KEV,
             html`Kev isn't downloaded. In Terminal: <code>${PULL_KEV}</code>`,
             html`<span class="help">It needs Ollama 0.40.4 or later.</span>`,
           )
-        : html`
-            <div class="field">
-              <span></span>
-              <div class="ollama decider">
-                <span class="status running"><span class="dot" aria-hidden="true"></span>Kev is ready</span>
-              </div>
-            </div>
-          `;
-    return html`
-      <label class="field decider">
-        <span>Decisions</span>
-        <select @change=${(e) => this.#actor.send({ type: "_setDecider", decider: e.target.value })}>
-          ${offered.map((d) => html`<option value=${d} ?selected=${d === provider}>${DECIDER_LABELS[d] ?? d}</option>`)}
-        </select>
-      </label>
-      ${status}
+        : nothing}
     `;
   }
 

@@ -39,7 +39,7 @@ const needsKey = (picture) => {
 // The key rides through to the server from here and never enters context.
 const patchOf = (event) => {
   const patch = {};
-  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey", "address", "decider"]) if (field in event) patch[field] = event[field];
+  for (const field of ["provider", "key", "model", "effort", "ttl", "jevKey", "address", "decider", "deciderModel"]) if (field in event) patch[field] = event[field];
   return patch;
 };
 

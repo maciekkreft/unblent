@@ -115,8 +115,9 @@ It answers yes or no, or picks one option, in a fraction of a second, free and o
 2. In Terminal, run `ollama pull kev:0.8b-mlx-bf16`.
 3. In Unblent, choose the evaluators in Settings, then write a line in a Choice Point.
 
-Settings › Your account › Decisions shows whether Kev is ready. If you prefer,
-choose Jev and enter your own Jev key instead.
+Settings › Your account › Evaluating shows whether Ollama is running and which model
+makes the checks, Kev unless you choose another. If you prefer, choose Jev as the
+provider and enter your own Jev key instead.
 
 ## Required: read before you open the app
 
