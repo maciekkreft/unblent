@@ -8,8 +8,9 @@ const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.en
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
-// The failing server this test stands in, and how each browser reports it.
-const IGNORE = [/HTTP 503: .*\/api\/notes\//, /status of 503/];
+// The failing server this test stands in, and how each browser reports it. Chromium
+// also reports the stand-in 503 as aborted, because the notes fact never reads its body.
+const IGNORE = [/HTTP 503: .*\/api\/notes\//, /status of 503/, /\/api\/notes\/\S+ net::ERR_ABORTED/];
 
 const status = (page) =>
   page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".status > span").textContent.trim());
