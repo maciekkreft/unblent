@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isPlaced, placeable, dateOf, dayName, writable, shownValues, earlierDays, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
+import { machine, isPlaced, placeable, dateOf, dayName, writable, shownValues, changedLine, boxMarks, marksFor, warned, statusOf, sureOf, rowKey, suggestionFor, sourceOf, cleaned } from "../machine.js";
 
 const SCHEMA = JSON.parse(readFileSync(new URL("../events/values.saved.json", import.meta.url), "utf8"));
 const PLACED = JSON.parse(readFileSync(new URL("../events/values.placed.json", import.meta.url), "utf8"));
@@ -38,7 +38,6 @@ async function start(versions = {}, { vimKeys, checks, evaluators, suggestions, 
         if (target === "evaluators") return Promise.resolve(evaluators ? { evaluators } : { error: "no-answerer" });
         if (target === "generators") return Promise.resolve(suggestions ? { results: suggestions } : { error: "no-answerer" });
         const days = daysOf();
-        if (name === "versions") return Promise.resolve({ days });
         const on = days.filter((d) => payload.day === undefined || d <= payload.day).at(-1) ?? null;
         const answer = { day: on, values: on ? versions[on] : [], changedSince: payload.day !== undefined && days.some((d) => d > payload.day) };
         if (placed && payload.day !== undefined) answer.placed = placed[payload.day] === true;
@@ -156,15 +155,14 @@ test("a placement from another device arrives on values.changed and keeps the ve
   assert.equal(ctx().open, false);
 });
 
-test("it asks the shown day's version and the days, and follows day.shown", async () => {
+test("it asks the shown day's version, and follows day.shown", async () => {
   assert.equal(dateOf(NOW), TODAY);
   const { actor, asked, ctx } = await start({ [EARLIER]: [v(1, "Honest")] });
   assert.deepEqual(
     asked.filter((a) => a.target === "values").map((a) => [a.name, a.payload]),
-    [["read", { day: TODAY }], ["versions", {}]],
+    [["read", { day: TODAY }]],
   );
   assert.deepEqual(ctx().version, { day: EARLIER, values: [v(1, "Honest")], changedSince: false });
-  assert.deepEqual(ctx().days, [EARLIER]);
 
   actor.send({ type: "day.shown", day: TODAY, writable: true });
   await flush();
@@ -249,22 +247,9 @@ test("an earlier day is read only and says when the values changed since", async
   actor.send({ type: "_open" });
   actor.send({ type: "_see" });
   await flush();
-  assert.deepEqual(ctx().viewing, { kind: "current", day: TODAY, values: [v(1, "Honest"), v(2, "Kind")] });
+  assert.deepEqual(ctx().viewing, { day: TODAY, values: [v(1, "Honest"), v(2, "Kind")] });
   actor.send({ type: "_back" });
   assert.equal(ctx().viewing, null);
-});
-
-test("earlier versions are listed before the shown one, and one picked is shown", async () => {
-  const { actor, ctx } = await start({ "2026-09-01": [v(1, "Calm")], [EARLIER]: [v(1, "Honest")], [TODAY]: [v(2, "Kind")] });
-  assert.equal(changedLine(ctx()), "Changed today");
-  assert.deepEqual(earlierDays(ctx()), [EARLIER, "2026-09-01"]);
-  actor.send({ type: "_open" });
-  actor.send({ type: "_browse" });
-  assert.equal(ctx().browsing, true);
-  actor.send({ type: "_see", day: "2026-09-01" });
-  await flush();
-  assert.deepEqual(ctx().viewing, { kind: "earlier", day: "2026-09-01", values: [v(1, "Calm")] });
-  assert.equal(ctx().browsing, false);
 });
 
 test("values.changed is followed, also by an open sheet with nothing waiting, and marks a past day changed", async () => {
@@ -287,17 +272,14 @@ test("values.changed is followed, also by an open sheet with nothing waiting, an
   assert.equal(ctx().version.changedSince, true);
 });
 
-test("after a change the days listed and Changed since are asked again, as the fact says them", async () => {
+test("after a change Changed since is asked again, as the fact says it", async () => {
   const versions = { [EARLIER]: [v(1, "Honest")], [TODAY]: [v(2, "Kind")] };
   const { actor, ctx, asked } = await start(versions);
-  assert.deepEqual(earlierDays(ctx()), [EARLIER]);
-  // Today's edit made the earlier version read as today's, so the fact no longer lists it.
-  delete versions[EARLIER];
+  assert.equal(changedLine(ctx()), "", "nothing said of a version written today");
   const before = asked.length;
   actor.send({ type: "values.changed", day: TODAY, values: [v(1, "Honest")] });
   await flush();
-  assert.deepEqual(asked.slice(before).map((a) => a.name).sort(), ["read", "versions"]);
-  assert.deepEqual(earlierDays(ctx()), []);
+  assert.deepEqual(asked.slice(before).map((a) => a.name), ["read"]);
   assert.deepEqual(ctx().version.values, [v(1, "Honest")], "the shown day's version follows the event at once");
 });
 
@@ -392,10 +374,10 @@ test("marks show for the line as written, green or red by the expected answer, p
     [["value-checks", "read", { day: TODAY }], ["evaluators", "list", { day: TODAY }], ["generators", "results", { generator: "value-suggestion" }]],
   );
   assert.deepEqual(marksFor(ctx(), v(1, "Honest"), "name"), [
-    { question: Q, name: "A way of acting", tone: "right", icon: "compass", expected: "A way of acting", sure: 1 },
+    { question: Q, name: "A way of acting", about: "Is it a value?", tone: "right", icon: "compass", expected: "A way of acting", sure: 1 },
   ]);
   assert.deepEqual(marksFor(ctx(), v(1, "Honest", "Say it"), "meaning"), [
-    { question: QX, name: "Yes", tone: "plain", icon: "check", expected: null, sure: sureOf(0.6) },
+    { question: QX, name: "Yes", about: "Does the example fit?", tone: "plain", icon: "check", expected: null, sure: sureOf(0.6) },
   ]);
   const red = marksFor(ctx(), v(2, "Get rich"), "name");
   assert.equal(red[0].tone, "wrong");
@@ -408,11 +390,12 @@ test("marks show for the line as written, green or red by the expected answer, p
   actor.send({ type: "_open" });
   assert.equal(statusOf(ctx()), "");
   actor.send({ type: "_point", source: "cursor", id: id(2), field: "name", text: "Get rich" });
-  assert.equal(statusOf(ctx()), "A goal · you expect A way of acting");
+  const redSaid = "Is it a value?: A goal, you expect A way of acting";
+  assert.equal(statusOf(ctx()), redSaid, "what was checked, then the answer, as on a choice point");
   actor.send({ type: "_point", source: "hover", id: id(1), field: "meaning", text: "Say it" });
-  assert.equal(statusOf(ctx()), "Yes", "the pointer comes before the cursor");
+  assert.equal(statusOf(ctx()), "Does the example fit?: Yes", "the pointer comes before the cursor");
   actor.send({ type: "_point", source: "hover", field: null });
-  assert.equal(statusOf(ctx()), "A goal · you expect A way of acting");
+  assert.equal(statusOf(ctx()), redSaid);
 
   // Settings no longer naming the examples' evaluator takes those marks away.
   actor.send({ type: "value-checks.changed", settings: { values: EV, examples: null } });

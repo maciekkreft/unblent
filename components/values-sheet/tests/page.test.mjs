@@ -109,7 +109,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await card(page).catch(() => null)) === "Being a present parent · Honest with people");
         await page.locator("values-sheet .card").click();
-        assert.equal(await page.locator("values-sheet .when").innerText(), "Changed today");
+        await page.locator("values-sheet .done").waitFor();
+        assert.equal(await page.locator("values-sheet .when").count(), 0, "no Changed today in the footer");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();
@@ -119,7 +120,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     // Yesterday's values arrive through the API under the test's own login, so today has
     // values in force but no version of its own, and so no panel until it is added.
     // Browser: a reload against real storage.
-    test("+ Your values adds the panel folded to read, Edit opens it, a reload keeps it, and Remove from this day takes it off", async () => {
+    test("+ Your values adds the panel folded to read, a press on it opens it, a reload keeps it, and Remove from this day takes it off", async () => {
       const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
       context.setDefaultTimeout(4000);
       await signedIn(context, forgeCookie("values-placed"));
@@ -137,7 +138,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(await inSheet(page, (root) => root.activeElement?.className), "card", "the keyboard on the list");
         await page.reload({ waitUntil: "domcontentloaded" });
         await until(async () => (await card(page).catch(() => null)) === "Honest");
-        await sheet.locator("h3 .edit").click();
+        assert.equal(await sheet.locator("h3 button").count(), 0, "no Edit beside the heading");
+        await sheet.locator(".card").click();
         await until(async () => (await focusedField(page)) === "name");
         await sheet.locator(".unplace").click();
         await sheet.locator(".unplaced .new").waitFor();
@@ -280,7 +282,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           await box(2, "name").locator(".mark.wrong").waitFor();
           assert.equal(await box(2, "meaning").locator(".mark").count(), 0, "an empty example is not checked");
           await box(2, "name").locator(".mark").hover();
-          assert.equal(await sheet.locator(".status").innerText(), "A goal · you expect A way of acting");
+          assert.equal(await sheet.locator(".status").innerText(), "Is it a value?: A goal, you expect A way of acting", "what was checked, then the answer");
           const orderShown = () => inSheet(page, (root) => getComputedStyle(root.querySelector(".row .order")).opacity);
           if (where === "phone") assert.equal(await orderShown(), "1", "the move buttons always show on a phone");
           assert.deepEqual(problems, []);
@@ -306,7 +308,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const name = sheet.locator(`.row[data-id="${ID(2)}"] .box[data-field="name"]`);
         await name.locator(".mark.wrong").waitFor();
         await name.locator(".cm-content").click();
-        await until(async () => (await sheet.locator(".status").innerText()) === "A goal · you expect A way of acting");
+        await until(async () => (await sheet.locator(".status").innerText()) === "Is it a value?: A goal, you expect A way of acting");
         const at = await sheet.locator(".done").boundingBox();
         await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
         await page.mouse.down();
@@ -412,6 +414,52 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Today's values arrive through the API under the test's own login.
+    // Browser: focus and keys.
+    test("with Vim keys on, j and k go on out of the open sheet's first and last rows to the journal's text and the choice points, and back to the same row", async () => {
+      const context = await browser.newContext({ viewport: { width: 900, height: 900 } });
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("values-out"));
+      try {
+        await context.addInitScript((v) => localStorage.setItem("settings", v), VIM_ON);
+        const values = [
+          { id: ID(1), name: "Calm", meaning: "" },
+          { id: ID(2), name: "Kind", meaning: "" },
+        ];
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${dayOf(Date.now())}`, { data: { values, baseVersion: null } })).status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+        await page.locator("choice-point-cards .new:not([disabled])").waitFor();
+        // Where the keyboard is: a row of the sheet by its value's id, the journal's text, or
+        // the choice points.
+        const at = () =>
+          page.evaluate(() => {
+            const sheet = document.querySelector("values-sheet");
+            if (sheet.matches(":focus-within")) return sheet.shadowRoot.activeElement?.closest(".row")?.dataset.id ?? "sheet";
+            if (document.querySelector("choice-point-cards").matches(":focus-within")) return "choice points";
+            return document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") ? "text" : null;
+          });
+        const press = async (key, want) => {
+          await page.keyboard.press(key);
+          await until(async () => (await at()) === want);
+        };
+        await page.locator("values-sheet .card").click();
+        await until(async () => (await focusedField(page)) === "name");
+        await page.keyboard.press("Escape");
+        await press("Escape", ID(1));
+        await press("k", "text");
+        await press("j", ID(1));
+        await press("j", ID(2));
+        await press("j", "choice points");
+        await press("k", ID(2));
+        assert.equal(await isOpen(page), true, "the sheet stays open");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // An earlier day and two versions of the values arrive through the APIs under the
     // test's own login.
     // Browser: rendering and layout.
@@ -432,7 +480,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.locator("journal-days .row", { hasText: "Earlier" }).click();
         const sheet = page.locator("values-sheet");
         await until(async () => (await card(page)) === "Calm");
-        assert.equal(await sheet.locator("h3 .edit").count(), 0, "no Edit on an earlier day");
         await sheet.locator(".card").click();
         await sheet.locator(".close").waitFor();
         assert.equal(await sheet.locator(".box").count(), 0, "nothing to type in");

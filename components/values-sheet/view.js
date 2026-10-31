@@ -6,7 +6,7 @@ import { EditorState, Prec, Annotation, StateField, StateEffect } from "@codemir
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, toRegister } from "editor";
-import { machine, writable, placeable, isPlaced, shownValues, earlierDays, changedLine, dayName, dateOf, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor, isEmpty } from "./machine.js";
+import { machine, writable, placeable, isPlaced, shownValues, changedLine, boxMarks, marksFor, warned, statusOf, sayMarks, rowKey, suggestionFor, isEmpty } from "./machine.js";
 import saved from "./events/values.saved.json" with { type: "json" };
 import placed from "./events/values.placed.json" with { type: "json" };
 
@@ -199,23 +199,6 @@ class ValuesSheet extends LitElement {
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--color-body-mid);
-    }
-    /* Edit is a word in the heading's line, not a button's frame, so the list stays first. */
-    h3 .edit {
-      padding: 0;
-      border: 0;
-      background: none;
-      font-size: var(--text-caption);
-      font-weight: var(--weight-normal);
-      letter-spacing: normal;
-      text-transform: none;
-      color: var(--color-body);
-      text-decoration: underline;
-      text-decoration-color: var(--color-mute);
-      text-underline-offset: 0.2em;
-    }
-    h3 .edit:hover {
-      color: var(--color-ink);
     }
     button {
       appearance: none;
@@ -417,21 +400,6 @@ class ValuesSheet extends LitElement {
       color: var(--color-accent);
       text-decoration: underline;
       text-underline-offset: 0.15em;
-    }
-    .versions {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-2xs);
-    }
-    .version {
-      text-align: left;
-      padding: var(--space-xs) var(--space-sm);
-      border-color: transparent;
-      border-radius: var(--radius-sm);
-      background: transparent;
-    }
-    .version:hover {
-      background: var(--color-surface-hover);
     }
     .buttons {
       display: flex;
@@ -839,6 +807,10 @@ class ValuesSheet extends LitElement {
   // Vim keys): folded, on the card, the + Your values row or the Write your values row;
   // open, on the first box, in Vim's normal mode, or on a button of a sheet only read.
   focus(options) {
+    // Handed the keyboard from above or below with Vim keys on, an open sheet takes it on
+    // its first row or its last, where j and k move on, so the way back is the same key.
+    const rows = options?.from ? [...(this.renderRoot?.querySelectorAll(".rows > .row[tabindex]") ?? [])] : [];
+    if (rows.length) return (options.from === "below" ? rows.at(-1) : rows[0]).focus();
     const first = this.renderRoot?.querySelector(".box[data-key]");
     const box = first && this.#boxes.get(first.dataset.key);
     if (box) return box.view.focus();
@@ -885,13 +857,16 @@ class ValuesSheet extends LitElement {
     const context = this.#actor.snapshot.context;
     // u on a row not cut is the page's Undo (12, Undo), so it is left to go on.
     if (action === "undo" && !context.cut) return;
-    e.preventDefault();
-    e.stopPropagation();
     const rows = [...this.renderRoot.querySelectorAll(".rows > .row[data-id]")];
     const at = rows.findIndex((r) => r.dataset.id === id);
     const index = context.drafts.findIndex((d) => d.id === id);
     const go = { down: at + 1, up: at - 1, first: 0, last: rows.length - 1 }[action];
-    if (go !== undefined) return rows[Math.max(0, Math.min(rows.length - 1, go))]?.focus();
+    // A step past the first row or the last is left to the page around the sheet, which
+    // moves the keyboard on from there (journal-entry; 12, "Vim keys").
+    if (go !== undefined && (go < 0 || go >= rows.length)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (go !== undefined) return rows[go]?.focus();
     if (action === "edit") {
       const box = this.#boxes.get(`${id}:name`);
       if (box) this.#focusBox(box);
@@ -1037,7 +1012,6 @@ class ValuesSheet extends LitElement {
   }
 
   #sheet(context) {
-    const today = dateOf(context.now());
     // Escape on a button or a read value folds the sheet like Done; the boxes decide
     // their own Escape, for Vim (#keys). The key is taken so nothing around acts too.
     const keydown = (e) => {
@@ -1053,23 +1027,13 @@ class ValuesSheet extends LitElement {
     };
     let body;
     if (context.viewing) {
-      const { kind, day, values } = context.viewing;
-      body = html`<p class="caption">${kind === "current" ? "Today's values" : `Your values on ${dayName(day, today)}`}</p>
+      const { values } = context.viewing;
+      body = html`<p class="caption">Today's values</p>
         <div class="rows">${values.length ? values.map((v) => this.#readRow(context, v)) : html`<p class="empty">No values.</p>`}</div>
-        ${this.#foot(context, { back: true })}`;
-    } else if (context.browsing) {
-      body = html`<p class="caption">Earlier versions</p>
-        <div class="versions">
-          ${earlierDays(context).map(
-            (d) => html`<button type="button" class="version" @click=${() => this.#send({ type: "_see", day: d }, ".sheet .back")}>${dayName(d, today)}</button>`,
-          )}
-        </div>
         ${this.#foot(context, { back: true })}`;
     } else {
       const write = writable(context);
-      const earlier = earlierDays(context).length;
       const about = html`${changedLine(context) ? html`<span class="when">${changedLine(context)}</span>` : nothing}
-      ${earlier ? html`<button type="button" class="link earlier" @click=${() => this.#send({ type: "_browse" }, ".sheet .version")}>Earlier versions (${earlier})</button>` : nothing}
       ${!write && context.version?.changedSince
         ? html`<button type="button" class="link since" @click=${() => this.#send({ type: "_see" }, ".sheet .back")}>Changed since · see today's</button>`
         : nothing}`;
@@ -1100,7 +1064,6 @@ class ValuesSheet extends LitElement {
     }
     const shown = shownValues(context);
     const names = shown.map((v) => v.name.trim() || "A value");
-    const writes = !failed && writable(context);
     // An earlier day without values has nothing to show.
     if (!failed && !context.open && !names.length && !writable(context)) return nothing;
     let body;
@@ -1127,9 +1090,7 @@ class ValuesSheet extends LitElement {
       if (folded && !e.composedPath().some((n) => n.localName === "button")) this.#open();
     };
     return html`<section tabindex="-1" class=${folded ? "folded" : ""} aria-labelledby="heading" @click=${open}>
-      <h3><span id="heading">Your values</span>${folded && writes && names.length
-          ? html`<button type="button" class="edit" aria-label="Edit your values" @click=${() => this.#open()}>Edit</button>`
-          : nothing}</h3>
+      <h3 id="heading">Your values</h3>
       ${body}
     </section>`;
   }

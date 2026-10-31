@@ -270,17 +270,6 @@ export function textEdge(e, vim, line, { last }) {
   return e.key === "j" && line >= last ? "down" : null;
 }
 
-// The first and the last line a cursor can stand on, by the lines' lengths in order: a
-// blank line is a gap the cursor steps over (the editor kit, 10), so blank lines at either
-// end do not count, unless the cursor stands on one.
-export function edges(lengths, cursor) {
-  let first = 1;
-  let last = lengths.length;
-  while (first < cursor && lengths[first - 1] === 0) first += 1;
-  while (last > cursor && lengths[last - 1] === 0) last -= 1;
-  return { first, last };
-}
-
 // A j or k a nested view let bubble out unused: the next or the previous stop in the
 // order shown, the text being the stop above the first nested view.
 export const nestedStep = (e, vimKeys) => (vimKeys && plain(e) ? { j: "down", k: "up" }[e.key] ?? null : null);
@@ -353,7 +342,7 @@ export const machine = setup({
       " A web address, bare or written as [label](https://…), is drawn as an underlined link in " +
       "the accent color, a markdown link showing only its label except on the line being " +
       "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab, on an " +
-      "earlier day too. With Vim keys on, j in normal mode on the text's last line moves the " +
+      "earlier day too. With Vim keys on, j in normal mode on the text's last line, a blank one too, so empty lines at the end are reached and dd removes them, moves the " +
       "keyboard down onto the views nested under the text, in the order they are shown, and " +
       "j or k on one of them that it does not use itself (j on its last row, k on its first) " +
       "moves to the next one or back up, the text being the stop above the first; the keyboard " +

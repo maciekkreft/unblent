@@ -6,7 +6,7 @@ import { EditorState, StateField, StateEffect, RangeSetBuilder, Compartment, Map
 import { EditorView, Decoration, placeholder } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, edges, flagShown } from "./machine.js";
+import { machine, shown, selectedOf, conflictOn, longDate, parseBody, serialize, showing, linkMissing, textEdge, nestedStep, flagShown } from "./machine.js";
 import saved from "./events/day.saved.json" with { type: "json" };
 import dayShown from "./events/day.shown.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
@@ -562,9 +562,8 @@ class JournalEntry extends LitElement {
   #toText() {
     if (!this.#view || !this.#editableOn) return false;
     const { doc } = this.#view.state;
-    const last = doc.line(edges(Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).length), 1).last);
     this.#view.focus();
-    this.#view.dispatch({ selection: { anchor: last.from }, scrollIntoView: true });
+    this.#view.dispatch({ selection: { anchor: doc.line(doc.lines).from }, scrollIntoView: true });
     return true;
   }
 
@@ -592,9 +591,9 @@ class JournalEntry extends LitElement {
           keydown: (event, view) => {
             if (this.#actor.snapshot?.context.vimKeys !== true) return false;
             const line = view.state.doc.lineAt(view.state.selection.main.head).number;
-            const { doc } = view.state;
-            const lengths = Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).length);
-            if (textEdge(event, getCM(view)?.state?.vim, line, edges(lengths, line)) !== "down") return false;
+            // The text's very last line, blank or not: the editor kit stops on blank lines
+            // at the end (10), so dd can remove them before j leaves the text.
+            if (textEdge(event, getCM(view)?.state?.vim, line, { last: view.state.doc.lines }) !== "down") return false;
             if (!this.#enter(0, 1)) return false;
             event.preventDefault();
             return true;

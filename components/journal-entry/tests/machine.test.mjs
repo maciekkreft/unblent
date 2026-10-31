@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown, textEdge, nestedStep, edges, flagShown } from "../machine.js";
+import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown, textEdge, nestedStep, flagShown } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
 // is saved when. Times are built with the local Date constructor, so the midnight cases
@@ -580,11 +580,6 @@ test("j in normal mode on the text's last line goes down onto the nested views",
   assert.equal(textEdge({ key: "j" }, { ...normal, inputState: { ...normal.inputState, keyBuffer: ["g"] } }, 4, { last: 4 }), null);
   assert.equal(textEdge({ key: "j", metaKey: true }, normal, 4, { last: 4 }), null);
   assert.equal(textEdge({ key: "j" }, undefined, 4, { last: 4 }), null);
-});
-
-test("blank lines after the text's last words do not count as its last line", () => {
-  assert.deepEqual(edges([5, 0, 3, 0, 0], 3).last, 3);
-  assert.deepEqual(edges([5, 0, 0], 3).last, 3);
 });
 
 test("a j or k a nested view left unused moves on only with Vim keys on", () => {

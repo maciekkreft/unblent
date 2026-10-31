@@ -233,9 +233,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.type("Answer every work email");
         await page.keyboard.press("ArrowUp");
         await line("work email").locator(".mark.wrong").waitFor();
-        assert.equal(await cards.locator(".status").innerText(), "Serves Being a present parent", "the line the cursor is on");
+        assert.equal(await cards.locator(".status").innerText(), "Your values: Serves Being a present parent", "the line the cursor is on");
         await line("work email").locator(".mark").hover();
-        assert.equal(await cards.locator(".status").innerText(), "Goes against Being a present parent", "the line the pointer is over");
+        assert.equal(await cards.locator(".status").innerText(), "Your values: Goes against Being a present parent", "the line the pointer is over");
         await cards.locator(".done").click();
         await cards.locator(".card .towards .flag").waitFor();
         assert.deepEqual(problems, []);

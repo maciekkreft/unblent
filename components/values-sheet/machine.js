@@ -2,8 +2,8 @@ import { setup, assign, emit, enqueueActions, fromPromise, spawnChild, stopChild
 
 // The view component that shows the client's values on a journal day (6.4). It owns only
 // UI state — the day shown, that day's version as the fact last said it, whether the sheet
-// is open, its drafts, and which other version is being looked at — and points at one fact: it asks values: read for the shown day and
-// values: versions for the days the values changed, and follows values.changed after (4.3,
+// is open, its drafts, and whether today's values are looked at in place — and points at one fact: it asks values: read for the shown day
+// and follows values.changed after (4.3,
 // fourth rule). The day comes from day.shown, so the rule for which day the journal shows
 // stays in journal-entry. Writing leaves as values.saved, the whole list (4.3, third rule).
 // It also asks settings: read for the "Vim keys" preference (12) and follows
@@ -76,19 +76,13 @@ export function shownValues(context) {
   return list.filter((v) => !isEmpty(v));
 }
 
-// The days the values changed before the version the shown day holds, newest first:
-// what "Earlier versions" lists.
-export function earlierDays(context) {
-  const before = context.version?.day ?? context.day;
-  return context.days.filter((d) => d < before).sort().reverse();
-}
-
-// What the footer says about when the shown version was written.
+// What the footer says about when the shown version was written: nothing when that is
+// today, where the sheet itself is what changed.
 export function changedLine(context) {
   const day = context.version?.day;
   if (!day) return "";
   const today = dateOf(context.now());
-  return day === today ? "Changed today" : `Last changed ${dayName(day, today)}`;
+  return day === today ? "" : `Last changed ${dayName(day, today)}`;
 }
 
 // The open sheet follows a version from the fact only while nothing typed waits to be
@@ -102,9 +96,8 @@ function merged(drafts, values) {
 }
 
 // A version for the shown day, or an earlier one newer than what is held, is the shown
-// day's. Which days are worth listing, and whether the values changed since, only the fact
-// can say, since a change can make an earlier version read as today's: they are asked
-// again (recount).
+// day's. Whether the values changed since only the fact can say, since a change can make an
+// earlier version read as today's: it is asked again (recount).
 // A change of whether the shown day shows the panel arrives as that day with the values in
 // force on it, unchanged; the version it holds is kept, so its day stays when it was written
 // (the values fact ignores a save that changes nothing, so equal values are no new version).
@@ -183,6 +176,12 @@ const expectedName = (evaluator, id, option) => {
   return optionOf(evaluator, id, option)?.name || "another answer";
 };
 
+// What a mark answers, said before its answer, as in choice-point-cards: the question's
+// short name, else the evaluator's, so every hint has the one form "<what was checked>:
+// <answer>".
+const named = (x) => (typeof x === "string" && x.trim()) || null;
+const aboutOf = (evaluator, id) => named(questionOf(evaluator, id)?.name) ?? named(evaluator?.name) ?? "Jev";
+
 // How sure Jev is, as the mark's opacity: solid from 90% up, fading to a third at an even
 // chance, so an unsure answer is seen as one without a number to read.
 export const sureOf = (p) => Math.round((1 / 3 + (2 / 3) * Math.min(1, Math.max(0, (p - 0.5) / 0.4))) * 100) / 100;
@@ -201,6 +200,7 @@ export function marksOf(line, evaluator) {
     return {
       question: a.question,
       name: a.name,
+      about: aboutOf(evaluator, a.question),
       tone,
       icon: optionOf(evaluator, a.question, a.option)?.icon || (tone === "wrong" ? "warning" : "check"),
       expected: expect == null ? null : expectedName(evaluator, a.question, expect),
@@ -209,11 +209,12 @@ export function marksOf(line, evaluator) {
   });
 }
 
-// The hint of one line's marks: each answer's name, and for a red one the answer expected.
+// The hint of one line's marks: each mark as "<what was checked>: <answer>", and for a red
+// one the answer expected after a comma, so the dots part only the marks.
 export function sayMarks(marks) {
   if (!marks.length) return null;
   if (marks[0].pending) return "Jev is checking…";
-  return marks.map((m) => (m.tone === "wrong" ? `${m.name} · you expect ${m.expected}` : m.name)).join(" · ");
+  return marks.map((m) => `${m.about}: ${m.name}${m.tone === "wrong" && m.expected ? `, you expect ${m.expected}` : ""}`).join(" · ");
 }
 
 // The checked lines of one box of a value, each with its marks, for the view to put at the
@@ -379,13 +380,13 @@ const reorder = (where) =>
 // Opening shows the shown day's version; today with none yet opens on one empty row.
 const openSheet = assign(({ context }) => {
   const values = copy(context.version?.values ?? []);
-  return { open: true, drafts: values.length || !writable(context) ? values : [blank(context.mint())], browsing: false, viewing: null };
+  return { open: true, drafts: values.length || !writable(context) ? values : [blank(context.mint())], viewing: null };
 });
 
 // Folding saves what was typed.
 const fold = enqueueActions(({ enqueue }) => {
   enqueue(leaveAll);
-  enqueue.assign({ open: false, drafts: [], edited: [], browsing: false, viewing: null, cut: null, pointed: { hover: null, tap: null, cursor: null } });
+  enqueue.assign({ open: false, drafts: [], edited: [], viewing: null, cut: null, pointed: { hover: null, tap: null, cursor: null } });
   enqueue.stopChild("lookup");
 });
 
@@ -396,24 +397,11 @@ const unplace = enqueueActions(({ context, enqueue }) => {
 
 export const machine = setup({
   actors: {
-    // The shown day's version and the days the values changed; the day rides along so a
-    // reply for a day left meanwhile is dropped.
-    load: fromPromise(async ({ input }) => {
-      const [read, versions] = await Promise.all([
-        input.ask("values", "read", { day: input.day }),
-        input.ask("values", "versions", {}),
-      ]);
-      return { read, versions };
-    }),
-    // After a change: the days worth listing and whether the shown day's values changed
-    // since, for the day asked about.
-    recount: fromPromise(async ({ input }) => {
-      const [read, versions] = await Promise.all([
-        input.ask("values", "read", { day: input.day }),
-        input.ask("values", "versions", {}),
-      ]);
-      return { day: input.day, read, versions };
-    }),
+    // The shown day's version.
+    load: fromPromise(({ input }) => input.ask("values", "read", { day: input.day }).then((read) => ({ read }))),
+    // After a change: whether the shown day's values changed since, for the day asked about;
+    // the day rides along so a reply for a day left meanwhile is dropped.
+    recount: fromPromise(({ input }) => input.ask("values", "read", { day: input.day }).then((read) => ({ day: input.day, read }))),
     // The day's checks, and the evaluators, each asked on its own so each reply is kept
     // the moment it lands, before the events it holds back (4.2). The day rides along so a
     // reply for a day left meanwhile is dropped. On a page without value-checks the reply
@@ -429,12 +417,8 @@ export const machine = setup({
     suggestions: fromPromise(({ input }) => input.ask("generators", "results", { generator: SUGGESTER })),
     // On a page without a settings fact the ask replies no-answerer and Vim stays off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
-    // Another version looked at in place: the current one, or an earlier day's.
-    lookup: fromPromise(({ input }) =>
-      input
-        .ask("values", "read", input.asked ? { day: input.asked } : {})
-        .then((reply) => ({ day: input.day, kind: input.kind, reply })),
-    ),
+    // Today's values looked at in place from an earlier day (Changed since).
+    lookup: fromPromise(({ input }) => input.ask("values", "read", {}).then((reply) => ({ day: input.day, reply }))),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -446,8 +430,8 @@ export const machine = setup({
       "Shows the client's values on the journal days the user added them to, under the day's " +
       "text and above the choice points, in a section headed \"Your values\": folded, a " +
       "read-only list of every value on its own line with its example under it in smaller " +
-      "type, whole however long; pressing it, anywhere on the folded section, or the Edit " +
-      "link beside the heading, shown on today's page only, opens the sheet. Whether a day shows the panel is the values fact's (values: " +
+      "type, whole however long; pressing it, anywhere on the folded section, opens the " +
+      "sheet, as a folded choice point opens. Whether a day shows the panel is the values fact's (values: " +
       "read's placed, and values.changed after, also from another device). Today's page " +
       "without it shows a muted + Your values row, which adds the panel to the day " +
       "(values.placed) and shows the folded list with the keyboard on it, or, with no values " +
@@ -472,34 +456,37 @@ export const machine = setup({
       "removes the empty row at once. A value removed with Vim keys is gone from today's " +
       "version at once, and earlier days keep theirs; every change here is a step that Undo " +
       "in the top bar takes back, and a removal shows the short notice with Undo. A row whose name and sentence are " +
-      "both empty is not saved. The footer says Changed today when today's version was " +
-      "written today, or when the shown version was written, and Earlier versions with how " +
-      "many there are, which lists their days; picking one shows that version, read only. " +
-      "Which days are listed, and whether Changed since is offered, is the values fact's to " +
+      "both empty is not saved. The footer says when the shown version was written (Last " +
+      "changed 12 October), and nothing when it was written today; earlier versions are not " +
+      "listed. Whether Changed since is offered is the values fact's to " +
       "say, and is asked again after every change. " +
       "What is written is saved a short time into typing and at once when a box loses focus " +
       "or the sheet folds; a save made as the user leaves a row they typed in (Enter or Tab " +
       "on to the next row, the box losing focus, or Done) names that row as finished, so its " +
       "lines are checked then and not while they are typed. When the page hands it the keyboard, it lands on the folded list, " +
       "the + Your values row or the Write your values row, or, open, on the first box, or on a button when the " +
-      "sheet is only read. When Settings names an evaluator to check the values or the " +
+      "sheet is only read; with Vim keys on, an open sheet handed the keyboard from the text " +
+      "above or the choice points below takes it on its first row or its last. When Settings names an evaluator to check the values or the " +
       "examples, and the account has its own Jev key, Jev's marks stand at the right end of " +
       "a line the user has finished, inside its box: a pulsing dot while Jev is checking, " +
       "then a mark per answer, green when it is the answer the evaluator's question expects, " +
       "red when not, uncoloured when it expects none, solid when Jev is sure and faded when " +
       "it is not, with the icon the evaluator gives the option answered, or a check, or a " +
       "warning for a red one. A line edited since it was checked has no mark until it is " +
-      "checked again. The answer's name, and for a red mark the expected one (\"A goal · you " +
-      "expect A way of acting\"), is said in a status line in the footer while the pointer is " +
-      "over a mark, after a mark is tapped until something else is pressed, or while the text " +
-      "cursor is in a checked line; otherwise it says why Jev could not check, or nothing. A " +
+      "checked again. A mark's hint has the same form as on a choice point: what was checked " +
+      "(the question's short name, else the evaluator's name), a colon, then the answer, and " +
+      "for a red mark the expected one (\"Is it a value?: A goal, you expect A way of acting\"). " +
+      "It is said in a status line in the footer while the pointer is over a mark, after a " +
+      "mark is tapped until something else is pressed, or while the text cursor is in a " +
+      "checked line; otherwise the status line says why Jev could not check, or nothing. A " +
       "read-only row, on an earlier day, shows its marks after " +
       "the text. The folded list shows a red warning beside a value whose value or example " +
       "has a red mark. Today's values can be put in another order: each row has up and down " +
       "buttons, shown while the pointer or the keyboard is on the row and always on a phone, " +
       "and Alt+Up or Alt+Down in a box moves its row and keeps the cursor where it was; the " +
       "opposite move undoes one. With Vim keys on, Escape in a box in normal mode puts the " +
-      "keyboard on the row; there j, k or the arrow keys, gg and G move between rows, Enter " +
+      "keyboard on the row; there j, k or the arrow keys, gg and G move between rows, and j " +
+      "on the last row or k on the first moves on to the page around the sheet, Enter " +
       "or i goes back into the value, o and O add a value below or above, and Escape folds " +
       "the sheet; dd cuts the row, shown greyed as Cut, p puts it below the row the keyboard " +
       "is on and P above, u on the cut row puts it back, and u anywhere else is the top bar's " +
@@ -513,7 +500,7 @@ export const machine = setup({
       "puts the old value back. Earlier days show no suggestion.",
     kind: "view",
     emits: ["values.saved", "values.placed"],
-    asks: ["values: read", "values: versions", "settings: read", "value-checks: read", "evaluators: list", "generators: results"],
+    asks: ["values: read", "settings: read", "value-checks: read", "evaluators: list", "generators: results"],
     attributes: [],
   },
   context: ({ input }) => ({
@@ -531,8 +518,6 @@ export const machine = setup({
     version: null,
     // Whether the shown day shows Your values, as the fact last said it; null until it has.
     placed: null,
-    // The days a version was written, oldest first.
-    days: [],
     // Changes that arrived before the starting picture, applied after it.
     early: [],
     open: false,
@@ -540,9 +525,7 @@ export const machine = setup({
     dirty: false,
     // The ids of the rows typed in since the user last left them (values.saved's finished).
     edited: [],
-    // The list of earlier versions is shown, or another version is looked at:
-    // { kind: "current" | "earlier", day, values }.
-    browsing: false,
+    // Today's values looked at in place from an earlier day: { day, values }.
     viewing: null,
     vimKeys: false,
     // What value-checks last said for the shown day: the settings, each value's checked
@@ -654,7 +637,6 @@ export const machine = setup({
             drafts: [],
             dirty: false,
             edited: [],
-            browsing: false,
             viewing: null,
             checks: { settings: context.checks.settings, reports: {}, error: null },
             pointed: { hover: null, tap: null, cursor: null },
@@ -674,9 +656,8 @@ export const machine = setup({
     "xstate.done.actor.recount": {
       guard: ({ context, event }) => event.output?.day === context.day && context.version != null,
       actions: assign(({ context, event }) => {
-        const { read, versions } = event.output;
+        const { read } = event.output;
         return {
-          days: Array.isArray(versions?.days) ? [...versions.days].sort() : context.days,
           version: typeof read?.changedSince === "boolean" ? { ...context.version, changedSince: read.changedSince } : context.version,
           placed: typeof read?.placed === "boolean" ? read.placed : context.placed,
         };
@@ -685,8 +666,7 @@ export const machine = setup({
     "xstate.done.actor.lookup": {
       guard: ({ context, event }) => event.output?.day === context.day && Array.isArray(event.output.reply?.values),
       actions: assign({
-        viewing: ({ event }) => ({ kind: event.output.kind, day: event.output.reply.day, values: copy(event.output.reply.values) }),
-        browsing: false,
+        viewing: ({ event }) => ({ day: event.output.reply.day, values: copy(event.output.reply.values) }),
       }),
     },
   },
@@ -703,11 +683,10 @@ export const machine = setup({
             target: "ready",
             actions: [
               assign(({ event }) => {
-                const { read, versions } = event.output;
+                const { read } = event.output;
                 return {
                   version: { day: read.day, values: copy(read.values), changedSince: read.changedSince === true },
                   placed: read.placed !== false,
-                  days: Array.isArray(versions?.days) ? [...versions.days].sort() : [],
                 };
               }),
               enqueueActions(({ context, enqueue }) => {
@@ -829,23 +808,17 @@ export const machine = setup({
             if (at !== index) reorderNow(enqueue, context, id, at);
           }),
         },
-        _browse: { guard: opened, actions: assign({ browsing: true, viewing: null }) },
         _see: {
           guard: opened,
           actions: [
             stopChild("lookup"),
             spawnChild("lookup", {
               id: "lookup",
-              input: ({ context, event }) => ({
-                ask: context.ask,
-                day: context.day,
-                kind: isDay(event.day) ? "earlier" : "current",
-                asked: isDay(event.day) ? event.day : null,
-              }),
+              input: ({ context }) => ({ ask: context.ask, day: context.day }),
             }),
           ],
         },
-        _back: { actions: [stopChild("lookup"), assign({ browsing: false, viewing: null })] },
+        _back: { actions: [stopChild("lookup"), assign({ viewing: null })] },
       },
       states: {
         idle: {

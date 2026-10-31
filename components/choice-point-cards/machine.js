@@ -190,11 +190,10 @@ const expectedName = (evaluator, questionId, option) => {
 };
 
 // What a mark answers, said before its answer so that two evaluators on one box can be
-// told apart ("Thinking traps: None"): the question's short name, else the evaluator's.
-const aboutOf = (evaluator, questionId) => {
-  const named = (x) => (typeof x === "string" && x.trim()) || null;
-  return named(questionOf(evaluator, questionId)?.name) ?? named(evaluator?.name);
-};
+// told apart ("Thinking traps: None"): the question's short name, else the evaluator's,
+// so every hint has the one form "<what was checked>: <answer>".
+const named = (x) => (typeof x === "string" && x.trim()) || null;
+const aboutOf = (evaluator, questionId) => named(questionOf(evaluator, questionId)?.name) ?? named(evaluator?.name) ?? "Jev";
 
 // How sure Jev is, as the mark's opacity: solid from 90% up, fading to a third at an even
 // chance, so an unsure answer is seen as one without a number to read.
@@ -255,7 +254,8 @@ function combinedMark(evaluator, answer) {
     .map((q) => ({ q, a: answer(q.id) }))
     .filter((x) => x.a);
   if (!answered.length) return [];
-  const mark = (tone, { q, a }, name) => ({ question: q.id, combined: true, name, p: a.p, tone, icon: "compass", expected: null, sure: sureOf(a.p) });
+  const about = named(evaluator.name) ?? "Your values";
+  const mark = (tone, { q, a }, name) => ({ question: q.id, combined: true, about, name, p: a.p, tone, icon: "compass", expected: null, sure: sureOf(a.p) });
   const served = answered.find(({ q, a }) => expectOf(q) != null && a.option === expectOf(q));
   if (served) return [mark("right", served, `Serves ${valueName(served.q)}`)];
   const against = answered.find(({ q, a }) => q.options?.some((o) => o.id === a.option && o.against));
@@ -278,14 +278,13 @@ export function marksOf(box, line, evaluators = []) {
   });
 }
 
-// What the status line says about one line's marks, short: what each mark answers and its
-// answer, and for one that is not expected, the answer that is, after a comma, so the dots
-// part only the marks. A combined mark already says it in a sentence.
+// The hint of one line's marks, short: each mark as "<what was checked>: <answer>", and
+// for one that is not expected the answer that is, after a comma, so the dots part only
+// the marks. A combined mark's answer is a sentence and expects nothing.
 export function sayMarks(marks) {
   if (!marks.length) return null;
   if (marks[0].pending) return "Jev is checking…";
-  const said = (m) => (m.combined ? m.name : `${m.about ? `${m.about}: ` : ""}${m.name}${m.tone === "wrong" ? `, you expect ${m.expected}` : ""}`);
-  return marks.map(said).join(" · ");
+  return marks.map((m) => `${m.about}: ${m.name}${m.tone === "wrong" && m.expected ? `, you expect ${m.expected}` : ""}`).join(" · ");
 }
 
 const reportOf = (context, id) => context.checks.reports[id];
@@ -372,17 +371,6 @@ export function boxEdge(e, vim, line, { first, last }) {
   return null;
 }
 
-// The first and the last line a cursor can stand on, by the lines' lengths in order: a
-// blank line is a gap the cursor steps over (the editor kit, 10), so blank lines at either
-// end do not count, unless the cursor stands on one.
-export function edges(lengths, cursor) {
-  let first = 1;
-  let last = lengths.length;
-  while (first < cursor && lengths[first - 1] === 0) first += 1;
-  while (last > cursor && lengths[last - 1] === 0) last -= 1;
-  return { first, last };
-}
-
 const POINTS = new Set(["hover", "tap", "cursor"]);
 
 const isDay = (v) => typeof v === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v);
@@ -447,18 +435,18 @@ export const machine = setup({
       "any of the values, red when it serves none and goes against one, uncoloured when Jev " +
       "can't tell, solid or faded as the answer that decided it, or the least sure answer " +
       "for an uncoloured one; with no values written there is no compass at all. Its hint " +
-      "names the value, by its question's name: \"Serves Being a present parent\", \"Goes against Health\", or " +
-      "\"Can't tell which of your values this serves\", the first value in the values' order " +
+      "names the value, by its question's name: \"Your values: Serves Being a present parent\", \"Your values: Goes against Health\", or " +
+      "\"Your values: Can't tell which of your values this serves\", the first value in the values' order " +
       "when several fit. An earlier day's marks name that day's values. A line edited since it was " +
       "checked has no mark until it is checked again. The marks are not text: they do not " +
-      "move the cursor or count for Vim. What the mark answers, the question's short name or " +
-      "else the evaluator's name, then the answer, and for a red mark the expected answer " +
-      "(\"Therapy Goal: Emotional Goal, you expect Behavioral Goal · Logical fallacies: None\"), " +
-      "is the mark's hint and is said " +
-      "in the status line under the boxes while the pointer is over a mark, after a mark is " +
-      "tapped until something else is pressed, or while the text cursor is on a checked line; " +
-      "otherwise the status line says why Jev could not check when it could not, and is " +
-      "empty. A folded card shows a red warning beside the situation, away or towards line " +
+      "move the cursor or count for Vim. Every mark's hint has one form, what was checked, a " +
+      "colon, then the answer: what was checked is the question's short name or else the " +
+      "evaluator's name, and a red mark adds the expected answer " +
+      "(\"Therapy Goal: Emotional Goal, you expect Behavioral Goal · Logical fallacies: None\"). " +
+      "The hint is said in the status line under the boxes while the pointer is over a mark, " +
+      "after a mark is tapped until something else is pressed, or while the text cursor is " +
+      "on a checked line; otherwise the status line says why Jev could not check when it " +
+      "could not, and is empty. A folded card shows a red warning beside the situation, away or towards line " +
       "when a line there has a red mark, a red compass included. The arrow keys, and with Vim " +
       "keys on j, k, gg and G, step through the cards, the open sheets and the New choice " +
       "point row; Enter opens a card, or adds a choice point on the New row, and o adds one. " +
@@ -466,7 +454,7 @@ export const machine = setup({
       "earlier day, whose boxes take no keyboard, on Close. In a box, in Vim's normal mode, " +
       "j on the last line goes to the first line of the next box and k on the first line to " +
       "the last line of the box before, in the order the boxes are shown, and from the last " +
-      "or first box on to the row after or before the sheet. Escape folds the sheet and the " +
+      "or first box on to the row after or before the sheet, or, with none, on to the page around the list. Escape folds the sheet and the " +
       "keyboard stays on its card. A move past the first row or the last is left to the page " +
       "around the list, so the journal page moves the keyboard on from there.",
     kind: "view",

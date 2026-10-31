@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable, rowAction, rowTarget, boxEdge, edges } from "../machine.js";
+import { machine, dateOf, marksOf, sayMarks, sureOf, statusOf, cardWarnings, writable, rowAction, rowTarget, boxEdge } from "../machine.js";
 
 const json = (name) => JSON.parse(readFileSync(new URL(`../events/${name}.json`, import.meta.url), "utf8"));
 const SCHEMAS = { "choice-point.saved": json("choice-point.saved") };
@@ -411,13 +411,13 @@ test("a line's marks follow the box's settings: shown, only when, expected; the 
   assert.deepEqual(marksOf(hidden, done("Call", [ans(Q1, EMO, "Emotional Goal", 0.9), ans(Q2, OVERT, "Overt behavior", 0.9)])), [], "unticked, and only when unmet");
 });
 
-test("the status line names a line's answers, and how sure Jev is shows as the mark's opacity", () => {
+test("a hint names what was checked and its answer, and how sure Jev is shows as the mark's opacity", () => {
   const calm = marksOf(TOWARDS_BOX, done("Feel calm when she doesn't answer", [ans(Q1, EMO, "Emotional Goal", 0.92)]), EVALUATORS);
   assert.equal(sayMarks(calm), "Therapy Goal: Emotional Goal, you expect Behavioral Goal", "the evaluator's name, then the answer");
   const call = marksOf(TOWARDS_BOX, done("Call Anna", [ans(Q1, BEH, "Behavioral Goal", 0.7), ans(Q2, OVERT, "Overt behavior", 0.97)]), EVALUATORS);
   assert.equal(sayMarks(call), "Therapy Goal: Behavioral Goal · Behavior: Overt behavior", "a question's short name before the evaluator's");
   const unnamed = EVALUATORS.map((e) => ({ ...e, name: " " }));
-  assert.equal(sayMarks(marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.9)]), unnamed)), "Emotional Goal, you expect Behavioral Goal", "nothing to name: the answer alone");
+  assert.equal(sayMarks(marksOf(TOWARDS_BOX, done("Feel calm", [ans(Q1, EMO, "Emotional Goal", 0.9)]), unnamed)), "Jev: Emotional Goal, you expect Behavioral Goal", "nothing else to name: Jev, so the form stays");
   assert.equal(sayMarks([{ pending: true }]), "Jev is checking…");
   assert.deepEqual(call.map((m) => m.sure), [0.67, 1], "solid when sure, faded when not");
   assert.equal(sureOf(0.5), 0.33);
@@ -504,7 +504,7 @@ test("Your values draws one compass mark after the box's own marks: green, red o
   const email = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.7), ans(V2, UNRELATED, "Unrelated", 0.99)), evaluators);
   assert.deepEqual([email[1].tone, email[1].name], ["wrong", "Goes against Being a present parent"]);
   assert.ok(email[1].sure < 1, "faded: Jev is not sure the move goes against the value");
-  assert.equal(sayMarks(email), "Therapy Goal: Behavioral Goal · Goes against Being a present parent", "no 'you expect' for a values mark");
+  assert.equal(sayMarks(email), "Therapy Goal: Behavioral Goal · Your values: Goes against Being a present parent", "no 'you expect' for a values mark");
 
   const healthWins = marksOf(BOTH, line(ans(V1, AGAINST, "Goes against", 0.9), ans(V2, SERVES, "Serves", 0.9)), evaluators);
   assert.deepEqual([healthWins[1].tone, healthWins[1].name], ["right", "Serves Health"], "serving any value wins over going against another");
@@ -541,7 +541,7 @@ test("a red values mark warns on the folded card; the shown day's values name th
   actor.send({ type: "evaluator.changed", evaluator: { ...VALUES, name: "Your values", on: false } });
   actor.send({ type: "_open", id: A });
   actor.send({ type: "_point", source: "cursor", id: A, field: "towards", text: "Answer every work email" });
-  assert.equal(statusOf(ctx(), A), "Goes against Family first", "an earlier day keeps that day's values when today's change");
+  assert.equal(statusOf(ctx(), A), "Your values: Goes against Family first", "an earlier day keeps that day's values when today's change");
   assert.equal(ctx().evaluators.find((e) => e.id === YV).on, false, "while the rest of the change is taken");
 });
 
@@ -615,9 +615,3 @@ test("j on a box's last line and k on its first move on, only in Vim's normal mo
   assert.equal(boxEdge({ key: "j" }, null, 3, { first: 1, last: 3 }), null);
 });
 
-test("blank lines at a box's ends are gaps the cursor steps over, so they do not count as its edges", () => {
-  assert.deepEqual(edges([2, 0, 1, 0, 0], 3), { first: 1, last: 3 });
-  assert.deepEqual(edges([0, 0, 4], 3), { first: 3, last: 3 });
-  assert.deepEqual(edges([2, 0], 2), { first: 1, last: 2 });
-  assert.deepEqual(edges([0], 1), { first: 1, last: 1 });
-});

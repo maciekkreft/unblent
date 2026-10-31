@@ -6,7 +6,7 @@ import { EditorState, Compartment, Prec, Annotation, StateField, StateEffect } f
 import { EditorView, placeholder, Decoration, WidgetType } from "@codemirror/view";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
-import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable, rowAction, rowTarget, boxEdge, edges } from "./machine.js";
+import { machine, boxMarks, cardWarnings, sayMarks, statusOf, writable, rowAction, rowTarget, boxEdge } from "./machine.js";
 import saved from "./events/choice-point.saved.json" with { type: "json" };
 
 // The view sits in journal-entry's slot, under the day's text inside its scrolling page
@@ -36,9 +36,6 @@ const boxTheme = (lines) =>
 const shortTheme = boxTheme(2);
 // The two moves stand beside the V, so they start as tall as it is.
 const tallTheme = boxTheme(4);
-
-// Each line's length, in order, for edges().
-const lengthsOf = (doc) => Array.from({ length: doc.lines }, (_, i) => doc.line(i + 1).length);
 
 // A box's text set from the draft rather than typed, which is not sent back as an edit.
 const fromDraft = Annotation.define();
@@ -670,7 +667,9 @@ class ChoicePointCards extends LitElement {
     const box = this.#boxes.get(`${id}:${field}`);
     if (!box?.vimOn) return false;
     const line = view.state.doc.lineAt(view.state.selection.main.head).number;
-    const step = boxEdge(event, getCM(view)?.state?.vim, line, edges(lengthsOf(view.state.doc), line));
+    // A box's first and last lines count even when blank: the editor kit stops on them
+    // (10), so dd can remove them before j or k leaves the box.
+    const step = boxEdge(event, getCM(view)?.state?.vim, line, { first: 1, last: view.state.doc.lines });
     if (!step) return false;
     const sheet = box.region.closest(".sheet");
     const regions = [...sheet.querySelectorAll(".box[data-key]")];
@@ -680,8 +679,11 @@ class ChoicePointCards extends LitElement {
     else {
       const rows = this.#rows();
       const at = rows.indexOf(sheet) + (step === "down" ? 1 : -1);
-      if (at < 0 || at >= rows.length) return false;
-      this.#focusRow(rows[at], step === "down" ? "first" : "last");
+      if (at < 0 || at >= rows.length) {
+        // Past either end the move is the page's (journal-entry moves on from there), but a
+        // key in a box is the box's text to the page, so it is handed on from the host.
+        this.dispatchEvent(new KeyboardEvent("keydown", { key: event.key, bubbles: true, composed: true }));
+      } else this.#focusRow(rows[at], step === "down" ? "first" : "last");
     }
     event.preventDefault();
     return true;
@@ -692,8 +694,7 @@ class ChoicePointCards extends LitElement {
   #landIn(box, edge) {
     const { doc } = box.view.state;
     box.view.focus();
-    const lengths = lengthsOf(doc);
-    const n = edge === "first" ? edges(lengths, doc.lines).first : edges(lengths, 1).last;
+    const n = edge === "first" ? 1 : doc.lines;
     box.view.dispatch({ selection: { anchor: doc.line(n).from }, scrollIntoView: true });
   }
 

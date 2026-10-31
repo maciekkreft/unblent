@@ -318,5 +318,128 @@ for (const engine of ENGINES) {
       await page.keyboard.type("A!");
       await until(async () => (await editor(page).innerText()).includes("two!"));
     });
+
+    // Where the keyboard is, by name: the text, Your values, a choice point's box by its
+    // field, its card, its Close, or the New choice point row.
+    const keyboardAt = (page) =>
+      page.evaluate(() => {
+        if (document.querySelector("values-sheet").matches(":focus-within")) return "values";
+        const cards = document.querySelector("choice-point-cards");
+        if (cards.matches(":focus-within")) {
+          const a = cards.shadowRoot.activeElement;
+          return a?.closest(".box")?.dataset.field ?? ["new", "card", "close", "done"].find((c) => a?.classList.contains(c)) ?? a?.className;
+        }
+        return document.querySelector("journal-entry").shadowRoot.activeElement?.classList.contains("cm-content") ? "text" : null;
+      });
+    const pressTo = async (page, key, want) => {
+      await page.keyboard.press(key);
+      await until(async () => (await keyboardAt(page)) === want);
+    };
+    const linesIn = (page, host, selector) =>
+      page.evaluate(([h, sel]) => {
+        const root = h === "journal-entry" ? document.querySelector(h).shadowRoot : document.querySelector(h).shadowRoot.querySelector(sel);
+        return root.querySelectorAll(".cm-line").length;
+      }, [host, selector]);
+
+    // Browser: focus and keys.
+    run("with Vim keys on, j reaches blank lines at the end of the text, dd removes them, and j and k between the text, Your values and New choice point come back the same way", async (page) => {
+      await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await until(async () => (await page.locator("choice-point-cards .new:not([disabled])").count()) === 1);
+      await editor(page).click();
+      await page.keyboard.press("i");
+      await page.keyboard.type("one");
+      await page.keyboard.press("Escape");
+      // o left empty: two blank lines after the text, the first a gap.
+      await page.keyboard.press("o");
+      await page.keyboard.press("Escape");
+      await until(async () => (await linesIn(page, "journal-entry")) === 3);
+      await page.keyboard.press("k");
+      await page.keyboard.press("j");
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(async () => (await linesIn(page, "journal-entry")) === 2);
+      assert.equal(await keyboardAt(page), "text", "j stopped on the blank line, so dd removed it and the keyboard stays");
+      await pressTo(page, "j", "values");
+      await pressTo(page, "k", "text");
+      // k came back to the blank last line, which dd removes too.
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(async () => (await linesIn(page, "journal-entry")) === 1);
+      await pressTo(page, "j", "values");
+      await pressTo(page, "j", "new");
+      await pressTo(page, "k", "values");
+      await pressTo(page, "k", "text");
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys on, j and k through a choice point's boxes go on out of the first and the last and come back, and a box's blank last line is reached", async (page) => {
+      await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
+      await page.goto(STEM, { waitUntil: "domcontentloaded" });
+      await page.locator("choice-point-cards .new:not([disabled])").click();
+      await until(async () => (await keyboardAt(page)) === "situation");
+      await page.keyboard.press("Escape");
+      // Up through the boxes in the order shown, out of the first to Your values, and back.
+      await pressTo(page, "k", "towards");
+      await pressTo(page, "k", "away");
+      await pressTo(page, "k", "values");
+      await pressTo(page, "j", "away");
+      await pressTo(page, "j", "towards");
+      await pressTo(page, "j", "situation");
+      await pressTo(page, "j", "thoughts");
+      // A box's blank last line is reached and removed the same way as the text's.
+      await page.keyboard.press("i");
+      await page.keyboard.type("x");
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("o");
+      await page.keyboard.press("Escape");
+      const thoughts = '.box[data-field="thoughts"]';
+      await until(async () => (await linesIn(page, "choice-point-cards", thoughts)) === 3);
+      await page.keyboard.press("k");
+      await page.keyboard.press("j");
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(async () => (await linesIn(page, "choice-point-cards", thoughts)) === 2);
+      assert.equal(await keyboardAt(page), "thoughts");
+      await pressTo(page, "j", "new");
+      await pressTo(page, "k", "thoughts");
+    });
+
+    // An earlier day, its values and a choice point arrive through the APIs under the
+    // test's own login.
+    // Browser: focus and keys.
+    test("with Vim keys on, an earlier day moves between Your values and a choice point both ways, open or folded", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      await signedIn(context, forgeCookie("journal-entry-earlier-keys"));
+      try {
+        const then = Date.now() - 3 * 864e5;
+        const d = new Date(then);
+        const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
+        assert.equal((await put("journal/days", { record: { id: "01J00000000000000000000DAY", day, text: "Earlier", editedAt: then }, baseVersion: null })).status(), 200);
+        assert.equal((await put(`values/${day}`, { values: [{ id: "01J000000000000000000000V1", name: "Calm", meaning: "" }], baseVersion: null })).status(), 200);
+        assert.equal((await put("choice-points/01J000000000000000000000CP", { day, situation: "Old", thoughts: "", away: "Snapped", towards: "Paused", baseVersion: null })).status(), 200);
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ nav: [], vimKeys: true })));
+        await page.goto(STEM, { waitUntil: "domcontentloaded" });
+        await page.locator("journal-days .row", { hasText: "Earlier" }).click();
+        await page.locator("choice-point-cards .card").waitFor();
+        await page.locator("values-sheet .card").waitFor();
+        // The page hands the keyboard to the journal as dock-desk's Ctrl+h/j/k/l does.
+        await page.evaluate(() => document.querySelector("journal-entry").focus());
+        await until(async () => (await keyboardAt(page)) === "values");
+        await pressTo(page, "j", "card");
+        await pressTo(page, "k", "values");
+        await pressTo(page, "j", "card");
+        await pressTo(page, "Enter", "close");
+        await pressTo(page, "k", "values");
+        await pressTo(page, "j", "close");
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
   });
 }
