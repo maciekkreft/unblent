@@ -15,6 +15,8 @@ const other = (component, name) =>
 
 const SUBMITTED = load("events/turn.submitted.json");
 const STEERED = load("events/turn.steered.json");
+const STAGED = load("events/conversation.staged.json");
+const CLOSED = load("events/conversation.closed.json");
 const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
 const SUBJECT = other("subject", "read");
@@ -63,12 +65,15 @@ const mkMint = () => {
 };
 
 function start(options = {}) {
-  const { openId = null, subject = null, llm = ECHO, conversation = null, vimKeys = false } = options;
+  const { openId = null, subject = null, llm = ECHO, conversation = null, vimKeys = false, staged = false } = options;
   const input = {
     mint: mkMint(),
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
-      if (key === "conversations: open") return see(payload, OPEN.payload), Promise.resolve({ id: openId });
+      if (key === "conversations: open") {
+        if (staged) throw new Error("the stage's box asks no open chat");
+        return see(payload, OPEN.payload), Promise.resolve({ id: openId });
+      }
       if (key === "conversations: read") return see(payload, READ.payload), Promise.resolve(conversation ? { conversation } : { error: "not-found" });
       if (key === "subject: read") return see(payload, SUBJECT.payload), Promise.resolve({ subject });
       if (key === "llm: read") return see(payload, LLM.payload), Promise.resolve(llm);
@@ -76,8 +81,10 @@ function start(options = {}) {
       throw new Error(`unexpected ask ${key}`);
     },
   };
-  const actor = createActor(machine, { input });
+  const actor = createActor(machine, { input: { ...input, staged } });
   const emitted = [];
+  actor.on("conversation.staged", (e) => (emitted.push(e), see(e, STAGED)));
+  actor.on("conversation.closed", (e) => (emitted.push(e), see(e, CLOSED)));
   actor.on("turn.submitted", (e) => (emitted.push(e), see(e, SUBMITTED)));
   actor.on("turn.steered", (e) => (emitted.push(e), see(e, STEERED)));
   actor.start();
@@ -407,4 +414,34 @@ test("a copied text or link goes into Vim's register", () => {
   actor.send({ type: "link.copied", id: "01K7TEST0000000000000H0001", text: "[q](note:01K7TEST0000000000000H0001)" });
   assert.deepEqual(pushed, ["One.\n\nTwo.", "[q](note:01K7TEST0000000000000H0001)"]);
   actor.stop();
+});
+
+// --- The stage (12) ----------------------------------------------------------------------
+
+const SAID = { id: CHAT, title: "hi", about: [], start: "", turns: [{ id: USER, role: "user", text: "hi" }], pending: false, updatedAt: 1 };
+
+test(":tab split in the panel's box stages its chat once it has a message; :q there closes nothing", async () => {
+  const h = start({ openId: CHAT, conversation: { ...SAID, turns: [] } });
+  await ready(h);
+  h.actor.send({ type: "_stage" });
+  assert.deepEqual(emittedOf(h, "conversation.staged"), [], "a chat with no message has no tab");
+  h.actor.send({ ...SAID, type: "conversation.changed" });
+  h.actor.send({ type: "_stage" });
+  assert.deepEqual(emittedOf(h, "conversation.staged").map((e) => e.id), [CHAT]);
+  h.actor.send({ type: "_quit" });
+  assert.deepEqual(emittedOf(h, "conversation.closed"), []);
+});
+
+test("the stage's box takes the chat load names, ignores the panel's, and :q closes its tab", async () => {
+  const h = start({ staged: true, conversation: SAID });
+  await ready(h);
+  assert.equal(h.actor.getSnapshot().context.openId, null, "nothing until the stage names a chat");
+  h.actor.send({ type: "load", id: CHAT });
+  await until(() => h.actor.getSnapshot().context.conversation?.id === CHAT, "loaded");
+  h.actor.send({ type: "conversation.opened", id: ANSWER });
+  assert.equal(h.actor.getSnapshot().context.openId, CHAT, "the panel's chat is not the stage's");
+  h.actor.send({ type: "_stage" });
+  assert.deepEqual(emittedOf(h, "conversation.staged"), [], "it is on the stage already");
+  h.actor.send({ type: "_quit" });
+  assert.deepEqual(emittedOf(h, "conversation.closed").map((e) => e.id), [CHAT]);
 });

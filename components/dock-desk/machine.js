@@ -126,7 +126,7 @@ const shown = (context, type) => {
   let staged = false;
   const opened = new Set();
   for (const v of context.views) {
-    if (v.showsOn !== type) continue;
+    if (!(v.showsOn ?? "").split(/\s+/).includes(type)) continue;
     const s = sideOf(docks, v.name);
     if (s) {
       docks = { ...docks, [s]: { ...docks[s], open: true, active: v.name } };
@@ -346,7 +346,8 @@ export const machine = setup({
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
       "arrives, and is still pressed after a reload in this browser (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
-      "`note.selected`, `conversation.selected`, `evaluator.selected`, or `note.staged`, a note opened on the stage), which " +
+      "`note.selected`, `conversation.selected`, `evaluator.selected`, `note.staged`, a note opened on the stage, or " +
+      "`conversation.staged`, a chat opened on the stage; several names separated by spaces show it on any of them), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
       "another device's change never moves a tab; and `flag` naming a feature, which draws no " +
@@ -554,6 +555,7 @@ export const machine = setup({
         "book.selected": show,
         "note.selected": show,
         "note.staged": show,
+        "conversation.staged": show,
         "conversation.selected": show,
         "evaluator.selected": show,
       },
@@ -580,6 +582,7 @@ export const machine = setup({
         "book.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "note.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "note.staged": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "conversation.staged": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "evaluator.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },

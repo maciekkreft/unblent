@@ -22,7 +22,7 @@ const put = async (cookie, path, type, body) => {
 
 // What the label says, its button included, as the user reads it.
 const label = (page) =>
-  page.evaluate(() => document.querySelector("chat-thread").shadowRoot.querySelector(".chapter")?.textContent.replace(/\s+/g, " ").trim() ?? "");
+  page.evaluate(() => document.querySelector("#chats-thread").shadowRoot.querySelector(".chapter")?.textContent.replace(/\s+/g, " ").trim() ?? "");
 
 for (const engine of ENGINES) {
   // Rendering and layout, and a gesture: the label names the chat's chapter, and its
@@ -44,11 +44,11 @@ for (const engine of ENGINES) {
         await page.locator("dock-desk").getByRole("tab", { name: "Chats" }).click();
         await page.locator("conversation-list").getByText("A chat", { exact: true }).click();
         await until(async () => (await label(page)) === "Whole book Link to Chapter One");
-        const button = page.locator("chat-thread .relink");
+        const button = page.locator("#chats-thread .relink");
         const shown = () => button.evaluate((el) => getComputedStyle(el).opacity === "1");
         await page.mouse.move(0, 0);
         await until(async () => !(await shown())).catch(() => assert.fail("the button waits for the pointer or the keyboard"));
-        await page.locator("chat-thread .chapter").hover();
+        await page.locator("#chats-thread .chapter").hover();
         await until(shown);
         await button.click();
         await until(async () => (await label(page)) === "Chapter One Unlink");

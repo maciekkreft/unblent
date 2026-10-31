@@ -7,26 +7,40 @@ import { setup, assign, fromPromise, enqueueActions } from "xstate";
 // books: list for the starting picture and follows book.opened, book.changed and
 // book.deleted after (4.3, fourth rule). It also keeps a tab per note the user opened on
 // the stage (note.staged), labelled from notes: list and note.changed, and tells the
-// stage's note editor which note to show by the load command (4.4). It asks session: read
+// stage's note editor which note to show by the load command (4.4); and a tab per chat
+// the same way (conversation.staged, conversations: list, conversation.changed), telling
+// the stage's chat and its box which chat to show. It asks session: read
 // and follows session.changed only for whether anyone is signed in. The asks, the send,
 // the storage and whether the page is a try page arrive through `input`, so the machine
 // is importable in Node.
 
-// Which child the view shows: "note" while a note's tab is in front, else "written" while
-// the open book is the one the user writes, "reader" otherwise, also when no book is open
-// or the open book cannot be read.
+// Which child the view shows: "note" while a note's tab is in front, "chat" while a chat's
+// is, else "written" while the open book is the one the user writes, "reader" otherwise,
+// also when no book is open or the open book cannot be read.
 export const shownOf = (context) =>
-  context.notes.includes(context.front) ? "note" : context.written ? "written" : "reader";
+  context.notes.includes(context.front)
+    ? "note"
+    : context.chats.includes(context.front)
+      ? "chat"
+      : context.written
+        ? "written"
+        : "reader";
 
 // The address of the editor that shows a note tab: the page gives it the id "stage" (4.1).
 const STAGE_EDITOR = "note-editor#stage";
+// The addresses of the chat that shows a chat tab and of its box, by the page's ids (4.1).
+const STAGE_CHAT = "chat-thread#stage-chat";
+const STAGE_CHAT_INPUT = "chat-input#stage-chat-input";
 
-// A note's tab says its title, or Untitled while it has none.
+// A note's or a chat's tab says its title, or Untitled while it has none.
 const noteLabel = (title) => (title === "" ? "Untitled" : title);
 
 // A tab's label, or undefined while it is not known yet, so the tab is not drawn.
-const labelFor = (context, id) =>
-  context.notes.includes(id) ? (id in context.titles ? noteLabel(context.titles[id]) : undefined) : context.labels[id];
+const labelFor = (context, id) => {
+  if (context.notes.includes(id)) return id in context.titles ? noteLabel(context.titles[id]) : undefined;
+  if (context.chats.includes(id)) return id in context.chatTitles ? noteLabel(context.chatTitles[id]) : undefined;
+  return context.labels[id];
+};
 
 // The journal is the book with `written` set (books: list); every other book shows the
 // title the user gave it.
@@ -43,12 +57,13 @@ const recall = (storage, key) => {
   }
 };
 
-// The order of every tab stays in the one list under `key`, and which of them are notes in
-// a second list beside it, so a list stored before notes had tabs still reads as books.
+// The order of every tab stays in the one list under `key`, and which of them are notes and
+// which chats in lists beside it, so a list stored before notes had tabs still reads as books.
 const remember = (context) => {
   try {
     context.storage?.setItem(context.key, JSON.stringify(context.tabs));
     context.storage?.setItem(`${context.key}.notes`, JSON.stringify(context.notes));
+    context.storage?.setItem(`${context.key}.chats`, JSON.stringify(context.chats));
   } catch {
     // A full or blocked storage keeps the tabs for this page load only.
   }
@@ -110,7 +125,7 @@ const announce = (context, enqueue) => {
 const settle = (context, enqueue, change) => {
   const next = { ...context, ...change };
   enqueue.assign(change);
-  if (change.tabs || change.notes) remember(next);
+  if (change.tabs || change.notes || change.chats) remember(next);
   return announce(next, enqueue);
 };
 
@@ -121,13 +136,20 @@ const switchTo = (enqueue, id) => {
   enqueue.emit({ type: "book.switched", id });
 };
 
-// Brings any tab to the front. A note's tab tells the stage's editor which note to show;
-// it never touches `books`, so the open book, and with it the subject, stays. The open
-// book's own tab needs no book.switched, since `books` already holds it open.
+// Brings any tab to the front. A note's tab tells the stage's editor which note to show,
+// and a chat's tells the stage's chat and its box; neither touches `books`, so the open
+// book, and with it the subject, stays. The open book's own tab needs no book.switched,
+// since `books` already holds it open.
 const bringForward = (context, enqueue, id) => {
   if (id != null && context.notes.includes(id)) {
     enqueue.assign({ front: id });
     enqueue(() => context.send?.(STAGE_EDITOR, "load", { id }));
+  } else if (id != null && context.chats.includes(id)) {
+    enqueue.assign({ front: id });
+    enqueue(() => {
+      context.send?.(STAGE_CHAT, "load", { id });
+      context.send?.(STAGE_CHAT_INPUT, "load", { id });
+    });
   } else if (id == null || id === context.openId) enqueue.assign({ front: id });
   else switchTo(enqueue, id);
 };
@@ -137,9 +159,10 @@ const bringForward = (context, enqueue, id) => {
 const drop = (context, enqueue, id) => {
   const tabs = context.tabs.filter((t) => t !== id);
   const notes = context.notes.filter((t) => t !== id);
+  const chats = context.chats.filter((t) => t !== id);
   const front = context.front === id ? neighbourOf(context, id) : context.front;
   if (context.front === id) bringForward(context, enqueue, front);
-  return settle({ ...context, front }, enqueue, { tabs, notes });
+  return settle({ ...context, front }, enqueue, { tabs, notes, chats });
 };
 
 // Removes a tab the user closed. The last drawn tab stays, so the stage always shows a
@@ -185,6 +208,7 @@ export const machine = setup({
     read: fromPromise(({ input }) => input.ask("books", "read", { id: input.id })),
     list: fromPromise(({ input }) => input.ask("books", "list", {})),
     noteList: fromPromise(({ input }) => input.ask("notes", "list", {})),
+    chatList: fromPromise(({ input }) => input.ask("conversations", "list", {})),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
@@ -216,7 +240,12 @@ export const machine = setup({
       "stays. Picking a book's tab, or a book opened anywhere, brings the book back to the " +
       "front. A note's tab closes like a book's, also by `:q` or `:tabc` in its editor, and the " +
       "note itself is unchanged; a deleted note, or one the account does not have, loses its " +
-      "tab. Note tabs are kept in the browser beside the book tabs, and after a reload the open " +
+      "tab. A chat opened on the stage (`conversation.staged`, the chat's Open on stage) gets a " +
+      "tab the same way; while it is in front the stage shows a fourth view, the chat with id " +
+      "`stage-chat` and its box `stage-chat-input`, which it tells which chat to show. A chat's " +
+      "tab says the chat's title, closes like a note's, also by `:q` or `:tabc` in its box, and " +
+      "a deleted chat loses its tab. Note and chat tabs are kept in the browser beside the book " +
+      "tabs, and after a reload the open " +
       "book is in front. It announces its tabs so the desk can draw them in place of the " +
       "stage's own tab. Signed out it shows only \"Sign in to read.\": no tabs, no book, no " +
       "journal page and no note. The tabs stay kept in the browser, and signing in, with or " +
@@ -224,8 +253,8 @@ export const machine = setup({
       "a visitor not yet signed in still sees the stage.",
     kind: "view",
     emits: ["tabs.shown", "book.switched"],
-    asks: ["books: open", "books: read", "books: list", "notes: list", "session: read"],
-    sends: ["note-editor: load"],
+    asks: ["books: open", "books: read", "books: list", "notes: list", "conversations: list", "session: read"],
+    sends: ["note-editor: load", "chat-thread: load", "chat-input: load"],
     attributes: ["height"],
   },
   context: ({ input }) => {
@@ -242,9 +271,13 @@ export const machine = setup({
       tabs,
       // Which tabs are notes; every other tab is a book.
       notes: recall(input.storage, `${key}.notes`).filter((id) => tabs.includes(id)),
+      // Which tabs are chats.
+      chats: recall(input.storage, `${key}.chats`).filter((id) => tabs.includes(id)),
       labels: {},
       // Every note's title, by id, from notes: list and note.changed.
       titles: {},
+      // Every chat's title, by id, from conversations: list and conversation.changed.
+      chatTitles: {},
       front: null,
       listed: false,
       said: null,
@@ -338,7 +371,7 @@ export const machine = setup({
                 // No answer (no books on the page, offline) keeps the stored list as it is.
                 if (!Array.isArray(books)) return;
                 const labels = Object.fromEntries(books.map((b) => [b.id, labelOf(b)]));
-                let tabs = context.tabs.filter((id) => labels[id] !== undefined || context.notes.includes(id));
+                let tabs = context.tabs.filter((id) => labels[id] !== undefined || context.notes.includes(id) || context.chats.includes(id));
                 if (context.openId != null && labels[context.openId] !== undefined && !tabs.includes(context.openId)) tabs = [...tabs, context.openId];
                 settle({ ...context, listed: true }, enqueue, { labels, tabs, listed: true });
               }),
@@ -376,9 +409,42 @@ export const machine = setup({
         known: {},
       },
     },
+    // The chats' titles (conversations: list). A chat tab whose chat the reply lacks stays
+    // stored but undrawn, because signed out or offline the list is empty or fails; a chat
+    // deleted loses its tab by conversation.deleted. Asked again when someone signs in.
+    chatTitles: {
+      initial: "listing",
+      on: {
+        _relistChats: { target: ".listing" },
+      },
+      states: {
+        listing: {
+          invoke: {
+            src: "chatList",
+            input: ({ context }) => ({ ask: context.ask }),
+            onDone: {
+              target: "known",
+              actions: enqueueActions(({ context, event, enqueue }) => {
+                const chats = event.output?.conversations;
+                if (!Array.isArray(chats)) return;
+                settle(context, enqueue, { chatTitles: { ...context.chatTitles, ...Object.fromEntries(chats.map((c) => [c.id, c.title])) } });
+              }),
+            },
+            onError: "known",
+          },
+        },
+        known: {},
+      },
+    },
   },
   on: {
-    "session.changed": { actions: enqueueActions(({ context, event, enqueue }) => signIn(context, enqueue, event.userId != null)) },
+    // Signing in also asks for the chats' titles again, which signed out were none.
+    "session.changed": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        signIn(context, enqueue, event.userId != null);
+        if (event.userId != null && event.leaving !== true) enqueue.raise({ type: "_relistChats" });
+      }),
+    },
     // The Notes panel's Open on stage (4.3, fifth rule): a tab for the note at the end, or
     // its tab to the front.
     "note.staged": {
@@ -406,6 +472,32 @@ export const machine = setup({
       }),
     },
     "note.closed": { actions: enqueueActions(close) },
+    // The chat's Open on stage (4.3, fifth rule): a tab for the chat at the end, or its tab
+    // to the front.
+    "conversation.staged": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        const { id } = event;
+        const fresh = !context.tabs.includes(id);
+        const tabs = fresh ? [...context.tabs, id] : context.tabs;
+        const chats = fresh ? [...context.chats, id] : context.chats;
+        const chatTitles = id in context.chatTitles ? context.chatTitles : { ...context.chatTitles, [id]: "" };
+        const next = { ...context, tabs, chats, chatTitles };
+        if (context.front !== id) bringForward(next, enqueue, id);
+        settle({ ...next, front: id }, enqueue, { tabs, chats, chatTitles });
+      }),
+    },
+    "conversation.changed": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (context.chatTitles[event.id] === event.title) return;
+        settle(context, enqueue, { chatTitles: { ...context.chatTitles, [event.id]: event.title } });
+      }),
+    },
+    "conversation.deleted": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (context.chats.includes(event.id)) drop(context, enqueue, event.id);
+      }),
+    },
+    "conversation.closed": { actions: enqueueActions(close) },
     "book.changed": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         if (event.id === context.openId) enqueue.assign({ written: event.written === true });

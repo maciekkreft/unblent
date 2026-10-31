@@ -114,12 +114,12 @@ const look = ({ page }) =>
       rows: names("note-list", "li.row").join(", "),
       chatRows: names("conversation-list", "li.row"),
       chatOpen: names("conversation-list", 'li.row[aria-selected="true"]')[0] ?? null,
-      chatBox: cm("chat-input"),
+      chatBox: cm("#chats-input"),
       // Vim's normal mode in the chat box: the block cursor in place of the caret. The box
       // enters insert mode a frame after it takes the keyboard, so letters typed before
       // that would be Vim commands.
-      chatNormal: Boolean(document.querySelector("chat-input")?.shadowRoot?.querySelector(".cm-scroller.cm-vimMode")),
-      thread: [...(document.querySelector("chat-thread")?.shadowRoot?.querySelectorAll(".turn") ?? [])].map(
+      chatNormal: Boolean(document.querySelector("#chats-input")?.shadowRoot?.querySelector(".cm-scroller.cm-vimMode")),
+      thread: [...(document.querySelector("#chats-thread")?.shadowRoot?.querySelectorAll(".turn") ?? [])].map(
         (t) => `${t.classList.contains("user") ? "user" : "model"}: ${(t.querySelector(".answer") ?? t).textContent.trim()}`,
       ),
     };
@@ -168,7 +168,7 @@ function deskTab(label) {
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
 function chatBox() {
-  const el = document.querySelector("chat-input")?.shadowRoot?.querySelector(".cm-content");
+  const el = document.querySelector("#chats-input")?.shadowRoot?.querySelector(".cm-content");
   if (!el) return null;
   const r = el.getBoundingClientRect();
   return { x: r.left + 10, y: r.top + r.height / 2 };

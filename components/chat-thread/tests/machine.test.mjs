@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -36,7 +36,7 @@ const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
 function start(options = {}) {
-  const { openId = null, chatsById = {}, readError = {}, vimKeys = false, subject = null, clock } = options;
+  const { openId = null, chatsById = {}, readError = {}, vimKeys = false, subject = null, clock, staged = false } = options;
   const input = {
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
@@ -55,7 +55,9 @@ function start(options = {}) {
       throw new Error(`unexpected ask ${key}`);
     },
   };
-  const actor = createActor(machine, { input, ...(clock ? { clock } : {}) });
+  const actor = createActor(machine, { input: { ...input, staged }, ...(clock ? { clock } : {}) });
+  const stagedIds = [];
+  actor.on("conversation.staged", (e) => stagedIds.push(e.id));
   const relinked = [];
   actor.on("conversation.relinked", (e) => {
     const { type, ...payload } = e;
@@ -63,7 +65,7 @@ function start(options = {}) {
     see(payload, RELINKED);
   });
   actor.start();
-  return { actor, relinked };
+  return { actor, relinked, staged: stagedIds };
 }
 
 // The top state only: showing has substates of its own (the comment being written).
@@ -657,4 +659,50 @@ test("every query payload and marks.edited matches its schema", () => {
     const result = new Validator(schema, "2020-12").validate(value);
     assert.ok(result.valid, `${JSON.stringify(value)} against ${schema.description ?? "schema"}: ${JSON.stringify(result.errors?.[0])}`);
   }
+});
+
+// --- Open on stage (12) ---------------------------------------------------------------
+
+const said = (id) => emptyChat(id, { title: "hi", turns: [{ id: "01HQ8ZK7M4N5P6Q7R8S9T0V1W3", role: "user", text: "hi" }] });
+
+test("Open on stage sends the open chat once it has a message; with none it does nothing", async () => {
+  const h = start({ openId: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
+  await until(() => state(h) === "showing", "showing");
+  assert.equal(canStage(h.actor.getSnapshot().context), false, "a chat with no message cannot have a tab");
+  h.actor.send({ type: "_stage" });
+  assert.deepEqual(h.staged, []);
+  h.actor.send({ type: "conversation.changed", ...said(CHAT) });
+  h.actor.send({ type: "_stage" });
+  assert.deepEqual(h.staged, [CHAT]);
+});
+
+test("the button knows the chat is on a stage from tabs.shown, and lets go when the tab goes", async () => {
+  const h = start({ openId: CHAT, chatsById: { [CHAT]: said(CHAT) } });
+  await until(() => state(h) === "showing", "showing");
+  h.actor.send({ type: "tabs.shown", view: "book-stage", tabs: [{ id: CHAT, label: "hi", closable: true }], active: CHAT });
+  assert.equal(isStaged(h.actor.getSnapshot().context), true);
+  h.actor.send({ type: "tabs.shown", view: "book-stage", tabs: [], active: null });
+  assert.equal(isStaged(h.actor.getSnapshot().context), false);
+});
+
+test("the stage's chat opens nothing by itself, shows what load names, and ignores the chat opened elsewhere", async () => {
+  const h = start({ staged: true, openId: CHAT2, chatsById: { [CHAT]: said(CHAT), [CHAT2]: said(CHAT2) } });
+  await flush();
+  assert.equal(state(h), "empty");
+  h.actor.send({ type: "load", id: CHAT });
+  await until(() => state(h) === "showing", "showing");
+  assert.equal(h.actor.getSnapshot().context.conversation.id, CHAT);
+  h.actor.send({ type: "conversation.opened", id: CHAT2 });
+  assert.equal(h.actor.getSnapshot().context.openId, CHAT, "the panel's chat is not the stage's");
+  h.actor.send({ type: "_stage" });
+  assert.deepEqual(h.staged, [], "the stage's chat has no Open on stage");
+  h.actor.send({ type: "conversation.deleted", id: CHAT });
+  assert.equal(state(h), "empty");
+});
+
+test("load is ignored outside the stage", async () => {
+  const h = start({ openId: CHAT, chatsById: { [CHAT]: said(CHAT), [CHAT2]: said(CHAT2) } });
+  await until(() => state(h) === "showing", "showing");
+  h.actor.send({ type: "load", id: CHAT2 });
+  assert.equal(h.actor.getSnapshot().context.openId, CHAT);
 });

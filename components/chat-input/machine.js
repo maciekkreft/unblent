@@ -1,4 +1,4 @@
-import { setup, assign, fromPromise, enqueueActions } from "xstate";
+import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 
 // The question box (architecture.md 3.1): a view owning only its draft (kept in the
 // view's own storage, 3.1). It emits `turn.submitted` when the reader sends and
@@ -190,9 +190,10 @@ export const machine = setup({
     // chat links to, and the account picture that decides whether the box is usable.
     // subject: read may go unanswered where no subject fact is mounted (a Node test); it
     // is treated as none.
+    // The stage's box asks no open chat: it shows only what `load` names.
     start: fromPromise(async ({ input }) => {
       const [open, subject, llm] = await Promise.all([
-        input.ask("conversations", "open", {}),
+        input.staged ? Promise.resolve({ id: null }) : input.ask("conversations", "open", {}),
         input.ask("subject", "read", {}).catch(() => ({ subject: null })),
         input.ask("llm", "read", {}),
       ]);
@@ -228,10 +229,14 @@ export const machine = setup({
       "after a reload or on coming back, and never shows up in another chat; sending clears " +
       "it, and deleting a chat drops its text. When the user has commented on the last answer, " +
       "Send says how many comments it sends and works with an empty box. It disables itself while nobody is signed in " +
-      "or the chosen provider has no key.",
+      "or the chosen provider has no key. With Vim keys on, `:tab split` or `:tab sp` in the box " +
+      "shows its chat on the stage, as the conversation's Open on stage does, once the chat has " +
+      "its first message. With `stage` it is the box of a chat the stage shows: it follows no " +
+      "chat opened or picked elsewhere, takes the chat the stage names by `load`, and `:q`, " +
+      "`:tabc` or `:tabclose` closes the chat's tab without changing the chat.",
     kind: "view",
-    attributes: [],
-    emits: ["turn.submitted", "turn.steered"],
+    attributes: ["stage"],
+    emits: ["turn.submitted", "turn.steered", "conversation.staged", "conversation.closed"],
     asks: ["conversations: open", "conversations: read", "subject: read", "llm: read", "settings: read"],
   },
   context: ({ input }) => ({
@@ -239,6 +244,8 @@ export const machine = setup({
     // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     mint: input.mint,
+    // The `stage` attribute: the box of a chat the stage shows, told which by `load` alone.
+    staged: Boolean(input.staged),
     openId: null,
     conversation: null,
     subject: null,
@@ -278,6 +285,7 @@ export const machine = setup({
     // picture; conversation.changed keeps it current after (4.3), held until the read
     // lands (4.2).
     "conversation.opened": {
+      guard: ({ context }) => !context.staged,
       actions: enqueueActions(({ context, event, enqueue, self }) => {
         enqueue.assign({ openId: event.id, conversation: null, reading: event.id, touched: mark(context.touched, "openId", "conversation") });
         if (event.id != null) {
@@ -290,6 +298,32 @@ export const machine = setup({
           );
         }
       }),
+    },
+    // A command addressing this instance (4.4): the stage names the chat of its tab, read
+    // the same way as a chat opened elsewhere is for the panel's box.
+    load: {
+      guard: ({ context }) => context.staged,
+      actions: enqueueActions(({ context, event, enqueue, self }) => {
+        const id = event.id;
+        enqueue.assign({ openId: id, conversation: null, reading: id, touched: mark(context.touched, "openId", "conversation") });
+        enqueue(() =>
+          context
+            .ask("conversations", "read", { id })
+            .then((reply) => self.send({ type: "_openLoaded", id, conversation: reply?.conversation ?? null }))
+            .catch(() => {}),
+        );
+      }),
+    },
+    // `:tab split` in the panel's box (4.3, fifth rule): the stage decides what that means.
+    // Only a chat with a message, which `conversations` keeps, can have a tab.
+    _stage: {
+      guard: ({ context }) => !context.staged && context.openId != null && turns(context.conversation).length > 0,
+      actions: emit(({ context }) => ({ type: "conversation.staged", id: context.openId })),
+    },
+    // `:q`, `:tabc` or `:tabclose` in the stage's box closes the chat's tab.
+    _quit: {
+      guard: ({ context }) => context.staged && context.openId != null,
+      actions: emit(({ context }) => ({ type: "conversation.closed", id: context.openId })),
     },
     _openLoaded: {
       guard: ({ context, event }) => event.id === context.openId,
@@ -304,6 +338,7 @@ export const machine = setup({
     // change or a reload never moves the cursor. A chat already shown is decided now;
     // another waits for its read.
     "conversation.selected": {
+      guard: ({ context }) => !context.staged,
       actions: assign(({ context, event }) =>
         event.id === context.openId && context.reading !== event.id ? focusIfNew(context, context.conversation) : { focusFor: event.id },
       ),
@@ -333,7 +368,7 @@ export const machine = setup({
     starting: {
       invoke: {
         src: "start",
-        input: ({ context }) => ({ ask: context.ask }),
+        input: ({ context }) => ({ ask: context.ask, staged: context.staged }),
         onDone: {
           target: "ready",
           actions: assign(({ context, event }) => {

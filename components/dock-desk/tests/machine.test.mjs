@@ -849,6 +849,21 @@ test("on a narrow desk, a note opened on the stage brings the stage forward and 
   ]);
 });
 
+test("a shows-on naming several gestures shows the child on each: a chat opened on the stage folds the drawer too", async () => {
+  const views = [
+    { name: "book-stage", label: "Reader", showsOn: "note.staged conversation.staged" },
+    { name: "chats", label: "Chats", side: "right" },
+  ];
+  const { actor, emitted } = await settle(stored({ stage: "book-stage", docks: { right: { open: true, views: ["chats"] } } }), {
+    views,
+    narrow: () => true,
+  });
+  actor.send({ type: "conversation.staged", id: "01HZZZZZZZZZZZZZZZZZZZZZZZ" });
+  assert.deepEqual(emitted, [
+    { type: "dock.arranged", stage: "book-stage", docks: { right: { open: false, views: ["chats"] } } },
+  ]);
+});
+
 test("a child whose flag is hidden is drawn nowhere, and the stored layout keeps its place", async () => {
   const views = [
     { name: "book-stage", label: "Reader" },

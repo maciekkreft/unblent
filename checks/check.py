@@ -1166,6 +1166,8 @@ def shows_on_problems(shows_on: list, consumes: dict) -> list:
     `shows_on` is (tag, event, (container tag, container id) or None) per tag;
     `consumes` maps a component name to the events its manifest consumes."""
     problems = []
+    # A `shows-on` may name several gestures, separated by spaces; each is checked.
+    shows_on = [(tag, event, parent) for tag, value, parent in shows_on for event in value.split()]
     for tag, event, parent in shows_on:
         if parent is None:
             problems.append(f'<{tag}> has shows-on="{event}" but sits in no container to show it')

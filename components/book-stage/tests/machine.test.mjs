@@ -444,3 +444,82 @@ test("signing in brings back the same tabs and the same book in front without a 
   actor.send({ type: "session.changed", ...SIGNED_OUT, registrationOpen: false });
   assert.equal(shownEvents.length, count, "news that changes nothing draws nothing again");
 });
+
+// Chat tabs (conversation.staged): the same as note tabs, told to the stage's chat and box.
+const CHAT_A = "01J000000000000000000000CA";
+const CHAT_B = "01J000000000000000000000CB";
+const CHATS_KEY = KEY + ".chats";
+
+const chatStaging = async ({ stored, storedChats, chats = [{ id: CHAT_A, title: "About Dune" }] } = {}) => {
+  const initial = {};
+  if (stored) initial[KEY] = JSON.stringify(stored);
+  if (storedChats) initial[CHATS_KEY] = JSON.stringify(storedChats);
+  const storage = fakeStorage(initial);
+  const books = fakeAsk({ openId: BOOK, books: LIBRARY });
+  const ask = (target, name, payload) =>
+    target === "conversations" && name === "list" ? Promise.resolve({ conversations: chats }) : books(target, name, payload);
+  const sent = [];
+  const send = (target, name, payload) => sent.push({ target, name, ...payload });
+  const actor = createActor(machine, { input: { ask, send, address: "book-stage", storage } });
+  const shownEvents = [];
+  const switched = [];
+  actor.on("tabs.shown", (e) => shownEvents.push(e));
+  actor.on("book.switched", (e) => switched.push(e.id));
+  actor.start();
+  await flush();
+  return { actor, storage, sent, switched, last: () => shownEvents.at(-1) };
+};
+
+test("a staged chat gets a tab at the end, in front, labelled by its title, and its chat and box are told", async () => {
+  const { actor, last, sent, switched, storage } = await chatStaging();
+  actor.send({ type: "conversation.staged", id: CHAT_A });
+  assert.deepEqual(last().tabs, [
+    { id: BOOK, label: "Dune", closable: true },
+    { id: CHAT_A, label: "About Dune", closable: true },
+  ]);
+  assert.equal(shownOf(actor.getSnapshot().context), "chat");
+  assert.deepEqual(sent, [
+    { target: "chat-thread#stage-chat", name: "load", id: CHAT_A },
+    { target: "chat-input#stage-chat-input", name: "load", id: CHAT_A },
+  ]);
+  assert.deepEqual(switched, [], "the open book stays, so the subject does not move");
+  assert.deepEqual(JSON.parse(storage.data[CHATS_KEY]), [CHAT_A]);
+  actor.send({ type: "conversation.changed", id: CHAT_A, title: "Renamed" });
+  assert.equal(last().tabs[1].label, "Renamed");
+});
+
+test("a chat tab and its way back: the book's tab brings the book back, the chat's tab the chat", async () => {
+  const { actor, last } = await chatStaging();
+  actor.send({ type: "conversation.staged", id: CHAT_A });
+  actor.send({ type: "tab.picked", view: "book-stage", id: BOOK });
+  assert.equal(shownOf(actor.getSnapshot().context), "reader");
+  actor.send({ type: "tab.picked", view: "book-stage", id: CHAT_A });
+  assert.equal(shownOf(actor.getSnapshot().context), "chat");
+  assert.equal(last().active, CHAT_A);
+});
+
+test("closing a chat tab, by its × or by :q in its box, removes it; a deleted chat loses its tab", async () => {
+  const { actor, last } = await chatStaging({ chats: [{ id: CHAT_A, title: "A" }, { id: CHAT_B, title: "B" }] });
+  actor.send({ type: "conversation.staged", id: CHAT_A });
+  actor.send({ type: "conversation.staged", id: CHAT_B });
+  actor.send({ type: "tab.closed", view: "book-stage", id: CHAT_B });
+  assert.deepEqual(ids(last()), [BOOK, CHAT_A]);
+  actor.send({ type: "conversation.closed", id: CHAT_A });
+  assert.deepEqual(ids(last()), [BOOK]);
+  assert.equal(shownOf(actor.getSnapshot().context), "reader");
+  actor.send({ type: "conversation.staged", id: CHAT_B });
+  actor.send({ type: "conversation.deleted", id: CHAT_B });
+  assert.deepEqual(ids(last()), [BOOK]);
+});
+
+test("stored chat tabs come back beside the book tabs after a reload, with the book in front", async () => {
+  const { last } = await chatStaging({ stored: [BOOK, CHAT_A], storedChats: [CHAT_A] });
+  assert.deepEqual(ids(last()), [BOOK, CHAT_A]);
+  assert.equal(last().active, BOOK);
+});
+
+test("a stored chat tab whose chat the list lacks (signed out, offline) is kept but not drawn", async () => {
+  const { last, storage } = await chatStaging({ stored: [BOOK, CHAT_B], storedChats: [CHAT_B] });
+  assert.deepEqual(ids(last()), [BOOK]);
+  assert.deepEqual(JSON.parse(storage.data[CHATS_KEY] ?? JSON.stringify([CHAT_B])), [CHAT_B]);
+});

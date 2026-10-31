@@ -9,8 +9,11 @@ import { setup, assign } from "xstate";
 // event (6.4). The selection gestures are the closed set the container consumes:
 // book.selected, note.selected, conversation.selected, highlights.selected and
 // evaluator.selected.
+// A `shows-on` may name several gestures, separated by spaces.
+const names = (showsOn) => (showsOn ?? "").split(/\s+/);
+
 const shownFor = (items, type) => {
-  const matching = items.filter((item) => item.showsOn === type);
+  const matching = items.filter((item) => names(item.showsOn).includes(type));
   return matching.length ? matching[matching.length - 1].name : null;
 };
 
@@ -26,11 +29,11 @@ const kept = (items, shown) => (items.some((item) => item.name === shown) ? show
 // records it honestly as ignored.
 const select = [
   {
-    guard: ({ context, event }) => context.items.some((item) => item.showsOn === event.type),
+    guard: ({ context, event }) => context.items.some((item) => names(item.showsOn).includes(event.type)),
     actions: assign({ shown: ({ context, event }) => shownFor(context.items, event.type) }),
   },
   {
-    guard: ({ context, event }) => context.opensOn === event.type,
+    guard: ({ context, event }) => names(context.opensOn).includes(event.type),
     actions: assign({ shown: null }),
   },
 ];

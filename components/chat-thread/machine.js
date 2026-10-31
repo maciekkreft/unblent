@@ -42,6 +42,16 @@ const syncOfRead = watchSync((event) => event.output?.conversation);
 // Whether the open chat's finished turns have waited too long for the server.
 export const notSynced = (context) => context.openId != null && context.unsynced.includes(context.openId);
 
+// Whether the open chat can go on the stage: only once it has its first message, since a
+// chat with none is not kept by `conversations` and a stage tab could not show it again.
+// Read by the view too, so Open on stage is disabled exactly when a press would do nothing.
+export const canStage = (context) =>
+  !context.staged && context.openId != null && context.conversation?.id === context.openId && (context.conversation.turns?.length ?? 0) > 0;
+
+// Whether the open chat has a tab on a stage, from the stages' tabs.shown.
+export const isStaged = (context) =>
+  context.openId != null && Object.values(context.stageTabs).some((ids) => ids.includes(context.openId));
+
 // Render an assistant answer's markdown to a tree of blocks and inline runs, so the view
 // draws bold, headings, lists and tables as formatting rather than raw # and * (10). It is
 // ours, small and pure — no vendored library — the reverse of the HTML-to-markdown
@@ -714,15 +724,30 @@ export const machine = setup({
       "and Ctrl+u scroll half the box, and i moves the keyboard into the chat box under it in " +
       "insert mode; Escape in the chat box's normal mode, the second Escape after typing, puts " +
       "the keyboard back on the conversation. These keys never act while the user types in the " +
-      "comment box.",
+      "comment box. Its header also has Open on stage, at the top right, which shows the chat on " +
+      "the stage as a tab of its own (and `:tab split` or `:tab sp` in the chat box while Vim " +
+      "keys is on); the button is accent while the chat has a tab there, its arrow points towards " +
+      "the stage, also after the desk moves its dock, and it is disabled until the chat has its " +
+      "first message. With `stage` it is the chat a stage shows for a chat tab: it follows no " +
+      "chat opened elsewhere, has no Open on stage, and shows the chat the stage names by `load`; " +
+      "the chat itself is the same as in the Chats panel.",
     kind: "view",
-    attributes: ["height", "markdown"],
-    emits: ["marks.edited", "highlights.edited", "conversation.relinked"],
+    attributes: ["height", "markdown", "stage"],
+    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged"],
     asks: ["conversations: open", "conversations: read", "settings: read", "subject: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     mint: input.mint,
+    // The `stage` attribute: the chat a stage shows for a chat tab, told what to show by
+    // `load` alone.
+    staged: Boolean(input.staged),
+    // The tab ids each stage last announced (tabs.shown), by the stage's address, so the
+    // Open on stage button knows whether the open chat is there already.
+    stageTabs: {},
+    // How many desk layouts it has seen (dock.changed): a dock moved without changing size
+    // fires no resize, so this is what tells the view to point the arrow again.
+    layouts: 0,
     undoMs: input.undoMs ?? 3000,
     throttleMs: input.throttleMs ?? 200,
     // Which chat is open on this device, and its contents, or null when none is open.
@@ -773,15 +798,31 @@ export const machine = setup({
       }),
     },
     // The open chat changed on this device (12): load the new one, or clear to the
-    // empty page when nothing is open.
+    // empty page when nothing is open. The stage's chat shows only what `load` names.
     "conversation.opened": [
       {
-        guard: ({ event }) => event.id == null,
+        guard: ({ context, event }) => !context.staged && event.id == null,
         target: ".empty",
         actions: [settle, assign({ openId: null, conversation: null })],
       },
-      { target: ".loading", actions: [settle, assign({ openId: ({ event }) => event.id })] },
+      { guard: ({ context }) => !context.staged, target: ".loading", actions: [settle, assign({ openId: ({ event }) => event.id })] },
     ],
+    // A command addressing this instance (4.4): the stage names the chat of its tab.
+    load: {
+      guard: ({ context }) => context.staged,
+      target: ".loading",
+      actions: [settle, assign({ openId: ({ event }) => event.id })],
+    },
+    "tabs.shown": {
+      actions: assign({ stageTabs: ({ context, event }) => ({ ...context.stageTabs, [event.view]: event.tabs.map((t) => t.id) }) }),
+    },
+    "dock.changed": { actions: assign({ layouts: ({ context }) => context.layouts + 1 }) },
+    // Open on stage (4.3, fifth rule): the stage decides what that means. Pressed again
+    // while the chat is on the stage, it brings that tab to the front.
+    _stage: {
+      guard: ({ context }) => canStage(context),
+      actions: emit(({ context }) => ({ type: "conversation.staged", id: context.openId })),
+    },
     // The fact's news about the open chat (4.3, fourth rule): adopt it whole. A change
     // for another chat is left to the bus to record as ignored. Held until the read
     // reply lands (4.2), so it never overtakes the starting picture.
@@ -805,6 +846,8 @@ export const machine = setup({
   },
   states: {
     starting: {
+      // The stage's chat opens nothing by itself.
+      always: { guard: ({ context }) => context.staged, target: "empty" },
       invoke: {
         src: "open",
         input: ({ context }) => ({ ask: context.ask }),

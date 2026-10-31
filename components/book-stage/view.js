@@ -92,9 +92,9 @@ class BookStage extends LitElement {
   #focusLater = null;
 
   // The first child reads an ordinary book, the second shows the written one, the third
-  // the note whose tab is in front.
+  // the note whose tab is in front, the fourth the chat whose tab is.
   #child(shown) {
-    return this.children[{ reader: 0, written: 1, note: 2 }[shown]] ?? this.children[0];
+    return this.children[{ reader: 0, written: 1, note: 2, chat: 3 }[shown]] ?? this.children[0];
   }
 
   #shown() {

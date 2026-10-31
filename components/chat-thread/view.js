@@ -2,10 +2,12 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced } from "./machine.js";
+import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
+import staged from "./events/conversation.staged.json" with { type: "json" };
+import load from "./commands/load.json" with { type: "json" };
 
 // The gap between a passage's last line and the comment box under it, in px; the box is
 // placed in JS, so the value is not a style (7.4 covers styles).
@@ -35,13 +37,20 @@ class ActorController {
 
   hostConnected() {
     const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
+    // 4.1: a page may hold this view twice (the Chats panel and the stage), so each
+    // mounts and asks under its own id.
+    const instance = this.host.id || undefined;
     this.actor = mount(machine, {
+      instance,
+      commands: { load },
       input: {
-        ask: (target, name, payload) => ask(machine, target, name, payload),
+        ask: (target, name, payload) => ask(machine, target, name, payload, instance),
         mint: ulid,
         undoMs,
+        // Parsed by the time hostConnected runs, so the actor is born knowing it.
+        staged: this.host.hasAttribute("stage"),
       },
-      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked },
+      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -102,6 +111,8 @@ class ChatThread extends LitElement {
     // When set, an answer's markdown is rendered as formatting (10). Set first on the
     // chat stem page; it reaches the product page only after the owner approves it (9).
     markdown: { type: Boolean, reflect: true },
+    // The chat the stage shows for a chat tab: it shows only what `load` names.
+    stage: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -114,6 +125,43 @@ class ChatThread extends LitElement {
       flex: 1;
     }
     /* The header: the chapter label at the left. */
+    /* Open on stage: muted, accent while the chat has a tab on the stage, as the note
+       editor draws it. One icon, sized by the body type. */
+    .open {
+      flex: none;
+      display: inline-flex;
+      appearance: none;
+      background: none;
+      border: var(--border-width) solid transparent;
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs);
+      margin: 0 0 0 auto;
+      font: inherit;
+      font-size: var(--text-body);
+      cursor: pointer;
+      color: var(--color-body-mid);
+    }
+    .open svg {
+      display: block;
+    }
+    /* The arrow points towards the stage: up-left from a dock right of the middle. */
+    .open.mirrored svg {
+      transform: scaleX(-1);
+    }
+    .open:hover:not(:disabled):not([aria-pressed="true"]) {
+      color: var(--color-ink);
+    }
+    .open[aria-pressed="true"] {
+      color: var(--color-accent);
+    }
+    .open:disabled {
+      color: var(--color-mute);
+      cursor: default;
+    }
+    .open:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
     .header {
       flex: none;
       display: flex;
@@ -617,12 +665,16 @@ class ChatThread extends LitElement {
     super.connectedCallback();
     document.addEventListener("selectionchange", this.#onSelectionChange);
     this.addEventListener("keydown", this.#onBoxEscape);
+    this.#resized.observe(this);
+    globalThis.addEventListener("resize", this.#place);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener("selectionchange", this.#onSelectionChange);
     this.removeEventListener("keydown", this.#onBoxEscape);
+    this.#resized.disconnect();
+    globalThis.removeEventListener("resize", this.#place);
     clearTimeout(this.#settle);
   }
 
@@ -632,6 +684,8 @@ class ChatThread extends LitElement {
   }
 
   updated() {
+    // A desk layout change (dock.changed counted in `layouts`) may move the dock without a resize.
+    this.#place();
     this.#afterComment();
     if (!this.#stick) return;
     const el = this.renderRoot.querySelector(".transcript");
@@ -715,15 +769,45 @@ class ChatThread extends LitElement {
     `;
   }
 
-  // The header: the chapter label (12).
+  // The header: the chapter label (12), and, outside the stage, Open on stage. It is
+  // disabled until the chat has its first message; its label names the action for
+  // assistive tech, and says Show while the chat has a tab there.
   #header(snapshot) {
     if (!snapshot) return nothing;
+    const { context } = snapshot;
+    const onStage = isStaged(context);
+    const label = `${onStage ? "Show on stage" : "Open on stage"}${context.vimKeys ? " (:tab split)" : ""}`;
     return html`
       <div class="header">
         <div class="place">${this.#chapter(chapterLabelOf(snapshot))}</div>
+        ${context.staged
+          ? nothing
+          : html`<button
+              class=${this.#mirrored ? "open mirrored" : "open"}
+              type="button"
+              aria-pressed=${onStage}
+              aria-label=${label}
+              title=${label}
+              ?disabled=${!canStage(context)}
+              @mousedown=${(e) => e.preventDefault()}
+              @click=${() => this.#actor.send({ type: "_stage" })}
+            >
+              ${icon("arrow-square-out")}
+            </button>`}
       </div>
     `;
   }
+
+  // Whether the arrow is mirrored: layout reading only. The left edge, not the centre,
+  // tells a dock right of the middle, as the note editor reads it.
+  #mirrored = false;
+  #resized = new ResizeObserver(() => this.#place());
+  #place = () => {
+    const mirrored = this.getBoundingClientRect().left >= globalThis.innerWidth / 2;
+    if (mirrored === this.#mirrored) return;
+    this.#mirrored = mirrored;
+    this.requestUpdate();
+  };
 
   // The chapter label (machine.js: chapterLabelOf decides what it says and offers).
   #chapter(label) {

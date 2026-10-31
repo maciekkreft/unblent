@@ -9,6 +9,16 @@ import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, draftKey, chatDraftKey, inputState, pendingTurn, canContinue, retryText, canSend, sendLabel, unsentComments } from "./machine.js";
 import submitted from "./events/turn.submitted.json" with { type: "json" };
 import steered from "./events/turn.steered.json" with { type: "json" };
+import staged from "./events/conversation.staged.json" with { type: "json" };
+import closed from "./events/conversation.closed.json" with { type: "json" };
+import load from "./commands/load.json" with { type: "json" };
+
+// `:tab split` (or `:tab sp`) shows the chat on the stage. Ex commands are one set for the
+// page, so it reaches the focused editor's own element as a "tabsplit" event, the same
+// definition the note editor makes, and an editor that does not listen ignores it.
+Vim.defineEx("tab", "tab", (cm, params) => {
+  if (["split", "sp"].includes(params.args?.[0])) cm.cm6?.contentDOM.dispatchEvent(new CustomEvent("tabsplit"));
+});
 
 // The question box (3.1): a CodeMirror document owning only its draft. The setup, the
 // Vim switch and the paragraph rule are the editor kit's (10): the "Vim keys" preference
@@ -89,16 +99,22 @@ class ActorController {
   }
 
   hostConnected() {
+    // 4.1: a page may hold this box twice (the Chats panel and the stage), so each mounts
+    // and asks under its own id.
+    const instance = this.host.id || undefined;
     this.actor = mount(machine, {
+      instance,
+      commands: { load },
       input: {
-        ask: (target, name, payload) => ask(machine, target, name, payload),
+        ask: (target, name, payload) => ask(machine, target, name, payload, instance),
+        staged: this.host.hasAttribute("stage"),
         // Vim's registers are one per page, so text put there is what any editor's p pastes.
         pushRegister: toRegister,
         // Monotonic ids, so two turns minted in the same millisecond keep the order they
         // were made in.
         mint: monotonicFactory(),
       },
-      events: { "turn.submitted": submitted, "turn.steered": steered },
+      events: { "turn.submitted": submitted, "turn.steered": steered, "conversation.staged": staged, "conversation.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -253,7 +269,7 @@ class ChatInput extends LitElement {
     this.#vimOn = this.#actor.snapshot?.context.vimKeys === true;
     this.#editableOn = !inputState(this.#actor.snapshot?.context.llm).disabled;
     return [
-      baseExtensions({ vim: this.#vimOn }),
+      baseExtensions({ vim: this.#vimOn, quit: () => this.#actor.send({ type: "_quit" }) }),
       this.#keys(),
       // Enter is a send in every mode (#keys), so only Shift+Enter reaches the kit (10).
       paragraphs({ box: (into, ticked) => render(ticked ? icon("check-square") : icon("square"), into) }),
@@ -261,6 +277,13 @@ class ChatInput extends LitElement {
       editorTheme,
       placeholder("Ask about your library…"),
       EditorView.updateListener.of(this.#onUpdate),
+      // `:tab split` typed in this box (the "tab" Ex command above).
+      EditorView.domEventHandlers({
+        tabsplit: () => {
+          this.#actor.send({ type: "_stage" });
+          return true;
+        },
+      }),
     ];
   }
 

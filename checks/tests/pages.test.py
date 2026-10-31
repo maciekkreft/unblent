@@ -139,6 +139,13 @@ class ShowsOn(unittest.TestCase):
             '<dock-desk><list-then-item id="a"><note-list></note-list></list-then-item>'
             '<book-toc shows-on="book.selected"></book-toc></dock-desk>'), [])
 
+    def test_several_gestures_are_each_checked(self):
+        self.assertEqual(shows_on(
+            '<dock-desk><book-stage shows-on="book.selected note.selected"></book-stage></dock-desk>'), [])
+        found = shows_on('<dock-desk><book-stage shows-on="note.selected evaluator.selected"></book-stage></dock-desk>')
+        self.assertEqual(len(found), 1)
+        self.assertIn('shows-on="evaluator.selected"', found[0])
+
     def test_shows_on_outside_any_container_fails(self):
         self.assertEqual(len(shows_on('<book-toc shows-on="book.selected"></book-toc>')), 1)
 
