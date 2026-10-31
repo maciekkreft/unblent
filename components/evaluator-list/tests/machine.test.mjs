@@ -782,7 +782,7 @@ const run = (at, line, status, answers = []) => ({ at, line, status, error: null
 
 test("a line's marks: a dot while asked, then one per answer, its icon or a check or warning, faded when unsure", () => {
   assert.deepEqual(marksOf(run(1, "A", "waiting")), []);
-  assert.deepEqual(marksOf(run(1, "A", "asking")), [{ pending: true, label: "Asking Jev" }]);
+  assert.deepEqual(marksOf(run(1, "A", "asking")), [{ pending: true, label: "Checking" }]);
   assert.deepEqual(marksOf({ ...run(1, "A", "failed"), error: "busy" }), []);
   const wrong = said([{ id: O(3), p: 0.5 }, { id: O(2), p: 0.4 }]);
   const plain = results([{ id: id(9), questions: [yesno(22, "Kind?"), yesno(23, "Short?")] }], [

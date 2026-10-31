@@ -999,7 +999,7 @@ class SettingsSheet extends LitElement {
       <div class="checks">
         <span class="group">Choice point checks</span>
         <details class="keys-fold">
-          <summary>Choose what Jev checks</summary>
+          <summary>Choose what to check</summary>
           <div class="boxes">${BOXES.map(({ field, label }) => this.#checkBox(field, label, checks[field], choosable))}</div>
         </details>
       </div>

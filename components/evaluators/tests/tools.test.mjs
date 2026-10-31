@@ -249,6 +249,13 @@ test("any other error from Jev is the reply, and nothing more is asked", async (
   assert.equal(asked.length, 1);
 });
 
+test("Ollama off or Nimble v3 not downloaded is the reply as itself", async () => {
+  for (const error of ["local-off", "no-model"]) {
+    const { actor } = start([row()], { decide: () => ({ error }) });
+    assert.deepEqual(await evaluate(actor, ID, ["Run"]), { error });
+  }
+});
+
 test("the tools asked while the store loads are answered once it has", async () => {
   const { actor } = start([row()], { decide: () => answers(yes(0.9), picked(O1)) });
   assert.ok(actor.getSnapshot().matches("loading"));

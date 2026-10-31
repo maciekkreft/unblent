@@ -113,7 +113,9 @@
               "unavailable",
               "used-up",
               "paused",
-              "blocked"
+              "blocked",
+              "local-off",
+              "no-model"
             ]
           }
         },

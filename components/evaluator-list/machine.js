@@ -312,7 +312,7 @@ const answersOf = (run) => Object.values(run.results).flatMap((v) => v.questions
 // line with no answer has none.
 export const marksOf = (run) =>
   run.status === "asking"
-    ? [{ pending: true, label: "Asking Jev" }]
+    ? [{ pending: true, label: "Checking" }]
     : answersOf(run).map((a) => ({ icon: a.glyph ?? "check", tone: a.tone, sure: a.sure, label: a.question ? `${a.question} ${a.words}` : a.words }));
 
 // Whether a line came out as expected: at least one of its answers expects one, and every

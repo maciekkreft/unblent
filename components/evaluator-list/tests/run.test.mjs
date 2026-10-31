@@ -160,11 +160,11 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.locator("evaluator-list .cm-content").waitFor();
         const release = hold();
         await page.locator("evaluator-list .cm-content").evaluate((el) => el.cmView.view.dispatch({ changes: { from: 0, insert: "One\nTwo\nThree\nFour\nFive" }, userEvent: "input.paste" }));
-        await until(async () => (await marks(page))[0]?.[1][0] === "pending|Asking Jev");
+        await until(async () => (await marks(page))[0]?.[1][0] === "pending|Checking");
         assert.equal(await inList(page, (root) => root.querySelector("button.stop")?.textContent.trim()), "Stop");
         release();
         await until(async () => (await panel(page))?.[0] === "Line 4 of 5");
-        assert.deepEqual(await panel(page), ["Line 4 of 5", "3 evaluated · 0 as expected", "“Four”", "Jev is busy. Try again in a moment."]);
+        assert.deepEqual(await panel(page), ["Line 4 of 5", "3 evaluated · 0 as expected", "“Four”", "Busy. Try again in a moment."]);
         assert.deepEqual((await marks(page)).map(([t, m]) => [t, m.length]), [["One", 4], ["Two", 4], ["Three", 4], ["Four", 0], ["Five", 0]]);
         assert.deepEqual(bodies.map((b) => b.state.text), ["One", "Two", "Three", "Four"]);
         assert.equal(await inList(page, (root) => root.querySelector("button.stop")), null, "nothing waits, no Stop");

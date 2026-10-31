@@ -97,7 +97,9 @@
         "overloaded",
         "invalid",
         "busy",
-        "unavailable"
+        "unavailable",
+        "local-off",
+        "no-model"
       ],
       "description": "Why the last check failed, as llm: decide said it; left out when nothing failed."
     }

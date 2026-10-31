@@ -67,7 +67,7 @@ for (const engine of ENGINES) {
         await sheet.locator(".checks details.keys-fold").waitFor({ state: "attached" });
         await page.locator("dock-desk .controls .pill").click();
         assert.equal(await towards.isVisible(), false, "the boxes are folded away at first");
-        await sheet.locator("summary", { hasText: "Choose what Jev checks" }).click();
+        await sheet.locator("summary", { hasText: "Choose what to check" }).click();
         await until(async () => (await towards.locator(shown).count()) === 1);
         assert.equal(await towards.locator('select[aria-label="Evaluator for Towards · unhooked"]').inputValue(), evaluator);
         assert.equal(await towards.locator(shown).isChecked(), true);

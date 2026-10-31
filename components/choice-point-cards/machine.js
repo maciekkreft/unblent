@@ -152,16 +152,18 @@ const finishLines = enqueueActions(({ context, event, enqueue }) => {
 
 const NO_BOX = { evaluator: null, questions: [] };
 
-// Why Jev could not check, in one plain sentence under the sheet.
+// Why the check failed, in one plain sentence under the sheet.
 export const ERROR_SENTENCES = {
-  "signed-out": "Jev could not check: sign in to have your lines checked.",
-  "no-key": "Jev could not check: add your Jev key in Settings.",
-  "bad-key": "Jev could not check: your Jev key was refused. Check it in Settings.",
-  "rate-limited": "Jev could not check: too many requests. It tries again at your next change.",
-  overloaded: "Jev could not check: Jev is busy. It tries again at your next change.",
-  busy: "Jev could not check: Jev is busy. It tries again at your next change.",
-  invalid: "Jev could not check: the evaluator's questions could not be asked.",
-  unavailable: "Jev could not be reached. It tries again at your next change.",
+  "signed-out": "Could not check: sign in to have your lines checked.",
+  "no-key": "Could not check: add your Jev key in Settings.",
+  "bad-key": "Could not check: your Jev key was refused. Check it in Settings.",
+  "rate-limited": "Could not check: too many requests. It tries again at your next change.",
+  overloaded: "Could not check: busy right now. It tries again at your next change.",
+  busy: "Could not check: busy right now. It tries again at your next change.",
+  invalid: "Could not check: the evaluator's questions could not be asked.",
+  unavailable: "Could not check right now. It tries again at your next change.",
+  "local-off": "Could not check: Ollama isn't running on this Mac. Open Ollama; it tries again at your next change.",
+  "no-model": "Could not check: Nimble v3 isn't downloaded. In Terminal, run ollama pull nimble-v3; it tries again at your next change.",
 };
 
 // An evaluator by id, as the shown day has it; undefined when it is not known.
@@ -283,7 +285,7 @@ export function marksOf(box, line, evaluators = []) {
 // part only the marks. A combined mark already says it in a sentence.
 export function sayMarks(marks) {
   if (!marks.length) return null;
-  if (marks[0].pending) return "Jev is checking…";
+  if (marks[0].pending) return "Checking…";
   const said = (m) => (m.combined ? m.name : `${m.about ? `${m.about}: ` : ""}${m.name}${m.tone === "wrong" ? `, you expect ${m.expected}` : ""}`);
   return marks.map(said).join(" · ");
 }

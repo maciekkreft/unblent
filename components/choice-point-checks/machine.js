@@ -21,8 +21,8 @@ const str = (v) => (typeof v === "string" ? v : "");
 export const FIELDS = ["away", "towards", "situation", "thoughts"];
 const ICONS = new Set(["auto", "check", "warning", "person-simple-walk", "brain", "none"]);
 // What llm: decide may answer instead of answers; anything else (a bus refusal, a thrown
-// ask) is announced as unavailable, the one kind lines.checked has for "Jev cannot be reached".
-const ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable"]);
+// ask) is announced as unavailable, the one kind lines.checked has for "the decider cannot be reached".
+const ERRORS = new Set(["signed-out", "no-key", "bad-key", "rate-limited", "overloaded", "invalid", "busy", "unavailable", "local-off", "no-model"]);
 
 // The pause after a settings or evaluator change before the day on screen is checked
 // again, so a run of edits in Settings asks once; also how long a busy line waits.
