@@ -220,7 +220,9 @@ export const machine = setup({
       "returns the answers in the reply, on the account's own Jev key, and refuses as no-key at once when Jev decides and no Jev key is saved. `generate` writes one short text in one go " +
       "for a generator, the generator's prompt as the instruction and the item's content as the message, on the account's " +
       "own Anthropic key whichever provider the chat uses, one at a time and beside a chat answer; a model the key does not " +
-      "offer is refused as unavailable, guests and signed-out visitors are refused as signed-out, and the model \"echo\" " +
+      "offer is refused as unavailable. On the Mac it writes on the chat's provider instead: on the generator's model when " +
+      "that provider offers it, otherwise on the chat model, so by default on Gemma in Ollama with no key and no cost, " +
+      "and unavailable while Ollama does not answer. Guests and signed-out visitors are refused as signed-out, and the model \"echo\" " +
       "answers \"Echo: \" and the content's first line, without a key or a network call, for any signed-in account. Signed out on a try page, the first `decide` makes a guest and is asked as that guest. " +
       "A guest spends only on the guest keys, one per provider, which the admin enters; a provider without a guest key is " +
       "not offered to guests. Every use costs the tokens the provider reports at that provider's published price (Jev $42 " +

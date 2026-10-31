@@ -95,6 +95,12 @@ const fakeOllama = () =>
       for await (const part of req) raw += part;
       const body = JSON.parse(raw);
       received.push(body);
+      if (!body.stream) {
+        // A generator's one text in one go (llm: generate), not streamed.
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "c2", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: " Stoic evenings " }, finish_reason: "stop" }], usage: { prompt_tokens: 30, completion_tokens: 3, total_tokens: 33 } }));
+        return;
+      }
       res.writeHead(200, { "content-type": "text/event-stream" });
       res.end(answer(body));
       return;
@@ -113,6 +119,9 @@ const DECISION = {
   ],
 };
 const complete = async (body) => (await (await fetch(`${base}/api/llm/complete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).text()).trim().split("\n").map((line) => JSON.parse(line));
+
+const generate = async (body) => (await fetch(`${base}/api/llm/generate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+const WANTED = { model: "claude-haiku-5-5", prompt: "Name this chat.", text: "What did the Stoics do at night?" };
 
 const ulid = (n) => `01TEST${String(n).padStart(20, "0")}`;
 const TOOL = { target: "books", name: "chapter", description: "Read a chapter.", payload: { type: "object", properties: { book: { type: "string" } }, required: ["book"] } };
@@ -262,5 +271,27 @@ test("with Jev chosen, a decision needs the Jev key and is sent to Jev with it",
     assert.equal((await read()).decider.provider, "jev", "the choice is kept");
   } finally {
     await edit({ decider: "ollama", jevKey: "" });
+  }
+});
+
+test("a generator runs on the chat model in Ollama, in one go and with no key, when Ollama lacks its own model", async () => {
+  await edit({ address: ollama });
+  received.length = 0;
+  assert.deepEqual(await generate(WANTED), { text: "Stoic evenings" }, "the website's default runs on Gemma");
+  assert.deepEqual([received[0].model, received[0].stream ?? false, received[0].reasoning_effort], ["gemma4:e2b-mlx", false, "none"]);
+  assert.deepEqual(received[0].messages, [{ role: "system", content: WANTED.prompt }, { role: "user", content: WANTED.text }]);
+  assert.deepEqual(await generate({ ...WANTED, model: "gemma3:latest" }), { text: "Stoic evenings" });
+  assert.equal(received[1].model, "gemma3:latest", "a model Ollama has runs as chosen");
+  assert.deepEqual(await generate({ ...WANTED, model: "echo" }), { text: "Echo: What did the Stoics do at night?" });
+});
+
+test("a generator on the Mac is unavailable while Ollama does not answer, and needs the key when the chat uses Anthropic", async () => {
+  try {
+    await edit({ address: dead });
+    assert.deepEqual(await generate(WANTED), { error: "unavailable" });
+    await edit({ address: ollama, provider: "anthropic" });
+    assert.deepEqual(await generate(WANTED), { error: "no-key" });
+  } finally {
+    await edit({ address: ollama, provider: "ollama" });
   }
 });

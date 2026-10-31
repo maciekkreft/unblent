@@ -10,7 +10,9 @@ newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
 questions and returns its answers, on the account's own Jev key or, in the local edition
 with the ollama decider, from nimble-v3 in Ollama on the user's Mac; POST "/generate"
 writes one short text in one go on the account's own Anthropic key, whichever
-provider the chat uses, and model "echo" answers with Echo. In the local edition (3.4)
+provider the chat uses, and model "echo" answers with Echo; in the local edition it
+writes on the chat's provider instead, on the generator's model when that provider
+offers it and otherwise on the chat model, so Ollama needs no key. In the local edition (3.4)
 the picture also offers Ollama on the user's own Mac, at an address the account keeps,
 for chats and, by default, for decisions. A request body that fails validation is answered
 with a fixed 400, never echoed, because it may carry the key.
@@ -505,6 +507,8 @@ def _generate(user_id: str, model: str, prompt: str, text: str) -> dict:
         reply = echo_adapter.generate(text)
         _log_usage("echo", model, reply["usage"])
         return {"text": reply["text"]}
+    if local_user():
+        return _generate_local(user_id, model, prompt, text)
     # The account's own Anthropic key, independent of the chat's provider: a generator
     # runs on the model it names.
     with _connect(user_id) as connection:
@@ -514,11 +518,37 @@ def _generate(user_id: str, model: str, prompt: str, text: str) -> dict:
     if model not in {m["id"] for m in _models(user_id, "anthropic", key)}:
         # A model the key does not offer (renamed, retired, or a list that failed).
         return {"error": "unavailable"}
+    return _generate_anthropic(key, model, prompt, text)
+
+
+def _generate_anthropic(key: str, model: str, prompt: str, text: str) -> dict:
     reply = anthropic_adapter.generate(key, model, prompt, text)
     if "error" in reply:
         return {"error": reply["error"]}
     _log_usage("anthropic", model, reply["usage"])
     return {"text": reply["text"]}
+
+
+def _generate_local(user_id: str, model: str, prompt: str, text: str) -> dict:
+    # On the Mac a generator runs on the chat's provider (3.4): on the model it names
+    # when that provider offers it, otherwise on the chat model, so a generator left at
+    # the website's default runs on Gemma in Ollama, with no key and no cost (7.7).
+    settings, key = _for_completion(user_id)
+    provider = settings["provider"]
+    models = {m["id"] for m in _models(user_id, provider, key, settings["address"])}
+    chosen = model if model in models else settings["model"]
+    if not chosen:
+        # Ollama is not running, or has no model downloaded; Anthropic without a key.
+        return {"error": "unavailable" if provider == "ollama" else "no-key"}
+    if provider == "echo":
+        return _generate(user_id, "echo", prompt, text)
+    if provider == "ollama":
+        reply = openai_adapter.generate(settings["base_url"], key, chosen, prompt, text)
+        if "error" in reply:
+            return {"error": reply["error"]}
+        _log_usage("ollama", chosen, reply["usage"])
+        return {"text": reply["text"]}
+    return _generate_anthropic(key, chosen, prompt, text)
 
 
 @router.post("/generate")

@@ -39,11 +39,25 @@ export const shown = (context, id) => {
 export const changed = (record, pending = {}) =>
   Object.fromEntries(TYPED.filter((k) => typeof pending[k] === "string" && pending[k] !== record[k]).map((k) => [k, pending[k]]));
 
-// The models to choose from: those the account's key offers (llm: read), and the one
-// stored when the key does not offer it, so the choice shows what is kept.
+// On the Mac (3.4) the llm picture carries `ollama`, and a generator runs on the chat's
+// provider: on its own model when that provider offers it, otherwise on the chat model.
+const onMac = (llm) => Boolean(llm?.ollama);
+
+// The model a generator runs on, as the tab shows it: on the Mac the chat model when the
+// stored one is not offered; elsewhere the stored one.
+export const modelOf = (llm, model) => {
+  if (!onMac(llm)) return model;
+  const models = Array.isArray(llm.models) ? llm.models : [];
+  return models.some((m) => m.id === model) || !llm.model ? model : llm.model;
+};
+
+// The models to choose from: those the account offers (llm: read: the Anthropic key's
+// on the website, the chat provider's on the Mac), and the one shown when they do not
+// include it, so the choice shows what is kept.
 export const modelsFor = (llm, model) => {
   const models = Array.isArray(llm?.models) ? llm.models : [];
-  return models.some((m) => m.id === model) ? models : [...models, { id: model, label: model }];
+  const shown = modelOf(llm, model);
+  return models.some((m) => m.id === shown) ? models : [...models, { id: shown, label: shown }];
 };
 
 // Generators run on the account's own Anthropic key (7.7); null while llm has not
@@ -51,6 +65,13 @@ export const modelsFor = (llm, model) => {
 export const keySet = (llm) => {
   if (!llm || !Array.isArray(llm.providers)) return null;
   return llm.providers.some((p) => p.id === "anthropic" && p.keySet);
+};
+
+// The one line above the generators: "ollama" when they run on the chat model in Ollama
+// on this Mac, "key" when they need an Anthropic key that is not saved, else null.
+export const note = (llm) => {
+  if (onMac(llm) && llm.provider === "ollama") return "ollama";
+  return keySet(llm) === false ? "key" : null;
 };
 
 const replace = (generators, next) => (generators ?? []).map((g) => (g.id === next.id ? next : g));
@@ -109,12 +130,14 @@ export const machine = setup({
     description:
       "The Generators tab of the gear's sheet, after Settings. It shows the three generators one " +
       "under the other, Chat title, Journal summary and Could be, each with an On tick box, its name, Model " +
-      "(the models the account's Anthropic key offers, Haiku 5.5 at first) and Ask the model, the " +
+      "(the models the account's Anthropic key offers, Haiku 5.5 at first; on the Mac, the models of the chat's provider, " +
+      "and the chat model while the generator's own is not one of them) and Ask the model, the " +
       "prompt, in an editor box that follows the Vim keys preference. Every change is saved to the " +
       "account (generator.edited, carrying only the fields changed): the tick box and the model at " +
       "once, the name and the prompt a short time into typing and when the field loses focus. " +
       "Without an Anthropic key one line says generators run on it and that it is added in the " +
-      "Settings tab. Run on the open chat, Run on the picked journal " +
+      "Settings tab; on the Mac, while the chat uses Ollama, one line says generators run on the chat model in Ollama on " +
+      "this Mac instead. Run on the open chat, Run on the picked journal " +
       "entry, or Run on your values (the first of today's values with a red mark), asks for that one text again now with the current prompt (generation.requested), " +
       "saving what was typed first; a line under the button says what was asked for, for a few " +
       "seconds. The sheet takes the stage, so the chat list and the journal's contents stay in " +

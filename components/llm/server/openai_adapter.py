@@ -30,6 +30,28 @@ def list_models(base_url: str, key: str, timeout: float = 2.0) -> list[dict]:
     return [{"id": model.id, "label": model.id.removesuffix(":latest")} for model in result.data]
 
 
+def generate(base_url: str, key: str, model: str, system: str, text: str) -> dict:
+    """One short text in one go (llm: generate), as anthropic_adapter.generate does: the
+    generator's prompt is the system message and the item's content the one user
+    message. Not streamed, and without thinking, because the answer is a few words to a
+    sentence. Returns {"text", "usage"} or {"error"} in generate's words: the reply's
+    errors have no local-off, so a server that cannot be reached is unavailable."""
+    client = OpenAI(base_url=base_url, api_key=key or "none", timeout=300.0, max_retries=0)
+    try:
+        final = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": text}],
+            reasoning_effort=_REASONING["off"],
+        )
+    except openai.APIError:
+        return {"error": "unavailable"}
+    written = "".join((choice.message.content or "") for choice in final.choices).strip()
+    if not written:
+        # An empty answer kept as the result would count as done and never be made again.
+        return {"error": "unavailable"}
+    return {"text": written, "usage": _usage(final.usage) if final.usage is not None else {}}
+
+
 async def stream(settings, key, request, forward, tool_name):
     kwargs = dict(
         model=settings["model"],
