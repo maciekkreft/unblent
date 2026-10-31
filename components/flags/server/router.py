@@ -4,7 +4,7 @@ same for every account.
 
 GET answers anyone, signed out included: ``off``, the features turned off, and
 ``hidden``, what this request's account does not see, which is the same for every
-account. PUT, the admin alone, turns
+account. A feature in STARTS_OFF is off until the admin turns it on. PUT, the admin alone, turns
 one feature on or off and answers the same picture. Hiding is not a lock: no other
 server module reads this file.
 """
@@ -27,7 +27,12 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
 # The features that have a flag, in the order the Feature flags tab shows them; the
 # browser half of this component holds the same list (machine.js).
-FEATURES = ("chats", "evaluators", "choice-points", "highlights")
+FEATURES = ("chats", "evaluators", "choice-points", "highlights", "undo")
+
+# The features that start off (3.1): one with no row in `turned_on` is off, so a fresh
+# data directory and a server that never stored it both hide it until the admin turns
+# it on.
+STARTS_OFF = ("undo",)
 
 
 @contextmanager
@@ -45,12 +50,20 @@ def _connect() -> Iterator[sqlite3.Connection]:
 def off() -> list[str]:
     with _connect() as connection:
         rows = {row[0] for row in connection.execute("SELECT feature FROM off")}
-    return [f for f in FEATURES if f in rows]
+        turned_on = {row[0] for row in connection.execute("SELECT feature FROM turned_on")}
+    return [f for f in FEATURES if f in rows or (f in STARTS_OFF and f not in turned_on)]
 
 
 def switch(feature: str, on: bool) -> None:
     with _connect() as connection:
-        if on:
+        if feature in STARTS_OFF:
+            if on:
+                connection.execute(
+                    "INSERT OR IGNORE INTO turned_on (feature, at) VALUES (?, ?)", (feature, int(time.time() * 1000))
+                )
+            else:
+                connection.execute("DELETE FROM turned_on WHERE feature = ?", (feature,))
+        elif on:
             connection.execute("DELETE FROM off WHERE feature = ?", (feature,))
         else:
             connection.execute(

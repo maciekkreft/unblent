@@ -46,6 +46,9 @@ out["someone"] = call("GET", someone)
 out["admin"] = call("GET", admin)
 out["adminViewing"] = call("GET", viewing)
 out["back"] = call("PUT", admin, {"feature": "highlights", "on": True})
+out["undoOn"] = call("PUT", admin, {"feature": "undo", "on": True})
+out["undoOnTwice"] = call("PUT", admin, {"feature": "undo", "on": True})
+out["undoOff"] = call("PUT", admin, {"feature": "undo", "on": False})
 print(json.dumps(out))
 `;
 
@@ -58,17 +61,20 @@ test("anyone reads which features are off; only the admin switches one, and ever
         env: { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "flags-test-secret", UNBLENT_LOCAL_USER: "" },
       }),
     );
-    assert.deepEqual(out.fresh, [200, { off: [], hidden: [] }], "every feature is on at first");
+    assert.deepEqual(out.fresh, [200, { off: ["undo"], hidden: ["undo"] }], "every feature is on at first, except Undo, which starts off");
     assert.deepEqual(out.notAdmin, [403, { error: "not-admin" }]);
     assert.deepEqual(out.viewing, [403, { error: "not-admin" }], "not while the admin views as someone");
     assert.deepEqual(out.bad, [400, 400, 400, 400, 400]);
-    assert.deepEqual(out.off, [200, { off: ["highlights"], hidden: ["highlights"] }], "the admin sees what everyone sees");
-    assert.deepEqual(out.twice, [200, { off: ["chats", "highlights"], hidden: ["chats", "highlights"] }], "turning off twice is once, in the tab's order");
-    assert.deepEqual(out.signedOut, [200, { off: ["chats", "highlights"], hidden: ["chats", "highlights"] }]);
+    assert.deepEqual(out.off, [200, { off: ["highlights", "undo"], hidden: ["highlights", "undo"] }], "the admin sees what everyone sees");
+    assert.deepEqual(out.twice, [200, { off: ["chats", "highlights", "undo"], hidden: ["chats", "highlights", "undo"] }], "turning off twice is once, in the tab's order");
+    assert.deepEqual(out.signedOut, [200, { off: ["chats", "highlights", "undo"], hidden: ["chats", "highlights", "undo"] }]);
     assert.deepEqual(out.someone, out.signedOut);
     assert.deepEqual(out.admin, out.signedOut);
     assert.deepEqual(out.adminViewing, out.signedOut);
-    assert.deepEqual(out.back, [200, { off: ["chats"], hidden: ["chats"] }]);
+    assert.deepEqual(out.back, [200, { off: ["chats", "undo"], hidden: ["chats", "undo"] }]);
+    assert.deepEqual(out.undoOn, [200, { off: ["chats"], hidden: ["chats"] }], "the admin turns Undo on");
+    assert.deepEqual(out.undoOnTwice, out.undoOn, "turning on twice is once");
+    assert.deepEqual(out.undoOff, [200, { off: ["chats", "undo"], hidden: ["chats", "undo"] }], "and off again");
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

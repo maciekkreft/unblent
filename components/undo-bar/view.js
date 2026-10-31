@@ -93,7 +93,7 @@ class UndoBar extends LitElement {
   // `defaultPrevented` says whether one used it.
   #onKeydown = (e) => {
     const context = this.#actor.snapshot?.context;
-    if (!context) return;
+    if (!context || context.hidden) return;
     const direction = keyOf(e, { vimKeys: context.vimKeys, editable: e.composedPath().some(isTextBox) });
     if (!direction) return;
     // Ctrl+R would reload the page and Cmd+Z reach the browser's own undo.
@@ -125,7 +125,8 @@ class UndoBar extends LitElement {
   render() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return nothing;
-    const { undo, redo } = snapshot.context;
+    const { undo, redo, hidden } = snapshot.context;
+    if (hidden) return nothing;
     return html`${this.#button("undo", undo)}${this.#button("redo", redo)}`;
   }
 }

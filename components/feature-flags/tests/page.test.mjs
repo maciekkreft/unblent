@@ -52,9 +52,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.locator("dock-desk .controls button.pill").click();
         await page.locator('settings-tabs [role="tab"]', { hasText: "Feature flags" }).click();
         const chats = page.locator("feature-flags").getByRole("switch", { name: "Chats" });
-        await until(async () => (await page.locator("feature-flags").getByRole("switch").count()) === 4);
+        await until(async () => (await page.locator("feature-flags").getByRole("switch").count()) === 5);
         const said = await text(page);
-        for (const line of ["Feature flags", "hidden from everyone, you included", "Chats", "Evaluators", "Choice points", "Highlights", "The Highlights row"]) {
+        for (const line of ["Feature flags", "hidden from everyone, you included", "Chats", "Evaluators", "Choice points", "Highlights", "Undo", "The Highlights row"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
         assert.equal(await chats.isChecked(), true, "every feature is on");
