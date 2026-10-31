@@ -107,6 +107,7 @@ for (const engine of ENGINES) {
         await drag(page, PHRASE);
         await until(async () => (await look(page)).box !== null);
         assert.equal((await look(page)).marked, PHRASE, "the passage is marked the moment the box opens");
+        assert.equal(await inThread(page, (root) => getComputedStyle(root.querySelector("mark.open")).display), "inline", "the open passage stays in the line");
         assert.ok(await inThread(page, (root) => root.activeElement?.localName === "textarea"), "the box takes the keys");
         await page.keyboard.type("Say why.");
         await page.keyboard.press("Enter");

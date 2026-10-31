@@ -127,7 +127,7 @@ class ChatThread extends LitElement {
     /* The header: the chapter label at the left. */
     /* Open on stage: muted, accent while the chat has a tab on the stage, as the note
        editor draws it. One icon, sized by the body type. */
-    .open {
+    button.open {
       flex: none;
       display: inline-flex;
       appearance: none;
@@ -141,24 +141,24 @@ class ChatThread extends LitElement {
       cursor: pointer;
       color: var(--color-body-mid);
     }
-    .open svg {
+    button.open svg {
       display: block;
     }
     /* The arrow points towards the stage: up-left from a dock right of the middle. */
-    .open.mirrored svg {
+    button.open.mirrored svg {
       transform: scaleX(-1);
     }
-    .open:hover:not(:disabled):not([aria-pressed="true"]) {
+    button.open:hover:not(:disabled):not([aria-pressed="true"]) {
       color: var(--color-ink);
     }
-    .open[aria-pressed="true"] {
+    button.open[aria-pressed="true"] {
       color: var(--color-accent);
     }
-    .open:disabled {
+    button.open:disabled {
       color: var(--color-mute);
       cursor: default;
     }
-    .open:focus-visible {
+    button.open:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
