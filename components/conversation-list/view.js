@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, source, chaptered, placement } from "./machine.js";
+import { machine, shown, chaptered, placement } from "./machine.js";
 import selected from "./events/conversation.selected.json" with { type: "json" };
 import discarded from "./events/conversation.discarded.json" with { type: "json" };
 import moved from "./events/conversation.moved.json" with { type: "json" };
@@ -206,19 +206,6 @@ class ConversationList extends LitElement {
     .text {
       flex: 1;
       min-width: 0;
-    }
-    /* The open chat kept in the list though it is not about the subject (12), as
-       note-list keeps a note: a caption naming why it is here, and a rule under the row
-       that sets it off from the chats about the subject below it. */
-    .tag {
-      display: block;
-      font-size: var(--text-caption);
-      color: var(--color-body-mid);
-    }
-    .row.apart {
-      border-bottom: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-0);
-      margin-bottom: var(--space-2xs);
     }
     /* The "New chat" row is one line, centred in a chat row's two-line height so the
        list keeps a constant row height, the same as note-list. The height is the two
@@ -468,12 +455,8 @@ class ConversationList extends LitElement {
     const groups = chaptered(snapshot.context);
     const chats = groups ? [...groups.loose, ...(groups.all ? groups.rest : groups.here)] : shown(snapshot.context);
     const { draft } = snapshot.context;
-    // The open chat, when it is not about the subject (12), leads the list set apart, so
-    // its highlighted row is never missing; then the "New chat" row, the fresh chat to
-    // start.
-    const kept = apart(snapshot.context);
+    // The "New chat" row, the fresh chat to start, then the chats.
     return [
-      ...(kept ? [{ ...kept, apart: source(kept, snapshot.context.books, snapshot.context.subject) }] : []),
       ...(draft ? [{ id: draft, draft: true }] : []),
       ...chats,
     ];
@@ -517,7 +500,7 @@ class ConversationList extends LitElement {
   // The neighbours a move is placed between (12), worked out by the machine (placement)
   // from the chat rows as shown; the fixed rows are not chats a move can stand next to.
   #neighbours(rows, current, below) {
-    const ids = rows.filter((r) => !r.draft && !r.apart).map((r) => r.id);
+    const ids = rows.filter((r) => !r.draft).map((r) => r.id);
     return placement(this.#actor.snapshot.context, ids, current, below);
   }
 
@@ -816,7 +799,6 @@ class ConversationList extends LitElement {
     const classes = [
       "row",
       r.draft ? "draft" : "",
-      r.apart ? "apart" : "",
       isDiscarding ? "discarding" : "",
       isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
@@ -872,7 +854,6 @@ class ConversationList extends LitElement {
         <span class="under">Delete</span>
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
-            ${r.apart ? html`<span class="tag">${r.apart}</span>` : nothing}
             ${this.#editingId === r.id
               ? html`<input
                   class="title-input"

@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, apart, source, highlights, showing, chaptered, placement } from "./machine.js";
+import { machine, shown, highlights, showing, chaptered, placement } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
@@ -242,19 +242,6 @@ class NoteList extends LitElement {
       flex: 1;
       min-width: 0;
     }
-    /* The open note kept in the list though it is not about the subject (12): a caption
-       naming why it is here, and a rule under the row that sets it off from the notes
-       that are about the subject below it. */
-    .tag {
-      display: block;
-      font-size: var(--text-caption);
-      color: var(--color-body-mid);
-    }
-    .row.apart {
-      border-bottom: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-0);
-      margin-bottom: var(--space-2xs);
-    }
     /* The next-note row is one line, centred in a note row's two-line height so the
        list keeps a constant row height. The height is the two line-boxes a note row
        stacks (title + subtitle), expressed from the type tokens. */
@@ -491,15 +478,10 @@ class NoteList extends LitElement {
     const groups = chaptered(snapshot.context);
     const notes = groups ? [...groups.loose, ...(groups.all ? groups.rest : groups.here)] : shown(snapshot.context);
     const { draft } = snapshot.context;
-    // The open note, when it is not about the subject (12), leads the list set apart, so
-    // its highlighted row is never missing. It is a real row: pickable, deletable, and it
-    // takes the roving focus like any other.
-    const kept = apart(snapshot.context);
     // The Highlights row (Decision 1): under the New note row and above the notes, shown
     // only while the subject has a highlight. It is not a note; the view sets it apart.
     const hs = highlights(snapshot.context);
     const lead = [
-      ...(kept ? [{ ...kept, apart: source(kept, snapshot.context.books, snapshot.context.subject) }] : []),
       ...(draft ? [{ id: draft, draft: true }] : []),
       ...(hs ? [{ id: HIGHLIGHTS, highlights: true, count: hs.count, updatedAt: hs.updatedAt }] : []),
     ];
@@ -543,7 +525,7 @@ class NoteList extends LitElement {
   // The neighbours a move is placed between (12), worked out by the machine (placement)
   // from the note rows as shown; the fixed rows are not notes a move can stand next to.
   #neighbours(rows, current, below) {
-    const ids = rows.filter((r) => !r.draft && !r.highlights && !r.apart).map((r) => r.id);
+    const ids = rows.filter((r) => !r.draft && !r.highlights).map((r) => r.id);
     return placement(this.#actor.snapshot.context, ids, current, below);
   }
 
@@ -796,7 +778,6 @@ class NoteList extends LitElement {
       "row",
       r.draft ? "draft" : "",
       r.highlights ? "highlights" : "",
-      r.apart ? "apart" : "",
       isDiscarding ? "discarding" : "",
       isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
@@ -880,7 +861,6 @@ class NoteList extends LitElement {
         <span class="under">Delete</span>
         <span class="slide" style="transform: translateX(${dx}px)">
           <span class="text">
-            ${r.apart ? html`<span class="tag">${r.apart}</span>` : nothing}
             <span class="name ${untitled ? "untitled" : ""}">${untitled ? "Untitled" : r.title}</span>
             <span class="subtitle">${r.subtitle || " "}</span>
           </span>

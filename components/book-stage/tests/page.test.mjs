@@ -132,8 +132,6 @@ for (const engine of ENGINES) {
         document.querySelector("note-editor[subject]").shadowRoot.querySelector("button.open").getAttribute("aria-pressed") === "true",
       );
 
-      // The pin starts on (pins), so it is let go of for the panel to follow the book.
-      await page.evaluate(() => document.querySelector("note-editor[subject]").shadowRoot.querySelector("button.pin").click());
       await page.evaluate((id) => document.querySelector("book-shelf").shadowRoot.querySelector(`.tile[data-id="${id}"]`).click(), JOURNAL);
       await page.waitForFunction(() => document.querySelector("note-editor[subject]").shadowRoot.querySelector(".cm-content")?.textContent === "Thoughts");
       assert.deepEqual(await stageTabs(page), ["Sample Book", "Plans", "Journal*"]);

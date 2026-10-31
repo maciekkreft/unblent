@@ -185,6 +185,8 @@ test("the switch toggles flip their flag", async () => {
   assert.equal(emitted[1].layoutSwitchHidden, true);
   actor.send({ type: "_toggleVim" });
   assert.equal(emitted[2].vimKeys, true);
+  actor.send({ type: "_toggleKeep" });
+  assert.equal(emitted[3].keepOpen, true);
 });
 
 test("_reset emits the defaults", async () => {
@@ -197,6 +199,7 @@ test("_reset emits the defaults", async () => {
     layoutSwitchHidden: false,
     arranging: true,
     vimKeys: false,
+    keepOpen: false,
     editors: {},
   });
 });

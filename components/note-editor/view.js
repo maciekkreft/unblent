@@ -10,7 +10,6 @@ import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks
 import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing, notSynced } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
-import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
 import staged from "./events/note.staged.json" with { type: "json" };
 import closed from "./events/note.closed.json" with { type: "json" };
@@ -24,29 +23,30 @@ import focus from "./commands/focus.json" with { type: "json" };
 // half: the level field, the level ladder and the level bar. The theme, Vim and the
 // paragraphs come from the editor kit (architecture.md 10).
 
-// The note this editor pinned under its own key (3.1) before `pins` owned the pin: read
-// once at start so a device keeps its pin, handed to `pins` by the machine, then
-// cleared. Wrapped like settings/store.js so a browser refusing storage reads null.
-const KEY = "note-editor.pinned";
-const legacyPin = {
+// The note this editor last showed, kept under a key beginning with its name (3.1), so
+// with keepOpen on a reload reopens it. Wrapped like settings/store.js so a browser
+// refusing storage reads null and drops the write.
+const OPEN_KEY = "note-editor.open";
+const openStore = {
   recall() {
     try {
-      return localStorage.getItem(KEY);
+      return localStorage.getItem(OPEN_KEY);
     } catch {
       return null;
     }
   },
-  forget() {
+  remember(id) {
     try {
-      localStorage.removeItem(KEY);
+      if (id == null) localStorage.removeItem(OPEN_KEY);
+      else localStorage.setItem(OPEN_KEY, id);
     } catch {
-      // Nothing stored to clear.
+      // No persistence available; the open note is not kept across a reload.
     }
   },
 };
 
-// The titles of subjects this browser has seen (12), kept beside the pin under a key
-// beginning with its name (3.1). "kind:id" -> title. Wrapped like legacyPin: a browser refusing storage, or a malformed
+// The titles of subjects this browser has seen (12), kept beside the open note under a key
+// beginning with its name (3.1). "kind:id" -> title. Wrapped like openStore: a browser refusing storage, or a malformed
 // value, reads an empty table and drops the write.
 const TITLES_KEY = "note-editor.titles";
 const titleStore = {
@@ -254,8 +254,8 @@ class ActorController {
         follows: this.host.follows,
         subjecting: this.host.subject,
         staged: this.host.stage,
-        recall: legacyPin.recall,
-        forget: legacyPin.forget,
+        recallOpen: openStore.recall,
+        rememberOpen: openStore.remember,
         recallTitles: titleStore.recall,
         rememberTitles: titleStore.remember,
         // Vim's registers are one per page, so the link lands where any editor's p reads.
@@ -263,7 +263,7 @@ class ActorController {
         // A try page (8) shows the editor signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
-      events: { "note.saved": saved, "note.opened": opened, "pin.toggled": pinToggled, "passage.selected": passageSelected, "note.staged": staged, "note.closed": closed },
+      events: { "note.saved": saved, "note.opened": opened, "passage.selected": passageSelected, "note.staged": staged, "note.closed": closed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -289,7 +289,7 @@ class NoteEditor extends LitElement {
   static properties = {
     height: { type: String, reflect: true },
     follows: { type: Boolean, reflect: true },
-    // Whether this editor follows the stage and offers the pin (D5). Reflected so the
+    // Whether this editor follows the stage (D5). Reflected so the
     // page's bare `subject` reads as true and the manifest attribute is visible. Off is
     // exactly today's behaviour.
     subject: { type: Boolean, reflect: true },
@@ -322,7 +322,7 @@ class NoteEditor extends LitElement {
       box-sizing: border-box;
     }
     /* The header (only while following the stage): what the note is about on the left,
-       the pin on the right. It keeps its height with an empty About line so the editor
+       Open on stage on the right. It keeps its height with an empty About line so the editor
        below does not jump as the About line comes and goes. */
     .header {
       flex: none;
@@ -402,9 +402,8 @@ class NoteEditor extends LitElement {
       outline: none;
       box-shadow: var(--focus-ring);
     }
-    /* The pin: a toggle, muted while following, accent when pinned (D7). One icon,
+    /* Open on stage: muted, accent while the note has a tab on the stage. One icon,
        sized by the caption type. */
-    .pin,
     .open {
       flex: none;
       display: inline-flex;
@@ -419,7 +418,6 @@ class NoteEditor extends LitElement {
       cursor: pointer;
       color: var(--color-body-mid);
     }
-    .pin svg,
     .open svg {
       display: block;
     }
@@ -427,20 +425,16 @@ class NoteEditor extends LitElement {
     .open.mirrored svg {
       transform: scaleX(-1);
     }
-    .pin:hover:not(:disabled):not([aria-pressed="true"]),
     .open:hover:not(:disabled):not([aria-pressed="true"]) {
       color: var(--color-ink);
     }
-    .pin[aria-pressed="true"],
     .open[aria-pressed="true"] {
       color: var(--color-accent);
     }
-    .pin:disabled,
     .open:disabled {
       color: var(--color-mute);
       cursor: default;
     }
-    .pin:focus-visible,
     .open:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
@@ -787,10 +781,6 @@ class NoteEditor extends LitElement {
     this.#actor.send({ type: "_stage" });
   }
 
-  #togglePin() {
-    this.#actor.send({ type: "_togglePin" });
-  }
-
   #relink() {
     this.#actor.send({ type: "_relink" });
   }
@@ -814,10 +804,10 @@ class NoteEditor extends LitElement {
     return aboutTitleOf(snapshot);
   }
 
-  // The header shown only while following the stage (D7): the About line with the pin
-  // toggle, and under it the chapter label's line. The pin is disabled while the editor holds no note; its label names the
-  // action for assistive tech, and its colour follows the state (accent when pinned).
-  #header(aboutTitle, chapter, pinned, id, onStage, vimKeys) {
+  // The header shown only while following the stage (D7): the About line with Open on
+  // stage, and under it the chapter label's line. Open on stage is disabled while the
+  // editor holds no note; its label names the action for assistive tech.
+  #header(aboutTitle, chapter, id, onStage, vimKeys) {
     const label = `${onStage ? "Show on stage" : "Open on stage"}${vimKeys ? " (:tab split)" : ""}`;
     return html`
       <div class="header">
@@ -833,16 +823,6 @@ class NoteEditor extends LitElement {
           @click=${this.#stageNote}
         >
           ${icon("arrow-square-out")}
-        </button>
-        <button
-          class="pin"
-          type="button"
-          aria-pressed=${pinned}
-          aria-label=${pinned ? "Unpin note" : "Pin note"}
-          ?disabled=${!id}
-          @click=${this.#togglePin}
-        >
-          ${icon("push-pin")}
         </button>
       </div>
       <div class="place">${this.#chapter(chapter)}</div>
@@ -863,12 +843,12 @@ class NoteEditor extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { subjecting, pinned, id, vimKeys } = snapshot.context;
+    const { subjecting, id, vimKeys } = snapshot.context;
     const aboutTitle = this.#aboutTitle(snapshot);
     // .region has no bindings, so Lit never touches CM6's subtree on re-render.
     return html`
       <div class="editor">
-        ${subjecting ? this.#header(aboutTitle, chapterLabelOf(snapshot), pinned, id, isStaged(snapshot.context), vimKeys) : nothing}
+        ${subjecting ? this.#header(aboutTitle, chapterLabelOf(snapshot), id, isStaged(snapshot.context), vimKeys) : nothing}
         <div class="region" role="textbox" aria-label="Note"></div>
         <div class="footer">
           <p class="status">

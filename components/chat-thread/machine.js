@@ -6,10 +6,8 @@ import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 // is open and reads it for the starting picture (4.3), then follows the conversation
 // events for everything after. The question box is a separate view shown through a
 // default slot (6.3). Everything with a side effect — the queries, the id source —
-// arrives through input, so this stays a pure definition importable in Node. Two
-// gestures are its own. The pin (12): it asks `pins` for the pinned chat, follows
-// pins.changed, and emits pin.toggled; `conversations` keeps a pinned chat open, and
-// `pins` moves an "on" pin to whichever chat opens. The comments on the last answer:
+// arrives through input, so this stays a pure definition importable in Node. The
+// comments on the last answer:
 // every change is emitted as the whole list in marks.edited (4.3, fifth rule), and
 // `conversations`, which keeps them with the chat, echoes them in conversation.changed.
 // The highlights the same way, in highlights.edited: a selection in an earlier answer, or
@@ -582,12 +580,6 @@ const rehighlight = enqueueActions(({ context, event, enqueue }) => {
   storeHighlights(enqueue, context, [...(context.conversation.highlights ?? []), back]);
 });
 
-// Whether the open chat can be pinned: only once it has its first message, because
-// `conversations` keeps a pinned chat only when it has one (12). Read by the view too,
-// so the button is unavailable exactly when a press would do nothing.
-export const canPin = (context) =>
-  context.openId != null && context.conversation?.id === context.openId && (context.conversation.turns?.length ?? 0) > 0;
-
 // The conversation's Vim keys (12, "Vim keys"): what a key pressed on the conversation
 // asks for. Ctrl+d and Ctrl+u are the only ones with a modifier; a letter with Ctrl, Alt
 // or Cmd belongs to the browser and the desk. `afterG` is whether a g was pressed just
@@ -677,8 +669,6 @@ export const machine = setup({
     // that races the start is applied after it, in order.
     open: fromPromise(({ input }) => input.ask("conversations", "open", {})),
     read: fromPromise(({ input }) => input.ask("conversations", "read", { id: input.id })),
-    // pins.changed is held for us until this reply lands (pins: read supersededBy).
-    pins: fromPromise(({ input }) => input.ask("pins", "read", {})),
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
     // races it is held for us until the reply lands (settings: read supersededBy).
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
@@ -698,12 +688,7 @@ export const machine = setup({
       "are written in markdown and drawn as formatted text by a small renderer of our own, " +
       "always as escaped text, so nothing the model writes reaches the page as HTML. It holds " +
       "only the scroll position, which thinking records are open, and the comment being " +
-      "written; the chat itself belongs to `conversations`. A pin at the top right, on unless " +
-      "the user turns it off, keeps the open " +
-      "chat when the subject changes; opening another chat while it is on moves the pin to it, " +
-      "and the pin is kept by `pins`, so it survives a reload. A chat with no message yet " +
-      "cannot be pinned: its pin is shown unavailable, saying why, until the first message " +
-      "is sent, and then it is on unless the user turned pins off. At the top left plain muted " +
+      "written; the chat itself belongs to `conversations`. At the top left plain muted " +
       "text names the chapter the chat is linked to, as the chapter's title read when it " +
       "was linked, or \"Whole book\" (\"Whole Journal\") when it is linked to no chapter; " +
       "a new chat shows the chapter it will be linked to. While the chat's book is the " +
@@ -732,8 +717,8 @@ export const machine = setup({
       "comment box.",
     kind: "view",
     attributes: ["height", "markdown"],
-    emits: ["pin.toggled", "marks.edited", "highlights.edited", "conversation.relinked"],
-    asks: ["conversations: open", "conversations: read", "pins: read", "settings: read", "subject: read"],
+    emits: ["marks.edited", "highlights.edited", "conversation.relinked"],
+    asks: ["conversations: open", "conversations: read", "settings: read", "subject: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -745,9 +730,6 @@ export const machine = setup({
     conversation: null,
     // The chats whose finished turns have waited longer than NOT_SYNCED_MS for the server.
     unsynced: [],
-    // The chat `pins` holds pinned; the open chat is pinned while the two are the same.
-    pin: null,
-    pinsObserved: false,
     // The "Vim keys" preference (12): off until settings says otherwise, and off on a
     // page without a settings fact.
     vimKeys: false,
@@ -764,15 +746,6 @@ export const machine = setup({
   initial: "starting",
   invoke: [
     {
-      src: "pins",
-      input: ({ context }) => ({ ask: context.ask }),
-      onDone: {
-        guard: ({ context }) => !context.pinsObserved,
-        actions: assign({ pin: ({ event }) => (typeof event.output?.chat === "string" ? event.output.chat : null) }),
-      },
-      onError: { actions: [] },
-    },
-    {
       src: "settings",
       input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ vimKeys: ({ event }) => event.output?.vimKeys === true }) },
@@ -787,7 +760,6 @@ export const machine = setup({
   ],
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "pins.changed": { actions: assign({ pin: ({ event }) => event.chat ?? null, pinsObserved: true }) },
     "subject.changed": { actions: assign({ subject: ({ event }) => event.subject ?? null }) },
     // The chapter label's button (4.3, fifth rule): the gesture goes to `conversations`
     // with the chat's new links, and the label turns at once; the echo in
@@ -799,15 +771,6 @@ export const machine = setup({
         enqueue.assign({ conversation: { ...context.conversation, about } });
         enqueue.emit({ type: "conversation.relinked", id: context.openId, about });
       }),
-    },
-    // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the
-    // button turns at once. Nothing to pin until the open chat has its first message.
-    _togglePin: {
-      guard: ({ context }) => canPin(context),
-      actions: [
-        assign({ pin: ({ context }) => (context.pin === context.openId ? null : context.openId) }),
-        emit(({ context }) => ({ type: "pin.toggled", what: "chat", id: context.pin })),
-      ],
     },
     // The open chat changed on this device (12): load the new one, or clear to the
     // empty page when nothing is open.

@@ -12,7 +12,7 @@ import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, r
 // the view edits are pure functions, tested at the end.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schemaOf = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"].map((n) => [n, schemaOf(n)]));
+const SCHEMAS = Object.fromEntries(["note.saved", "note.opened", "passage.selected", "note.staged", "note.closed"].map((n) => [n, schemaOf(n)]));
 // Every emit of every test, checked against its schema by the last test.
 const recorded = [];
 
@@ -42,47 +42,45 @@ function editor({
   mint = () => ID,
   subjecting = false,
   staged = false,
-  recall,
-  forget,
   recallTitles,
   rememberTitles,
-  // The note `pins` holds at start; pins: read is answered here so each test's own ask
-  // only answers notes and subject.
-  pinned = null,
+  // The device preference keepOpen, merged into whatever the test's own ask answers for
+  // settings: read, and the note kept in the browser that it reopens.
+  keep = false,
+  kept = null,
   pushRegister,
-  // What session: read answers, answered here like pins; missing, no session is mounted.
+  // What session: read answers; missing, no session is mounted.
   session,
   tryPage = false,
 } = {}) {
   const clock = new SimulatedClock();
   const saved = [];
   const opened = [];
-  const toggled = [];
+  const remembered = [];
   const stagedIds = [];
   const closed = [];
   const asked = (target, name, payload) =>
-    target === "pins"
-      ? Promise.resolve({ note: pinned, chat: null, evaluators: null })
+    target === "settings"
+      ? Promise.resolve(ask(target, name, payload)).then((reply) => ({ ...(reply ?? {}), keepOpen: keep }))
       : target === "session"
         ? Promise.resolve(session ?? { error: "no-answerer" })
         : ask(target, name, payload);
   const actor = createActor(machine, {
-    input: { ask: asked, mint, focus, follows, subjecting, staged, recall, forget, recallTitles, rememberTitles, pushRegister, tryPage },
+    input: { ask: asked, mint, focus, follows, subjecting, staged, recallOpen: () => kept, rememberOpen: (id) => remembered.push(id), recallTitles, rememberTitles, pushRegister, tryPage },
     clock,
   });
   actor.on("note.saved", (e) => saved.push(e));
   actor.on("note.opened", (e) => opened.push(e.id));
-  actor.on("pin.toggled", (e) => toggled.push(e.id));
   actor.on("note.staged", (e) => stagedIds.push(e.id));
   actor.on("note.closed", (e) => closed.push(e.id));
   for (const name of Object.keys(SCHEMAS)) actor.on(name, (value) => recorded.push({ value, schema: SCHEMAS[name] }));
   actor.start();
-  return { actor, clock, saved, opened, toggled, staged: stagedIds, closed };
+  return { actor, clock, saved, opened, remembered, staged: stagedIds, closed };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 // The follow tests chain two async queries (start's list+subject, then a read) and
-// sometimes a second read (a forgotten pin), so drain a few microtask turns to settle.
+// sometimes a second read (a kept note that is gone), so drain a few microtask turns to settle.
 const settle = async () => {
   for (let i = 0; i < 6; i++) await tick();
 };
@@ -398,7 +396,7 @@ test("a deletion of another note leaves the open one alone", async () => {
   assert.equal(s.context.id, ID);
 });
 
-// --- Following the stage and the pin (D7) --------------------------------------
+// --- Following the stage and keeping the open note (D7, 12) --------------------------------------
 
 const SUBJECT = { kind: "book", id: "bookA", title: "Dune" };
 const SUBJECT_B = { kind: "book", id: "bookB", title: "Emma" };
@@ -476,7 +474,7 @@ test("a highlight of the subject is never the note the editor opens", async () =
   assert.equal(actor.getSnapshot().context.id, ID, "the plain note, not the newer highlight");
 });
 
-test("with the attribute on but nothing on the stage, start opens the empty page, not a note that would be pinned", async () => {
+test("with the attribute on but nothing on the stage, start opens the empty page, not a note that would be kept", async () => {
   const list = { notes: [{ id: ID2, title: "n", updatedAt: 20, about: [] }, { id: ID, title: "o", updatedAt: 10, about: [] }] };
   const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID2, null) }, subject: null }) });
   await settle();
@@ -551,12 +549,11 @@ test("a title-only subject change keeps the note on screen and updates what it s
   assert.equal(s.context.titles["book:bookA"], "Dune (2nd ed.)", "the new title is remembered for the About line");
 });
 
-test("a pinned editor keeps its note when the subject changes, only remembering the new subject", async () => {
+test("with keepOpen on the editor keeps its note when the subject changes, only remembering the new subject", async () => {
   const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
-  const { actor } = editor({ subjecting: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
+  const { actor } = editor({ subjecting: true, keep: true, ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }) });
   await settle();
-  actor.send({ type: "_togglePin" });
-  assert.equal(actor.getSnapshot().context.pinned, true);
+  assert.equal(actor.getSnapshot().context.keep, true);
   actor.send({ type: "subject.changed", subject: SUBJECT_B });
   const s = actor.getSnapshot();
   assert.deepEqual(s.value, { editing: "clean" });
@@ -564,7 +561,7 @@ test("a pinned editor keeps its note when the subject changes, only remembering 
   assert.equal(s.context.subject.id, "bookB", "but the new subject is remembered");
 });
 
-test("a pinned editor opens a picked note and stays pinned on it, moving the pin to it", async () => {
+test("with keepOpen on a picked note opens and is the one kept", async () => {
   const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
   const ask = (target, name, payload) => {
     if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
@@ -572,30 +569,39 @@ test("a pinned editor opens a picked note and stays pinned on it, moving the pin
     if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
     return Promise.resolve({});
   };
-  const { actor, toggled } = editor({ subjecting: true, follows: true, ask });
+  const { actor, remembered } = editor({ subjecting: true, follows: true, keep: true, ask });
   await settle();
-  actor.send({ type: "_togglePin" });
 
   actor.send({ type: "note.selected", id: ID2 });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID2, "the pick opened");
-  assert.equal(actor.getSnapshot().context.pinned, true, "the pin stays on the editor");
-  assert.deepEqual(toggled, [ID, ID2], "the pin now holds the picked note");
+  assert.equal(remembered.at(-1), ID2, "the browser keeps the picked note");
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  assert.equal(actor.getSnapshot().context.id, ID2, "and it stays while the stage moves");
 
   actor.send({ type: "load", id: ID });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID, "load opens too");
-  assert.equal(toggled.at(-1), ID);
+  assert.equal(remembered.at(-1), ID);
 });
 
-test("the pin does nothing while the editor holds no note", async () => {
-  const { actor } = editor({ subjecting: true, ask: asking({ subject: SUBJECT }) });
+test("with keepOpen on an editor holding no note still follows the subject", async () => {
+  const list = { notes: [{ id: ID2, title: "about B", updatedAt: 20, about: [LINK_B] }] };
+  const ask = (target, name, payload) => {
+    if (target === "subject" && name === "read") return Promise.resolve({ subject: null });
+    if (name === "list") return Promise.resolve(list);
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_B) });
+    return Promise.resolve({});
+  };
+  const { actor } = editor({ subjecting: true, keep: true, ask });
   await settle();
   assert.equal(actor.getSnapshot().value, "empty");
-  assert.equal(actor.getSnapshot().can({ type: "_togglePin" }), false, "the pin button is disabled with no note");
+  actor.send({ type: "subject.changed", subject: SUBJECT_B });
+  await settle();
+  assert.equal(actor.getSnapshot().context.id, ID2, "nothing was open to keep, so the subject's note opens");
 });
 
-test("unpinning lets the editor follow the next subject change again", async () => {
+test("turning keepOpen off lets the editor follow the next subject change again", async () => {
   const list = {
     notes: [
       { id: ID2, title: "about C", updatedAt: 30, about: [{ kind: "book", id: "bookC" }] },
@@ -608,82 +614,62 @@ test("unpinning lets the editor follow the next subject change again", async () 
     if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, null) });
     return Promise.resolve({});
   };
-  const { actor } = editor({ subjecting: true, follows: true, ask });
+  const { actor } = editor({ subjecting: true, follows: true, keep: true, ask });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID, "started on A's note");
-  actor.send({ type: "_togglePin" });
   actor.send({ type: "subject.changed", subject: SUBJECT_B });
-  assert.equal(actor.getSnapshot().context.id, ID, "pinned: unchanged while B is on the stage");
-  actor.send({ type: "_togglePin" });
+  assert.equal(actor.getSnapshot().context.id, ID, "kept: unchanged while B is on the stage");
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, editors: {}, keepOpen: false });
   actor.send({ type: "subject.changed", subject: SUBJECT_C });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID2, "following resumed: opened C's note");
+  actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, editors: {}, keepOpen: true });
+  actor.send({ type: "subject.changed", subject: SUBJECT });
+  assert.equal(actor.getSnapshot().context.id, ID2, "turned on again, the note stays");
 });
 
-test("deleting the pinned note falls to the empty page and leaves the pin to pins", async () => {
+test("deleting the kept note falls to the empty page, which the browser keeps instead", async () => {
   const list = { notes: [{ id: ID, title: "about A", updatedAt: 10, about: [LINK_A] }] };
-  const { actor, toggled: forgot } = editor({
+  const { actor, remembered } = editor({
     subjecting: true,
+    keep: true,
     ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
   });
   await settle();
-  actor.send({ type: "_togglePin" });
-  assert.deepEqual(forgot, [ID], "the pin went to pins");
+  assert.equal(remembered.at(-1), ID);
   actor.send({ type: "note.deleted", id: ID });
-  const s = actor.getSnapshot();
-  assert.equal(s.value, "empty");
-  assert.equal(s.context.pinned, false);
-  assert.deepEqual(forgot, [ID], "no press, so no pin.toggled: pins hears the empty page instead");
+  assert.equal(actor.getSnapshot().value, "empty");
+  assert.equal(remembered.at(-1), null);
 });
 
-test("the note pins holds reopens and starts pinned, skipping the subject choice", async () => {
+test("with keepOpen on the note kept in the browser reopens, skipping the subject choice", async () => {
   const list = { notes: [{ id: ID2, title: "newest about A", updatedAt: 99, about: [LINK_A] }] };
-  const { actor, toggled } = editor({
+  const { actor } = editor({
     subjecting: true,
-    pinned: ID,
+    keep: true,
+    kept: ID,
     ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
   });
   await settle();
   const s = actor.getSnapshot();
   assert.deepEqual(s.value, { editing: "clean" });
-  assert.equal(s.context.id, ID, "the pinned note, not the newest about the subject");
-  assert.equal(s.context.pinned, true, "restored pinned");
-  assert.deepEqual(toggled, [], "nothing to tell pins");
+  assert.equal(s.context.id, ID, "the kept note, not the newest about the subject");
 });
 
-test("a pin kept under the editor's old key is handed to pins once, cleared, and reopens pinned", async () => {
+test("with keepOpen off the note kept in the browser is not reopened: the subject's newest opens", async () => {
   const list = { notes: [{ id: ID2, title: "newest about A", updatedAt: 99, about: [LINK_A] }] };
-  let forgotten = 0;
-  const { actor, toggled } = editor({
-    subjecting: true,
-    recall: () => ID,
-    forget: () => forgotten++,
-    ask: asking({ list, note: { note: noteAbout(ID, LINK_A) }, subject: SUBJECT }),
-  });
-  await settle();
-  const s = actor.getSnapshot();
-  assert.equal(s.context.id, ID, "the old pin's note");
-  assert.equal(s.context.pinned, true, "restored pinned");
-  assert.deepEqual(toggled, [ID], "pins now holds it");
-  assert.equal(forgotten, 1, "the old key is cleared");
-});
-
-test("a pin in pins wins over the old key, which is still cleared", async () => {
-  const list = { notes: [] };
-  let forgotten = 0;
   const ask = (target, name, payload) => {
     if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
     if (name === "list") return Promise.resolve(list);
-    return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
+    if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
+    return Promise.resolve({});
   };
-  const { actor, toggled } = editor({ subjecting: true, pinned: ID2, recall: () => ID, forget: () => forgotten++, ask });
+  const { actor } = editor({ subjecting: true, kept: ID, ask });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID2);
-  assert.deepEqual(toggled, []);
-  assert.equal(forgotten, 1);
 });
 
-test("a pinned note that is gone is not reopened, and start falls back to the subject's note", async () => {
+test("a kept note that is gone is not reopened, and start falls back to the subject's note", async () => {
   const list = { notes: [{ id: ID2, title: "about A", updatedAt: 20, about: [LINK_A] }] };
   const ask = (target, name, payload) => {
     if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
@@ -691,13 +677,11 @@ test("a pinned note that is gone is not reopened, and start falls back to the su
     if (name === "read") return Promise.resolve(payload.id === ID2 ? { note: noteAbout(ID2, LINK_A) } : { error: "not-found" });
     return Promise.resolve({});
   };
-  const { actor, toggled: forgot } = editor({ subjecting: true, pinned: ID, ask });
+  const { actor } = editor({ subjecting: true, keep: true, kept: ID, ask });
   await settle();
   const s = actor.getSnapshot();
   assert.deepEqual(s.value, { editing: "clean" });
   assert.equal(s.context.id, ID2, "fell back to the newest note about the subject");
-  assert.equal(s.context.pinned, false);
-  assert.deepEqual(forgot, [], "no press, so no pin.toggled: pins hears the note opened instead");
 });
 
 // --- The About line survives a reload, and names a new note (12) ----------------
@@ -715,9 +699,9 @@ const pendingStart = () => {
   return { ask, resolve };
 };
 
-test("a subject.changed before the notes arrive keeps the pin: it reopens pinned", async () => {
+test("a subject.changed before the notes arrive still reopens the kept note", async () => {
   // subject.changed lands while start is still waiting for the notes list. The editor
-  // must not re-follow the new subject and skip the pin restore.
+  // must not re-follow the new subject and skip reopening the kept note.
   let resolveList;
   const gate = new Promise((r) => (resolveList = r));
   const ask = (target, name, payload) => {
@@ -726,7 +710,7 @@ test("a subject.changed before the notes arrive keeps the pin: it reopens pinned
     if (name === "read") return Promise.resolve({ note: noteAbout(payload.id, LINK_A) });
     return Promise.resolve({});
   };
-  const { actor } = editor({ subjecting: true, pinned: ID, ask });
+  const { actor } = editor({ subjecting: true, keep: true, kept: ID, ask });
   actor.send({ type: "subject.changed", subject: SUBJECT_B });
   assert.equal(actor.getSnapshot().value, "starting", "still waiting for the notes");
   assert.equal(actor.getSnapshot().context.subject.id, "bookB", "the new subject was taken");
@@ -734,11 +718,10 @@ test("a subject.changed before the notes arrive keeps the pin: it reopens pinned
   await settle();
   const s = actor.getSnapshot();
   assert.deepEqual(s.value, { editing: "clean" });
-  assert.equal(s.context.id, ID, "the remembered pinned note, not B's note the re-follow would open");
-  assert.equal(s.context.pinned, true, "restored pinned despite the racing subject change");
+  assert.equal(s.context.id, ID, "the kept note, not B's note the re-follow would open");
 });
 
-test("a subject.changed before the notes arrive, no pin, follows the new subject with one list query", async () => {
+test("a subject.changed before the notes arrive, keepOpen off, follows the new subject with one list query", async () => {
   const listCalls = [];
   let resolve;
   const gate = new Promise((r) => (resolve = r));
@@ -761,23 +744,23 @@ test("a subject.changed before the notes arrive, no pin, follows the new subject
   assert.equal(listCalls.length, 1, "the start's list is reused, not asked a second time");
 });
 
-test("a subject.changed while the pinned note is loading keeps it", async () => {
+test("a subject.changed while the kept note is loading keeps it", async () => {
   let resolveRead;
   const list = { notes: [{ id: ID2, title: "about A", updatedAt: 20, about: [LINK_A] }] };
   const ask = (target, name, payload) => {
     if (target === "subject" && name === "read") return Promise.resolve({ subject: SUBJECT });
     if (name === "list") return Promise.resolve(list);
-    if (name === "read") return new Promise((r) => (resolveRead = () => r({ note: noteAbout(payload.id, LINK_A) })));
+    if (target === "notes" && name === "read") return new Promise((r) => (resolveRead = () => r({ note: noteAbout(payload.id, LINK_A) })));
     return Promise.resolve({});
   };
-  const { actor } = editor({ subjecting: true, pinned: ID, ask });
+  const { actor } = editor({ subjecting: true, keep: true, kept: ID, ask });
   await settle();
-  assert.equal(actor.getSnapshot().value, "loading", "the remembered note is loading");
+  assert.equal(actor.getSnapshot().value, "loading", "the kept note is loading");
   actor.send({ type: "subject.changed", subject: SUBJECT_B });
   resolveRead();
   await settle();
   const s = actor.getSnapshot();
-  assert.equal(s.context.id, ID, "the pinned note stayed, though the stage moved");
+  assert.equal(s.context.id, ID, "the kept note stayed, though the stage moved");
   assert.equal(s.context.subject.id, "bookB", "the new subject was still taken");
 });
 
@@ -1149,7 +1132,7 @@ test("a new desk layout tells the view to point the arrow again", async () => {
 
 test("the stage's editor shows what load names and never announces it", async () => {
   const notes = { notes: [{ id: ID2, title: "Newest", updatedAt: 10, about: [] }] };
-  const { actor, opened, toggled } = editor({ staged: true, ask: asking({ list: notes, note: { note: NOTE } }) });
+  const { actor, opened, remembered } = editor({ staged: true, ask: asking({ list: notes, note: { note: NOTE } }) });
   await settle();
   assert.equal(actor.getSnapshot().value, "empty", "it opens nothing by itself");
   actor.send({ type: "load", id: ID });
@@ -1157,22 +1140,19 @@ test("the stage's editor shows what load names and never announces it", async ()
   assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
   assert.equal(actor.getSnapshot().context.body, NOTE.body);
   actor.send({ type: "note.deleted", id: ID });
-  assert.deepEqual(opened, [], "`pins` never takes a note on the stage for the pinned one");
-  assert.deepEqual(toggled, []);
+  assert.deepEqual(opened, [], "a note on the stage is never the panel's open note");
+  assert.deepEqual(remembered, [], "nor the one the browser keeps");
 });
 
-test("the stage's editor ignores the list's selection, the subject and the pin", async () => {
+test("the stage's editor ignores the list's selection and the subject", async () => {
   const { actor } = editor({ staged: true, ask: asking({ note: { note: NOTE } }) });
   await settle();
   actor.send({ type: "load", id: ID });
   await settle();
   actor.send({ type: "note.selected", id: ID2 });
   actor.send({ type: "subject.changed", subject: { kind: "book", id: "b", title: "B" } });
-  actor.send({ type: "_togglePin" });
   actor.send({ type: "_stage" });
-  const { context } = actor.getSnapshot();
-  assert.equal(context.id, ID);
-  assert.equal(context.pinned, false);
+  assert.equal(actor.getSnapshot().context.id, ID);
 });
 
 test(":q or :tabc in the stage's editor closes its tab; elsewhere it does nothing", async () => {
@@ -1299,11 +1279,11 @@ test("moving into a part with no chapter keeps the note", async () => {
   assert.equal(actor.getSnapshot().context.id, ID);
 });
 
-test("a pinned note stays when the chapter changes", async () => {
+test("with keepOpen on the note stays when the chapter changes", async () => {
   const list = { notes: [noteAbout(ID2, { ...LINK_A, ...CH2 }), noteAbout(ID, { ...LINK_A, ...CH4 })] };
-  const { actor } = editor({ subjecting: true, pinned: ID, ask: asking({ list, note: { note: list.notes[1] }, subject: IN_CH4 }) });
+  const { actor } = editor({ subjecting: true, keep: true, ask: asking({ list, note: { note: list.notes[1] }, subject: IN_CH4 }) });
   await settle();
-  assert.equal(actor.getSnapshot().context.pinned, true);
+  assert.equal(actor.getSnapshot().context.id, ID);
   actor.send({ type: "subject.changed", subject: { ...SUBJECT, ...CH2 } });
   await settle();
   assert.equal(actor.getSnapshot().context.id, ID);
@@ -1369,7 +1349,7 @@ test("no button on a highlight, without an open chapter, on another book's note,
   assert.equal(relinkOf({ ...base, about: [{ ...LINK_A, place: PLACE }] }), null, "a highlight");
   assert.equal(chapterLabelOf({ context: { ...base, about: [{ ...LINK_A, place: PLACE }] }, matches: () => false }), null, "a highlight shows no label");
   assert.equal(relinkOf({ ...base, subject: SUBJECT }), null, "the subject has no chapter");
-  assert.equal(relinkOf({ ...base, about: [LINK_B] }), null, "a pinned note about another book");
+  assert.equal(relinkOf({ ...base, about: [LINK_B] }), null, "a kept note about another book");
   assert.deepEqual(chapterLabelOf({ context: { ...base, about: [LINK_B] }, matches: () => false }), { text: "Whole book", linked: false, action: null });
   assert.equal(relinkOf({ ...base, baseVersion: null }), null, "not saved yet");
   const { saved, actor } = editor();

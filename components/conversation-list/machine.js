@@ -73,8 +73,7 @@ const linkTo = (chat, subject) =>
 // subject that has an open chapter; null otherwise, and then the list is `shown` with no
 // switch. `all` is the user's choice, This chapter by default. Under either choice the
 // chats linked to no chapter come first, because they belong to every chapter, then the
-// open chapter's (`here`) or every chapter's (`rest`). The open chat of another chapter
-// is listed apart instead (`apart`).
+// open chapter's (`here`) or every chapter's (`rest`).
 export const chaptered = (context) => {
   const { following, subject, allChapters } = context;
   if (!following || !subject?.chapter) return null;
@@ -86,25 +85,11 @@ export const chaptered = (context) => {
   return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest };
 };
 
-// The open chat, when it is not among the shown chats (12): a pinned chat after the stage
-// moved, or, under This chapter, a chat of another chapter. Only while following a
-// subject; otherwise the open chat is always shown. Its row is the same row as any other;
-// the view sets it apart, as note-list does for a note.
-export const apart = (context) => {
-  const { chats, following, subject, open, handed, allChapters } = context;
-  if (!following || subject == null || open == null) return null;
-  const chat = chats.find((c) => c.id === open);
-  if (!chat || handed?.has(chat.id)) return null;
-  if (!isAbout(chat, subject)) return chat;
-  const other = linkTo(chat, subject)?.chapter;
-  return subject.chapter && !allChapters && other != null && other !== subject.chapter ? chat : null;
-};
-
 // Where a chat placed at a row of the list (p, P, o, O; 12) goes in the whole order the
 // user set: right below or above that row, next to it in every list that shows both, even
 // while a subject or a chapter hides the chats between it and its neighbour on screen.
-// `ids` are the chat rows as shown; from a fixed row (New chat, a chat listed apart) the
-// chat goes above the first shown chat. The chat being moved is never its own neighbour.
+// `ids` are the chat rows as shown; from the fixed New chat row the chat goes above the
+// first shown chat. The chat being moved is never its own neighbour.
 export const placement = ({ chats, cut }, ids, current, below) => {
   const all = chats.filter((c) => c.id !== cut).map((c) => c.id);
   const shownIds = ids.filter((id) => id !== cut);
@@ -115,24 +100,6 @@ export const placement = ({ chats, cut }, ids, current, below) => {
   }
   const i = all.indexOf(shownIds[at]);
   return below ? { after: all[i], before: all[i + 1] ?? null } : { after: all[i - 1] ?? null, before: all[i] };
-};
-
-// The book titles (12), as { id: title }, from books: list then book.changed and
-// book.deleted; null while they cannot be read (no `books` on the page, or no answer).
-export const titles = (reply) =>
-  Array.isArray(reply?.books) ? Object.fromEntries(reply.books.map((b) => [b.id, b.title])) : null;
-
-// The tag on the chat listed apart (12): where it was opened from — its chapter of the
-// subject when that is what hides it ("From Chapter Two"), else the title of the first
-// book among its links ("From Journal"); "Not linked" when it links to no book; "Pinned"
-// while the titles cannot be read, or the book is not among them.
-export const source = (chat, books, subject) => {
-  const chapter = linkTo(chat, subject)?.chapterTitle;
-  if (chapter) return `From ${chapter}`;
-  const book = links(chat).find((l) => l.kind === "book");
-  if (!book) return "Not linked";
-  const title = books?.[book.id];
-  return typeof title === "string" && title ? `From ${title}` : "Pinned";
 };
 
 // A session reply without a userId (no-answerer on a page or in a test without `session`)
@@ -217,10 +184,6 @@ export const machine = setup({
     // Who is signed in (3.4), so the list can ask to sign in instead of offering chats it
     // cannot keep. session.changed is held for this ask until its reply lands.
     readSession: fromPromise(({ input }) => input.ask("session", "read", {})),
-    // The book titles for the row listed apart, only while following, where that row can
-    // be shown; book.changed and book.deleted are held for this ask until its reply lands.
-    readBooks: fromPromise(({ input }) =>
-      input.following ? input.ask("books", "list", {}) : Promise.resolve({})),
     readSubject: fromPromise(({ input }) =>
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
   },
@@ -245,9 +208,8 @@ export const machine = setup({
       "renamed. A moved or new chat goes right below or above the row it was placed at, also " +
       "in the whole order, so chats hidden by the subject or the chapter stay where they were. " +
       "While a subject is on the stage only the chats " +
-      "about it are listed; with no subject every chat is listed. The open chat, when it is not " +
-      "about the subject, such as a pinned chat, is listed apart at the top so the open row is " +
-      "never missing. While the subject has an open chapter (a book's chapter, or the " +
+      "about it are listed, never a chat apart from them, also while the open chat is not about " +
+      "it; with no subject every chat is listed. While the subject has an open chapter (a book's chapter, or the " +
       "Journal's day), a switch above the list reads \"This chapter\" and \"All chapters\" " +
       "(\"This day\" and \"All days\" in the Journal). It starts on This chapter and the " +
       "choice is kept in this browser. The switch is two equal halves across the list in one " +
@@ -255,14 +217,9 @@ export const machine = setup({
       "row reaches it, h and l or the left and right arrows change it, and j or the down arrow " +
       "goes back to the first row. This chapter shows first the chats about the book " +
       "linked to no chapter, under \"Not linked to a chapter\" when there are any, then, under " +
-      "the open chapter's title, its chats; an open chat of another chapter is listed apart. All chapters lists " +
+      "the open chapter's title, its chats. All chapters lists " +
       "every chat about the book. A chat row linked to a chapter names the chapter's title " +
-      "before its second line; a chat linked to the whole book shows nothing extra. That " +
-      "apart row's tag says where the chat is from: \"From \" and its chapter's title when it " +
-      "is in another chapter of the book, else \"From \" and the title of the " +
-      "first book it is about, such as \"From ACT made simple\", following a rename at once; " +
-      "\"Not linked\" when it is about no book; \"Pinned\" while the book titles cannot be " +
-      "read. Deleting waits out the undo " +
+      "before its second line; a chat linked to the whole book shows nothing extra. Deleting waits out the undo " +
       "window, so it can be taken back in one step. It learns which chat is open from " +
       "`conversations` and never decides it. Signed out it shows no rows, not even New chat, " +
       "only \"Sign in to chat.\", and signing in brings the account's chats back without a " +
@@ -274,7 +231,7 @@ export const machine = setup({
     // chats about the subject on the stage, and the chapter switch while the subject has
     // an open chapter.
     attributes: ["subject"],
-    asks: ["conversations: list", "conversations: open", "subject: read", "settings: read", "session: read", "books: list"],
+    asks: ["conversations: list", "conversations: open", "subject: read", "settings: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -294,9 +251,6 @@ export const machine = setup({
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
-    // The book titles, { id: title }, for the tag on the row listed apart; null until
-    // books answers, and while it cannot.
-    books: null,
     // How long a discarded row can be brought back (the --duration-undo token, read in
     // the view and passed in so the machine stays importable in Node). The delete is not a
     // fact until this window ends (delayed delete): stop it and nothing was emitted.
@@ -326,12 +280,6 @@ export const machine = setup({
   // their own and set the subject and the open chat, and the chats reply writes neither,
   // so a slow chats reply cannot re-apply a stale value over an event that arrived first.
   invoke: [
-    {
-      src: "readBooks",
-      input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: { actions: assign({ books: ({ event }) => titles(event.output) }) },
-      onError: { actions: [] },
-    },
     {
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
@@ -447,21 +395,6 @@ export const machine = setup({
     // open read until it lands, so an open that races the start is applied after it.
     "conversation.opened": {
       actions: assign({ open: ({ event }) => event.id ?? null }),
-    },
-    // A book renamed or gone (4.3): the tag on the row listed apart follows at once. Only
-    // once the titles were read, so a partial map never stands in for them.
-    "book.changed": {
-      guard: ({ context }) => context.books != null,
-      actions: assign({ books: ({ context, event }) => ({ ...context.books, [event.id]: event.title }) }),
-    },
-    "book.deleted": {
-      guard: ({ context }) => context.books != null,
-      actions: assign({
-        books: ({ context, event }) => {
-          const { [event.id]: _, ...rest } = context.books;
-          return rest;
-        },
-      }),
     },
     // The stage moved (4.3): the subject changed, so a different set of chats is about it.
     // Held for us until the starting subject: read reply lands. Ignored when not

@@ -103,7 +103,7 @@ test("a closed day and a chat whose first answer finished are written through ll
     conversations: {
       session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
       subject: () => Promise.resolve({ subject: null }),
-      pins: () => Promise.resolve({}),
+      settings: () => Promise.resolve({}),
       list: () => Promise.resolve({ conversations: [chat], tools: { tools: {}, approval: "auto" } }),
       read: () => Promise.resolve(chat),
       saveChat: (id, body) => (saved.push({ id, body }), Promise.resolve({ updatedAt: 1000 })),

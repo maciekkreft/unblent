@@ -1,7 +1,7 @@
 import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnChild, stopChild } from "xstate";
 
 // The view component for editing one note (3.1): owns only its own UI state — the
-// draft, which state it is in, whether it is pinned — and points at `notes`, which
+// draft, which state it is in — and points at `notes`, which
 // owns the fact, and at `subject`, which owns what is on the stage. On start it asks
 // notes: list and reopens a note, or takes a note by the load command or, when it
 // carries `follows`, by note.selected from the list (both ask notes: read); it follows
@@ -9,15 +9,15 @@ import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnCh
 // also tells which highlights the source links point at still exist. It emits
 // note.saved at a short throttle while the user
 // types, and on blur. With the `subject` attribute it follows the stage (12): it opens
-// the newest note about the subject, re-follows when the subject changes, and a pin
-// stops the re-following, so a change on the stage never moves the note on screen; a
-// pick by the user always opens. It announces the note
+// the newest note about the subject and re-follows when the subject changes, except while
+// the device preference keepOpen (12, `settings`) is on, which keeps the note on screen
+// whatever comes on the stage; a pick by the user always opens. It announces the note
 // it shows with note.opened whenever its id changes (6.4). The view (view.js) is a
 // CodeMirror 6 document with three levels (Title/Heading/Subheading) like Notes.app,
 // and Vim when the "Vim keys" preference is on (12). A note is markdown on the wire and
 // marker-free in the view; parseBody/serialize are the one place the two forms meet,
 // and both are pure, so they and titleOf are tested in Node. Everything with a side
-// effect — the queries, minting an id, focusing the input, the pin store — arrives
+// effect — the queries, minting an id, focusing the input, the open note's store — arrives
 // through input, so this stays a pure definition importable in Node; it imports no
 // CodeMirror (that lives in view.js, the browser-only entry). It asks session: read and
 // follows session.changed only for whether anyone is signed in.
@@ -100,9 +100,9 @@ const ofSubject = (note, subject) =>
 // Which note to open from a list reply (D7): the newest note for the subject (ofSubject;
 // the reply is newest first), or — for an editor that does not follow the stage — the
 // newest note overall. Null when there is none, so the editor lands on the empty page. A
-// following editor with nothing on the stage opens none: the note it opens is pinned
-// (`pins` starts every pin on), and the subject is often not known yet at a reload, so a
-// note chosen then would stay open in place of the subject's.
+// following editor with nothing on the stage opens none: the subject is often not known
+// yet at a reload, and with keepOpen on a note chosen then would stay open in place of
+// the subject's.
 const pickId = (notes, subject, subjecting) => {
   const list = Array.isArray(notes) ? notes : [];
   if (subject == null) return subjecting ? null : list[0]?.id ?? null;
@@ -130,7 +130,7 @@ const withTitle = (titles, subject) => {
 // What the About line names (12): the open note's first link, by a title this browser
 // has seen; else, while following the subject, the subject on the stage while the
 // editor holds a new note, because that is what the note is linked to at its first save. Never while
-// a note may still arrive (starting, loading), so a pinned note's line does not show
+// a note may still arrive (starting, loading), so a kept note's line does not show
 // the stage's book first. Pure, so it is tested in Node and the view only renders it.
 export function aboutTitleOf(snapshot) {
   const { about, titles, subjecting, subject, baseVersion } = snapshot.context;
@@ -256,10 +256,13 @@ const syncOfRead = watchSync((event) => event.output?.note);
 // Whether the open note's change has waited too long for the server (NOT_SYNCED_MS).
 export const notSynced = (context) => context.id != null && context.unsynced.includes(context.id);
 
-// The note shown is announced (6.4) by every editor but the stage's: `pins` takes the
-// announced note as the pinned one, and a note on the stage is never the panel's.
+// The note shown is announced (6.4) by every editor but the stage's, since a note on the
+// stage is never the panel's. The panel's editor also keeps it in the browser (3.1), so
+// with keepOpen on a reload reopens it.
 const announceOpened = (context, enqueue, id) => {
-  if (!context.staged) enqueue.emit({ type: "note.opened", id });
+  if (context.staged) return;
+  enqueue.emit({ type: "note.opened", id });
+  if (context.subjecting) enqueue(() => context.rememberOpen?.(id));
 };
 
 // Whether the open note has a tab on a stage, from the stages' tabs.shown. Ids are
@@ -324,19 +327,20 @@ export const machine = setup({
     // The starting picture (4.3): every note, and — only while following the stage —
     // the current subject. subject.changed that races the read is held for us until the
     // reply lands (subject: read supersededBy), so a change is applied after it, in order.
-    // The pin too, from `pins`, while following: pins.changed is held for us until that
-    // reply lands (pins: read supersededBy).
+    // Whether the open note is kept (keepOpen) too, while following, so the choice below
+    // knows whether to reopen the note kept in the browser; settings.changed is held for
+    // us until that reply lands (settings: read supersededBy).
     start: fromPromise(async ({ input }) => {
-      const [list, subject, pins] = await Promise.all([
+      const [list, subject, settings] = await Promise.all([
         input.ask("notes", "list", {}),
         input.subjecting ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null }),
-        input.subjecting ? input.ask("pins", "read", {}) : Promise.resolve({}),
+        input.subjecting ? input.ask("settings", "read", {}) : Promise.resolve({}),
       ]);
       return {
         notes: list?.notes ?? [],
         known: Array.isArray(list?.notes) ? list.notes.map((n) => n.id) : null,
         subject: subject?.subject ?? null,
-        pin: typeof pins?.note === "string" ? pins.note : null,
+        keep: settings?.keepOpen === true,
       };
     }),
     list: fromPromise(({ input }) => input.ask("notes", "list", {})),
@@ -358,9 +362,8 @@ export const machine = setup({
     // so a pause here is not a change: no note.saved, no new version. The title is
     // derived from the text, so equal text is equal title.
     unchanged: ({ context }) => context.sent != null && context.sent.body === context.body,
-    // A remembered pin (D10): a note to reopen and start pinned, skipping the subject
-    // choice.
-    hasPin: ({ context }) => context.restoreId != null,
+    // A kept note to reopen (keepOpen), skipping the subject choice.
+    hasRestore: ({ context }) => context.restoreId != null,
     // A keystroke landed while the start was still waiting for the subject.
     typedAhead: ({ context }) => context.id != null,
   },
@@ -380,7 +383,7 @@ export const machine = setup({
       enqueue.emit(savedEvent(context));
     }),
     // Take the subject the stage holds, from the start reply or from subject.changed, and
-    // keep its title in the browser (3.1) so the About line can name a pinned note's
+    // keep its title in the browser (3.1) so the About line can name a kept note's
     // book after a reload. One action, so the table in context and the stored one cannot
     // drift apart.
     takeSubject: enqueueActions(({ context, event, enqueue }) => {
@@ -400,24 +403,14 @@ export const machine = setup({
       enqueue.assign({ subject, titles });
       if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
     }),
-    // A pick opens its note even while pinned: the pin belongs to the editor, not to one
-    // note, so it moves to the note picked and survives a reload there.
-    open: enqueueActions(({ context, event, enqueue }) => {
-      enqueue.assign({ id: event.id, body: "", baseVersion: null, sent: null, about: [] });
-      if (context.pinned) enqueue.emit({ type: "pin.toggled", what: "note", id: event.id });
-    }),
-    // The pin the start found: `pins` holds it, or else the note this editor kept under
-    // its own key before `pins` existed, which is handed to `pins` once and forgotten
-    // here. A pins.changed that arrived first is newer than the reply and wins.
-    takeStartPin: enqueueActions(({ context, event, enqueue }) => {
-      const legacy = context.legacyPin;
-      if (legacy != null) enqueue(() => context.forget?.());
-      if (context.pinsObserved) return;
-      if (event.output.pin != null) enqueue.assign({ restoreId: event.output.pin });
-      else if (legacy != null) {
-        enqueue.assign({ restoreId: legacy });
-        enqueue.emit({ type: "pin.toggled", what: "note", id: legacy });
-      }
+    // A pick opens its note, also while keepOpen is on.
+    open: assign(({ event }) => ({ id: event.id, body: "", baseVersion: null, sent: null, about: [] })),
+    // keepOpen from the start reply, unless a settings.changed came first and is newer;
+    // while it is on, the note kept in the browser reopens.
+    takeStartKeep: enqueueActions(({ context, event, enqueue }) => {
+      const keep = context.keepObserved ? context.keep : event.output.keep;
+      enqueue.assign({ keep });
+      if (keep && context.kept != null) enqueue.assign({ restoreId: context.kept });
     }),
   },
 }).createMachine({
@@ -439,7 +432,7 @@ export const machine = setup({
       "(the Journal's open day), it opens the most recently edited note linked to that chapter, " +
       "never a note linked to the whole book, and the empty page when the chapter has none; " +
       "turning to another chapter opens that chapter's note the same way, except while the " +
-      "note is pinned or the keyboard is in it, and the next chapter change after the keyboard " +
+      "note is kept or the keyboard is in it, and the next chapter change after the keyboard " +
       "has left it follows again. Moving into a part with no chapter keeps the note. A new note is linked to " +
       "the subject at its first save, and to the chapter open in it (the Journal's open day), " +
       "the About line names the book, and plain muted text under it names the chapter the note " +
@@ -450,11 +443,12 @@ export const machine = setup({
       "linked to the open chapter, which links it to the whole book, or \"Link to\" and the " +
       "open chapter's title otherwise, which also moves it from another chapter; the label " +
       "turns at once, and pressing again reverses it. A keystroke made " +
-      "before the subject is known waits for it. The pin is on unless the user turns it off, and " +
-      "while it is on the editor stays on its note when the subject changes; picking another " +
-      "note still opens it and the pin stays on, now on that note; turned off, the editor " +
-      "follows the subject. The pin is kept by `pins` and the titles of subjects seen on this device, so " +
-      "both survive a reload. It announces the note it shows, or none for the " +
+      "before the subject is known waits for it. While the device preference \"Keep the open " +
+      "note and chat when the stage changes\" (`settings`) is on, the editor stays on its note " +
+      "when the subject changes and picking another note opens it; while it is off, as it is at " +
+      "first, the editor follows the subject. The open note and the titles of subjects seen are " +
+      "kept in this browser, so with the preference on the note comes back after a reload. It " +
+      "announces the note it shows, or none for the " +
       "empty page, so the list and `notes` know which note is open; a highlight is never opened " +
       "here. With Vim keys on, p pastes text or a link copied in the reader with Vim keys, paragraphs kept. A source link to a highlight, pasted from the reader's Copy link (or with p after " +
       "the reader's y while Vim keys is on), is drawn as one tag, the link icon and the start of " +
@@ -463,12 +457,12 @@ export const machine = setup({
       "and struck through, and opens nothing, as soon as its highlight is removed, or at once " +
       "when the highlight was already gone as the note opens, and turns back when the removal " +
       "is undone. With `subject` the " +
-      "header also has Open on stage, before the pin (and `:tab split` or `:tab sp` while Vim " +
+      "header also has Open on stage (and `:tab split` or `:tab sp` while Vim " +
       "keys is on), which shows the note on the stage as a tab of its own; the button is " +
       "accent while the note has a tab there, its arrow points towards the stage, also after the " +
       "desk moves its dock, and it is " +
       "disabled while the editor holds no note. With `stage` it is the editor the stage shows " +
-      "for a note tab: it follows no subject, no selection and no pin, has no header, never " +
+      "for a note tab: it follows no subject and no selection, is never kept, has no header, never " +
       "announces its note, shows the note the stage names by `load`, and `:q`, `:tabc` or " +
       "`:tabclose` closes the tab without changing the note. Signed out it shows only \"Sign " +
       "in to see your notes.\" and nothing of the note it holds, also when it was in front " +
@@ -478,9 +472,9 @@ export const machine = setup({
       "the accent color, a markdown link showing only its label except on the line being " +
       "edited; a click on it, or gx with Vim keys on, opens it in a new browser tab.",
     kind: "view",
-    emits: ["note.saved", "note.opened", "pin.toggled", "passage.selected", "note.staged", "note.closed"],
+    emits: ["note.saved", "note.opened", "passage.selected", "note.staged", "note.closed"],
     attributes: ["height", "follows", "subject", "stage"],
-    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "pins: read", "session: read"],
+    asks: ["notes: list", "notes: read", "subject: read", "settings: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -491,7 +485,7 @@ export const machine = setup({
     // container tells one editor to load by command instead.
     follows: input.follows,
     // The `subject` attribute (D5): present means follow the stage — open the note about
-    // it, re-follow on a change, and offer the pin. Off is exactly today's behaviour.
+    // it and re-follow on a change. Off is exactly today's behaviour.
     subjecting: Boolean(input.subjecting),
     // The `stage` attribute: the editor a stage shows for a note tab, told what to show by
     // `load` alone.
@@ -502,14 +496,17 @@ export const machine = setup({
     // How many desk layouts it has seen (dock.changed): a dock moved without changing size
     // fires no resize, so this is what tells the view to point the arrow again.
     layouts: 0,
-    // The note pinned under this editor's own key before `pins` owned the pin, read
-    // through input so the machine stays importable in Node; `forget` clears that key.
-    forget: input.forget,
-    legacyPin: input.subjecting ? input.recall?.() ?? null : null,
-    // The pinned note to reopen at start, from `pins` (D10).
+    // The note this editor last showed, kept in the browser (3.1) through input so the
+    // machine stays importable in Node; reopened at start while keepOpen is on.
+    rememberOpen: input.rememberOpen,
+    kept: input.subjecting ? input.recallOpen?.() ?? null : null,
+    // The kept note to reopen at start.
     restoreId: null,
-    // Whether pins.changed arrived before the start reply, which is then the older picture.
-    pinsObserved: false,
+    // The device preference keepOpen (12, `settings`): the note stays when the stage
+    // changes. Whether settings.changed arrived before the start reply, which is then the
+    // older picture.
+    keep: false,
+    keepObserved: false,
     id: null,
     body: "",
     baseVersion: null,
@@ -525,7 +522,7 @@ export const machine = setup({
     subjectObserved: false,
     // Titles of subjects this browser has seen, so the About line can name a link (D7,
     // D9): recalled from the view's own storage (3.1) and written back through
-    // rememberTitles, like the pin.
+    // rememberTitles, like the open note.
     rememberTitles: input.rememberTitles,
     titles: (input.subjecting ? input.recallTitles?.() : null) ?? {},
     // The "Vim keys" device preference (12), owned by `settings`: off until it says
@@ -533,8 +530,6 @@ export const machine = setup({
     vimKeys: false,
     // Whether the keyboard is in the editor (UI state), from the view's focus and blur.
     focused: false,
-    // Whether the note on screen is pinned (D7): UI state, remembered across reloads.
-    pinned: false,
     // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     // Source links a follow found gone (UI state): their tags are drawn removed.
@@ -543,10 +538,10 @@ export const machine = setup({
     unsynced: [],
     // The ids of every note notes lists, for the source links' tags; null until it answers.
     notes: null,
-    // Whether a pin restore is in flight, so a successful load starts pinned and a
-    // not-found one forgets the pin (D10).
+    // Whether a kept note's reopening is in flight, so a not-found one chooses from the
+    // start picture instead.
     restoring: false,
-    // The notes fetched at start, kept so a forgotten pin can choose from the same
+    // The notes fetched at start, kept so a kept note that is gone can choose from the same
     // picture without a second query.
     startNotes: [],
     // Whether someone is signed in (3.4): null until session answers.
@@ -582,7 +577,7 @@ export const machine = setup({
       guard: ({ context, event }) => !context.unsynced.includes(event.id),
       actions: assign({ unsynced: ({ context, event }) => [...context.unsynced, event.id] }),
     },
-    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
+    "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true, keep: ({ event }) => event.keepOpen === true, keepObserved: true }) },
     // A command addressing this instance (4.4).
     load: { target: ".loading", actions: "open" },
     // The list's gesture (4.3, fifth rule), taken only when this editor follows the
@@ -643,41 +638,26 @@ export const machine = setup({
         }),
       },
     ],
-    // The user pinned or unpinned (D7): the gesture goes to `pins` (4.3, fifth rule); the
-    // button turns at once and pins.changed confirms it. Guarded so the button does
-    // nothing while the editor holds no note.
-    _togglePin: {
-      guard: ({ context }) => context.subjecting && context.id != null,
-      actions: [
-        assign({ pinned: ({ context }) => !context.pinned }),
-        emit(({ context }) => ({ type: "pin.toggled", what: "note", id: context.pinned ? context.id : null })),
-      ],
-    },
-    // `pins`' news (4.3, fourth rule): the editor is pinned while `pins` holds its note.
-    "pins.changed": {
-      guard: ({ context }) => context.subjecting,
-      actions: assign({ pinned: ({ context, event }) => event.note != null && event.note === context.id, pinsObserved: true }),
-    },
     // The stage moved (4.3): a different subject is on it. Held for us until the starting
     // subject: read reply lands (subject: read supersededBy), so it is never lost and
     // never applied before the picture it supersedes. Ignored when not following.
     "subject.changed": [
       {
-        // Pinned (or a remembered pin's note still loading), the same thing with a new
+        // Kept (keepOpen with a note open, or a kept note still loading), the same thing with a new
         // title only, or another chapter while the user is in the note: take the subject
         // and its title but keep the note on screen (D7). The note in the user's hands is
         // never swapped from under the keyboard; the next chapter change after the keyboard
         // has left it re-follows.
         guard: ({ context, event }) =>
           context.subjecting &&
-          (context.pinned ||
+          ((context.keep && context.id != null) ||
             context.restoring ||
             (sameThing(context.subject, event.subject) && !otherChapter(context.subject, event.subject)) ||
             (otherChapter(context.subject, event.subject) && context.focused)),
         actions: "takeSubject",
       },
       {
-        // A different thing on the stage, or another chapter of it, not pinned: save a
+        // A different thing on the stage, or another chapter of it, not kept: save a
         // dirty draft (its links are the old subject's, still in context here), take the
         // new subject, and re-follow.
         guard: ({ context }) => context.subjecting,
@@ -696,14 +676,13 @@ export const machine = setup({
       },
     ],
     // The fact's news that the open note is gone (4.3, fourth rule): fall back to the
-    // empty page, where a keystroke starts a fresh note. `pins` lets go of the note when
-    // the empty page is announced; pin.toggled is the user's press alone, so it is not
-    // sent here. A deletion of another note only greys the tags that link to it.
+    // empty page, where a keystroke starts a fresh note. A deletion of another note only
+    // greys the tags that link to it.
     "note.deleted": [
       {
         guard: ({ context, event }) => event.id === context.id,
         target: ".empty",
-        actions: [trackDeleted, assign({ id: null, body: "", baseVersion: null, sent: null, about: [], pinned: false })],
+        actions: [trackDeleted, assign({ id: null, body: "", baseVersion: null, sent: null, about: [] })],
       },
       { actions: trackDeleted },
     ],
@@ -748,10 +727,10 @@ export const machine = setup({
         onDone: [
           // The user typed while following the stage: the subject is known now, so the
           // note starts its throttle here and its first save carries the link (12).
-          { guard: "typedAhead", target: "editing.dirty", actions: [takeKnown, "takeStartSubject"] },
+          { guard: "typedAhead", target: "editing.dirty", actions: [takeKnown, "takeStartSubject", "takeStartKeep"] },
           {
             target: "choosing",
-            actions: [takeKnown, "takeStartSubject", "takeStartPin", assign({ startNotes: ({ event }) => event.output.notes })],
+            actions: [takeKnown, "takeStartSubject", "takeStartKeep", assign({ startNotes: ({ event }) => event.output.notes })],
           },
         ],
         onError: [
@@ -778,18 +757,13 @@ export const machine = setup({
           mintAndType,
         ],
         // The stage moved before the notes arrived: take the subject and stay, so
-        // `choosing` still runs — a remembered pin is restored, and the note chosen is
+        // `choosing` still runs — a kept note is reopened, and the note chosen is
         // about the subject now on the stage. Tried before the root handler, which
         // would re-follow and skip the choice.
         "subject.changed": { guard: ({ context }) => context.subjecting, actions: "takeSubject" },
-        // A pin set or cleared before the notes arrived: the choice below honours it.
-        "pins.changed": {
-          guard: ({ context }) => context.subjecting,
-          actions: assign({ restoreId: ({ event }) => event.note ?? null, pinsObserved: true }),
-        },
       },
     },
-    // The start replies are in: a remembered pin reopens its note (D10), else the newest
+    // The start replies are in: a kept note reopens (keepOpen), else the newest
     // note about the subject, else the empty page. A synchronous choice, so a keystroke
     // never lands here.
     choosing: {
@@ -797,7 +771,7 @@ export const machine = setup({
         // The stage's editor opens only what `load` names.
         { guard: ({ context }) => context.staged, target: "empty" },
         {
-          guard: "hasPin",
+          guard: "hasRestore",
           target: "loading",
           actions: assign({ id: ({ context }) => context.restoreId, restoring: true }),
         },
@@ -844,15 +818,13 @@ export const machine = setup({
                 baseVersion: ({ event }) => event.output.note.version,
                 sent: ({ event }) => ({ body: event.output.note.body }),
                 about: ({ event }) => links(event.output.note.about),
-                // A pin restore that found its note starts pinned (D10).
-                pinned: ({ context }) => context.restoring || context.pinned,
                 restoring: false,
               }),
             ],
           },
           {
-            // A remembered pin whose note is gone (D10): choose from the start picture as
-            // an unpinned editor would; `pins` takes the note that choice announces.
+            // A kept note that is gone: choose from the start picture as if keepOpen were
+            // off.
             guard: ({ context, event }) => context.restoring && event.output.error === "not-found",
             target: "choosing",
             actions: assign({ restoreId: null, restoring: false, id: null }),
@@ -863,7 +835,7 @@ export const machine = setup({
         onError: "failed",
       },
     },
-    // The subject changed under a following, unpinned editor (D7): fetch the notes
+    // The subject changed under a following editor that does not keep its note: fetch the notes
     // afresh and open the newest about the new subject, else the empty page. A keystroke
     // here is the user's answer, the same as at start.
     refollowing: {

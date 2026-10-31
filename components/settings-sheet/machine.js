@@ -160,7 +160,7 @@ const chosen = (context, event) => {
 // Choosing the further evaluator of a box, or None (null) to drop it again.
 const alsoChosen = (context, event) => ({ ...shownBox(context, event.field), also: alsoOf(evaluatorOf(context, event.evaluator)) });
 
-const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, editors: {} };
+const DEFAULT = { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, vimKeys: false, keepOpen: false, editors: {} };
 
 const adopt = (event) => ({
   nav: event.nav.map((r) => ({ ...r })),
@@ -168,6 +168,7 @@ const adopt = (event) => ({
   layoutSwitchHidden: event.layoutSwitchHidden,
   arranging: event.arranging,
   vimKeys: event.vimKeys === true,
+  keepOpen: event.keepOpen === true,
   editors: { ...(event.editors ?? {}) },
 });
 
@@ -238,7 +239,9 @@ export const machine = setup({
   meta: {
     description:
       "The Settings sheet, in two sections. This device holds the preferences `settings` keeps: " +
-      "page order and visibility, the switches, and Vim keys. Your account holds the chat " +
+      "page order and visibility, the switches, Vim keys, and \"Keep the open note and chat " +
+      "when the stage changes\", off at first, so the Notes and Chats panels follow what is on " +
+      "the stage until the user turns it on. Your account holds the chat " +
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps. Every change is saved at " +
       "once by the fact that owns it. Your account also holds the Jev key, which `llm` keeps. " +
@@ -524,6 +527,9 @@ export const machine = setup({
         },
         _toggleVim: {
           actions: emit(({ context }) => edited({ ...context.settings, vimKeys: !context.settings.vimKeys })),
+        },
+        _toggleKeep: {
+          actions: emit(({ context }) => edited({ ...context.settings, keepOpen: !context.settings.keepOpen })),
         },
         // Choose the implementation for a swappable role (3.6, 7.3): the whole
         // settings with this role's choice set, like every other gesture here.

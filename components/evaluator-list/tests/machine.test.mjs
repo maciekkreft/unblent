@@ -72,7 +72,7 @@ test("every evaluator of the account is listed, whichever book it is kept with, 
   assert.ok(actor.getSnapshot().matches("ready"));
   assert.deepEqual(rows(ctx().evaluators).map((e) => e.id).sort(), [id(1), id(2), id(4)]);
   assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{}]);
-  assert.deepEqual(asked.filter(([t]) => t === "subject" || t === "pins" || t === "books"), [], "no book to follow and no pin");
+  assert.deepEqual(asked.filter(([t]) => t === "subject" || t === "books"), [], "no book to follow");
 });
 
 test("the Vim keys preference is read at start and followed after; without settings it is off", async () => {

@@ -17,7 +17,7 @@ test("a first visit lists the account's chats once the session is known", async 
     conversations: {
       session: () => Promise.resolve({ userId, registrationOpen: false }),
       subject: () => Promise.resolve({ subject: null }),
-      pins: () => Promise.resolve({ note: null, chat: null, evaluators: null }),
+      settings: () => Promise.resolve({}),
       complete: (request) => Promise.resolve({ id: request.id }),
       contracts: () => Promise.resolve({ queries: [] }),
       askTool: () => Promise.resolve({}),
@@ -58,7 +58,7 @@ test("a move goes through conversations, and a handed-off delete is settled by t
     conversations: {
       session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
       subject: () => Promise.resolve({ subject: null }),
-      pins: () => Promise.resolve({ note: null, chat: null, evaluators: null }),
+      settings: () => Promise.resolve({}),
       complete: (request) => Promise.resolve({ id: request.id }),
       contracts: () => Promise.resolve({ queries: [] }),
       askTool: () => Promise.resolve({}),

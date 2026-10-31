@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { shown, apart } from "../machine.js";
+import { shown } from "../machine.js";
 
 // The kit (10): note-list with its partners, real machines on the real bus — `notes`
 // (whose notes it lists and whose tombstones remove a row), `note-editor` (which says
@@ -54,11 +54,12 @@ const stage = (openId = null) => (target, name, payload) => {
 let minted = 0;
 const mint = () => `01ARZ3NDEKTSV4RRFFQ69G5M${String(minted++ % 100).padStart(2, "0")}`;
 
-async function start({ notes = [], openId = null, slow = 0, notesInput = {}, names = ["notes", "subject", "note-list", "note-editor"] } = {}) {
+async function start({ notes = [], openId = null, slow = 0, notesInput = {}, keepOpen = false, names = ["notes", "subject", "settings", "note-list", "note-editor"] } = {}) {
   const store = notesStore(notes, { slow });
   const wired = await wire(names, {
     notes: { store, now: (() => { let n = 100; return () => ++n; })(), api: null, revoke: () => {}, ...notesInput },
     subject: { ask: stage(openId) },
+    settings: { product: true, stored: { workshop: null, product: JSON.stringify({ keepOpen }), profile: null }, save: { workshop: () => {}, product: () => {}, profile: () => {} } },
     "note-list": { mint, undoMs: 20, following: true, highlightsOpen: false },
     "notice-stack": { fadeMs: 30 },
     "note-editor": {
@@ -66,8 +67,8 @@ async function start({ notes = [], openId = null, slow = 0, notesInput = {}, nam
       focus: () => {},
       follows: true,
       subjecting: true,
-      recall: () => null,
-      forget: () => {},
+      recallOpen: () => null,
+      rememberOpen: () => {},
       recallTitles: () => ({}),
       rememberTitles: () => {},
     },
@@ -83,47 +84,46 @@ async function start({ notes = [], openId = null, slow = 0, notesInput = {}, nam
 const same = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
 // The list shows only the notes about the book on the stage, and the editor opens that
-// book's note, following the stage; a pinned editor keeps its note, which the list sets
-// apart as the open row, and a pick while pinned moves the pin with no notice (12).
-test("the list shows the subject's notes, following the stage, and a pinned note is set apart", async () => {
-  const h = await start({ notes: [ABOUT_ONE, ABOUT_TWO] });
+// book's note, following the stage; with keepOpen on the editor keeps its note, which
+// the list does not show apart, and a pick opens with no notice (12).
+test("the list shows the subject's notes, following the stage, and a kept note is not listed apart", async () => {
+  const h = await start({ notes: [ABOUT_ONE, ABOUT_TWO], keepOpen: true });
   try {
     // No book open: no subject to scope to, so both notes show.
     await until(() => same(h.shownBodies(), ["About one", "About two"]));
 
-    h.open(BOOK_ONE);
-    await until(() => same(h.shownBodies(), ["About one"]) && h.editor().body === "About one");
+    // Nothing was open to keep, so the first book's note opens.
     h.open(BOOK_TWO);
     await until(() => same(h.shownBodies(), ["About two"]) && h.editor().body === "About two");
 
-    // Pin: the stage moves, the note stays, and the list holds it apart as the open row.
-    h.actors["note-editor"].send({ type: "_togglePin" });
-    assert.equal(h.editor().pinned, true);
+    // Kept: the stage moves, the note stays, and the list shows only the new book's notes.
     h.open(BOOK_ONE);
     await until(() => same(h.shownBodies(), ["About one"]));
-    await until(() => apart(h.list())?.id === NOTE_TWO);
-    assert.equal(h.editor().body, "About two", "the pinned note did not follow the stage");
-    assert.equal(h.list().open, NOTE_TWO, "the apart row is the open one");
+    assert.equal(h.editor().body, "About two", "the kept note did not follow the stage");
+    assert.equal(h.list().open, NOTE_TWO);
 
-    // A pick while pinned opens the picked note and keeps the pin on, now on it; the
-    // stage's own note is open, so nothing is apart, and nothing conflicted.
+    // A pick opens the picked note, and nothing conflicted.
     h.actors["note-list"].send({ type: "_pick", id: NOTE_ONE });
     await until(() => h.editor().body === "About one");
-    assert.equal(h.editor().pinned, true, "the pin stays on after a pick");
-    await until(() => apart(h.list()) == null);
     assert.equal(h.emitted("note.conflicted").length, 0, "no notice");
 
     h.open(BOOK_TWO);
     await until(() => same(h.shownBodies(), ["About two"]));
-    assert.equal(h.editor().body, "About one", "the pinned note did not follow the stage");
+    assert.equal(h.editor().body, "About one", "the kept note did not follow the stage");
+  } finally {
+    h.unwire();
+  }
+});
 
-    // Unpinned, the next change of stage is followed again.
-    h.actors["note-editor"].send({ type: "_togglePin" });
-    assert.equal(h.editor().pinned, false);
+test("with keepOpen off, as at first, the editor follows every change of stage", async () => {
+  const h = await start({ notes: [ABOUT_ONE, ABOUT_TWO] });
+  try {
     h.open(BOOK_ONE);
-    await until(() => same(h.shownBodies(), ["About one"]));
+    await until(() => h.editor().body === "About one");
     h.open(BOOK_TWO);
-    await until(() => h.editor().body === "About two");
+    await until(() => same(h.shownBodies(), ["About two"]) && h.editor().body === "About two");
+    h.open(BOOK_ONE);
+    await until(() => h.editor().body === "About one");
   } finally {
     h.unwire();
   }

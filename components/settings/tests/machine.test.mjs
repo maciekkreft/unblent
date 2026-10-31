@@ -57,6 +57,7 @@ test("garbage parses to defaults, arranging on", () => {
     layoutSwitchHidden: false,
     arranging: true,
     vimKeys: false,
+    keepOpen: false,
     editors: {},
     profile: "workshop",
   });
@@ -169,6 +170,7 @@ test("the product page starts in the product profile with its own defaults", () 
     layoutSwitchHidden: true,
     arranging: false,
     vimKeys: false,
+    keepOpen: false,
     editors: {},
     profile: "product",
   });
@@ -242,6 +244,17 @@ test("vimKeys is stored and announced; a repeat emits nothing", () => {
   edit(actor, { vimKeys: false });
   assert.equal(read(actor).vimKeys, false);
   assert.equal(emitted.length, 2);
+});
+
+test("keepOpen is off at first, stored and announced, and survives a reload", () => {
+  const { actor, saved, emitted } = start(null, { product: true });
+  assert.equal(read(actor).keepOpen, false, "the open note and chat follow the stage until the user says otherwise");
+  edit(actor, { keepOpen: true });
+  assert.equal(read(actor).keepOpen, true);
+  assert.equal(emitted.at(-1).keepOpen, true);
+  assert.equal(JSON.parse(saved.product.at(-1)).keepOpen, true);
+  assert.equal(read(start(JSON.stringify({ keepOpen: true })).actor).keepOpen, true);
+  assert.equal(read(start(JSON.stringify({ keepOpen: "yes" })).actor).keepOpen, false);
 });
 
 test("a stored vimKeys survives a reload; anything but true is off", () => {

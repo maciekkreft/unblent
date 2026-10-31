@@ -13,7 +13,8 @@ import { setup, fromPromise, fromCallback, enqueueActions } from "xstate";
 // loop (7.7): a tool is one of the system's own queries, opted in by its owner, so it
 // asks `llm: complete`, `catalog: contracts` for the tool list, and any marked query
 // through the `*: tool` wildcard. It follows `subject.changed` to open the right chat
-// (12), `pins.changed` to keep a pinned chat open, and `session.changed` to sync. Everything with a side effect — the network, the
+// (12), `settings.changed` for whether the open chat is kept when the stage changes, and
+// `session.changed` to sync. Everything with a side effect — the network, the
 // store, the clock, the id source — arrives through `input`, so this stays a pure
 // definition importable in Node.
 
@@ -1078,12 +1079,12 @@ const onSubjectChanged = (context, event, enqueue, self) => {
   if (sameSubject(sub, context.lastSubject)) return;
   const settling = context.lastSubject == null;
   context.lastSubject = sub;
-  // A pinned open chat stays whatever comes on the stage (12); the chat learns of it only
-  // from what is added later, never from a change to its start (14). A chat with no
-  // message yet is not kept by its pin, which is unavailable: it follows the stage, except
-  // while the subject first settles after a reload, so the new chat the reader had open
-  // is still the one shown.
-  if (context.pin != null && context.pin === context.openId && hasMessages(context, context.openId)) return;
+  // With "Keep the open note and chat when the stage changes" on (12), the open chat stays
+  // whatever comes on the stage; the chat learns of it only from what is added later,
+  // never from a change to its start (14). A chat with no message yet is not kept: it
+  // follows the stage, except while the subject first settles after a reload, so the new
+  // chat the reader had open is still the one shown.
+  if (context.keep && context.openId != null && hasMessages(context, context.openId)) return;
   if (settling && context.openId != null && !hasMessages(context, context.openId)) return;
   // The chat already open, if it is about the new subject, stays open (12): a reader who
   // picked an older chat about the book must not have it replaced by the newest one when
@@ -1278,7 +1279,7 @@ const applyBoot = (context, out, enqueue, self) => {
   }
   if (context.booted && context.openId !== before) enqueue.emit({ type: "conversation.opened", id: context.openId });
   context.booted = true;
-  if (!context.pinsObserved) context.pin = out.pin ?? null;
+  if (!context.keepObserved) context.keep = out.keep === true;
   const queued = context.queued;
   context.queued = [];
   for (const message of queued) self.send(message);
@@ -1292,25 +1293,22 @@ const queue = enqueueActions(({ context, event }) => {
 export const machine = setup({
   actors: {
     // The one round trip that gates the rest: session, then the chats and the subject.
-    // The pinned chat is asked beside them; pins.changed is held for us until that reply
-    // lands (pins: read supersededBy).
+    // Whether the open chat is kept is asked beside them; settings.changed is held for us
+    // until that reply lands (settings: read supersededBy).
     boot: fromPromise(async ({ input }) => {
-      const pinsReply = input.pins ? input.pins().catch(() => ({})) : Promise.resolve({});
-      const pinOf = async () => {
-        const pins = await pinsReply;
-        return typeof pins?.chat === "string" ? pins.chat : null;
-      };
+      const settingsReply = input.settings ? input.settings().catch(() => ({})) : Promise.resolve({});
+      const keepOf = async () => (await settingsReply)?.keepOpen === true;
       const session = await input.session();
       const userId = session ? session.userId ?? null : null;
-      if (userId == null) return { userId: null, pin: await pinOf() };
+      if (userId == null) return { userId: null, keep: await keepOf() };
       let list;
       try {
         list = await input.list();
       } catch {
-        return { userId, failed: true, pin: await pinOf() };
+        return { userId, failed: true, keep: await keepOf() };
       }
       const subjectReply = await input.subject().catch(() => ({}));
-      return { userId, list, subject: subjectReply && subjectReply.subject ? subjectReply.subject : null, pin: await pinOf() };
+      return { userId, list, subject: subjectReply && subjectReply.subject ? subjectReply.subject : null, keep: await keepOf() };
     }),
     // The browser's focus and online signals (5): a subscribe function from fact.js
     // sends _focus/_online; absent (a Node test) it is a no-op, and tests send those
@@ -1334,8 +1332,9 @@ export const machine = setup({
       "at 120,000 characters. A chat's start is written once, by the view where the chat was " +
       "created, and never changes. When the subject changes the open chat becomes the most " +
       "recently updated chat about it, or none, so the panel shows an empty new chat; while " +
-      "the open chat is pinned, as `pins` says, it stays open whatever the subject, once it has " +
-      "its first message; a new chat with none follows the subject like an unpinned one. " +
+      "the device preference \"Keep the open note and chat when the stage changes\" is on " +
+      "(`settings`, off at first), the open chat stays whatever the subject, once it has its " +
+      "first message; a new chat with none follows the subject. " +
       "The user's comments on the last finished answer are kept with the chat until the next " +
       "message, which carries them; the model gets them as quotes before the message, and the " +
       "answer itself is never changed, so the provider's cache holds. The user's highlights " +
@@ -1358,12 +1357,12 @@ export const machine = setup({
     owns: "the chats",
     emits: ["conversation.changed", "conversation.deleted", "conversation.opened", "tools.changed"],
     // `*: tool` lets the loop ask any query its owner marked as a tool (7.7).
-    asks: ["session: read", "subject: read", "pins: read", "llm: complete", "catalog: contracts", "*: tool"],
+    asks: ["session: read", "subject: read", "settings: read", "llm: complete", "catalog: contracts", "*: tool"],
   },
   context: ({ input }) => ({
     session: input.session,
     subject: input.subject,
-    pins: input.pins,
+    settings: input.settings,
     complete: input.complete,
     contracts: input.contracts,
     askTool: input.askTool,
@@ -1398,10 +1397,10 @@ export const machine = setup({
     openId: null,
     booted: false,
     lastSubject: null,
-    // The chat `pins` holds pinned, and whether pins.changed came before the boot reply,
-    // which is then the older picture.
-    pin: null,
-    pinsObserved: false,
+    // Whether the open chat stays when the stage changes (`settings`' keepOpen), and
+    // whether settings.changed came before the boot reply, which is then the older picture.
+    keep: false,
+    keepObserved: false,
     tools: {},
     approval: "auto",
     toolEntries: {}, // "target: query" -> { label, reply, name, excerpt }, from the catalog (7.7)
@@ -1410,12 +1409,12 @@ export const machine = setup({
     queued: [],
   }),
   initial: "loading",
-  // `pins`' news (4.3, fourth rule), in any state.
+  // `settings`' news (4.3, fourth rule), in any state.
   on: {
-    "pins.changed": {
+    "settings.changed": {
       actions: ({ context, event }) => {
-        context.pin = event.chat ?? null;
-        context.pinsObserved = true;
+        context.keep = event.keepOpen === true;
+        context.keepObserved = true;
       },
     },
     _toolEntries: { actions: enqueueActions(({ context, event, enqueue }) => onToolEntries(context, event, enqueue)) },
@@ -1424,7 +1423,7 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "boot",
-        input: ({ context }) => ({ session: context.session, list: context.list, subject: context.subject, pins: context.pins }),
+        input: ({ context }) => ({ session: context.session, list: context.list, subject: context.subject, settings: context.settings }),
         onDone: { target: "ready", actions: enqueueActions(({ context, event, enqueue, self }) => applyBoot(context, event.output, enqueue, self)) },
         onError: { target: "ready", actions: enqueueActions(({ context, enqueue, self }) => applyBoot(context, { userId: null }, enqueue, self)) },
       },

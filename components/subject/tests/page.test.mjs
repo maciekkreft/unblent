@@ -108,10 +108,13 @@ const seedUser = async ({ books = [], open = null, notes = [] } = {}) => {
 };
 
 // The subject stem in a context of its own (11.2): the user's cookie, empty storage.
-const openPage = async (browser, cookie) => {
+const openPage = async (browser, cookie, { keepOpen = false } = {}) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
+  // "Keep the open note and chat when the stage changes", as Settings stores it on this
+  // design page (its workshop copy).
+  if (keepOpen) await context.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ keepOpen: true })));
   const page = await context.newPage();
   const problems = [];
   watch(page, problems);
@@ -153,20 +156,11 @@ const typeInto = (page, text) =>
 const clickNew = (page) =>
   page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.draft")?.click());
 
-// Whether the editor's pin reads as pressed (pinned).
-const pinPressed = (page) =>
-  page.evaluate(
-    () => document.querySelector("note-editor").shadowRoot.querySelector('.pin[aria-pressed="true"]') != null,
-  );
-
-const clickPin = (page) =>
-  page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".pin")?.click());
-
-// The titles the list actually shows (the next-note draft, the apart row and the fixed
-// Highlights row excluded).
+// The titles the list actually shows (the next-note draft and the fixed Highlights row
+// excluded).
 const shownTitles = (page) =>
   page.evaluate(() =>
-    [...document.querySelector("note-list").shadowRoot.querySelectorAll(".row:not(.draft):not(.apart):not(.highlights)")].map((r) =>
+    [...document.querySelector("note-list").shadowRoot.querySelectorAll(".row:not(.draft):not(.highlights)")].map((r) =>
       r.querySelector(".name").textContent.trim(),
     ),
   );
@@ -244,7 +238,7 @@ for (const engine of ENGINES) {
   }
 
   // Signed in, following the stage. Which notes the list shows and which the editor
-  // opens as the stage moves, with the pin, is decided together in note-list's bus test;
+  // opens as the stage moves, kept or not, is decided together in note-list's bus test;
   // here is what only the page shows across a reload. One browser per engine.
   describe(`the notes follow the stage in ${engine.name}`, { timeout: 120000 }, () => {
     let browser;
@@ -276,7 +270,7 @@ for (const engine of ENGINES) {
     // One page kept open throughout, so the book stays staged and the subject stays set.
     // Browser: a reload against real storage.
     test("the About line survives a reload and names a new note", async () => {
-      const { page, problems } = await openPage(browser, await twoBooks());
+      const { page, problems } = await openPage(browser, await twoBooks(), { keepOpen: true });
       await until(async () => (await tileIds(page)).length >= 2, 8000);
       const [first, second] = [BOOK_ONE, BOOK_TWO];
 
@@ -284,13 +278,12 @@ for (const engine of ENGINES) {
       // the editor names it above the note about it.
       await openTile(page, second);
       await until(async () => (await editorBody(page)) !== "", 8000);
-      const pinnedBody = await editorBody(page);
+      const keptBody = await editorBody(page);
       assert.equal(await aboutText(page), "About: Sample Book");
 
-      // The note opened is pinned without a press (the pin starts on). Move the stage to
-      // the other book so the pinned note's book is no longer on the stage — the case
-      // where the About line used to go blank after a reload.
-      await until(async () => await pinPressed(page));
+      // The note is kept (keepOpen on). Move the stage to the other book so the kept
+      // note's book is no longer on the stage — the case where the About line used to go
+      // blank after a reload.
       const listBefore = await shownTitles(page);
       // The "open book" write for `first` must reach the server before the reload, so the
       // reload's own hidden-tab drain has nothing in flight for WebKit to cancel.
@@ -300,22 +293,19 @@ for (const engine of ENGINES) {
       );
       await openTile(page, first);
       await until(async () => !sameSet(await shownTitles(page), listBefore));
-      assert.equal(await editorBody(page), pinnedBody, "the pinned editor kept its note while the stage moved");
+      assert.equal(await editorBody(page), keptBody, "the editor kept its note while the stage moved");
       await drain(page);
       await openedDone.catch(() => {});
 
-      // Reload: the pinned note comes back, still pinned, and its About line still names
+      // Reload: the kept note comes back, and its About line still names
       // its own book though that book is not the one now on the stage.
       await page.reload({ waitUntil: "domcontentloaded" });
       await ready(page);
-      await until(async () => (await editorBody(page)) === pinnedBody, 8000);
-      assert.ok(await pinPressed(page), "the pinned note came back pinned");
+      await until(async () => (await editorBody(page)) === keptBody, 8000);
       assert.equal(await aboutText(page), "About: Sample Book", "its book is named though it was never on this page's stage");
 
-      // Unpin, open a fresh note: the line names the book on the stage at
-      // once, and it does not change once the note is saved (its own link names the same).
-      await clickPin(page);
-      await until(async () => !(await pinPressed(page)));
+      // Open a fresh note: the line names the book on the stage at once, and it does not
+      // change once the note is saved (its own link names the same).
       await clickNew(page);
       await until(async () => (await editorBody(page)) === "");
       assert.equal(await aboutText(page), "About: Sample Book", "a new note names its book at once");

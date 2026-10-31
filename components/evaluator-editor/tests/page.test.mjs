@@ -111,7 +111,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.match(await editor.locator(".read .description").innerText(), /how an action relates to each of your values/);
         assert.match(await editor.locator(".question .text").innerText(), /“Being a present parent” \(Showing up for my kids\)\?/);
         assert.deepEqual(await editor.locator(".answer").allInnerTexts(), ["Serves (expected)", "Goes against", "Unrelated"]);
-        assert.equal(await editor.locator("input, select, .box, button:not(.pin)").count(), 0, "nothing to type in, choose or delete");
+        assert.equal(await editor.locator("input, select, .box, button").count(), 0, "nothing to type in, choose or delete");
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

@@ -697,6 +697,9 @@ class SettingsSheet extends LitElement {
               ${this.#vimSheet(snapshot.context.chat)}
             </details>`
           : nothing}
+        ${this.#check("Keep the open note and chat when the stage changes", settings.keepOpen, () =>
+          this.#actor.send({ type: "_toggleKeep" }),
+        )}
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}

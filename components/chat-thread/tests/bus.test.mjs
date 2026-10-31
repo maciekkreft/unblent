@@ -28,7 +28,7 @@ test("picking an older chat in the list switches the thread to it", async () => 
     conversations: {
       session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
       subject: () => Promise.resolve({ subject: null }),
-      pins: () => Promise.resolve({ note: null, chat: null, evaluators: null }),
+      settings: () => Promise.resolve({}),
       complete: (request) => Promise.resolve({ id: request.id }),
       contracts: () => Promise.resolve({ queries: [] }),
       askTool: () => Promise.resolve({}),

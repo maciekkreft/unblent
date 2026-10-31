@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, chaptered, apart, placement, source } from "../machine.js";
+import { machine, chaptered, placement } from "../machine.js";
 
 // The chapter switch and its groups (as note-list has them), decided from the machine's context
 // alone, so they are tested here without a browser (9).
@@ -63,14 +63,6 @@ test("the switch starts on This chapter, comes back from input, and _chapters tu
   actor.send({ type: "_chapters", all: false });
   assert.equal(actor.getSnapshot().context.allChapters, false);
   assert.equal(start({ allChapters: true }).getSnapshot().context.allChapters, true);
-});
-
-test("under This chapter the open chat of another chapter is listed apart; under All it is in the list", () => {
-  assert.equal(apart(context({ open: ONE }))?.id, ONE);
-  assert.equal(source(chats[2], {}, subject("chapter-two", "Chapter Two")), "From Chapter One");
-  assert.equal(apart(context({ open: ONE, allChapters: true })), null);
-  assert.equal(apart(context({ open: LOOSE })), null);
-  assert.equal(apart(context({ open: ONE, subject: subject() })), null);
 });
 
 test("a move in the filtered list lands next to the row it was placed at in the whole order", () => {

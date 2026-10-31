@@ -32,7 +32,7 @@ test("a new chat is linked to the open book", async () => {
     conversations: {
       session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
       subject: () => Promise.resolve({ subject: null }),
-      pins: () => Promise.resolve({ note: null, chat: null, evaluators: null }),
+      settings: () => Promise.resolve({}),
       complete: (request) => Promise.resolve({ id: request.id }),
       contracts: () => Promise.resolve({ queries: [] }),
       askTool: () => Promise.resolve({}),
@@ -75,7 +75,7 @@ test("a reload mid-answer ends at the question with Continue", async () => {
   const conversations = (ulid) => ({
     session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
     subject: () => Promise.resolve({ subject: null }),
-    pins: () => Promise.resolve({ note: null, chat: null, evaluators: null }),
+    settings: () => Promise.resolve({}),
     complete: (request) => (completes.push(request), Promise.resolve({ id: request.id })),
     contracts: () => Promise.resolve({ queries: [] }),
     askTool: () => Promise.resolve({}),

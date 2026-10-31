@@ -357,6 +357,9 @@ for (const engine of ENGINES) {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       context.setDefaultTimeout(4000);
       await signedIn(context, cookie);
+      // The note is to stay in front across the reload: "Keep the open note and chat when
+      // the stage changes", as Settings stores it on the product.
+      await context.addInitScript(() => localStorage.setItem("settings:product", JSON.stringify({ keepOpen: true })));
       const problems = [];
       const page = await context.newPage();
       watch(page, problems);

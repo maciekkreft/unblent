@@ -69,7 +69,7 @@ const isHighlight = (note, subject) =>
 
 // The Highlights row (Decision 1, 5, 6), the Highlights note to the user (13): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
 // unless at least one note is a highlight of it. Its count and latest time come from the
-// notes the list already holds (no new query), so it is pure like `shown` and `apart`.
+// notes the list already holds (no new query), so it is pure like `shown`.
 // None without the `highlights` attribute, and none while `flags` reports the highlights
 // feature hidden, or has not answered yet (`hidden` is null), the same as `flags` itself
 // with no answer (3.1).
@@ -105,8 +105,7 @@ const linkTo = (note, subject) =>
 // an open chapter; null otherwise, and then the list is `shown` with no switch. `all` is
 // the user's choice, This chapter by default. Under either choice the notes linked to no
 // chapter come first, because they belong to every chapter, then the open chapter's
-// (`here`) or every chapter's (`rest`). The open note of another chapter is listed apart
-// instead (`apart`).
+// (`here`) or every chapter's (`rest`).
 export const chaptered = (context) => {
   const { following, subject, allChapters } = context;
   if (!following || !subject?.chapter) return null;
@@ -118,28 +117,11 @@ export const chaptered = (context) => {
   return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest };
 };
 
-// The note the editor has open, when it is not among the shown notes (12): a pinned
-// note after the stage moved, or one still open after unpinning, or, under This chapter,
-// a note of another chapter, which the editor keeps open only while it is pinned or the
-// keyboard is in it, or after the user picked it. Only while following a subject; otherwise the open note is
-// always in the shown set, so there is nothing apart. Its row is the same row as any other; the
-// view sets it apart. Computed from context, so no handler decides it: note.opened,
-// subject.changed, note.changed and note.deleted keep the inputs current.
-export const apart = (context) => {
-  const { notes, following, subject, open, handed, allChapters } = context;
-  if (!following || subject == null || open == null) return null;
-  const note = notes.find((n) => n.id === open);
-  if (!note || isHighlight(note, subject) || handed?.has(note.id)) return null;
-  if (!isAbout(note, subject)) return note;
-  const other = linkTo(note, subject)?.chapter;
-  return subject.chapter && !allChapters && other != null && other !== subject.chapter ? note : null;
-};
-
 // Where a note placed at a row of the list (p, P, o, O; 12) goes in the whole order the
 // user set: right below or above that row, next to it in every list that shows both, even
 // while a subject or a chapter hides the notes between it and its neighbour on screen.
-// `ids` are the note rows as shown; from a fixed row (New note, Highlights, a note listed
-// apart) the note goes above the first shown note. The note being moved is never its own
+// `ids` are the note rows as shown; from a fixed row (New note, Highlights) the note goes
+// above the first shown note. The note being moved is never its own
 // neighbour.
 export const placement = ({ notes, cut }, ids, current, below) => {
   const all = notes.filter((n) => n.id !== cut).map((n) => n.id);
@@ -159,24 +141,6 @@ const without = (set, id) => {
   const next = new Set(set);
   next.delete(id);
   return next;
-};
-
-// The book titles (12), as { id: title }, from books: list then book.changed and
-// book.deleted; null while they cannot be read (no `books` on the page, or no answer).
-export const titles = (reply) =>
-  Array.isArray(reply?.books) ? Object.fromEntries(reply.books.map((b) => [b.id, b.title])) : null;
-
-// The tag on the note listed apart (12): where it was opened from — its chapter of the
-// subject when that is what hides it ("From Chapter Two"), else the title of the first
-// book among its links ("From Journal"); "Not linked" when it links to no book; "Pinned"
-// while the titles cannot be read, or the book is not among them.
-export const source = (note, books, subject) => {
-  const chapter = linkTo(note, subject)?.chapterTitle;
-  if (chapter) return `From ${chapter}`;
-  const book = links(note).find((l) => l.kind === "book");
-  if (!book) return "Not linked";
-  const title = books?.[book.id];
-  return typeof title === "string" && title ? `From ${title}` : "Pinned";
 };
 
 // A session reply without a userId (no-answerer on a page or in a test without `session`)
@@ -228,10 +192,6 @@ export const machine = setup({
     // The notes starting picture (4.3): note.changed / note.deleted are held for this
     // ask until its reply lands, so a change that races the start is applied after it.
     load: fromPromise(({ input }) => input.ask("notes", "list", {})),
-    // The book titles for the row listed apart, only while following, where that row can
-    // be shown; book.changed and book.deleted are held for this ask until its reply lands.
-    readBooks: fromPromise(({ input }) =>
-      input.following ? input.ask("books", "list", {}) : Promise.resolve({})),
     // The subject starting picture, asked as its own concern (3.5) so its reply — the
     // picture at read time — never overwrites a subject.changed that arrived first while
     // the notes list was still loading. On a reload the notes pull is slow and the book
@@ -266,9 +226,8 @@ export const machine = setup({
       "rows stay put: dd does nothing there. A moved or new note goes right below or above the " +
       "row it was placed at, also in the whole order, so notes hidden by the subject or the " +
       "chapter stay where they were. With `subject` it lists only the " +
-      "notes about the subject, and a note open in the editor that is not about it, such as a " +
-      "pinned note, is listed apart at the top so the open row is never missing; it learns " +
-      "which note is open from the editor. While the subject has an open chapter (a book's " +
+      "notes about the subject, never a note apart from them, also while the editor keeps open a " +
+      "note that is not about it; it learns which note is open from the editor. While the subject has an open chapter (a book's " +
       "chapter, or the Journal's day), a switch above the list reads \"This chapter\" and " +
       "\"All chapters\" (\"This day\" and \"All days\" in the Journal). It starts on This " +
       "chapter and the choice is kept in this browser. The switch is two equal halves across " +
@@ -276,14 +235,10 @@ export const machine = setup({
       "arrow on the first row reaches it, h and l or the left and right arrows change it, and " +
       "j or the down arrow goes back to the first row. This chapter shows first the notes about " +
       "the book linked to no chapter, under \"Not linked to a chapter\" when there are any, " +
-      "then, under the open chapter's title, its notes; an open note of another chapter is listed apart. All " +
+      "then, under the open chapter's title, its notes. All " +
       "chapters lists every note about the book. A note row linked to a chapter names the " +
       "chapter's title before its second line; a note linked to the whole book shows nothing " +
-      "extra. That apart row's tag says where the note is from: \"From \" and its chapter's " +
-      "title when it is in another chapter of the book, else \"From \" " +
-      "and the title of the first book it is linked to, such as \"From Journal\", following a " +
-      "rename at once; \"Not linked\" when it is linked to no book; \"Pinned\" while the book " +
-      "titles cannot be read. While the subject has at least one highlight, a " +
+      "extra. While the subject has at least one highlight, a " +
       "fixed Highlights row under New note shows how many there are and the time of the latest, " +
       "and picking it shows the highlights editor in the note editor's place, under the same " +
       "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
@@ -307,7 +262,7 @@ export const machine = setup({
     // The highlights attribute: on, the Highlights row is offered while following; off,
     // highlights are still kept out of the list but nothing stands for them.
     attributes: ["subject", "highlights"],
-    asks: ["notes: list", "subject: read", "settings: read", "session: read", "books: list", "flags: read"],
+    asks: ["notes: list", "subject: read", "settings: read", "session: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -332,9 +287,6 @@ export const machine = setup({
     // The subject on the stage, learned from subject: read then subject.changed. Null
     // until the first reply, and whenever nothing on the stage is a subject.
     subject: null,
-    // The book titles, { id: title }, for the tag on the row listed apart; null until
-    // books answers, and while it cannot.
-    books: null,
     // How long a discarded row can be brought back (the --duration-undo token, read
     // in the view and passed in so the machine stays importable in Node). The delete
     // is not a fact until this window ends (delayed delete): stop it and nothing was
@@ -375,12 +327,6 @@ export const machine = setup({
       input: ({ context }) => ({ ask: context.ask, following: context.following, highlightsRow: context.highlightsRow }),
       onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
       onError: { actions: assign({ hidden: [] }) },
-    },
-    {
-      src: "readBooks",
-      input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: { actions: assign({ books: ({ event }) => titles(event.output) }) },
-      onError: { actions: [] },
     },
     {
       src: "readSubject",
@@ -467,21 +413,6 @@ export const machine = setup({
           cut: ({ context }) => (context.cut === event.id ? null : context.cut),
         });
         if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
-      }),
-    },
-    // A book renamed or gone (4.3): the tag on the row listed apart follows at once. Only
-    // once the titles were read, so a partial map never stands in for them.
-    "book.changed": {
-      guard: ({ context }) => context.books != null,
-      actions: assign({ books: ({ context, event }) => ({ ...context.books, [event.id]: event.title }) }),
-    },
-    "book.deleted": {
-      guard: ({ context }) => context.books != null,
-      actions: assign({
-        books: ({ context, event }) => {
-          const { [event.id]: _, ...rest } = context.books;
-          return rest;
-        },
       }),
     },
     // The stage moved (4.3): the subject changed, so a different set of notes is about

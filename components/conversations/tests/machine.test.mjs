@@ -88,7 +88,7 @@ function start(options = {}) {
     askTool = () => Promise.resolve({}),
     listValues,
     now,
-    pinned = null,
+    keep = false,
   } = options;
 
   const calls = { saved: [], deleted: [], savedTools: [], completes: [], reads: [], tools: [], list: 0, contracts: 0 };
@@ -109,7 +109,7 @@ function start(options = {}) {
       see({}, SUBJECT_READ.payload);
       return Promise.resolve({ subject });
     },
-    pins: () => Promise.resolve({ note: null, chat: pinned, evaluators: null }),
+    settings: () => Promise.resolve({ keepOpen: keep }),
     complete: (request) => {
       see(request, COMPLETE.payload);
       calls.completes.push(request);
@@ -371,45 +371,45 @@ test("a stored open chat about the subject is kept when the subject settles afte
   );
 });
 
-test("a pinned open chat stays open when the subject changes; unpinned, the next change is followed (12)", async () => {
+test("with keepOpen on the open chat stays when the subject changes; off, the next change is followed (12)", async () => {
   const B1 = { kind: "book", id: "b1", title: "One", view: "book-reader" };
   const B2 = { kind: "book", id: "b2", title: "Two", view: "book-reader" };
   const conversations = [
     { id: CHAT, title: "about one", about: [{ kind: "book", id: "b1" }], updatedAt: 5 },
     { id: CHAT2, title: "about two", about: [{ kind: "book", id: "b2" }], updatedAt: 10 },
   ];
-  const h = start({ conversations, stored: CHAT, subject: B1, pinned: CHAT });
+  const h = start({ conversations, stored: CHAT, subject: B1, keep: true });
   await ready(h);
   h.actor.send({ type: "subject.changed", subject: B2 });
   await flush();
-  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT, "the pinned chat stays");
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT, "the kept chat stays");
   assert.ok(!h.emitted.some((e) => e.type === "conversation.opened"), "nothing else was opened");
 
-  h.actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
+  h.actor.send({ type: "settings.changed", nav: [], viewportSwitchHidden: true, layoutSwitchHidden: true, arranging: false, editors: {}, keepOpen: false });
   h.actor.send({ type: "subject.changed", subject: B1 });
   h.actor.send({ type: "subject.changed", subject: B2 });
   await flush();
-  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT2, "unpinned, it follows the stage again");
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT2, "turned off, it follows the stage again");
 });
 
-test("a pin on another chat than the open one does not hold the open chat", async () => {
+test("keepOpen is off at first: the open chat follows the stage", async () => {
   const conversations = [
     { id: CHAT, title: "about one", about: [{ kind: "book", id: "b1" }], updatedAt: 5 },
     { id: CHAT2, title: "about two", about: [{ kind: "book", id: "b2" }], updatedAt: 10 },
   ];
-  const h = start({ conversations, stored: CHAT, pinned: CHAT2 });
+  const h = start({ conversations, stored: CHAT });
   await ready(h);
   h.actor.send({ type: "subject.changed", subject: { kind: "book", id: "b2", title: "Two", view: "book-reader" } });
   await flush();
   assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, CHAT2);
 });
 
-test("a pinned new chat with no message follows the subject; after its first message it stays (12)", async () => {
+test("with keepOpen on a new chat with no message follows the subject; after its first message it stays (12)", async () => {
   const B1 = { kind: "book", id: "b1", title: "One", view: "book-reader" };
   const B2 = { kind: "book", id: "b2", title: "Two", view: "book-reader" };
   const conversations = [{ id: CHAT2, title: "about two", about: [{ kind: "book", id: "b2" }], updatedAt: 10 }];
   const FRESH = U("NW");
-  const h = start({ conversations, subject: B1, pinned: FRESH });
+  const h = start({ conversations, subject: B1, keep: true });
   await ready(h);
   h.actor.send({ type: "conversation.selected", id: FRESH });
   h.actor.send({ type: "subject.changed", subject: B2 });
@@ -420,7 +420,7 @@ test("a pinned new chat with no message follows the subject; after its first mes
   submit(h, { conversationId: FRESH });
   h.actor.send({ type: "subject.changed", subject: B1 });
   await flush();
-  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, FRESH, "with a message, the pinned chat stays");
+  assert.equal((await query(h.actor, "open", {}, QUERIES.open.reply)).id, FRESH, "with a message, the kept chat stays");
 });
 
 test("a new chat open at a reload stays while the subject settles, and follows the next move (12)", async () => {
@@ -431,7 +431,7 @@ test("a new chat open at a reload stays while the subject settles, and follows t
     { id: CHAT2, title: "about two", about: [{ kind: "book", id: "b2" }], updatedAt: 10 },
   ];
   const FRESH = U("NW");
-  const h = start({ conversations, stored: FRESH, subject: null, pinned: FRESH });
+  const h = start({ conversations, stored: FRESH, subject: null, keep: true });
   await ready(h);
   h.actor.send({ type: "subject.changed", subject: B1 });
   await flush();

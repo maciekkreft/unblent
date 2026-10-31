@@ -2,8 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced } from "./machine.js";
-import pinToggled from "./events/pin.toggled.json" with { type: "json" };
+import { machine, chapterLabelOf, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
@@ -42,7 +41,7 @@ class ActorController {
         mint: ulid,
         undoMs,
       },
-      events: { "pin.toggled": pinToggled, "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked },
+      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -114,8 +113,7 @@ class ChatThread extends LitElement {
     :host([height="fill"]) {
       flex: 1;
     }
-    /* The header: the chapter label at the left, the pin at the top right, where the
-       note editor has its pin, so the two panels pin the same way. */
+    /* The header: the chapter label at the left. */
     .header {
       flex: none;
       display: flex;
@@ -181,39 +179,6 @@ class ChatThread extends LitElement {
       color: var(--color-ink);
     }
     .relink:focus-visible {
-      outline: none;
-      box-shadow: var(--focus-ring);
-    }
-    /* The pin: a toggle, muted while following, accent when pinned, as the note
-       editor's. */
-    .pin {
-      flex: none;
-      display: inline-flex;
-      appearance: none;
-      background: none;
-      border: var(--border-width) solid transparent;
-      border-radius: var(--radius-sm);
-      padding: var(--space-2xs);
-      margin: 0;
-      font: inherit;
-      font-size: var(--text-body);
-      cursor: pointer;
-      color: var(--color-body-mid);
-    }
-    .pin svg {
-      display: block;
-    }
-    .pin:hover:not(:disabled):not([aria-pressed="true"]) {
-      color: var(--color-ink);
-    }
-    .pin[aria-pressed="true"] {
-      color: var(--color-accent);
-    }
-    .pin:disabled {
-      color: var(--color-mute);
-      cursor: default;
-    }
-    .pin:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
@@ -750,29 +715,12 @@ class ChatThread extends LitElement {
     `;
   }
 
-  // The pin keeps the open chat when the subject changes (12). Unavailable until the
-  // open chat has its first message, and the tooltip and label say so; otherwise the
-  // label names the action for assistive tech.
+  // The header: the chapter label (12).
   #header(snapshot) {
     if (!snapshot) return nothing;
-    const { openId, pin } = snapshot.context;
-    const available = canPin(snapshot.context);
-    const pinned = available && pin === openId;
-    const label = !available ? "Pin chat: available after the first message" : pinned ? "Unpin chat" : "Pin chat";
     return html`
       <div class="header">
         <div class="place">${this.#chapter(chapterLabelOf(snapshot))}</div>
-        <button
-          class="pin"
-          type="button"
-          aria-pressed=${pinned}
-          aria-label=${label}
-          title=${label}
-          ?disabled=${!available}
-          @click=${() => this.#actor.send({ type: "_togglePin" })}
-        >
-          ${icon("push-pin")}
-        </button>
       </div>
     `;
   }

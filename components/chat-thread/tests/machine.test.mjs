@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -15,7 +15,6 @@ const other = (component, name) =>
   JSON.parse(readFileSync(resolve(HERE, "..", "..", component, "queries", `${name}.json`), "utf8"));
 const OPEN = other("conversations", "open");
 const READ = other("conversations", "read");
-const PIN_TOGGLED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "pin.toggled.json"), "utf8"));
 const MARKS_EDITED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "marks.edited.json"), "utf8"));
 const HIGHLIGHTS_EDITED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "highlights.edited.json"), "utf8"));
 const RELINKED = JSON.parse(readFileSync(resolve(HERE, "..", "events", "conversation.relinked.json"), "utf8"));
@@ -37,7 +36,7 @@ const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
 function start(options = {}) {
-  const { openId = null, chatsById = {}, readError = {}, pinned = null, vimKeys = false, subject = null, clock } = options;
+  const { openId = null, chatsById = {}, readError = {}, vimKeys = false, subject = null, clock } = options;
   const input = {
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
@@ -51,26 +50,20 @@ function start(options = {}) {
         const conversation = chatsById[payload.id];
         return Promise.resolve(conversation ? { conversation } : { error: "not-found" });
       }
-      if (key === "pins: read") return Promise.resolve({ note: null, chat: pinned, evaluators: null });
       if (key === "settings: read") return Promise.resolve({ vimKeys });
       if (key === "subject: read") return Promise.resolve({ subject });
       throw new Error(`unexpected ask ${key}`);
     },
   };
   const actor = createActor(machine, { input, ...(clock ? { clock } : {}) });
-  const toggled = [];
   const relinked = [];
   actor.on("conversation.relinked", (e) => {
     const { type, ...payload } = e;
     relinked.push(payload);
     see(payload, RELINKED);
   });
-  actor.on("pin.toggled", (e) => {
-    toggled.push(e.id);
-    see({ what: e.what, id: e.id }, PIN_TOGGLED);
-  });
   actor.start();
-  return { actor, toggled, relinked };
+  return { actor, relinked };
 }
 
 // The top state only: showing has substates of its own (the comment being written).
@@ -188,48 +181,6 @@ test("the open chat deleted falls back to the empty page", async () => {
 
 const TURN = { id: "01HQ8ZK7M4N5P6Q7R8S9T0V1W3", role: "user", text: "hi" };
 const asked = (id) => emptyChat(id, { title: "hi", turns: [TURN] });
-
-test("the pin pins the open chat and unpins it; with no chat open it does nothing", async () => {
-  const h = start({ openId: CHAT, chatsById: { [CHAT]: asked(CHAT) } });
-  await until(() => state(h) === "showing", "showing");
-  h.actor.send({ type: "_togglePin" });
-  assert.equal(h.actor.getSnapshot().context.pin, CHAT);
-  h.actor.send({ type: "_togglePin" });
-  assert.deepEqual(h.toggled, [CHAT, null]);
-  h.actor.send({ type: "conversation.opened", id: null });
-  await until(() => state(h) === "empty", "empty");
-  assert.equal(h.actor.getSnapshot().can({ type: "_togglePin" }), false);
-});
-
-test("a chat with no message yet cannot be pinned, even while pins holds it; its first message makes it pinned", async () => {
-  const h = start({ openId: CHAT, pinned: CHAT, chatsById: { [CHAT]: emptyChat(CHAT) } });
-  await until(() => state(h) === "showing", "showing");
-  assert.equal(canPin(h.actor.getSnapshot().context), false);
-  assert.equal(h.actor.getSnapshot().can({ type: "_togglePin" }), false);
-  h.actor.send({ type: "conversation.changed", ...asked(CHAT) });
-  assert.equal(canPin(h.actor.getSnapshot().context), true);
-  assert.equal(h.actor.getSnapshot().context.pin, CHAT, "on by default once it has a message");
-  assert.deepEqual(h.toggled, [], "no press, so nothing was sent");
-});
-
-test("opening or deleting the pinned chat sends no pin.toggled: only a press does, and pins follows the chat itself", async () => {
-  const h = start({ openId: CHAT, pinned: CHAT, chatsById: { [CHAT]: emptyChat(CHAT), [CHAT2]: emptyChat(CHAT2) } });
-  await until(() => state(h) === "showing", "showing");
-  assert.equal(h.actor.getSnapshot().context.pin, CHAT, "the pin from pins");
-  h.actor.send({ type: "conversation.opened", id: CHAT2 });
-  await until(() => state(h) === "showing", "showing");
-  h.actor.send({ type: "conversation.deleted", id: CHAT2 });
-  assert.deepEqual(h.toggled, []);
-});
-
-test("opening another chat while not pinned leaves the pins alone", async () => {
-  const h = start({ openId: CHAT, pinned: CHAT2, chatsById: { [CHAT]: emptyChat(CHAT), [CHAT2]: emptyChat(CHAT2) } });
-  await until(() => state(h) === "showing", "showing");
-  h.actor.send({ type: "conversation.opened", id: CHAT2 });
-  h.actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
-  h.actor.send({ type: "conversation.opened", id: CHAT });
-  assert.deepEqual(h.toggled, []);
-});
 
 test("an unavailable read says the server cannot be reached", async () => {
   const h = start({ openId: CHAT, readError: { [CHAT]: "unavailable" } });
@@ -409,7 +360,6 @@ async function commenting(chat = answered(), more = {}) {
   const actor = createActor(machine, {
     input: {
       ask: (target, name) => {
-        if (target === "pins") return Promise.resolve({ note: null, chat: null, evaluators: null });
         if (name === "open") return Promise.resolve({ id: CHAT });
         return Promise.resolve({ conversation: chat, ...more });
       },

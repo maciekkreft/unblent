@@ -774,7 +774,7 @@ test("open? answers the Highlights while they are in front, in reading order, un
   actor.send({ type: "note.opened", id: null });
   assert.ok("highlights" in (await askOpen(actor)));
 
-  // A pick brings the editor back, even one a pinned editor refuses or one naming the
+  // A pick brings the editor back, even one a kept editor refuses or one naming the
   // note it already holds, which announce nothing new.
   actor.send({ type: "note.opened", id: ID });
   actor.send({ type: "highlights.selected", about: BOOK });

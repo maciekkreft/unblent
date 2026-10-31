@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, apart, source, highlights, plain, showing } from "../machine.js";
+import { machine, shown, highlights, plain, showing } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -49,7 +49,6 @@ const answering = ({ notes = [], subject = null }) => (target, name) => {
 
 const ids = (actor) => actor.getSnapshot().context.notes.map((n) => n.id);
 const shownIds = (actor) => shown(actor.getSnapshot().context).map((n) => n.id);
-const apartId = (actor) => apart(actor.getSnapshot().context)?.id ?? null;
 const hl = (actor) => highlights(actor.getSnapshot().context);
 const highlightsOpen = (actor) => actor.getSnapshot().context.highlightsOpen;
 
@@ -318,38 +317,13 @@ const twoBooks = () =>
     subject: { kind: "book", id: "bk1", title: "One" },
   });
 
-test("the open note not about the subject leads apart, the shown set unchanged", async () => {
+test("the open note not about the subject is not listed: the list shows only the subject's notes", async () => {
   const { actor } = list({ following: true, ask: twoBooks() });
   await tick();
   actor.send({ type: "note.opened", id: B });
-  assert.equal(apartId(actor), B, "the open note is kept apart");
-  assert.deepEqual(shownIds(actor), [A], "the shown set is still only the subject's notes");
-});
-
-test("the open note about the subject is not apart", async () => {
-  const { actor } = list({ following: true, ask: twoBooks() });
-  await tick();
-  actor.send({ type: "note.opened", id: A });
-  assert.equal(apartId(actor), null, "an open note already in the shown set is not doubled");
-});
-
-test("subject.changed to the open note's subject folds it back into the list", async () => {
-  const { actor } = list({ following: true, ask: twoBooks() });
-  await tick();
-  actor.send({ type: "note.opened", id: B });
-  assert.equal(apartId(actor), B);
+  assert.deepEqual(shownIds(actor), [A]);
   actor.send({ type: "subject.changed", subject: { kind: "book", id: "bk2", title: "Two" } });
-  assert.equal(apartId(actor), null, "the open note is now about the subject");
-  assert.deepEqual(shownIds(actor), [B], "so it is in the shown set");
-});
-
-test("deleting the open note leaves nothing apart", async () => {
-  const { actor } = list({ following: true, ask: twoBooks() });
-  await tick();
-  actor.send({ type: "note.opened", id: B });
-  assert.equal(apartId(actor), B);
-  actor.send({ type: "note.deleted", id: B });
-  assert.equal(apartId(actor), null, "the row is gone, so nothing is apart");
+  assert.deepEqual(shownIds(actor), [B], "about the new subject, it is listed");
 });
 
 // --- Highlights are hidden from the list (Decision 2) ------------------------------
@@ -376,21 +350,6 @@ test("a highlight of the subject is kept but never shown in the list", async () 
   await tick();
   assert.deepEqual(ids(actor), [C, B, A], "every note is kept");
   assert.deepEqual(shownIds(actor), [A], "the highlight is hidden; the plain note shows");
-});
-
-test("a highlight note open in the editor is not kept apart either", async () => {
-  const { actor } = list({ following: true, ask: withHighlight() });
-  await tick();
-  actor.send({ type: "note.opened", id: C });
-  assert.equal(apartId(actor), null, "a highlight is hidden even when it is the open note");
-});
-
-test("the apart row can be picked like any row", async () => {
-  const { actor, selected } = list({ following: true, ask: twoBooks() });
-  await tick();
-  actor.send({ type: "note.opened", id: B });
-  actor.send({ type: "_pick", id: B });
-  assert.deepEqual(selected, [B], "picking the apart row emits note.selected");
 });
 
 // --- The Highlights row (Decision 1, 4, 5, 6, 7) -----------------------------------
@@ -796,44 +755,4 @@ test("dd does nothing on a row that is not a note (New note, Highlights)", async
   actor.send({ type: "_cut", id: MINTED });
   actor.send({ type: "_cut", id: "highlights" });
   assert.equal(actor.getSnapshot().context.cut, null);
-});
-
-// --- Where the row listed apart is from (12) --------------------------------------
-
-test("the row listed apart is tagged with its first book, Not linked, or Pinned", () => {
-  const row = (about) => ({ id: "x", about });
-  const books = { [A]: "Journal", [B]: "ACT made simple" };
-  assert.equal(source(row([{ kind: "book", id: B }, { kind: "book", id: A }]), books), "From ACT made simple", "the first book");
-  assert.equal(source(row([]), books), "Not linked", "no link");
-  assert.equal(source(row(undefined), books), "Not linked", "no links at all");
-  assert.equal(source(row([{ kind: "book", id: A }]), null), "Pinned", "titles not read");
-  assert.equal(source(row([{ kind: "book", id: C }]), books), "Pinned", "a book not among them");
-});
-
-test("the book titles come from books: list and follow a rename and a delete", async () => {
-  const asked = [];
-  const ask = (target, name) => {
-    asked.push(`${target}: ${name}`);
-    if (target === "books" && name === "list") return Promise.resolve({ books: [{ id: A, title: "Journal" }] });
-    if (name === "list") return Promise.resolve({ notes: [] });
-    return Promise.resolve({});
-  };
-  const { actor } = list({ ask, following: true });
-  await tick();
-  assert.ok(asked.includes("books: list"));
-  const tag = () => source({ about: [{ kind: "book", id: A }] }, actor.getSnapshot().context.books);
-  assert.equal(tag(), "From Journal");
-  actor.send({ type: "book.changed", id: A, title: "My journal" });
-  assert.equal(tag(), "From My journal", "a rename shows at once");
-  actor.send({ type: "book.deleted", id: A });
-  assert.equal(tag(), "Pinned", "a book gone");
-});
-
-test("without an answer from books the titles stay unread and events do not fill them", async () => {
-  const ask = (target, name) =>
-    Promise.resolve(target === "books" ? { error: "no-answerer" } : name === "list" ? { notes: [] } : {});
-  const { actor } = list({ ask, following: true });
-  await tick();
-  actor.send({ type: "book.changed", id: A, title: "Journal" });
-  assert.equal(actor.getSnapshot().context.books, null);
 });

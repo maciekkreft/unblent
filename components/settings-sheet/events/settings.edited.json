@@ -19,6 +19,7 @@
     "layoutSwitchHidden": { "type": "boolean" },
     "arranging": { "type": "boolean" },
     "vimKeys": { "type": "boolean", "description": "Vim keys on in every editor that has them; missing means off." },
+    "keepOpen": { "type": "boolean", "description": "The open note and the open chat stay when the stage changes; missing means off, so they follow the stage." },
     "editors": {
       "type": "object",
       "additionalProperties": { "type": "string" }
