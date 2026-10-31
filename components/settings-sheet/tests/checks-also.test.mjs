@@ -55,7 +55,7 @@ for (const engine of ENGINES) {
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await sheet.locator(".checks details.keys-fold").waitFor({ state: "attached" });
         await page.locator("dock-desk .controls .pill").click();
-        await sheet.locator("summary", { hasText: "Choose what Jev checks" }).click();
+        await sheet.locator("summary", { hasText: "Choice point evaluators" }).click();
         await also.waitFor();
         assert.equal(await sheet.locator('.box[data-field="away"] select[aria-label^="Also check"]').count(), 0, "a box without an evaluator offers none");
         const names = await also.locator("option").allInnerTexts();

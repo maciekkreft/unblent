@@ -358,10 +358,12 @@ for (const engine of ENGINES) {
       },
     },
     {
-      name: "gg reaches New chat, and with the focus then dropped Safari style j k j still move the chats",
+      name: "gg reaches the top row, the This chapter switch, j New chat, and with the focus then dropped Safari style j k j still move the chats",
       run: async (v) => {
         const before = await v.look();
         await press(v.page, "g", "g");
+        await v.see((s) => want(s.deep === "button" && s.deepText === "This chapter", `the keyboard is on ${s.deep} "${s.deepText}", not the switch`));
+        await press(v.page, "j");
         await v.see((s) => onRow(s, "New chat"));
         await safari(v.page);
         await v.see((s) => onRow(s, "New chat"));

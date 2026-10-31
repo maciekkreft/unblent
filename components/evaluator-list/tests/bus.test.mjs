@@ -5,11 +5,9 @@ import assert from "node:assert/strict";
 // schemas. What each decides alone is in its own machine test; here is what they do
 // together without a browser (9): a delete whose countdown ran out on the row reaches
 // `evaluators` as evaluator.discarded, which tombstones it, with no corner notice. The
-// store is faked, and `subject` is faked in the list's ask so the list shows one book.
+// store is faked.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
-const { ask } = await import("bus");
-const { machine: listMachine } = await import("../machine.js");
 
 const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5BK1";
 const ONE = "01ARZ3NDEKTSV4RRFFQ69G5EV1";
@@ -41,11 +39,6 @@ test("a row's countdown running out deletes the evaluator, with no corner notice
     "evaluator-list": {
       mint: () => DRAFT,
       undoMs: 20,
-      following: true,
-      ask: (target, name, payload) =>
-        target === "subject"
-          ? Promise.resolve({ subject: { kind: "book", id: BOOK, title: "A book", view: "book-stage" } })
-          : ask(listMachine, target, name, payload),
     },
   });
   const list = actors["evaluator-list"];

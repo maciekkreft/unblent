@@ -53,10 +53,11 @@
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
-    <script type="module" src="/static/components/book-shelf/view.js"></script>
     <script type="module" src="/static/components/list-then-item/view.js"></script>
     <script type="module" src="/static/components/evaluator-list/view.js"></script>
     <script type="module" src="/static/components/evaluator-editor/view.js"></script>
+    <script type="module" src="/static/components/evaluator-settings/view.js"></script>
+    <script type="module" src="/static/components/evaluator-starters/view.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
@@ -64,10 +65,11 @@
     <notice-stack></notice-stack>
     <dock-desk>
       <list-then-item id="evaluators" label="Evaluators" height="fill" shows-on="evaluator.selected">
-        <evaluator-list subject label="Evaluators"></evaluator-list>
-        <evaluator-editor subject shows-on="evaluator.selected" height="fill"></evaluator-editor>
+        <evaluator-list label="Evaluators"></evaluator-list>
+        <evaluator-editor shows-on="evaluator.selected" height="fill"></evaluator-editor>
       </list-then-item>
-      <book-shelf label="Books" side="left"></book-shelf>
+      <evaluator-settings label="All evaluators" side="left"></evaluator-settings>
+      <evaluator-starters label="Starters" admin side="right"></evaluator-starters>
     </dock-desk>
   </body>
 </html>

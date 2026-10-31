@@ -5,11 +5,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, rows, subtitle, bookOf, request, lines, results, errorKind, sayPick, sayYesNo, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected, showing, runsOf, waiting, stoppable, RECHECK_MS } from "../machine.js";
+import { machine, rows, subtitle, JOURNAL, request, lines, results, errorKind, sayPick, sayYesNo, foldLine, foldedAtStart, freeStop, notice, sayExpect, marksOf, tally, focusOf, asExpected, showing, runsOf, waiting, stoppable, RECHECK_MS } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started", "pin.toggled"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started"].map((n) => [n, schema(n)]));
 
 const A = "01K7TEST000000000000000BA1";
 const B = "01K7TEST000000000000000BB1";
@@ -20,26 +20,23 @@ const q = (n, removing = false) => ({ id: `01K7TEST0000000000000Q${String(n).pad
 const evaluator = (n, book, { on = true, removing = false, questions = [q(1)] } = {}) => ({
   id: id(n), book, name: `Evaluator ${n}`, on, removing, questions, version: 1, pending: false,
 });
-const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evaluator(4, A, { on: false })], [B]: [evaluator(2, B)] };
-const book = (bid) => ({ kind: "book", id: bid, title: "A book", view: "book-stage" });
+const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evaluator(4, A, { on: false })] };
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ subject = book(A), following = true, fail, kept = KEPT, vimKeys, decide, pinned = null, texts, freeUse, session, tryPage, memory, clock, undoMs } = {}) => {
+// `kept` by the book each evaluator is stored with; the list asks for all of them at once.
+const start = async ({ fail, kept = KEPT, vimKeys, decide, texts, freeUse, session, tryPage, memory, clock, undoMs } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
     input: {
-      following,
       tryPage,
       ask: (target, name, payload) => {
         asked.push([target, name, payload]);
-        if (target === "subject") return Promise.resolve({ subject });
         if (target === "session") return Promise.resolve(session ?? { error: "no-answerer" });
-        if (target === "pins") return Promise.resolve({ note: null, chat: null, evaluators: pinned });
         if (target === "settings") return Promise.resolve(vimKeys == null ? { error: "no-answerer" } : { vimKeys });
         if (target === "llm" && name === "read") return Promise.resolve(freeUse ? { signedIn: true, freeUse } : { signedIn: false });
         if (target === "llm") return decide(payload);
-        return Promise.resolve(fail ?? { evaluators: kept[payload.book] ?? [] });
+        return Promise.resolve(fail ?? { evaluators: Object.values(kept).flat() });
       },
       mint: () => drafts.shift(),
       ...(texts ? { drafts: texts } : {}),
@@ -70,156 +67,12 @@ test("the count leaves out a question switched off; one without `on` counts as o
   assert.equal(subtitle(evaluator(1, A, { questions: [q(1), { ...q(2), on: false }, { ...q(3), on: true }] })), "2 questions");
 });
 
-test("only a book is a subject with evaluators", () => {
-  assert.equal(bookOf(book(A)), A);
-  assert.equal(bookOf({ kind: "other", id: A, title: "" }), null);
-  assert.equal(bookOf(null), null);
-});
-
-test("the open book's evaluators are listed; another book shows its own; no book shows none", async () => {
-  const { actor, asked, ctx } = await start();
+test("every evaluator of the account is listed, whichever book it is kept with, from one ask", async () => {
+  const { actor, asked, ctx } = await start({ kept: { ...KEPT, [B]: [evaluator(2, B)] } });
   assert.ok(actor.getSnapshot().matches("ready"));
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(1), id(4)]);
-  actor.send({ type: "subject.changed", subject: book(B) });
-  await flush();
-  assert.equal(ctx().book, B);
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(2)]);
-  actor.send({ type: "subject.changed", subject: null });
-  assert.ok(actor.getSnapshot().matches("idle"));
-  assert.deepEqual(ctx().evaluators, []);
-  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p.book), [A, B]);
-});
-
-// The journal, like any book, lists only its own evaluators. Records may still carry
-// `journal: true` from the retired Show in journal tick; it is ignored.
-const J = "01K7TEST000000000000000BJ1";
-const BOOKS = [
-  { id: J, title: "Journal", written: true },
-  { id: A, title: "Atomic Habits" },
-];
-
-test("the journal lists only its own evaluators, an old Show in journal mark changing nothing", async () => {
-  const asking = [{ ...q(1), kind: "yesno", text: "Is it kind?", yes: "", no: "", options: [] }];
-  const marked = { ...evaluator(6, A, { questions: asking }), journal: true };
-  const kept = [evaluator(5, J, { questions: asking }), marked];
-  const asked = [];
-  const actor = createActor(machine, {
-    input: {
-      following: true,
-      mint: () => D1,
-      ask: (target, name, payload) => {
-        asked.push([target, name, payload]);
-        if (target === "subject") return Promise.resolve({ subject: book(J) });
-        if (target === "books") return Promise.resolve({ books: BOOKS });
-        if (target === "settings") return Promise.resolve({ error: "no-answerer" });
-        // A fact answering more than the book asked for still shows only that book's.
-        return Promise.resolve({ evaluators: kept });
-      },
-    },
-  }).start();
-  const ctx = () => actor.getSnapshot().context;
-  await flush();
-  await flush();
-  assert.ok(actor.getSnapshot().matches("ready"));
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5)]);
-  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{ book: J }], "the journal asks for its own only");
-  assert.equal(ctx().titles[J], "Journal");
-  assert.deepEqual(request("Hi", ctx().evaluators).questions.map((q) => q.id.split(":")[0]), [id(5)]);
-  // News of another book's evaluator, marked or not, leaves the journal's list as it is.
-  actor.send({ type: "evaluator.changed", evaluator: { ...marked, name: "Renamed" } });
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(5)]);
-  assert.equal(subtitle(marked), "1 question");
-});
-
-test("a book picked while another is still loading is the one shown", async () => {
-  const pending = new Map();
-  const actor = createActor(machine, {
-    input: {
-      following: true,
-      mint: () => D1,
-      ask: (target, name, payload) =>
-        target === "subject"
-          ? Promise.resolve({ subject: book(A) })
-          : target === "pins"
-            ? Promise.resolve({ note: null, chat: null, evaluators: null })
-            : new Promise((r) => pending.set(payload.book, r)),
-    },
-  });
-  actor.start();
-  await flush();
-  actor.send({ type: "subject.changed", subject: book(B) });
-  pending.get(A)({ evaluators: KEPT[A] });
-  await flush();
-  assert.ok(actor.getSnapshot().matches("loading"));
-  pending.get(B)({ evaluators: KEPT[B] });
-  await flush();
-  assert.deepEqual(actor.getSnapshot().context.evaluators.map((e) => e.id), [id(2)]);
-});
-
-test("pinned at start, the list shows the pinned book and stays on it when the stage moves", async () => {
-  const { actor, ctx, asked } = await start({ subject: book(A), pinned: B });
-  assert.equal(ctx().book, B);
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(2)]);
-  actor.send({ type: "subject.changed", subject: book(A) });
-  await flush();
-  assert.equal(ctx().book, B, "still the pinned book");
-  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{ book: B }], "A was never asked for");
-});
-
-test("pinned to the book shown, the list stays on it; unpinned, it shows the stage's book at once", async () => {
-  const { actor, ctx } = await start({ subject: book(A) });
-  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: A });
-  actor.send({ type: "subject.changed", subject: book(B) });
-  await flush();
-  assert.equal(ctx().book, A, "pinned: stays on A");
-  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
-  await flush();
-  await flush();
-  assert.equal(ctx().book, B, "unpinned: the book on the stage");
-  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id), [id(2)]);
-});
-
-test("pins.changed unpinning elsewhere follows the stage; pinning the shown book changes nothing shown", async () => {
-  const { actor, ctx } = await start({ subject: book(A), pinned: B });
-  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: null });
-  await flush();
-  await flush();
-  assert.equal(ctx().book, A);
-  actor.send({ type: "pins.changed", note: null, chat: null, evaluators: A });
-  assert.equal(ctx().book, A);
-  assert.ok(actor.getSnapshot().matches("ready"));
-});
-
-test("the list's pin holds the book shown and lets go of it, at once and through pin.toggled", async () => {
-  const { actor, ctx, emitted } = await start({ subject: book(A) });
-  actor.send({ type: "_togglePin" });
-  assert.equal(ctx().pin, A, "pinned at once");
-  actor.send({ type: "subject.changed", subject: book(B) });
-  await flush();
-  assert.equal(ctx().book, A, "held on A while B is on the stage");
-  actor.send({ type: "_togglePin" });
-  await flush();
-  await flush();
-  assert.equal(ctx().book, B, "unpinned: the stage's book at once");
-  assert.deepEqual(emitted.filter((e) => e.type === "pin.toggled").map(({ what, id }) => ({ what, id })), [
-    { what: "evaluators", id: A },
-    { what: "evaluators", id: null },
-  ]);
-  valid(emitted);
-});
-
-test("without `subject`, or with no book shown, the list's pin does nothing", async () => {
-  for (const options of [{ following: false }, { subject: null }]) {
-    const { actor, emitted } = await start(options);
-    actor.send({ type: "_togglePin" });
-    assert.equal(emitted.length, 0);
-  }
-});
-
-test("without `subject` nothing is asked and it says to open a book", async () => {
-  const { actor, asked } = await start({ following: false });
-  assert.ok(actor.getSnapshot().matches("idle"));
-  assert.deepEqual(asked.filter(([t, n]) => t !== "settings" && t !== "session" && !(t === "llm" && n === "read")), []);
+  assert.deepEqual(rows(ctx().evaluators).map((e) => e.id).sort(), [id(1), id(2), id(4)]);
+  assert.deepEqual(asked.filter(([t]) => t === "evaluators").map(([, , p]) => p), [{}]);
+  assert.deepEqual(asked.filter(([t]) => t === "subject" || t === "pins" || t === "books"), [], "no book to follow and no pin");
 });
 
 test("the Vim keys preference is read at start and followed after; without settings it is off", async () => {
@@ -230,7 +83,7 @@ test("the Vim keys preference is read at start and followed after; without setti
   assert.equal(ctx().vimKeys, false);
 });
 
-test("a pick of a shown evaluator or New evaluator emits evaluator.selected with the book; others are refused", async () => {
+test("a pick of a shown evaluator names its own book, New evaluator the Journal; others are refused", async () => {
   const { actor, emitted, ctx } = await start();
   actor.send({ type: "_pick", id: id(1) });
   actor.send({ type: "_pick", id: D1 });
@@ -238,7 +91,7 @@ test("a pick of a shown evaluator or New evaluator emits evaluator.selected with
   actor.send({ type: "_pick", id: id(3) });
   assert.deepEqual(emitted, [
     { type: "evaluator.selected", id: id(1), book: A },
-    { type: "evaluator.selected", id: D1, book: A },
+    { type: "evaluator.selected", id: D1, book: JOURNAL },
   ]);
   assert.equal(ctx().open, null, "the mark waits for the editor");
   actor.send({ type: "evaluator.opened", id: id(1) });
@@ -257,14 +110,14 @@ test("a tick emits evaluator.switched for a shown evaluator whose state it chang
   valid(emitted);
 });
 
-test("a change to the book shown is folded in, another book's is not; New evaluator gets a fresh id once saved", async () => {
+test("a change to any evaluator is folded in, whichever book; New evaluator gets a fresh id once saved", async () => {
   const { actor, ctx } = await start();
   assert.equal(ctx().draft, D1);
   actor.send({ type: "evaluator.changed", evaluator: { ...evaluator(9, A), id: D1 } });
   assert.equal(ctx().draft, D2);
   assert.ok(ctx().evaluators.some((e) => e.id === D1));
   actor.send({ type: "evaluator.changed", evaluator: evaluator(7, B) });
-  assert.ok(!ctx().evaluators.some((e) => e.id === id(7)));
+  assert.ok(ctx().evaluators.some((e) => e.id === id(7)));
   actor.send({ type: "evaluator.changed", evaluator: { ...evaluator(1, A), name: "Renamed" } });
   assert.equal(ctx().evaluators.find((e) => e.id === id(1)).name, "Renamed");
   actor.send({ type: "evaluator.deleted", id: id(1), book: A });
@@ -436,7 +289,7 @@ const runner = async (replies = () => ANSWERS, freeUse, extra = {}) => {
   const s = await start({
     ...extra,
     freeUse,
-    kept: { [A]: MIXED, [B]: [] },
+    kept: { [A]: MIXED },
     decide: (payload) => {
       decided.push(payload);
       most = Math.max(most, ++open);
@@ -672,39 +525,19 @@ test("switching a question off takes only that evaluator's marks; on again shows
   assert.deepEqual(statuses(ctx), ["done"]);
 });
 
-test("another book drops what waits and the text", async () => {
-  const { actor, ctx, settle } = await runner();
-  actor.send({ type: "_type", text: "Hello\nWorld" });
-  actor.send({ type: "_finish", lines: ["Hello", "World"] });
-  await settle();
-  actor.send({ type: "subject.changed", subject: book(A) });
-  assert.equal(ctx().text, "Hello\nWorld");
-  actor.send({ type: "subject.changed", subject: book(B) });
-  await flush();
-  assert.equal(ctx().text, "");
-  assert.deepEqual(runsOf(ctx()), []);
-  assert.deepEqual([ctx().queue, ctx().asking], [[], null]);
-});
-
-test("the text is kept per book and comes back after a reload", async () => {
-  const kept = {};
-  const texts = { read: (b) => kept[b] ?? "", write: (b, text) => (text ? (kept[b] = text) : delete kept[b]) };
-  const first = await start({ texts, kept: { [A]: [], [B]: [] } });
+test("the text is kept and comes back after a reload", async () => {
+  let kept = "";
+  const texts = { read: () => kept, write: (text) => (kept = text) };
+  const first = await start({ texts, kept: { [A]: [] } });
   first.actor.send({ type: "_type", text: "One\n\nTwo" });
-  assert.deepEqual(kept, { [A]: "One\n\nTwo" });
-  first.actor.send({ type: "subject.changed", subject: book(B) });
-  await flush();
-  assert.equal(first.ctx().text, "", "another book shows its own text");
-  first.actor.send({ type: "_type", text: "Other" });
-  first.actor.send({ type: "subject.changed", subject: book(A) });
-  await flush();
-  assert.equal(first.ctx().text, "One\n\nTwo", "coming back shows the book's text");
+  assert.equal(kept, "One\n\nTwo");
   first.actor.stop();
-  const again = await start({ texts, kept: { [A]: [], [B]: [] } });
+  const again = await start({ texts, kept: { [A]: [] } });
   assert.equal(again.ctx().text, "One\n\nTwo", "a reload shows the text last typed");
   again.actor.send({ type: "_type", text: "" });
-  assert.deepEqual(kept, { [B]: "Other" }, "an emptied box keeps nothing");
+  assert.equal(kept, "", "an emptied box keeps nothing");
 });
+
 
 test("a guest out of free use, or paused, is not checked, and the message under the box says why", async () => {
   assert.equal(freeStop(null), null);
@@ -912,7 +745,7 @@ test("the keyboard leaving the list, or a row opened, hands a cut or a countdown
 test("o or O opens a new evaluator, which goes where it was started once it exists", async () => {
   const { actor, emitted } = await start({ kept: { [A]: ORDERED } });
   actor.send({ type: "_place", after: id(1), before: id(2) });
-  assert.deepEqual(emitted.at(-1), { type: "evaluator.selected", id: D1, book: A });
+  assert.deepEqual(emitted.at(-1), { type: "evaluator.selected", id: D1, book: JOURNAL });
   actor.send({ type: "evaluator.changed", evaluator: { ...evaluator(9, A), id: D1, position: "1" } });
   assert.deepEqual(emitted.at(-1), { type: "evaluator.moved", id: D1, after: id(1), before: id(2) });
   actor.send({ type: "evaluator.changed", evaluator: { ...evaluator(9, A), id: D1, position: "W" } });

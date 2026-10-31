@@ -38,7 +38,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const writes = [];
         page.on("request", (r) => r.method() !== "GET" && r.url().includes("/api/") && writes.push(new URL(r.url()).pathname));
         await page.goto(`${BASE_URL}/try/evaluators`, { waitUntil: "domcontentloaded" });
-        await until(async () => (await listText(page)).includes("About: Journal"));
+        await page.locator("evaluator-list button.fold").waitFor();
 
         // The try page starts with the list of evaluators folded under the box.
         assert.equal(await page.locator("evaluator-list button.fold").getAttribute("aria-expanded"), "false");

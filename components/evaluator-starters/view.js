@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, groupsOf, countText, PATH } from "./machine.js";
+import { machine, startersOf, countText, PATH } from "./machine.js";
 import ticked from "./events/starter.ticked.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -16,8 +16,8 @@ class ActorController {
       events: { "starter.ticked": ticked },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
-    // The part reads its data each time it comes into view: the sheet shows it only to
-    // the admin, so nobody else asks.
+    // The part reads its data each time it comes into view: the desk shows it only to the
+    // admin, so nobody else asks.
     this.observer = new IntersectionObserver((entries) => {
       if (entries.some((e) => e.isIntersecting)) this.actor.send({ type: "_shown" });
     });
@@ -51,8 +51,8 @@ class EvaluatorStarters extends LitElement {
     this.copied = false;
   }
 
-  // The same column and heading as the other parts of Administration (guest-limits), so
-  // the tab reads as one sheet.
+  // The same column and heading as the other sheets of settings (generator-settings), so
+  // the tab reads as configuration.
   static styles = css`
     :host {
       display: block;
@@ -61,8 +61,6 @@ class EvaluatorStarters extends LitElement {
     }
     h3 {
       margin: 0 0 var(--space-md);
-      padding-top: var(--space-lg);
-      border-top: var(--border-width) solid var(--color-border);
       font-size: var(--text-subtitle);
       font-weight: var(--weight-semibold);
       line-height: var(--leading-tight);
@@ -112,14 +110,6 @@ class EvaluatorStarters extends LitElement {
     button.act:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
-    }
-    .book {
-      margin: var(--space-xs) 0 0;
-      font-size: var(--text-caption);
-      font-weight: var(--weight-semibold);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--color-body-mid);
     }
     label.check {
       display: flex;
@@ -182,10 +172,10 @@ class EvaluatorStarters extends LitElement {
     if (!snapshot?.context.read) return nothing;
     const { context } = snapshot;
     const link = `${location.origin}${PATH}`;
-    const groups = groupsOf(context);
+    const starters = startersOf(context);
     return html`
       <h3>Starters</h3>
-      <p class="hint">One group for each try page. A new guest on that page gets a copy of what is ticked.</p>
+      <p class="hint">A new visitor of this page gets a copy of each evaluator ticked here, as it is then.</p>
       <div class="try">
         <div class="head">
           <span class="name">${context.title ?? "Evaluators"}</span>
@@ -196,23 +186,18 @@ class EvaluatorStarters extends LitElement {
         </div>
         ${context.failed
           ? html`<p class="hint">Your evaluators could not be read. Open this tab again to try again.</p>`
-          : groups.length === 0
-            ? html`<p class="hint">You have no evaluators yet. Make one in a book's Evaluators to offer it here.</p>`
-            : groups.map(
-                (group) => html`
-                  <p class="book">${group.title}</p>
-                  ${group.evaluators.map(
-                    (e) => html`
-                      <label class="check">
-                        <input
-                          type="checkbox"
-                          .checked=${e.ticked}
-                          @change=${(event) => this.#actor.send({ type: "_tick", evaluator: e.id, on: event.target.checked })}
-                        />
-                        <span>${e.name} <span class="count">· ${countText(e.questions)}</span></span>
-                      </label>
-                    `,
-                  )}
+          : starters.length === 0
+            ? html`<p class="hint">You have no evaluators yet. Make one in Settings, in the Evaluators tab, to offer it here.</p>`
+            : starters.map(
+                (e) => html`
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      .checked=${e.ticked}
+                      @change=${(event) => this.#actor.send({ type: "_tick", evaluator: e.id, on: event.target.checked })}
+                    />
+                    <span>${e.name} <span class="count">· ${countText(e.questions)}</span></span>
+                  </label>
                 `,
               )}
       </div>

@@ -143,6 +143,8 @@ for (const engine of ENGINES) {
     try {
       const sheet = page.locator("settings-sheet");
       await page.locator("dock-desk .controls .pill").first().click();
+      // What the chat may read starts folded.
+      await sheet.locator(".tools summary").click();
       const box = sheet.locator(".tools input[type=checkbox]").last();
       await box.scrollIntoViewIfNeeded();
       const scrolled = () => page.evaluate(() => document.querySelector("dock-desk").shadowRoot.querySelector('.body[data-side="stage"]').scrollTop);

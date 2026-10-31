@@ -59,7 +59,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
-        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
         await page.click("evaluator-list .row.new .open");
         await page.fill("evaluator-editor input.title", "Goal or value");
         await page.locator("evaluator-editor").getByText("Pick one").click();
@@ -105,7 +104,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
-        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
         await page.click(`evaluator-list .row[data-id="0000000000000000000000YVAS"] .open`);
         const editor = page.locator("evaluator-editor");
         await editor.locator(".read .name").getByText("Your values").waitFor();
@@ -129,7 +127,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
-        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
         await page.click("evaluator-list .row.new .open");
         const editor = page.locator("evaluator-editor");
         const box = editor.locator('.box[data-key="description"]');
@@ -185,7 +182,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const saves = { count: 0 };
       page.on("console", (msg) => / event evaluator\.saved /.test(msg.text()) && saves.count++);
       await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
-      await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
       await page.click("evaluator-list .row.new .open");
       await page.fill("evaluator-editor input.title", "Goal or value");
       await page.locator("evaluator-editor").getByRole("button", { name: "Add a question" }).click();
@@ -344,7 +340,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
-        await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
         await page.click("evaluator-list .row.new .open");
         const editor = page.locator("evaluator-editor");
         await page.fill("evaluator-editor input.title", "Goal or value");

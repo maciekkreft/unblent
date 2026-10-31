@@ -1,8 +1,8 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// Starters, the whole way (5, 8): the admin ticks an evaluator in Administration ›
-// Starters, a fresh browser opens the Evaluators try page and finds a copy of it in the
+// Starters, the whole way (5, 8): the admin ticks an evaluator in the Starters tab of the
+// Evaluators try page, which only the admin sees, a fresh browser opens the try page and finds a copy of it in the
 // Journal before anything is made on the server, runs it as a guest, and finds it again
 // after a reload, now the guest's own on the server. The admin's cookie is forged as
 // session's server module sets it, and only who is the admin (the registry has no
@@ -37,7 +37,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: a gesture.
-    test("the admin ticks an evaluator in Administration › Starters", async () => {
+    test("the admin ticks an evaluator in the try page's Starters tab", async () => {
       const adminId = `admin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const admin = forge(`${adminId}|admin`);
       const id = ulid();
@@ -58,9 +58,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await context.route(/\/api\/session\/people$/, (route) => route.fulfill({ json: { people: [] } }));
         const page = await context.newPage();
         const problems = watch(page);
-        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-        await page.locator("dock-desk .controls button.pill").click();
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        await page.goto(`${BASE_URL}/try/evaluators`, { waitUntil: "domcontentloaded" });
+        await page.locator("dock-desk .stage .strip").getByRole("tab", { name: "Starters", exact: true }).click();
 
         const group = page.locator("evaluator-starters .try");
         await group.waitFor();
@@ -103,7 +102,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
         await page.goto(`${BASE_URL}/try/evaluators`, { waitUntil: "domcontentloaded" });
         await until(async () => (await listText(page)).includes(NAME));
-        assert.match(await listText(page), /About: Journal/);
         assert.deepEqual(writes, [], "the copy is made in this browser, nothing on the server");
 
         await page.getByRole("textbox", { name: "Write one sentence per line" }).click();
@@ -125,6 +123,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         assert.equal(mine[0].book, JOURNAL);
         assert.equal("starterFor" in mine[0], false, "the copy is a starter for nothing");
         assert.notEqual(mine[0].questions[0].id, QUESTION.id);
+
+        // Starters is the admin's alone: a visitor sees only the Evaluators tab.
+        assert.equal(await page.locator("dock-desk .stage .strip").getByRole("tab", { name: "Starters", exact: true }).count(), 0);
 
         // A reload cuts a request still in flight, which the watch would count as a failure.
         await page.waitForLoadState("networkidle");

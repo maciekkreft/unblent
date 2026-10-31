@@ -267,9 +267,11 @@ for (const engine of ENGINES) {
       },
     },
     {
-      name: "gg in the Notes list goes back to New note, in view",
+      name: "gg in the Notes list goes back to the top row, the This chapter switch, and j to New note, in view",
       run: async (v) => {
         await press(v.page, "g", "g");
+        await v.see((s) => want(s.deep === "button" && s.deepText === "This chapter", `the keyboard is on ${s.deep} "${s.deepText}", not the switch`));
+        await press(v.page, "j");
         await v.see((s) => all(onRow(s, "New note"), at(s, "first")));
       },
     },

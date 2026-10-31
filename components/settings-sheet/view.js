@@ -148,7 +148,12 @@ class SettingsSheet extends LitElement {
       gap: var(--space-sm);
       margin-top: var(--space-md);
     }
-    .tools .group,
+    /* The tool switches stand in a fold; opened, they keep the gap of the fields above. */
+    .tools details[open] {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+    }
     .judging .group {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
@@ -475,9 +480,9 @@ class SettingsSheet extends LitElement {
       gap: var(--space-sm);
       margin-top: var(--space-md);
     }
-    .checks .group {
-      color: var(--color-body-mid);
-      font-size: var(--text-sm);
+    /* Under the Jev key the fold stands in the group's own gap. */
+    .judging .checks {
+      margin-top: 0;
     }
     .boxes {
       display: flex;
@@ -686,10 +691,12 @@ class SettingsSheet extends LitElement {
           : nothing}
         ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
         <p class="hint">Move around the desk, the lists and the Reader with the keyboard.</p>
-        <details class="keys-fold">
-          <summary>Show the keys</summary>
-          ${this.#vimSheet(snapshot.context.chat)}
-        </details>
+        ${settings.vimKeys
+          ? html`<details class="keys-fold">
+              <summary>Show the keys</summary>
+              ${this.#vimSheet(snapshot.context.chat)}
+            </details>`
+          : nothing}
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
           this.#actor.send({ type: "_toggleLayout" }),
         )}
@@ -735,19 +742,21 @@ class SettingsSheet extends LitElement {
     const hint = profile !== "product";
     return html`
       <div class="tools">
-        <span class="group">What the chat may read</span>
-        ${toolList.map(
-          (tool) => html`
-            <label class="field">
-              <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
-              <input
-                type="checkbox"
-                .checked=${tools[tool.key] !== false}
-                @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
-              />
-            </label>
-          `,
-        )}
+        <details class="keys-fold">
+          <summary>What the chat may read</summary>
+          ${toolList.map(
+            (tool) => html`
+              <label class="field">
+                <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
+                <input
+                  type="checkbox"
+                  .checked=${tools[tool.key] !== false}
+                  @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
+                />
+              </label>
+            `,
+          )}
+        </details>
       </div>
     `;
   }
@@ -825,8 +834,7 @@ class SettingsSheet extends LitElement {
                 <span class="help">${TTL_NOTE}</span>
               </label>
             `}
-        ${llm.jev ? this.#judging(llm, evaluators) : nothing}
-        ${this.#checks(checks, evaluators)}
+        ${llm.jev ? this.#judging(llm, evaluators, checks) : this.#checks(checks, evaluators)}
         ${this.#tools(toolList, tools, profile)}
       </div>
     `;
@@ -906,7 +914,9 @@ class SettingsSheet extends LitElement {
   }
 
   // Evaluating (Jev): only where the picture carries `jev`, which the Mac app's does not.
-  #judging(llm, evaluators) {
+  // Under the key, what uses evaluators: the values, then the choice point boxes, each
+  // in a fold of its own.
+  #judging(llm, evaluators, checks) {
     return html`
         <div class="judging">
           <span class="group">Evaluating</span>
@@ -920,6 +930,7 @@ class SettingsSheet extends LitElement {
             remove: () => this.#actor.send({ type: "_removeJevKey" }),
           })}
           ${this.#valueChecks(llm, evaluators)}
+          ${this.#checks(checks, evaluators)}
         </div>
     `;
   }
@@ -933,9 +944,8 @@ class SettingsSheet extends LitElement {
     const choosable = evaluators.filter((e) => !e.removing);
     return html`
       <div class="checks">
-        <span class="group">Choice point checks</span>
         <details class="keys-fold">
-          <summary>Choose what Jev checks</summary>
+          <summary>Choice point evaluators</summary>
           <div class="boxes">${BOXES.map(({ field, label }) => this.#checkBox(field, label, checks[field], choosable))}</div>
         </details>
       </div>
@@ -966,7 +976,7 @@ class SettingsSheet extends LitElement {
     };
     return html`
       <details class="keys-fold value-checks">
-        <summary>Values checks</summary>
+        <summary>Your values evaluators</summary>
         <div class="boxes">${row("values", "Check values with")}${row("examples", "Check examples with")}</div>
       </details>
     `;

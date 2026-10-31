@@ -27,7 +27,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Per text, in the order given, Jev's answer to each question and whether the text passed; or an error: not-found for an unknown evaluator, off for one switched off, no-questions for one with nothing to ask, or the error llm: decide gave (busy once it stayed busy after every retry).",
+    "description": "Per text, in the order given, Jev's answer to each question and whether the text passed; or an error: not-found for an unknown evaluator, no-questions for one with nothing to ask, or the error llm: decide gave (busy once it stayed busy after every retry); off is never given, since any evaluator may be used.",
     "oneOf": [
       {
         "type": "object",
@@ -126,8 +126,7 @@
   },
   "supersededBy": [],
   "tool": {
-    "description": "Checks texts with one of the reader's switched-on evaluators (ids from evaluators: active): Jev answers each of its questions about each text, and a text passes when it gets the expected answers. Use it to test your own suggestions, such as candidate names or wordings, before offering them, and offer only those that pass. Each use costs a little.",
-    "label": "Checking with an evaluator",
-    "switch": false
+    "description": "Checks texts with one of the reader's evaluators (ids from evaluators: active): Jev answers each of its questions about each text, and a text passes when it gets the expected answers. Use it to test your own suggestions, such as candidate names or wordings, before offering them, and offer only those that pass. Each use costs a little.",
+    "label": "Checking with an evaluator"
   }
 }

@@ -92,6 +92,7 @@ class ActorController {
         side: child.getAttribute("side") ?? undefined,
         showsOn: child.getAttribute("shows-on") ?? undefined,
         flag: child.getAttribute("flag") ?? undefined,
+        admin: child.hasAttribute("admin"),
       }));
     // A remembered button the page no longer has is dropped.
     const recalled = memory.recall();
@@ -127,7 +128,7 @@ class ActorController {
     unmount(this.actor);
   }
 
-  // The view draws the layout without the children a flag hides (machine.js: visible).
+  // The view draws the layout without the children a flag or `admin` hides (machine.js: visible).
   get snapshot() {
     const snapshot = this.actor?.getSnapshot();
     if (!snapshot) return snapshot;

@@ -29,13 +29,13 @@ test("everyone else sees one tab, Settings; the admin sees Administration too, i
   assert.deepEqual(slottedOf(CHILDREN, false, "Administration"), [0]);
 });
 
-test("it asks session at start and follows session.changed after", async () => {
+test("it asks session and flags at start and follows session.changed after", async () => {
   const asked = [];
   const actor = createActor(machine, {
     input: { ask: async (...a) => (asked.push(a), { userId: "a", registrationOpen: false, admin: true }), children: CHILDREN },
   }).start();
   await flush();
-  assert.deepEqual(asked, [["session", "read", {}]]);
+  assert.deepEqual(asked, [["session", "read", {}], ["flags", "read", {}]]);
   assert.equal(actor.getSnapshot().context.admin, true);
   actor.send({ type: "_pick", label: "Administration" });
   assert.deepEqual(slottedOf(CHILDREN, true, actor.getSnapshot().context.picked), [1, 2]);
@@ -60,4 +60,28 @@ test("a pick handed back by the view is shown to the admin and kept for anyone e
   const { admin: isAdmin, picked } = guest.getSnapshot().context;
   assert.equal(shownOf(CHILDREN, isAdmin, picked), "Settings");
   assert.equal(picked, "Administration");
+});
+
+// The Evaluators tab carries `flag="evaluators"` (8): hidden while flags hides the feature,
+// and until flags answers; a page without flags hides nothing.
+test("a flagged tab shows only while flags reports its feature shown", async () => {
+  const children = [
+    { label: "Settings", admin: false },
+    { label: "Evaluators", admin: false, flag: "evaluators" },
+    { label: "Generators", admin: false },
+  ];
+  assert.deepEqual(tabsOf(children, false, null), ["Settings", "Generators"], "until flags answers");
+  assert.deepEqual(tabsOf(children, false, ["evaluators"]), ["Settings", "Generators"]);
+  assert.deepEqual(tabsOf(children, false, []), ["Settings", "Evaluators", "Generators"]);
+  assert.deepEqual(slottedOf(children, false, "Evaluators", ["evaluators"]), [0], "a hidden pick falls back to Settings");
+  const actor = createActor(machine, {
+    input: { ask: async (target) => (target === "flags" ? { off: ["evaluators"], hidden: ["evaluators"] } : { userId: "a" }), children },
+  }).start();
+  await flush();
+  assert.deepEqual(actor.getSnapshot().context.hidden, ["evaluators"]);
+  actor.send({ type: "flags.changed", off: [], hidden: [] });
+  assert.deepEqual(tabsOf(children, false, actor.getSnapshot().context.hidden), ["Settings", "Evaluators", "Generators"], "the way back");
+  const bare = createActor(machine, { input: { ask: async () => ({ error: "no-answerer" }), children } }).start();
+  await flush();
+  assert.deepEqual(bare.getSnapshot().context.hidden, [], "a page without flags hides nothing");
 });

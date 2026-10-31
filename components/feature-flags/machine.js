@@ -11,7 +11,7 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // the ones `flags` keeps and pages name in `flag="…"` (8).
 export const FEATURES = [
   { id: "chats", name: "Chats", says: "The Chats tab, where people talk with the language model about what they read." },
-  { id: "evaluators", name: "Evaluators", says: "The Evaluators tab, where people write questions Jev answers about a text." },
+  { id: "evaluators", name: "Evaluators", says: "The Evaluators tab of Settings, where people write questions Jev answers about a text, and the checks under the Jev key." },
   { id: "choice-points", name: "Choice points", says: "The choice point sheets under a journal day, and their checks in Settings." },
   { id: "highlights", name: "Highlights", says: "The Highlights row at the top of a book's notes." },
   { id: "undo", name: "Undo", says: "The Undo and Redo buttons beside the gear and their keys. Removing a value still offers Undo in its notice." },

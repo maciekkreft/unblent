@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove, visible } from "../machine.js";
+import { machine, nextGroup, nextTab, tabsOf, stripOf, entryOf, canMove, offersMove, visible, adminOf } from "../machine.js";
 
 const VIEWS = [
   { name: "token-sheet", label: "Tokens" },
@@ -879,4 +879,29 @@ test("until flags answers every flagged child is hidden; with nothing hidden the
   assert.equal(visible(context).stage, "a");
   const open = { ...context, hidden: [] };
   assert.equal(visible(open), open);
+});
+
+// The try page's Starters tab carries `admin` (8): drawn for the admin only, and not while
+// the admin views as someone, as the gear's sheet hides its Administration tabs.
+test("a child marked admin is drawn only for the admin's own session", async () => {
+  const views = [
+    { name: "list-then-item#evaluators", label: "Evaluators" },
+    { name: "evaluator-starters", label: "Starters", admin: true },
+  ];
+  assert.equal(adminOf({ userId: "a", admin: true }), true);
+  assert.equal(adminOf({ userId: "a", admin: true, viewingAs: "Guest 3" }), false);
+  assert.equal(adminOf({ userId: "g", guest: true }), false);
+  assert.equal(adminOf({ error: "no-answerer" }), false);
+  const ask = (target) =>
+    target === "session" ? Promise.resolve({ userId: "a", admin: true }) : target === "flags" ? Promise.resolve({ off: [], hidden: [] }) : stored({ stage: null, docks: {} })(target);
+  const { actor } = await settle(ask, { views });
+  await new Promise((r) => setTimeout(r));
+  const names = () => visible(actor.getSnapshot().context).views.map((v) => v.name);
+  assert.deepEqual(names(), ["list-then-item#evaluators", "evaluator-starters"]);
+  actor.send({ type: "session.changed", userId: "g", admin: false, viewingAs: "Guest 3" });
+  assert.deepEqual(names(), ["list-then-item#evaluators"]);
+  actor.send({ type: "session.changed", userId: "a", admin: true });
+  assert.deepEqual(names(), ["list-then-item#evaluators", "evaluator-starters"], "the way back");
+  const context = { views, docks: {}, stage: "evaluator-starters", hidden: [], admin: false };
+  assert.equal(visible(context).stage, "list-then-item#evaluators", "before session answers it is hidden too");
 });

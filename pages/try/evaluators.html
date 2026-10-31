@@ -54,14 +54,16 @@
     <script type="module" src="/static/components/evaluator-list/view.js"></script>
     <script type="module" src="/static/components/evaluator-editor/view.js"></script>
     <script type="module" src="/static/components/free-use/view.js"></script>
+    <script type="module" src="/static/components/evaluator-starters/view.js"></script>
   </head>
   <body>
     <viewas-bar></viewas-bar>
     <dock-desk>
       <list-then-item id="evaluators" label="Evaluators" height="fill" shows-on="evaluator.selected">
-        <evaluator-list subject folded label="Evaluators"></evaluator-list>
-        <evaluator-editor subject shows-on="evaluator.selected" height="fill"></evaluator-editor>
+        <evaluator-list folded label="Evaluators"></evaluator-list>
+        <evaluator-editor shows-on="evaluator.selected" height="fill"></evaluator-editor>
       </list-then-item>
+      <evaluator-starters label="Starters" admin></evaluator-starters>
       <free-use control></free-use>
     </dock-desk>
     <notice-stack></notice-stack>

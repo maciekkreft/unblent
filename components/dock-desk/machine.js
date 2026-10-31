@@ -144,9 +144,20 @@ const shown = (context, type) => {
 
 // The views a flag hides (8): a child whose `flag` names a feature `flags` reports
 // hidden. Until `flags` answers (`hidden` is null) every flagged child is hidden, the
-// same as `flags` itself with no answer yet (3.1).
+// same as `flags` itself with no answer yet (3.1). A child marked `admin` is hidden from
+// everyone but the admin, and from the admin while viewing as someone (12), as the gear's
+// sheet hides its admin tabs.
 const hiddenNames = (context) =>
-  new Set(context.views.filter((v) => v.flag && (context.hidden === null || context.hidden.includes(v.flag))).map((v) => v.name));
+  new Set(
+    context.views
+      .filter((v) => (v.flag && (context.hidden === null || context.hidden.includes(v.flag))) || (v.admin && !context.admin))
+      .map((v) => v.name),
+  );
+
+// Whether a session picture is the admin's own: signed in as the admin and not viewing as
+// someone (12).
+export const adminOf = (picture) =>
+  Boolean(picture && !picture.error && picture.userId != null && picture.admin === true && !picture.viewingAs);
 
 // The layout as drawn: the stored one with the hidden views left out, a side left
 // empty dropped, a side whose shown tab is hidden showing its first remaining one, and
@@ -320,6 +331,7 @@ export const machine = setup({
     read: fromPromise(({ input }) => input.ask("dock", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
 }).createMachine({
   id: "dock-desk",
@@ -340,7 +352,9 @@ export const machine = setup({
       "another device's change never moves a tab; and `flag` naming a feature, which draws no " +
       "tab and no panel for that child while `flags` reports the feature hidden, and until " +
       "`flags` answers, while the stored layout keeps its place for when the feature comes " +
-      "back on (a page without `flags` hides nothing). These are read from each child and are not attributes of `dock-desk` itself. While " +
+      "back on (a page without `flags` hides nothing); and `admin`, which draws that child only for " +
+      "the admin, and not while the admin views as someone, as the gear's sheet does with its " +
+      "Administration tabs. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. " +
       "A child that announces tabs of its own (`tabs.shown`) is drawn, wherever it sits and " +
@@ -374,7 +388,7 @@ export const machine = setup({
     kind: "view",
     emits: ["dock.arranged", "tab.picked", "tab.closed", "tab.moved"],
     attributes: [],
-    asks: ["dock: read", "settings: read", "flags: read"],
+    asks: ["dock: read", "settings: read", "flags: read", "session: read"],
   },
   // dock-desk keys children by name here and in the view; when two views share a
   // name (note-editor#1/#2, the notes-on-desk task) this is the edge to revisit.
@@ -399,15 +413,27 @@ export const machine = setup({
     tabs: {},
     // The features `flags` reports hidden (8), null until it answers.
     hidden: null,
+    // Whether the account is the admin's own, for a child marked `admin`; false until
+    // `session` answers, so such a child never shows to anyone else first.
+    admin: false,
   }),
-  // Which children a flag hides is asked once at mount, beside the layout, and
-  // followed through flags.changed (4.3, fourth rule).
-  invoke: {
-    src: "flags",
-    input: ({ context }) => ({ ask: context.ask }),
-    onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
-    onError: { actions: assign({ hidden: [] }) },
-  },
+  // Which children a flag hides, and whether the account is the admin, are asked once at
+  // mount, beside the layout, and followed through flags.changed and session.changed
+  // (4.3, fourth rule).
+  invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
+    {
+      src: "session",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ admin: ({ event }) => adminOf(event.output) }) },
+      onError: { actions: [] },
+    },
+  ],
   initial: "loading",
   states: {
     loading: {
@@ -571,6 +597,7 @@ export const machine = setup({
       actions: assign({ arranging: ({ event }) => event.arranging, vimKeys: ({ event }) => event.vimKeys === true }),
     },
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
+    "session.changed": { actions: assign({ admin: ({ event }) => adminOf(event) }) },
     // A child announces its own tabs: kept by its address, for a child on this desk only.
     "tabs.shown": {
       guard: ({ context, event }) => names(context.views).includes(event.view),

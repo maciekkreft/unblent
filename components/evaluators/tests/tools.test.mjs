@@ -128,7 +128,7 @@ test("a description is saved, announced and listed; a save without one keeps it"
   assert.equal(changed.at(-1).description, "", "emptied on purpose");
 });
 
-test("active lists the switched-on evaluators with something to ask, Your values among them", async () => {
+test("active lists every evaluator with something to ask, switched on or not, Your values among them", async () => {
   const rows = [
     row(),
     row({ id: ID2, name: "Off", on: false }),
@@ -154,35 +154,34 @@ test("active lists the switched-on evaluators with something to ask, Your values
       },
     ],
   });
-  assert.equal(evaluators.length, 2);
-  const yours = evaluators[1];
+  assert.deepEqual(evaluators.map((e) => e.id), [ID, ID2, YOURS], "the switched-off one is listed, the one with nothing to ask is not");
+  const yours = evaluators[2];
   assert.deepEqual([yours.id, yours.name, yours.combined], [YOURS, "Your values", true]);
   assert.match(yours.description, /each of your values/);
   assert.deepEqual(yours.questions.map((q) => q.expected), ["Serves"]);
 });
 
-test("active without values leaves Your values out; switched off, it is left out too", async () => {
+test("active without values leaves Your values out; switched off, it is still listed", async () => {
   const { actor } = start([row()]);
   assert.deepEqual((await active(actor)).evaluators.map((e) => e.id), [ID]);
   const two = start([row(), { id: YOURS, book: "00000000000000000000000JRN", name: "Your values", on: false, questions: [], version: 1 }], {
     values: [{ id: V1, name: "Honesty", meaning: "" }],
   });
-  assert.deepEqual((await active(two.actor)).evaluators.map((e) => e.id), [ID]);
+  assert.deepEqual((await active(two.actor)).evaluators.map((e) => e.id), [ID, YOURS]);
 });
 
-test("evaluate refuses an unknown evaluator, one switched off, and one with nothing to ask", async () => {
-  const { actor, asked } = start([row({ id: ID2, on: false }), row({ id: ID3, questions: [off] })]);
+test("evaluate refuses an unknown evaluator and one with nothing to ask", async () => {
+  const { actor, asked } = start([row({ id: ID3, questions: [off] })]);
   assert.deepEqual(await evaluate(actor, ID, ["x"]), { error: "not-found" });
   assert.deepEqual(await evaluate(actor, "nonsense", ["x"]), { error: "not-found" });
   assert.deepEqual(await evaluate(actor, YOURS, ["x"]), { error: "not-found" }, "no values fact");
-  assert.deepEqual(await evaluate(actor, ID2, ["x"]), { error: "off" });
   assert.deepEqual(await evaluate(actor, ID3, ["x"]), { error: "no-questions" });
   assert.equal(asked.length, 0);
 });
 
-test("evaluate asks Jev one text at a time and says which pass", async () => {
+test("evaluate asks Jev one text at a time and says which pass, whether the evaluator is switched on or not", async () => {
   const decide = ({ state }) => (state.text === "Run" ? answers(yes(0.9), picked(O1)) : answers(yes(0.2), picked(O2, 0.7)));
-  const { actor, asked } = start([row()], { decide });
+  const { actor, asked } = start([row({ on: false })], { decide });
   const reply = await evaluate(actor, ID, ["Run", "Run a marathon in under three hours"]);
   assert.deepEqual(
     asked.map((p) => p.state),

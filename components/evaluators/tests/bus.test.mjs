@@ -69,7 +69,7 @@ test("an evaluator's removal waits in notice-stack: Undo brings it back, the win
 // The chat's tools (7.7) on the real bus, with llm real and its call to Jev faked, so no
 // request leaves the test. A stand-in asks the way conversations' tool loop does. Two
 // checks at once find llm busy with the other, and the second waits and asks again.
-test("the chat lists the switched-on evaluators and checks texts with one through llm", async () => {
+test("the chat lists the evaluators and checks texts with one through llm", async () => {
   const Q1 = "01ARZ3NDEKTSV4RRFFQ69G5QQ1";
   const store = memory();
   store.rows.set(ID, {

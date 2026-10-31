@@ -295,16 +295,17 @@ const toQuestion = (q) => {
 const expectedOf = (q) =>
   q.kind === "pick" ? liveOptions(q).find((o) => o.id === q.expect)?.name : q.expect === "yes" ? "Yes" : q.expect === "no" ? "No" : undefined;
 
-// An evaluator the chat may use: switched on, not in its undo window, with a question to
+// An evaluator the chat may use: any of the account's, switched on or not, since the
+// chat's own switch in Settings decides (7.7); not in its undo window, with a question to
 // ask, its questions as announced (Your values' from the values given).
 function usable(context, r, values) {
-  if (!r || !r.on || r.removing) return null;
+  if (!r || r.removing) return null;
   const evaluator = announce(context, r, values ?? undefined);
   const questions = evaluator.questions.filter(askable);
   return questions.length ? { ...evaluator, questions } : null;
 }
 
-// Every switched-on evaluator of every book, as the model reads it (queries/active.json).
+// Every evaluator of the account, as the model reads it (queries/active.json).
 function replyActive(context, reply) {
   withValues(context, (values) => {
     const evaluators = [...context.evaluators.values()]
@@ -384,7 +385,6 @@ function replyEvaluate(context, payload, reply) {
   const run = (values) => {
     const r = id === YOURS ? (values ? yours(context) : null) : live(context, id);
     if (!r || r.removing) return reply({ error: "not-found" });
-    if (!r.on) return reply({ error: "off" });
     const evaluator = usable(context, r, values);
     if (!evaluator) return reply({ error: "no-questions" });
     const questions = evaluator.questions.map(toQuestion);
@@ -831,14 +831,16 @@ export const machine = setup({
   id: "evaluators",
   meta: {
     description:
-      "Owns the evaluators kept with each book: an evaluator is a name, an optional description " +
+      "Owns the account's evaluators: an evaluator is a name, an optional description " +
       "of what it checks (shown under its name in the evaluator editor and read by the chat), and a list of questions, " +
       "each a yes / no question with what yes and no mean, or a pick-one question with its " +
       "options, each option with an optional icon its mark on a choice point line shows; a " +
       "question may name the answer expected (an option, or yes or no), kept across a switch " +
-      "of kind and back, which a removed option takes with it once its removal settles; and it is switched on or off. Each question is switched on or off too: one " +
+      "of kind and back, which a removed option takes with it once its removal settles; and it is switched on or off, which only the Evaluate box of a try page reads. Each question is switched on or off too: one " +
       "switched off is kept, with its wording, but not asked, and a question without the " +
-      "switch counts as on. `evaluators: list` answers one book's evaluators, " +
+      "switch counts as on. Each evaluator is stored with a book, as from before evaluators " +
+      "belonged to the account, and one made now is stored with the Journal; the views list them all together. " +
+      "`evaluators: list` answers one book's evaluators, " +
       "or every book's when no book is given, in their places in the list, each with when its content last " +
       "changed (`updatedAt`, absent on one kept from before it was recorded). A new evaluator starts switched on and " +
       "goes first in the list; an edit never moves an evaluator, and a move from the list " +
@@ -852,7 +854,7 @@ export const machine = setup({
       "left by a closed tab ends at the next load. An evaluator deleted from the list " +
       "(`evaluator.discarded`) is not marked, since the list counts its undo window down on the " +
       "row, and goes at once when that window ends. An evaluator reads what it is given: the " +
-      "book's Run box asks the switched-on evaluators about a typed text, and " +
+      "try page's Evaluate box asks the switched-on evaluators about a typed text, and " +
       "choice-point-checks asks the one chosen for a choice point box about each of its " +
       "lines, whether it is switched on or not. It also presents Your values, kept with the " +
       "Journal under a fixed id, built from the user's own values (`values: read`) the way books " +
@@ -872,21 +874,21 @@ export const machine = setup({
       "the guest is made, and later changes by the admin do not reach them. Start over on a " +
       "try page, once its Undo window ends, deletes every evaluator in the browser and " +
       "copies the starters in again the same way. Your values has a fixed description. The chat " +
-      "may use two of its queries as tools, always offered, because the evaluator's own switch " +
-      "decides what they cover: `evaluators: active` (\"Listing your evaluators\") lists the " +
-      "switched-on evaluators of every book that have a question to ask, each with its description, " +
+      "may use two of its queries as tools, each with its own switch in Settings under What the chat " +
+      "may read: `evaluators: active` (\"Listing your evaluators\") lists every " +
+      "evaluator of the account that has a question to ask, switched on or not, each with its description, " +
       "its switched-on questions, their options and the answer each expects by name; " +
       "`evaluators: evaluate` (\"Checking with an evaluator\") checks up to ten texts with one " +
-      "switched-on evaluator, asking Jev (`llm: decide`) about one text at a time and, when Jev is " +
+      "of them, asking Jev (`llm: decide`) about one text at a time and, when Jev is " +
       "busy, waiting 1.5 seconds and asking again up to five times. Each text passes when every " +
       "expected answer was given, or, for Your values, when any was, as its mark is green then. " +
-      "An unknown evaluator, one switched off, or one with nothing to ask is refused, and an " +
+      "An unknown evaluator, or one with nothing to ask, is refused, and an " +
       "error Jev gives, such as no key, is the reply. It costs what any use of Jev costs and " +
       "changes nothing.",
     kind: "fact",
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
-    owns: "the evaluators kept with each book",
+    owns: "the account's evaluators",
     asks: ["session: read", "books: list", "values: read", "llm: decide"],
   },
   context: ({ input }) => ({

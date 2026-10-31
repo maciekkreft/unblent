@@ -2,10 +2,15 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { machine, tabsOf, shownOf, slottedOf } from "./machine.js";
 
-// The children as the machine reads them: each one's tab label and whether it is the
-// admin's alone. Read from this element's own light DOM, never written to.
+// The children as the machine reads them: each one's tab label, whether it is the admin's
+// alone, and the feature flag that hides it (8). Read from this element's own light DOM,
+// never written to.
 const childrenOf = (host) =>
-  [...host.children].map((c) => ({ label: c.getAttribute("label") ?? c.localName, admin: c.hasAttribute("admin") }));
+  [...host.children].map((c) => ({
+    label: c.getAttribute("label") ?? c.localName,
+    admin: c.hasAttribute("admin"),
+    ...(c.hasAttribute("flag") ? { flag: c.getAttribute("flag") } : {}),
+  }));
 
 // The tab picked, kept across reloads (3.1): the view's own UI state, so it follows the
 // browser, not the account, and losing it loses nothing. Wrapped like list-then-item's: a
@@ -119,8 +124,12 @@ class SettingsTabs extends LitElement {
   #state() {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return null;
-    const { children, admin, picked } = snapshot.context;
-    return { tabs: tabsOf(children, admin), shown: shownOf(children, admin, picked), slotted: slottedOf(children, admin, picked) };
+    const { children, admin, picked, hidden } = snapshot.context;
+    return {
+      tabs: tabsOf(children, admin, hidden),
+      shown: shownOf(children, admin, picked, hidden),
+      slotted: slottedOf(children, admin, picked, hidden),
+    };
   }
 
   // The arrow keys move between the tabs, as in every tab bar; Home and End jump.

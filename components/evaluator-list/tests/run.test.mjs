@@ -97,7 +97,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       const page = await context.newPage();
       const problems = watch(page);
       await page.goto(`${BASE_URL}/workshop/design/evaluators`, { waitUntil: "domcontentloaded" });
-      await page.click(`book-shelf .tile[data-id="${JOURNAL}"]`);
       return { context, page, problems, bodies, hold };
     };
 

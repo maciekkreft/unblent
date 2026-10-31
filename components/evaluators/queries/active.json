@@ -1,14 +1,14 @@
 {
   "payload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "No input: every switched-on evaluator of every book is wanted.",
+    "description": "No input: every evaluator of the account is wanted.",
     "type": "object",
     "properties": {},
     "additionalProperties": false
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "The switched-on evaluators of every book that have a question to ask, Your values among them when the user has values, in their places in the list. Each carries only its switched-on questions that can be asked.",
+    "description": "Every evaluator of the account that has a question to ask, switched on or not, Your values among them when the user has values, in their places in the list. Each carries only its switched-on questions that can be asked.",
     "type": "object",
     "properties": {
       "evaluators": {
@@ -116,8 +116,7 @@
     "evaluator.deleted"
   ],
   "tool": {
-    "description": "Lists the reader's evaluators that are switched on: for each, its id, name, a description of what it checks, and its questions, each with what Yes and No mean or its options, and the answer a text should get. Use it to choose an evaluator, then check text with it through evaluators: evaluate.",
-    "label": "Listing your evaluators",
-    "switch": false
+    "description": "Lists the reader's evaluators: for each, its id, name, a description of what it checks, and its questions, each with what Yes and No mean or its options, and the answer a text should get. Use it to choose an evaluator, then check text with it through evaluators: evaluate.",
+    "label": "Listing your evaluators"
   }
 }

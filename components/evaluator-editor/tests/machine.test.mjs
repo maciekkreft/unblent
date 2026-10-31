@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, isEmpty, duplicateNames, newest, shownExpect, showing, removable } from "../machine.js";
+import { machine, isEmpty, duplicateNames, shownExpect, showing, removable } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
@@ -427,7 +427,7 @@ test("rewording a question leaves as evaluator.saved with the new wording, under
   assert.deepEqual(saves(emitted).at(-1).questions.map((q) => [q.id, q.text]), [[Q1, "Goal or value?"], [Q2, "Is it something to finish?"]]);
 });
 
-test("every book's evaluators are asked for, so a pick in another book opens what that book keeps", async () => {
+test("every evaluator of the account is asked for once, so a pick of any book's evaluator opens it", async () => {
   const B = "01K6TEST000000000000000PB1";
   const theirs = { ...OTHER, id: "01K6TEST000000000000000R03", book: B, name: "Theirs" };
   const asked = [];
@@ -442,12 +442,13 @@ test("every book's evaluators are asked for, so a pick in another book opens wha
     },
   });
   actor.start();
+  await flush();
   await select(actor, { id: R, book: P });
   await select(actor, { id: theirs.id, book: B });
   assert.equal(actor.getSnapshot().context.draft.name, "Theirs");
   assert.deepEqual(
     asked.filter(([t]) => t === "evaluators"),
-    [["evaluators", "list", {}], ["evaluators", "list", {}]],
+    [["evaluators", "list", {}]],
   );
   actor.send(changed({ ...EVALUATOR, name: "Elsewhere" }));
   assert.equal(actor.getSnapshot().context.draft.name, "Theirs");
@@ -469,17 +470,6 @@ test("the Vim keys preference is read at start and followed after; without setti
   actor.send({ type: "settings.changed", vimKeys: false });
   assert.equal(ctx().vimKeys, false);
   assert.equal(ctx().draft.id, R);
-});
-
-test("a book's newest evaluator: its own only, none-timed oldest, equal times to the later id, a removing one never", () => {
-  const e = (id, book, updatedAt, removing = false) => ({ id, book, updatedAt, removing });
-  const OTHER_BOOK = "01K6TEST000000000000000PA2";
-  assert.equal(newest([], P), null);
-  assert.equal(newest([e(R, P), e(R2, P)], P).id, R2);
-  assert.equal(newest([e(R, P, "2026-01-01T00:00:00.000Z"), e(R2, P)], P).id, R);
-  assert.equal(newest([e(R, P, "2026-01-02T00:00:00.000Z"), e(R2, P, "2026-01-01T00:00:00.000Z")], P).id, R);
-  assert.equal(newest([e(R, P, "2026-01-01T00:00:00.000Z"), e(R2, P, "2026-01-02T00:00:00.000Z", true)], P).id, R);
-  assert.equal(newest([e(R, OTHER_BOOK, "2026-01-02T00:00:00.000Z")], P), null);
 });
 
 const SIGNED_IN = { userId: "u1", registrationOpen: false, guest: false, name: "Ann" };

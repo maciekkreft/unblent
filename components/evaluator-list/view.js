@@ -23,14 +23,13 @@ import {
   runsOf,
   pending,
   stoppable,
-  bookOf,
+  JOURNAL,
 } from "./machine.js";
 import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 import moved from "./events/evaluator.moved.json" with { type: "json" };
 import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 import removalStarted from "./events/removal.started.json" with { type: "json" };
-import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
 // the token is the one clock, shared with the bar's animation.
@@ -55,7 +54,6 @@ class ActorController {
         // Vim's registers are one per page, so text put there is what any editor's p pastes.
         pushRegister: toRegister,
         mint: ulid,
-        following: this.host.subject,
         drafts,
         memory,
         // The undo window comes from --duration-undo, read off the host so a stylesheet
@@ -70,7 +68,6 @@ class ActorController {
         "evaluator.moved": moved,
         "evaluator.discarded": discarded,
         "removal.started": removalStarted,
-        "pin.toggled": pinToggled,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -90,9 +87,10 @@ class ActorController {
   }
 }
 
-// The Run box's text, one entry per book, kept across reloads (3.1): the view's own UI
-// state under a key named for the component, so it follows the browser, not the account,
-// and losing it loses nothing. A browser refusing storage reads nothing and drops the write.
+// The Evaluate box's text, kept across reloads (3.1): the view's own UI state under a key
+// named for the component, so it follows the browser, not the account, and losing it loses
+// nothing. It is stored under the Journal's id, where the try page kept it while the box
+// was one per book. A browser refusing storage reads nothing and drops the write.
 const KEY = "evaluator-list.drafts";
 const readAll = () => {
   try {
@@ -103,15 +101,15 @@ const readAll = () => {
   }
 };
 const drafts = {
-  read(book) {
-    const text = readAll()[book];
+  read() {
+    const text = readAll()[JOURNAL];
     return typeof text === "string" ? text : "";
   },
-  write(book, text) {
+  write(text) {
     try {
       const all = readAll();
-      if (text) all[book] = text;
-      else delete all[book];
+      if (text) all[JOURNAL] = text;
+      else delete all[JOURNAL];
       if (Object.keys(all).length) localStorage.setItem(KEY, JSON.stringify(all));
       else localStorage.removeItem(KEY);
     } catch {
@@ -139,7 +137,7 @@ const writeFold = (folded) => {
 };
 
 // Jev's answers about each line, by evaluator, what it asks and the line's text
-// (machine.js memoryKey), kept in this browser (3.1) so a reload or coming back to a book
+// (machine.js memoryKey), kept in this browser (3.1) so a reload
 // asks nothing again. It cannot grow without bound: past MEMORY_MAX answers the oldest
 // kept are forgotten, and a line forgotten is asked again only when finished again. Read
 // once into a Map, whose order is the order the answers were kept; a browser refusing
@@ -218,7 +216,7 @@ const boxTheme = EditorView.theme({
   },
 });
 
-// The text set from the machine (another book) rather than typed, not sent back as an edit.
+// The text set from the machine rather than typed, not sent back as an edit.
 const fromMachine = Annotation.define();
 
 // What the box draws besides the text: the marks by line text, and the line in focus.
@@ -330,9 +328,8 @@ const ERRORS = {
 };
 
 class EvaluatorList extends LitElement {
-  // Follow the book open on the stage. Reflected so a page's bare `subject` reads as true.
   // `folded`: the list of evaluators starts hidden under the Evaluate box.
-  static properties = { subject: { type: Boolean, reflect: true }, folded: { type: Boolean } };
+  static properties = { folded: { type: Boolean } };
 
   static styles = css`
     :host {
@@ -340,60 +337,6 @@ class EvaluatorList extends LitElement {
       flex-direction: column;
       min-height: 0;
       overflow-y: auto;
-    }
-    /* The book the list shows and the pin that holds it, as the editor's header: the
-       same caption as the note editor's About line, the pin on the right. */
-    .header {
-      display: flex;
-      align-items: center;
-      gap: var(--space-sm);
-      min-height: var(--space-lg);
-      padding: var(--space-xs) var(--space-md) 0;
-    }
-    .about {
-      flex: 1;
-      min-width: 0;
-      margin: 0;
-      font-size: var(--text-caption);
-      color: var(--color-mute);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    /* Held on a book other than the stage's: a second line in the pin's color, so the
-       hold and the pin that releases it read as one thing. */
-    .held {
-      display: block;
-      color: var(--color-accent);
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .pin {
-      flex: none;
-      display: inline-flex;
-      appearance: none;
-      background: none;
-      border: var(--border-width) solid transparent;
-      border-radius: var(--radius-sm);
-      padding: var(--space-2xs);
-      margin: 0;
-      font: inherit;
-      font-size: var(--text-body);
-      cursor: pointer;
-      color: var(--color-body-mid);
-    }
-    .pin svg {
-      display: block;
-    }
-    .pin:hover:not([aria-pressed="true"]) {
-      color: var(--color-ink);
-    }
-    .pin[aria-pressed="true"] {
-      color: var(--color-accent);
-    }
-    .pin:focus-visible {
-      outline: none;
-      box-shadow: var(--focus-ring);
     }
     .list {
       list-style: none;
@@ -1073,7 +1016,7 @@ class EvaluatorList extends LitElement {
     });
   }
 
-  // The box follows the machine: the text when it changed elsewhere (another book), Vim,
+  // The box follows the machine: the text when it changed elsewhere, Vim,
   // the marks and the line in focus, and during a run the line asked, scrolled into view.
   #syncBox() {
     const snapshot = this.#actor.snapshot;
@@ -1131,7 +1074,6 @@ class EvaluatorList extends LitElement {
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">${ERRORS["signed-out"]}</p>`;
     if (snapshot.matches("loading")) return nothing;
-    if (snapshot.matches("idle")) return html`<p class="empty">Open a book to see its evaluators.</p>`;
     if (snapshot.matches("failed")) return html`<p class="empty">Evaluators unavailable.</p>`;
     const { draft, open, evaluators } = snapshot.context;
     const shown = rows(evaluators);
@@ -1139,7 +1081,6 @@ class EvaluatorList extends LitElement {
     const focusId = this.#focusRow(ids, open);
     const stop = notice(snapshot.context);
     return html`
-      ${this.#header(snapshot)}
       ${this.#runBox(snapshot)}
       ${this.#isFolded()
         ? nothing
@@ -1152,33 +1093,6 @@ class EvaluatorList extends LitElement {
             ${shown.map((e) => this.#row(e, open, focusId, snapshot.context))}
           </ul>`}
       <div class="out">${stop ? html`<p class="notice ${stop}" role="status">${ERRORS[stop]}</p>` : nothing}</div>
-    `;
-  }
-
-  // Only while following the stage, where the pin means something: the book the list
-  // shows, and the pin that keeps it there when the stage moves (12).
-  #header(snapshot) {
-    const { following, book, pin, titles, subject } = snapshot.context;
-    if (!following) return nothing;
-    const title = titles[book];
-    const pinned = pin != null && pin === book;
-    const stage = bookOf(subject);
-    const open = pinned && stage != null && stage !== book ? (titles[stage] ?? subject?.title) : null;
-    return html`
-      <div class="header">
-        <p class="about">
-          ${title ? html`About: ${title}` : nothing}${open ? html`<span class="held">Pinned · ${open} is open</span>` : nothing}
-        </p>
-        <button
-          class="pin"
-          type="button"
-          aria-pressed=${pinned}
-          aria-label=${pinned ? "Unpin evaluators" : "Pin evaluators"}
-          @click=${() => this.#actor.send({ type: "_togglePin" })}
-        >
-          ${icon("push-pin")}
-        </button>
-      </div>
     `;
   }
 

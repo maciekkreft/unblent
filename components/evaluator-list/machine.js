@@ -1,20 +1,16 @@
 import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 
-// The view component that lists the open book's evaluators (6.4), the list of the
-// Evaluators tab's list-then-item. It owns only UI state — the book it shows, the rows,
-// the row the editor shows, and a draft id for New evaluator — and points at three facts: it
-// asks subject: read for what is open and follows subject.changed, asks evaluators: list
-// for the open book and follows evaluator.changed / evaluator.deleted, asks session: read
-// for whether anyone is signed in and follows session.changed, asks books: list
-// for what each book is called and follows book.changed /
-// book.deleted, and asks settings: read for the "Vim keys" preference (12) and follows
-// settings.changed (4.3, fourth rule), and asks pins: read for the book the tab is pinned
-// to and follows pins.changed. Its pin, beside the line naming the book, emits the same
-// gesture as the editor's, pin.toggled, so `pins` stays the one place the pin lives and
-// the hold is visible without opening an evaluator. Which row is open it learns only from the editor's
-// evaluator.opened, never from its own pick, because the editor also opens evaluators by
-// itself (another book, a reload, a pin) and one source keeps the mark right. A pick and a tick leave as gestures (4.3, fifth rule). The
-// ask and the id minting arrive through input, so this stays importable in Node.
+// The view component that lists the account's evaluators (6.4), the list of the
+// Evaluators tab's list-then-item on the try page. It owns only UI state — the rows, the
+// row the editor shows, and a draft id for New evaluator — and points at three facts: it
+// asks evaluators: list for every evaluator and follows evaluator.changed /
+// evaluator.deleted, asks session: read for whether anyone is signed in and follows
+// session.changed, and asks settings: read for the "Vim keys" preference (12) and follows
+// settings.changed (4.3, fourth rule). Which row is open it learns only from the editor's
+// evaluator.opened, never from its own pick, because the editor also opens an evaluator
+// by itself after a reload, and one source keeps the mark right. A pick and a tick leave
+// as gestures (4.3, fifth rule). The ask and the id minting arrive through input, so this
+// stays importable in Node.
 //
 // New evaluator is always the first row and always names a minted id no evaluator has
 // yet, so picking it opens an empty editor under that id; once the editor saves,
@@ -34,7 +30,7 @@ export const UNTITLED = "Untitled evaluator";
 
 const live = (items) => items.filter((x) => !x.removing);
 
-// The rows under New evaluator: the book's evaluators, in the order the user set them,
+// The rows under New evaluator: the account's evaluators, in the order the user set them,
 // leaving out any whose deletion can still be undone in the corner notice.
 export const rows = (evaluators) => live(evaluators);
 
@@ -42,8 +38,12 @@ export const rows = (evaluators) => live(evaluators);
 const switchedOn = (question) => question.on !== false;
 
 
-// An evaluator is kept with a book, so only a subject that is a book has evaluators.
-export const bookOf = (subject) => (subject?.kind === "book" ? subject.id : null);
+// Evaluators belong to the account, but each is stored with a book (`evaluators`); a new
+// one is stored with the Journal, under the fixed id `books` gives it.
+export const JOURNAL = "00000000000000000000000JRN";
+
+// The book a pick names: the evaluator's own, or the Journal for one not made yet.
+const bookFor = (context, id) => context.evaluators.find((e) => e.id === id)?.book ?? JOURNAL;
 
 const filled = (s) => typeof s === "string" && s.trim() !== "";
 
@@ -227,7 +227,7 @@ export const results = (asked, answers) => {
 
 // What the user sees (7.3), shown by `show.py components` and the components page.
 const DESCRIPTION =
-  "Lists the evaluators kept with the open book and checks a text with them. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept. There is no button: a line is checked once the user has finished it, by pressing Enter, by moving the cursor to another line, or by leaving the box; a paste finishes every line it brings. Each line is checked on its own with the switched-on evaluators, asking only their switched-on questions; a line without words (no letter or digit in any script, such as one of only spaces, \"*\" or \"-\") is skipped and gets no mark. Finished lines wait their turn and each is one request to Jev, sent one after another, never two at once; a small Stop shows only while more than one line waits, and lets the line being asked be answered and asks no more until another line is finished. Answers are remembered in this browser, by evaluator, what it asks and the line's text, so a reload or coming back to the book shows the marks again without asking Jev, and nothing is asked when the page opens; a line typed but never finished is not asked. At most 1000 answers are kept; when there are more, the oldest are forgotten, and their lines are asked again only when finished again. A change to what an evaluator asks (a question, an option, a question's or the evaluator's tick) removes its marks and, two seconds after the last change, checks every line again, one at a time; a rename or a move asks nothing. Deleting a line removes its marks with it, and so does editing it, until it is finished again. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. Under the box, a panel tells about one line: while lines are being checked the line answered last, otherwise the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the checking: the lines already answered keep their marks, the ones waiting are not asked until finished again. Under the box a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. The evaluators are in the order the user set, kept on the account and the same on every device: a new evaluator goes to the top, an edit does not move one, and evaluators from before keep the order they had, oldest first, until moved. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. With `subject` it follows the book open on the stage, and another book shows that book's evaluators; while no book is open, or without `subject`, it says to open a book. The Journal, like any book, lists only its own evaluators; among them is Your values, built from the user's values, a row like any other that can be switched off and moved, and whose questions the Evaluate box asks like any evaluator's. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. With Vim keys on, never while typing in a field: dd cuts the row, greyed and marked Cut with no countdown, and the keyboard stays in the list; p places it below the row the cursor is on and P above; u on the cut row puts it back. While a row is cut, Escape does not leave the list but starts the row's delete with its undo countdown on the row, and u, Enter or a click on a row counting down takes the delete back. When the countdown ends the evaluator is deleted, with no notice after it, as in Notes and Chats. If the keyboard leaves the list while a row is cut or counting down (a row opened, another panel, a click elsewhere), the delete moves instead to the dark notice in the corner with its Undo, as a delete from the editor does, and the evaluator is deleted when that notice's time runs out. o starts a new evaluator below the cursor row and O above it, opening its editor; it takes that place once something is written in it. cc opens the evaluator's editor with the keyboard in its name. New evaluator stays put: dd does nothing there, and a move from it goes to the top. Your values cannot be deleted, so dd does nothing on its row either. On a try page, when a guest has used all its free use nothing more is checked and under the box it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it says \"Free trials are paused for now.\"; a guest the admin blocked reads \"This trial has ended.\" The text is kept per book in this browser, so a reload or coming back to the book shows it again. With `subject`, a line at the top names the book shown, \"About: Journal\", with a pin at its right, the same pin as the editor's: it is off until the user presses it, so the list follows the book on the stage. Pressed, it turns the accent color and the list stays on that book when another comes on the stage; the line then also says \"Pinned · ACT made simple is open\" with the stage's book, so a list held on another book says so. Pressing the pin again, here or in the editor, brings the stage's book back at once. The pin is kept by `pins`, so it survives a reload. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself on another book, after a reload or a pin, and the keyboard starts from it. Signed out it shows no box, no \"Evaluated by\" line and no rows, only \"Sign in to run evaluators.\"; the evaluators stay kept in this browser and come back when the user signs in, without a reload. On a try page a visitor not yet signed in still sees the starters and has lines checked, since the first check makes the guest.";
+  "Lists the account's evaluators and checks a text with them, on the Evaluators try page. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept. There is no button: a line is checked once the user has finished it, by pressing Enter, by moving the cursor to another line, or by leaving the box; a paste finishes every line it brings. Each line is checked on its own with the switched-on evaluators, asking only their switched-on questions; a line without words (no letter or digit in any script, such as one of only spaces, \"*\" or \"-\") is skipped and gets no mark. Finished lines wait their turn and each is one request to Jev, sent one after another, never two at once; a small Stop shows only while more than one line waits, and lets the line being asked be answered and asks no more until another line is finished. Answers are remembered in this browser, by evaluator, what it asks and the line's text, so a reload shows the marks again without asking Jev, and nothing is asked when the page opens; a line typed but never finished is not asked. At most 1000 answers are kept; when there are more, the oldest are forgotten, and their lines are asked again only when finished again. A change to what an evaluator asks (a question, an option, a question's or the evaluator's tick) removes its marks and, two seconds after the last change, checks every line again, one at a time; a rename or a move asks nothing. Deleting a line removes its marks with it, and so does editing it, until it is finished again. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. Under the box, a panel tells about one line: while lines are being checked the line answered last, otherwise the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the checking: the lines already answered keep their marks, the ones waiting are not asked until finished again. Under the box a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. The evaluators are in the order the user set, kept on the account and the same on every device: a new evaluator goes to the top, an edit does not move one, and evaluators from before keep the order they had, oldest first, until moved. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. Every evaluator of the account is listed, whichever book it was once kept with; a new one is kept with the Journal. Where the values are on the page, Your values, built from the user's values, is a row like any other that can be switched off and moved, and whose questions the Evaluate box asks like any evaluator's. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. With Vim keys on, never while typing in a field: dd cuts the row, greyed and marked Cut with no countdown, and the keyboard stays in the list; p places it below the row the cursor is on and P above; u on the cut row puts it back. While a row is cut, Escape does not leave the list but starts the row's delete with its undo countdown on the row, and u, Enter or a click on a row counting down takes the delete back. When the countdown ends the evaluator is deleted, with no notice after it, as in Notes and Chats. If the keyboard leaves the list while a row is cut or counting down (a row opened, another panel, a click elsewhere), the delete moves instead to the dark notice in the corner with its Undo, as a delete from the editor does, and the evaluator is deleted when that notice's time runs out. o starts a new evaluator below the cursor row and O above it, opening its editor; it takes that place once something is written in it. cc opens the evaluator's editor with the keyboard in its name. New evaluator stays put: dd does nothing there, and a move from it goes to the top. Your values cannot be deleted, so dd does nothing on its row either. On a try page, when a guest has used all its free use nothing more is checked and under the box it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it says \"Free trials are paused for now.\"; a guest the admin blocked reads \"This trial has ended.\" The text is kept in this browser, so a reload shows it again. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself after a reload, and the keyboard starts from it. Signed out it shows no box, no \"Evaluated by\" line and no rows, only \"Sign in to run evaluators.\"; the evaluators stay kept in this browser and come back when the user signs in, without a reload. On a try page a visitor not yet signed in still sees the starters and has lines checked, since the first check makes the guest.";
 // --- The Evaluate box ------------------------------------------------------------------
 // A line is checked once the user has finished it (the view tells: Enter, the cursor on
 // another line, a paste, the box losing the keyboard). Finished lines wait in a queue and
@@ -415,12 +415,6 @@ export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn =
 // What every evaluator shown asks, one signature each, so a change to it is seen.
 const askedBy = (evaluators) => askable(evaluators).map((a) => `${a.id}|${signature(a)}`);
 
-const without = (map, id) => {
-  if (!(id in map)) return map;
-  const { [id]: _, ...rest } = map;
-  return rest;
-};
-
 const withoutKey = (map, key) => {
   if (!map.has(key)) return map;
   const next = new Map(map);
@@ -428,7 +422,7 @@ const withoutKey = (map, key) => {
   return next;
 };
 
-// A different book, or none, starts the box afresh: nothing waits and nothing is asked.
+// The box as it starts: nothing waits and nothing is asked.
 const fresh = { text: "", queue: [], asking: null, job: null, failures: {}, refused: null, picked: null, placing: null };
 
 // The pause after an evaluator changes before its lines are asked again, so typing in the
@@ -496,43 +490,6 @@ const remint = (context, evaluators) => (evaluators.some((e) => e.id === context
 
 const shownHas = (context, id) => rows(context.evaluators).some((e) => e.id === id);
 
-// What books says about each book's title, for the line naming the book shown.
-const fromList = (event) => {
-  const books = Array.isArray(event.output?.books) ? event.output.books : [];
-  return Object.fromEntries(books.map((b) => [b.id, b.title]));
-};
-
-// The book the list shows: the one the tab is pinned to, else the book on the stage.
-export const wanted = ({ pin, subject }) => pin ?? bookOf(subject);
-
-// A new subject or pin: `next` gives both. A different book is asked for afresh; no book
-// shows the line that says to open one. While pinned the subject is only noted, and
-// unpinning shows the book on the stage at once, because a list left on the pinned book
-// would offer no way back to it.
-// `first` runs before the change, while the context is still the one it was decided on.
-const follow = (next, first = []) => [
-  {
-    guard: ({ context, event }) => wanted(next({ context, event })) === context.book,
-    actions: [...first, assign(({ context, event }) => next({ context, event }))],
-  },
-  {
-    guard: ({ context, event }) => wanted(next({ context, event })) != null,
-    target: ".loading",
-    actions: [
-      ...first,
-      assign(({ context, event }) => {
-        const n = next({ context, event });
-        const book = wanted(n);
-        return { ...fresh, ...n, book, text: context.drafts.read(book), evaluators: [] };
-      }),
-    ],
-  },
-  {
-    target: ".idle",
-    actions: [...first, assign(({ context, event }) => ({ ...fresh, ...next({ context, event }), book: null, evaluators: [] }))],
-  },
-];
-
 // A request ended: its line is no longer asked, and what came back is remembered, or why
 // it failed is kept and nothing more is asked.
 const answered = enqueueActions(({ context, event, enqueue }) => {
@@ -564,21 +521,9 @@ const pageMemory = () => {
 
 export const machine = setup({
   actors: {
-    // The starting picture: the pin, then the subject. pins.changed and subject.changed are
-    // each held for this ask until their reply lands (supersededBy), so they are applied
-    // after, in order.
-    readSubject: fromPromise(async ({ input }) => {
-      if (!input.following) return { subject: null, pin: null };
-      const pins = await input.ask("pins", "read", {});
-      const subject = await input.ask("subject", "read", {});
-      return { subject: subject?.subject ?? null, pin: typeof pins?.evaluators === "string" ? pins.evaluators : null };
-    }),
-    // The book's evaluators; evaluator.changed / evaluator.deleted are held for this ask
-    // until its reply lands, so a change that races it is applied after it.
-    load: fromPromise(({ input }) => input.ask("evaluators", "list", { book: input.book })),
-    // book.changed / book.deleted are held for this ask until its reply lands. A page
-    // without books gets no-answerer, and then no book has a title.
-    books: fromPromise(({ input }) => (input.following ? input.ask("books", "list", {}) : Promise.resolve({ books: [] }))),
+    // Every evaluator; evaluator.changed / evaluator.deleted are held for this ask until
+    // its reply lands, so a change that races it is applied after it.
+    load: fromPromise(({ input }) => input.ask("evaluators", "list", {})),
     // The "Vim keys" device preference (12); on a page without a settings fact the ask
     // replies no-answerer and the letters stay off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
@@ -601,17 +546,17 @@ export const machine = setup({
   meta: {
     description: DESCRIPTION,
     kind: "view",
-    emits: ["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started", "pin.toggled"],
-    attributes: ["subject", "folded"],
-    asks: ["evaluators: list", "subject: read", "settings: read", "llm: decide", "books: list", "pins: read", "llm: read", "session: read"],
+    emits: ["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started"],
+    attributes: ["folded"],
+    asks: ["evaluators: list", "settings: read", "llm: decide", "llm: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
     // Puts text copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     mint: input.mint,
-    // The box's text per book, kept by the view across reloads (3.1); without one the
-    // text lives only for this page.
+    // The box's text, kept by the view across reloads (3.1); without one the text lives
+    // only for this page.
     drafts: input.drafts ?? { read: () => "", write: () => {} },
     // Each evaluator's answers about each line, kept by the view in this browser (3.1);
     // without one they live only for this page.
@@ -619,16 +564,7 @@ export const machine = setup({
     // How many answers were remembered in this page, so the view draws each one.
     remembered: 0,
     undoMs: input.undoMs ?? 3000,
-    following: Boolean(input.following),
-    subject: null,
-    book: null,
-    // The book `pins` holds for this tab, and whether pins.changed came before the start
-    // reply, which is then the older picture.
-    pin: null,
-    pinsObserved: false,
     evaluators: [],
-    // Each book's title by id, empty until books answers.
-    titles: {},
     // The evaluator the editor shows, learned from evaluator.opened; the row marked.
     open: null,
     draft: input.mint(),
@@ -653,19 +589,11 @@ export const machine = setup({
     // ({ at, line }) for the panel; and a new evaluator started with o or O, with where
     // it goes ({ id, after, before }).
     ...fresh,
+    text: input.drafts?.read() ?? "",
   }),
-  // The subject and settings reads run for the machine's whole life, so a book's load
+  // The settings, llm and session reads run for the machine's whole life, so the load
   // never cancels them.
   invoke: [
-    {
-      src: "readSubject",
-      input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: follow(({ context, event }) => ({
-        subject: event.output?.subject ?? null,
-        pin: context.pinsObserved ? context.pin : (event.output?.pin ?? null),
-      })),
-      onError: { actions: [] },
-    },
     {
       src: "settings",
       input: ({ context }) => ({ ask: context.ask }),
@@ -686,26 +614,19 @@ export const machine = setup({
       },
       onError: { actions: assign({ signedIn: true }) },
     },
-    {
-      src: "books",
-      input: ({ context }) => ({ ask: context.ask, following: context.following }),
-      onDone: { actions: assign({ titles: ({ event }) => fromList(event) }) },
-      onError: { actions: [] },
-    },
   ],
-  initial: "idle",
+  initial: "loading",
   states: {
-    idle: {},
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ ask: context.ask, book: context.book }),
+        input: ({ context }) => ({ ask: context.ask }),
         onDone: [
           {
             guard: ({ event }) => Array.isArray(event.output?.evaluators),
             target: "ready",
             actions: assign(({ context, event }) => {
-              const evaluators = sorted(event.output.evaluators.filter((e) => e.book === context.book));
+              const evaluators = sorted(event.output.evaluators);
               return { evaluators, draft: remint(context, evaluators) };
             }),
           },
@@ -745,7 +666,7 @@ export const machine = setup({
         _type: {
           actions: [
             assign({ text: ({ event }) => (typeof event.text === "string" ? event.text : "") }),
-            ({ context }) => context.book != null && context.drafts.write(context.book, context.text),
+            ({ context }) => context.drafts.write(context.text),
           ],
         },
         // Lines the user finished (Enter, the cursor on another line, a paste), by text,
@@ -773,7 +694,7 @@ export const machine = setup({
           actions: [
             enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
             assign({ placing: null }),
-            emit(({ context, event }) => ({ type: "evaluator.selected", id: event.id, book: context.book })),
+            emit(({ context, event }) => ({ type: "evaluator.selected", id: event.id, book: bookFor(context, event.id) })),
           ],
         },
         _switch: {
@@ -831,7 +752,7 @@ export const machine = setup({
           actions: enqueueActions(({ context, event, enqueue }) => {
             handOff(context, enqueue);
             enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
-            enqueue.emit({ type: "evaluator.selected", id: context.draft, book: context.book });
+            enqueue.emit({ type: "evaluator.selected", id: context.draft, book: JOURNAL });
           }),
         },
       },
@@ -847,35 +768,21 @@ export const machine = setup({
     "session.changed": { actions: assign({ guest: ({ event }) => event.guest === true, signedIn: ({ event }) => event.userId != null }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "evaluator.opened": { actions: assign({ open: ({ event }) => event.id }) },
-    "subject.changed": follow(({ context, event }) => ({ subject: event.subject ?? null, pin: context.pin })),
-    // The user pressed the pin: the gesture goes to `pins` (4.3, fifth rule), and the list
-    // acts on it at once, as the editor does; pins.changed then confirms it.
-    _togglePin: [
-      { guard: ({ context }) => !context.following || context.book == null, actions: [] },
-      ...follow(
-        ({ context }) => ({ subject: context.subject, pin: context.pin != null ? null : context.book }),
-        [emit(({ context }) => ({ type: "pin.toggled", what: "evaluators", id: context.pin != null ? null : context.book }))],
-      ),
-    ],
-    // `pins`' news (4.3, fourth rule): the tab's book pinned, or unpinned.
-    "pins.changed": [
-      { guard: ({ context }) => !context.following, actions: [] },
-      ...follow(({ context, event }) => ({ subject: context.subject, pin: event.evaluators ?? null, pinsObserved: true })),
-    ],
-    "book.changed": { actions: assign({ titles: ({ context, event }) => ({ ...context.titles, [event.id]: event.title }) }) },
-    "book.deleted": { actions: assign({ titles: ({ context, event }) => without(context.titles, event.id) }) },
-    // The fact's news (4.3, fourth rule), for the evaluators of the book shown only. When
+    // The fact's news (4.3, fourth rule). When
     // what the evaluators shown ask changed (a question, a question's tick, or an
     // evaluator's own tick), every line of the box waits to be asked again, once the
     // change has settled; a line already answered by that evaluator as it now asks is not
     // asked. A rename, a move or the server's acknowledgement asks nothing. A new
     // evaluator started with o or O is moved, once it exists, to where it was started.
     "evaluator.changed": {
-      guard: ({ context, event }) => event.evaluator.book === context.book,
       actions: enqueueActions(({ context, event, enqueue }) => {
         const evaluators = sorted([...context.evaluators.filter((e) => e.id !== event.evaluator.id), event.evaluator]);
+        // Only an evaluator the list already held can have changed what it asks: one that
+        // arrives new, such as the account's evaluators pulled while the page opens, asks
+        // nothing, so nothing is asked when the page opens.
         const before = new Set(askedBy(context.evaluators));
-        const changed = askedBy(evaluators).some((s) => !before.has(s));
+        const changed =
+          context.evaluators.some((e) => e.id === event.evaluator.id) && askedBy(evaluators).some((s) => !before.has(s));
         enqueue.assign({ evaluators, draft: remint(context, evaluators) });
         if (changed) {
           enqueue.assign({ ...finish(context, texts(context.text)), settling: true });
