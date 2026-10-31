@@ -118,6 +118,9 @@ def main() -> None:
     import certifi
     os.environ.setdefault("SSL_CERT_FILE", certifi.where())
     os.environ["UNBLENT_FIRST_BOOK"] = str(root / "mac" / "books" / "meditations.epub")
+    # The owner's evaluators and box settings (mac/export-checks.py); a build without
+    # them ships no folder, and then nothing is given.
+    os.environ["UNBLENT_FIRST_CHECKS"] = str(root / "mac" / "checks")
     sys.path.insert(0, str(root))
 
     import uvicorn

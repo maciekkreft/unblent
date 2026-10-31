@@ -11,8 +11,10 @@ carries one, the answers as lines.checked carries a line's.
 """
 
 import json
+import os
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,7 +23,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from jsonschema import Draft202012Validator
 
-from server.user import require_user, user_dir
+from server.user import DATA, local_user, require_user, user_dir
 
 router = APIRouter()
 
@@ -134,11 +136,66 @@ async def put_answer(key: str, request: Request, user_id: str = Depends(require_
         return _answer(connection.execute("SELECT * FROM answers WHERE key = ?", (key,)).fetchone())
 
 
+# The box settings the local edition (3.4) starts with: the Mac launcher sets
+# UNBLENT_FIRST_CHECKS to the bundled mac/checks/, which mac/export-checks.py wrote from
+# the owner's own. This component reads only its own file there; the evaluators it
+# names are the ids evaluators brings from the same folder. The lock keeps two first
+# pulls from both importing.
+_first_lock = threading.Lock()
+# Given once per Mac (11.1): a disconnect moves the account's directory to the backup
+# (5), and the boxes found empty after it must not get the settings again.
+FIRST_GIVEN = DATA / "first-choice-point-checks"
+
+
+def _bundled() -> list[dict] | None:
+    """The bundle's boxes that are well formed, or None when there is no bundle."""
+    folder = os.environ.get("UNBLENT_FIRST_CHECKS")
+    path = Path(folder) / "choice-point-checks.json" if folder else None
+    if path is None or not path.is_file():
+        return None
+    try:
+        listed = json.loads(path.read_text()).get("boxes")
+    except (ValueError, AttributeError):
+        return []
+    out = {}
+    for b in listed if isinstance(listed, list) else []:
+        if not isinstance(b, dict) or b.get("field") not in _FIELDS or b["field"] in out:
+            continue
+        box = {"evaluator": b.get("evaluator"), "questions": b.get("questions"), "also": b.get("also", [])}
+        if _BOX.is_valid(box):
+            out[b["field"]] = box
+    return [{"field": field, **box} for field, box in out.items()]
+
+
+def _first_boxes(user_id: str) -> None:
+    """Import the bundled box settings into the local account's empty boxes, before the
+    first pull answers. Only while no box has a row and the Mac never had them; a Mac
+    that already had settings is marked as given on its next pull. On the web, or
+    without a bundle, nothing happens."""
+    if user_id != local_user() or FIRST_GIVEN.exists():
+        return
+    bundled = _bundled()
+    if bundled is None:
+        return
+    with _first_lock, _connect(user_id) as connection:
+        if FIRST_GIVEN.exists():
+            return
+        if connection.execute("SELECT 1 FROM boxes LIMIT 1").fetchone() is None:
+            for b in bundled:
+                connection.execute(
+                    "INSERT INTO boxes (field, evaluator, questions, also, version, seq) VALUES (?, ?, ?, ?, 1, ?)",
+                    (b["field"], b["evaluator"], json.dumps(b["questions"], separators=(",", ":")),
+                     json.dumps(b["also"], separators=(",", ":")), _next_seq(connection)),
+                )
+    FIRST_GIVEN.touch()
+
+
 @router.get("")
 def pull(since: str = "0", user_id: str = Depends(require_user)):
     if not since.isdigit():
         return JSONResponse(_BAD, status_code=400)
     after = int(since)
+    _first_boxes(user_id)
     with _connect(user_id) as connection:
         boxes = connection.execute("SELECT * FROM boxes WHERE seq > ? ORDER BY seq", (after,)).fetchall()
         answers = connection.execute("SELECT * FROM answers WHERE seq > ? ORDER BY seq", (after,)).fetchall()
