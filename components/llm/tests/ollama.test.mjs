@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // Ollama in the Mac app (3.4): a local-edition server of this file's own, on a
 // throwaway data directory, answered by a fake OpenAI-compatible server in this process
 // that streams thinking, text and a tool call as Ollama does, and answers decisions at
-// /v1/systemone as Ollama does for nimble-v3. The same fake stands in for Jev under
+// /v1/systemone as Ollama does for kev:0.8b-mlx-bf16. The same fake stands in for Jev under
 // /jev, so choosing Jev is tried without reaching typesafe.ai. The local edition needs
 // no cookie: every request belongs to its one account.
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -20,9 +20,9 @@ const data = mkdtempSync(join(tmpdir(), "unblent-test-ollama-"));
 const received = [];
 const decided = [];
 const MODELS = [{ id: "gemma3:latest", object: "model", created: 1, owned_by: "library" }, { id: "gemma4:e2b-mlx", object: "model", created: 1, owned_by: "library" }];
-const NIMBLE = { id: "nimble-v3:latest", object: "model", created: 1, owned_by: "library" };
+const KEV = { id: "kev:0.8b-mlx-bf16", object: "model", created: 1, owned_by: "library" };
 // What the fake lists as downloaded, and the status its systemone answers with.
-const fakeState = { nimble: false, systemone: 200 };
+const fakeState = { kev: false, systemone: 200 };
 let server;
 let fake;
 let base;
@@ -63,7 +63,7 @@ const fakeOllama = () =>
   createHttp(async (req, res) => {
     if (req.method === "GET" && req.url === "/v1/models") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ object: "list", data: fakeState.nimble ? [...MODELS, NIMBLE] : MODELS }));
+      res.end(JSON.stringify({ object: "list", data: fakeState.kev ? [...MODELS, KEV] : MODELS }));
       return;
     }
     if (req.method === "POST" && (req.url === "/v1/systemone" || req.url === "/jev")) {
@@ -216,11 +216,11 @@ test("an answer streams thinking, text and one joined call, and the result goes 
   ]);
 });
 
-test("Ollama decides by default: nimble-v3 answers yes/no and pick-one at /v1/systemone, with no key and no confidence", async () => {
-  fakeState.nimble = true;
+test("Ollama decides by default: kev:0.8b-mlx-bf16 answers yes/no and pick-one at /v1/systemone, with no key and no confidence", async () => {
+  fakeState.kev = true;
   try {
     const picture = await (await edit({ address: ollama })).json();
-    assert.deepEqual(picture.decider, { provider: "ollama", model: "nimble-v3:latest", ready: true });
+    assert.deepEqual(picture.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true });
     decided.length = 0;
     const reply = await decide(DECISION);
     assert.deepEqual(reply.answers, [
@@ -228,29 +228,29 @@ test("Ollama decides by default: nimble-v3 answers yes/no and pick-one at /v1/sy
       { id: "k", p: 0.9, choice: "v", probabilities: [{ id: "g", p: 0.1 }, { id: "v", p: 0.9 }] },
     ]);
     assert.equal(reply.inputTokens, 0, "Ollama reports no usage");
-    assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/v1/systemone", null, "nimble-v3:latest"]);
+    assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/v1/systemone", null, "kev:0.8b-mlx-bf16"]);
     assert.deepEqual(decided[0].body.questions.k.criteria, { Goal: null, Value: "never finished" });
   } finally {
-    fakeState.nimble = false;
+    fakeState.kev = false;
   }
 });
 
-test("a decision Ollama cannot give is local-off when nothing listens and no-model when nimble-v3 is missing", async () => {
+test("a decision Ollama cannot give is local-off when nothing listens and no-model when kev:0.8b-mlx-bf16 is missing", async () => {
   try {
     const off = await (await edit({ address: dead })).json();
-    assert.deepEqual(off.decider, { provider: "ollama", model: "nimble-v3:latest", ready: false });
+    assert.deepEqual(off.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: false });
     assert.deepEqual(await decide(DECISION), { error: "local-off" });
 
     const missing = await (await edit({ address: ollama })).json();
-    assert.equal(missing.decider.ready, false, "Ollama answers but has no nimble-v3");
+    assert.equal(missing.decider.ready, false, "Ollama answers but has no kev:0.8b-mlx-bf16");
     assert.deepEqual(await decide(DECISION), { error: "no-model" });
 
     // Listed, yet Ollama's systemone says the model is not found.
-    fakeState.nimble = true;
+    fakeState.kev = true;
     fakeState.systemone = 404;
     assert.deepEqual(await decide(DECISION), { error: "no-model" });
   } finally {
-    Object.assign(fakeState, { nimble: false, systemone: 200 });
+    Object.assign(fakeState, { kev: false, systemone: 200 });
     await edit({ address: ollama });
   }
 });

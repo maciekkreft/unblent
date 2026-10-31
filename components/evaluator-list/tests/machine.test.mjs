@@ -268,7 +268,7 @@ test("error replies come in the kinds the user tells apart", () => {
   for (const e of ["no-key", "bad-key", "paused"]) assert.equal(errorKind(e, true), "paused");
   assert.equal(errorKind("blocked", true), "blocked", "a blocked guest is told the trial has ended");
   assert.equal(errorKind("busy", true), "busy", "a guest is told busy like anyone");
-  for (const e of ["local-off", "no-model"]) assert.equal(errorKind(e), e, "Nimble v3 in Ollama says what to do");
+  for (const e of ["local-off", "no-model"]) assert.equal(errorKind(e), e, "Kev in Ollama says what to do");
 });
 
 const ANSWERS = {

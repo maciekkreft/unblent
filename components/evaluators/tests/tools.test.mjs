@@ -248,7 +248,7 @@ test("any other error from Jev is the reply, and nothing more is asked", async (
   assert.equal(asked.length, 1);
 });
 
-test("Ollama off or Nimble v3 not downloaded is the reply as itself", async () => {
+test("Ollama off or Kev not downloaded is the reply as itself", async () => {
   for (const error of ["local-off", "no-model"]) {
     const { actor } = start([row()], { decide: () => ({ error }) });
     assert.deepEqual(await evaluate(actor, ID, ["Run"]), { error });

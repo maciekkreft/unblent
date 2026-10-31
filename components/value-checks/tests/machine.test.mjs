@@ -288,18 +288,18 @@ test("a failure ends the queue and is announced; busy waits and asks again", asy
 });
 
 test("with a decider named, its readiness decides, not the Jev key", async () => {
-  const ollama = (ready) => ({ jev: { keySet: false }, decider: { provider: "ollama", model: "nimble-v3:latest", ready } });
+  const ollama = (ready) => ({ jev: { keySet: false }, decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready } });
   const days = { [DAY]: [val(V1, "Honesty")] };
   const { actor, decides } = await start({ asks: fakeAsk({ picture: ollama(false), days }) });
   actor.send(choose(EV, null));
   actor.send({ type: "day.shown", day: DAY });
   await flush();
-  assert.equal(decides.length, 0, "Nimble not ready: nothing is asked");
+  assert.equal(decides.length, 0, "Kev not ready: nothing is asked");
   assert.equal((await read(actor)).keySet, false);
 
   actor.send({ type: "llm.changed", ...ollama(true) });
   await flush();
-  assert.equal(decides.length, 1, "Nimble ready, no Jev key: the day is checked");
+  assert.equal(decides.length, 1, "Kev ready, no Jev key: the day is checked");
 
   // A Jev key alone does not count while the named decider is not ready.
   actor.send({ type: "llm.changed", jev: { keySet: true }, decider: { provider: "jev", model: "jev", ready: false } });

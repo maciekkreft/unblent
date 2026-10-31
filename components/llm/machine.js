@@ -239,10 +239,10 @@ export const machine = setup({
       "provider: it needs no key, costs nothing and is not counted, its address is kept with the account (empty brings " +
       "back http://localhost:11434), and the picture says whether it answered there just now and lists only the models " +
       "downloaded in it, preferring gemma4:e2b-mlx; its thinking is On or Off, and an answer it cannot give because it is not " +
-      "running fails as local-off. In the Mac app `decide` is answered by default by the decision model nimble-v3 in Ollama, " +
+      "running fails as local-off. In the Mac app `decide` is answered by default by the decision model kev:0.8b-mlx-bf16 in Ollama, " +
       "with no key and no cost; the user may choose Jev on their own Jev key instead. The picture names who decides, its " +
-      "model, and whether it can answer now (a Jev key is saved, or Ollama answered and has nimble-v3 downloaded); a " +
-      "decision Ollama cannot give fails as local-off when it is not running and as no-model when nimble-v3 is not " +
+      "model, and whether it can answer now (a Jev key is saved, or Ollama answered and has kev:0.8b-mlx-bf16 downloaded); a " +
+      "decision Ollama cannot give fails as local-off when it is not running and as no-model when kev:0.8b-mlx-bf16 is not " +
       "downloaded. The website never offers Ollama, for chats or for decisions.",
     kind: "fact",
     shape: "remote-only",

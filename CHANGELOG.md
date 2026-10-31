@@ -9,9 +9,9 @@ All notable changes to Unblent for Mac are listed here. The format follows
 ### Added
 
 - Checks on your writing, made on your own Mac. Each line of a Choice Point gets a mark,
-  your values and their examples are checked, with the evaluators you choose in Settings. The checks come from the Nimble v3 decision model in
+  your values and their examples are checked, with the evaluators you choose in Settings. The checks come from the Kev decision model in
   [Ollama](https://ollama.com): no account, no key, no cost, and nothing leaves your Mac.
-  Run `ollama pull nimble-v3` (about 9 GB; Ollama 0.40.4 or later).
+  Run `ollama pull kev:0.8b-mlx-bf16` (Ollama 0.40.4 or later).
 - The Mac app is now the same app as app.unblent.com, with the same panels, Settings and
   layout. Only signing in differs: the Mac has its own account, connected to the website
   from Settings › Account.
@@ -21,9 +21,9 @@ All notable changes to Unblent for Mac are listed here. The format follows
   pick-one questions.
 - Generators, written by the chat model in Ollama: a suggested value under a value that
   was marked red, a one-sentence summary of each past journal day, and a title for each chat.
-- Settings › Your account › Decisions chooses who makes the checks: Nimble v3 in Ollama
+- Settings › Your account › Decisions chooses who makes the checks: Kev in Ollama
   on this Mac, or Jev with your own key. Settings says when Ollama is not running or
-  Nimble v3 is not downloaded, and how to fix it.
+  Kev is not downloaded, and how to fix it.
 
 ## [0.4.1] — 2026-10-31
 

@@ -86,9 +86,9 @@ test("the part shows only once a decider can answer, on a page with value-checks
   assert.equal(valueChecksShown({ valueChecks: null, hidden: [], llm }), false, "no value-checks on the page");
   assert.equal(valueChecksShown({ valueChecks, hidden: null, llm }), false, "flags has not answered");
   assert.equal(valueChecksShown({ valueChecks, hidden: ["evaluators"], llm }), false);
-  const nimble = (ready) => ({ jev: { keySet: false }, decider: { provider: "ollama", model: "nimble-v3:latest", ready } });
-  assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: nimble(true) }), true, "Nimble v3 needs no Jev key");
-  assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: nimble(false) }), false, "Nimble v3 not downloaded");
+  const kev = (ready) => ({ jev: { keySet: false }, decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready } });
+  assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: kev(true) }), true, "Kev needs no Jev key");
+  assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: kev(false) }), false, "Kev not downloaded");
   const jev = { jev: { keySet: true }, decider: { provider: "jev", model: "jev-latest", ready: false } };
   assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: jev }), false, "the decider's own word wins");
 });

@@ -159,7 +159,7 @@ export const ERROR_SENTENCES = {
   invalid: "Could not check: the evaluator's questions could not be asked.",
   unavailable: "Could not check right now. It tries again at your next change.",
   "local-off": "Could not check: Ollama isn't running on this Mac. Open Ollama; it tries again at your next change.",
-  "no-model": "Could not check: Nimble v3 isn't downloaded. In Terminal, run ollama pull nimble-v3; it tries again at your next change.",
+  "no-model": "Could not check: Kev isn't downloaded. In Terminal, run ollama pull kev:0.8b-mlx-bf16; it tries again at your next change.",
 };
 
 const questionOf = (evaluator, id) => evaluator?.questions?.find((q) => q.id === id);
@@ -469,7 +469,7 @@ export const machine = setup({
       "the + Your values row or the Write your values row, or, open, on the first box, or on a button when the " +
       "sheet is only read; with Vim keys on, an open sheet handed the keyboard from the text " +
       "above or the choice points below takes it on its first row or its last. When Settings names an evaluator to check the values or the " +
-      "examples, and a decider can answer (a Jev key, or Nimble v3 on the Mac), the marks stand at the right end of " +
+      "examples, and a decider can answer (a Jev key, or Kev on the Mac), the marks stand at the right end of " +
       "a line the user has finished, inside its box: a pulsing dot while Jev is checking, " +
       "then a mark per answer, green when it is the answer the evaluator's question expects, " +
       "red when not, uncoloured when it expects none, solid when Jev is sure and faded when " +

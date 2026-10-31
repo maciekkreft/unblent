@@ -163,7 +163,7 @@ export const ERROR_SENTENCES = {
   invalid: "Could not check: the evaluator's questions could not be asked.",
   unavailable: "Could not check right now. It tries again at your next change.",
   "local-off": "Could not check: Ollama isn't running on this Mac. Open Ollama; it tries again at your next change.",
-  "no-model": "Could not check: Nimble v3 isn't downloaded. In Terminal, run ollama pull nimble-v3; it tries again at your next change.",
+  "no-model": "Could not check: Kev isn't downloaded. In Terminal, run ollama pull kev:0.8b-mlx-bf16; it tries again at your next change.",
 };
 
 // An evaluator by id, as the shown day has it; undefined when it is not known.

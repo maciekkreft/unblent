@@ -2,7 +2,7 @@
 questions about one state with the probability of yes, and pick-one questions with the
 option it picks and every option's probability; it writes no text. Ollama on the user's
 Mac (3.4) answers the same request at its own /v1/systemone with the decision model
-nimble-v3, without a key, so `decide_local` reuses everything here. The
+kev:0.8b-mlx-bf16, without a key, so `decide_local` reuses everything here. The
 standard library's urllib makes the call, because the import check allows only the
 standard library and what requirements.txt names (11.2). The key and the body are never
 logged: the body may hold the user's own writing.

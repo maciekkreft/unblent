@@ -330,7 +330,7 @@ const ERRORS = {
   busy: "Busy. Try again in a moment.",
   failed: "Could not answer. Try again.",
   "local-off": "Ollama isn't running on this Mac. Open Ollama, then try again.",
-  "no-model": "Nimble v3 isn't downloaded. In Terminal, run ollama pull nimble-v3, then try again.",
+  "no-model": "Kev isn't downloaded. In Terminal, run ollama pull kev:0.8b-mlx-bf16, then try again.",
 };
 
 class EvaluatorList extends LitElement {

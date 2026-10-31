@@ -440,7 +440,7 @@ test("llm.edited carries the Jev key through to the server and never into contex
 const onMac = (ready) => ({
   ...PICTURE,
   jev: { keySet: false },
-  decider: { provider: "ollama", model: "nimble-v3:latest", ready },
+  decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready },
   deciders: ["ollama", "jev"],
 });
 

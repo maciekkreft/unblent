@@ -615,8 +615,8 @@ test("j on a box's last line and k on its first move on, only in Vim's normal mo
   assert.equal(boxEdge({ key: "j" }, null, 3, { first: 1, last: 3 }), null);
 });
 
-test("Ollama off and Nimble v3 not downloaded each say what to do", () => {
+test("Ollama off and Kev not downloaded each say what to do", () => {
   assert.match(ERROR_SENTENCES["local-off"], /Ollama isn't running on this Mac\. Open Ollama/);
-  assert.match(ERROR_SENTENCES["no-model"], /run ollama pull nimble-v3/);
+  assert.match(ERROR_SENTENCES["no-model"], /run ollama pull kev:0.8b-mlx-bf16/);
   for (const sentence of Object.values(ERROR_SENTENCES)) assert.doesNotMatch(sentence, /^Jev /, "true for either decider");
 });

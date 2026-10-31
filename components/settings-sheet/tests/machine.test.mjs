@@ -541,43 +541,43 @@ test("evaluator.changed and evaluator.deleted keep the list to choose from (4.3)
   assert.deepEqual(actor.getSnapshot().context.evaluators.map((e) => e.name), ["Renamed"]);
 });
 
-// The Mac app's picture with Nimble v3 deciding (3.4): both deciders offered, Jev keyless.
-const NIMBLE_PICTURE = {
+// The Mac app's picture with Kev deciding (3.4): both deciders offered, Jev keyless.
+const KEV_PICTURE = {
   ...OLLAMA_PICTURE,
   jev: { keySet: false },
-  decider: { provider: "ollama", model: "nimble-v3:latest", ready: true },
+  decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true },
   deciders: ["ollama", "jev"],
 };
 
 test("Decisions shows only where two deciders are offered, with Ollama's state (3.4)", () => {
   assert.equal(deciderView(LLM_PICTURE), null, "a picture without deciders: nothing new");
   assert.equal(deciderView({ ...LLM_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: true }, deciders: ["jev"] }), null, "the website");
-  assert.deepEqual(deciderView(NIMBLE_PICTURE), { provider: "ollama", offered: ["ollama", "jev"], running: true, ready: true });
-  const off = { ...NIMBLE_PICTURE, ollama: { address: "http://localhost:11434", running: false }, decider: { ...NIMBLE_PICTURE.decider, ready: false } };
+  assert.deepEqual(deciderView(KEV_PICTURE), { provider: "ollama", offered: ["ollama", "jev"], running: true, ready: true });
+  const off = { ...KEV_PICTURE, ollama: { address: "http://localhost:11434", running: false }, decider: { ...KEV_PICTURE.decider, ready: false } };
   assert.deepEqual(deciderView(off), { provider: "ollama", offered: ["ollama", "jev"], running: false, ready: false });
-  const missing = { ...NIMBLE_PICTURE, decider: { ...NIMBLE_PICTURE.decider, ready: false } };
+  const missing = { ...KEV_PICTURE, decider: { ...KEV_PICTURE.decider, ready: false } };
   assert.equal(deciderView(missing).running, true);
-  assert.equal(deciderView(missing).ready, false, "running, but nimble-v3 is not downloaded");
-  const jev = { ...NIMBLE_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } };
+  assert.equal(deciderView(missing).ready, false, "running, but kev:0.8b-mlx-bf16 is not downloaded");
+  const jev = { ...KEV_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } };
   assert.deepEqual(deciderView(jev), { provider: "jev", offered: ["ollama", "jev"] });
 });
 
 test("a decider can answer: the picture's word, else a saved Jev key", () => {
-  assert.equal(deciderReady(NIMBLE_PICTURE), true, "Nimble v3 needs no Jev key");
-  assert.equal(deciderReady({ ...NIMBLE_PICTURE, decider: { ...NIMBLE_PICTURE.decider, ready: false } }), false);
+  assert.equal(deciderReady(KEV_PICTURE), true, "Kev needs no Jev key");
+  assert.equal(deciderReady({ ...KEV_PICTURE, decider: { ...KEV_PICTURE.decider, ready: false } }), false);
   assert.equal(deciderReady({ jev: { keySet: true } }), true, "a picture from before deciders");
   assert.equal(deciderReady({ jev: { keySet: false } }), false);
   assert.equal(deciderReady(null), false, "signed out");
 });
 
 test("choosing a decider emits only decider, and only one offered and not already chosen", async () => {
-  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, llm: NIMBLE_PICTURE });
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, llm: KEV_PICTURE });
   actor.send({ type: "_setDecider", decider: "ollama" });
   actor.send({ type: "_setDecider", decider: "anthropic" });
   assert.deepEqual(emittedLlm, [], "the current one, or one not offered, changes nothing");
   actor.send({ type: "_setDecider", decider: "jev" });
   assert.deepEqual(emittedLlm, [{ type: "llm.edited", decider: "jev" }]);
-  actor.send({ type: "llm.changed", ...NIMBLE_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } });
+  actor.send({ type: "llm.changed", ...KEV_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } });
   assert.deepEqual(actor.getSnapshot().context.llm.decider, { provider: "jev", model: "jev-latest", ready: false }, "adopted");
   assert.deepEqual(actor.getSnapshot().context.llm.deciders, ["ollama", "jev"], "adopted");
   actor.send({ type: "_setDecider", decider: "ollama" });

@@ -8,7 +8,7 @@ Routes: GET "" returns the account's picture (without signedIn, which the browse
 adds); PUT "" changes settings and the keys; POST "/complete" streams one answer as
 newline-delimited JSON pieces (6.3); POST "/decide" asks Jev yes/no and pick-one
 questions and returns its answers, on the account's own Jev key or, in the local edition
-with the ollama decider, from nimble-v3 in Ollama on the user's Mac; POST "/generate"
+with the ollama decider, from kev:0.8b-mlx-bf16 in Ollama on the user's Mac; POST "/generate"
 writes one short text in one go on the account's own Anthropic key, whichever
 provider the chat uses, and model "echo" answers with Echo; in the local edition it
 writes on the chat's provider instead, on the generator's model when that provider
@@ -68,9 +68,8 @@ _OLLAMA_EFFORTS = ("on", "off")
 _OLLAMA_ADDRESS = "http://localhost:11434"
 _TTLS = ("5m", "1h")
 _DEFAULT_MODEL = "claude-opus-5"
-# The decision model the Mac app asks in Ollama (3.4), under any tag it was pulled with.
-_NIMBLE = "nimble-v3"
-_NIMBLE_DEFAULT = "nimble-v3:latest"
+# The decision model the Mac app asks in Ollama (3.4).
+_KEV = "kev:0.8b-mlx-bf16"
 
 # The models a provider offers, cached per user for ten minutes so a read does not
 # call the provider on every mount; cleared for a user when their settings change.
@@ -152,9 +151,9 @@ def _ollama_models(address: str) -> list[dict] | None:
         return None
 
 
-def _nimble(models: list[dict] | None) -> str | None:
-    """The id of nimble-v3 among Ollama's downloaded models, or None."""
-    return next((m["id"] for m in models or [] if m["id"].startswith(_NIMBLE)), None)
+def _kev(models: list[dict] | None) -> str | None:
+    """The id of kev:0.8b-mlx-bf16 among Ollama's downloaded models, or None."""
+    return next((m["id"] for m in models or [] if m["id"] == _KEV), None)
 
 
 def _key(connection: sqlite3.Connection, provider: str) -> str | None:
@@ -232,8 +231,8 @@ def _picture(user_id: str, connection: sqlite3.Connection, guest: bool = False) 
     if local:
         picture["ollama"] = {"address": settings["address"], "running": ollama is not None}
     if settings["decider"] == "ollama":
-        nimble = _nimble(ollama)
-        picture["decider"] = {"provider": "ollama", "model": nimble or _NIMBLE_DEFAULT, "ready": nimble is not None}
+        kev = _kev(ollama)
+        picture["decider"] = {"provider": "ollama", "model": kev or _KEV, "ready": kev is not None}
     else:
         picture["decider"] = {"provider": "jev", "model": "jev-latest", "ready": jev_set}
     picture["deciders"] = _deciders()
@@ -441,16 +440,16 @@ def _decide(user_id: str, state: dict, questions: list, guest: bool = False) -> 
 
 
 def _decide_local(address: str, state: dict, questions: list) -> dict:
-    # nimble-v3 on the user's own Mac needs no key, costs nothing and is not counted
+    # kev:0.8b-mlx-bf16 on the user's own Mac needs no key, costs nothing and is not counted
     # (3.4, 7.7). Asking Ollama for its models first tells "not running" from "not
     # downloaded" and finds the tag the model was pulled with.
     models = _ollama_models(address)
     if models is None:
         return {"error": "local-off"}
-    nimble = _nimble(models)
-    if nimble is None:
+    kev = _kev(models)
+    if kev is None:
         return {"error": "no-model"}
-    return jev_adapter.decide_local(address, nimble, state, questions)
+    return jev_adapter.decide_local(address, kev, state, questions)
 
 
 def _options_ok(options) -> bool:

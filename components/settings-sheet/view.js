@@ -27,8 +27,8 @@ const PROVIDER_LABELS = { ollama: "Ollama (on this Mac)" };
 const PULL = "ollama pull gemma4:e2b-mlx";
 // Who answers the checks in the Mac app (3.4): each name says where the answers come from
 // and what they cost.
-const DECIDER_LABELS = { ollama: "Nimble v3 in Ollama (on this Mac, free)", jev: "Jev (your own key)" };
-const PULL_NIMBLE = "ollama pull nimble-v3";
+const DECIDER_LABELS = { ollama: "Kev in Ollama (on this Mac, free)", jev: "Jev (your own key)" };
+const PULL_KEV = "ollama pull kev:0.8b-mlx-bf16";
 // How long Copy reads Copied, so the click visibly did something (Don Norman: feedback).
 const COPIED_MS = 2000;
 const FEEDBACK_URL = "https://github.com/maciekkreft/unblent/issues/new/choose";
@@ -931,7 +931,7 @@ class SettingsSheet extends LitElement {
 
   // Evaluating: only where the picture carries `jev`. In the Mac app it starts with who
   // answers the checks (deciderView); the Jev key shows only while Jev is chosen, since
-  // Nimble v3 needs none. Under the key, what uses evaluators: the values, then the
+  // Kev needs none. Under the key, what uses evaluators: the values, then the
   // choice point boxes, each in a fold of its own.
   #judging(llm, evaluators, checks) {
     const decider = deciderView(llm);
@@ -954,7 +954,7 @@ class SettingsSheet extends LitElement {
     `;
   }
 
-  // Decisions (3.4): the choice of who answers, and with Nimble v3 one line saying whether
+  // Decisions (3.4): the choice of who answers, and with Kev one line saying whether
   // it can answer now, worded as the Ollama row for the chat is, with what to do when not.
   #decider({ provider, offered, running, ready }) {
     const status =
@@ -975,15 +975,15 @@ class SettingsSheet extends LitElement {
           `
         : !ready
         ? this.#pullHint(
-            PULL_NIMBLE,
-            html`Nimble v3 isn't downloaded. In Terminal: <code>${PULL_NIMBLE}</code>`,
+            PULL_KEV,
+            html`Kev isn't downloaded. In Terminal: <code>${PULL_KEV}</code>`,
             html`<span class="help">It needs Ollama 0.40.4 or later.</span>`,
           )
         : html`
             <div class="field">
               <span></span>
               <div class="ollama decider">
-                <span class="status running"><span class="dot" aria-hidden="true"></span>Nimble v3 is ready</span>
+                <span class="status running"><span class="dot" aria-hidden="true"></span>Kev is ready</span>
               </div>
             </div>
           `;

@@ -197,7 +197,7 @@ export const deciderReady = (llm) => (llm?.decider ? llm.decider.ready === true 
 
 // The Decisions choice (3.4): null where only one decider is offered (the website), so
 // nothing new shows there; else who decides and, with Ollama, what the status line says:
-// whether Ollama answered and whether nimble-v3 is downloaded.
+// whether Ollama answered and whether kev:0.8b-mlx-bf16 is downloaded.
 export const deciderView = (llm) => {
   const offered = Array.isArray(llm?.deciders) ? llm.deciders : [];
   if (offered.length < 2) return null;
@@ -269,10 +269,10 @@ export const machine = setup({
       "list shows the models downloaded in Ollama; when gemma4:e2b-mlx is not among them a line gives the " +
       "Terminal command ollama pull gemma4:e2b-mlx with Copy and Try again. Thinking is On or Off, and the " +
       "cache lifetime is not shown for Ollama. The Evaluating group holds the Jev key on the website. In the Mac app " +
-      "it starts with Decisions, which chooses who answers the checks: Nimble v3 in Ollama (on this Mac, free), the " +
-      "default, or Jev (your own key); choosing the other one again is the undo. With Nimble v3 a line says it is ready, " +
-      "or that Ollama isn't running with Try again, or that nimble-v3 is not downloaded, with the Terminal command " +
-      "ollama pull nimble-v3, Copy, Try again and a note that it needs Ollama 0.40.4 or later. With Jev the Jev key " +
+      "it starts with Decisions, which chooses who answers the checks: Kev in Ollama (on this Mac, free), the " +
+      "default, or Jev (your own key); choosing the other one again is the undo. With Kev a line says it is ready, " +
+      "or that Ollama isn't running with Try again, or that kev:0.8b-mlx-bf16 is not downloaded, with the Terminal command " +
+      "ollama pull kev:0.8b-mlx-bf16, Copy, Try again and a note that it needs Ollama 0.40.4 or later. With Jev the Jev key " +
       "field shows. Your account also holds the " +
       "choice point checks, which `choice-point-checks` keeps, in a fold that starts closed: " +
       "for each box of a choice point, the evaluator whose questions Jev answers about each " +

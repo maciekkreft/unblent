@@ -623,7 +623,7 @@ export const machine = setup({
       "value itself, which Jev reads alone, and its example, which Jev reads together with " +
       "the value as \"<value>. For example: <example>\". A line without words (no letter or " +
       "digit in any script) is never asked. Nothing is asked and nothing is reported unless " +
-      "a decider can answer, as `llm` says: the account's own Jev key, or, on the Mac, Nimble v3 " +
+      "a decider can answer, as `llm` says: the account's own Jev key, or, on the Mac, Kev " +
       "in Ollama. The settings are one row, chosen in Settings under Your account, where " +
       "they show only once a decider can answer; the last " +
       "write wins, so two devices never conflict. Which questions are asked, and which answer " +
@@ -655,7 +655,7 @@ export const machine = setup({
     answers: new Map(), // key -> { key, answers }
     outbox: new Map(),
     evaluators: new Map(), // as evaluators announced them
-    keySet: false, // a decider can answer llm: decide (a Jev key, or Nimble v3 on the Mac)
+    keySet: false, // a decider can answer llm: decide (a Jev key, or Kev on the Mac)
     days: new Map(), // day -> { day: the version's own day, values }
     latest: null, // the last values.changed, today's version
     fetching: new Set(), // days whose values: read is on its way
