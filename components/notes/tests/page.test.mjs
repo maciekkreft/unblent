@@ -168,7 +168,6 @@ for (const engine of ENGINES) {
       await write(page, "A note\nits body");
 
       await until(() => debug.some((l) => SAVED.test(l)) && debug.some((l) => CHANGED.test(l)));
-      await until(async () => (await editorStatus(page))?.trim() === "Saved");
 
       // Persistence: the fact wrote through the store to IndexedDB (5), not just to
       // its in-memory Map. Read the raw database the store opened.
@@ -193,8 +192,7 @@ for (const engine of ENGINES) {
       // start and reopens the newest note from the store.
       await page.reload({ waitUntil: "domcontentloaded" });
       await ready(page);
-      await until(async () => (await editorStatus(page))?.trim() === "Saved");
-      assert.equal(await editorBody(page), "A note\nits body");
+      await until(async () => (await editorBody(page)) === "A note\nits body");
 
       // Height (the editor's one attribute): in content mode the body grows with its
       // lines; in neither mode does it grow past the viewport, so the status stays in

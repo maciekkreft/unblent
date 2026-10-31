@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf } from "./machine.js";
+import { machine, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced } from "./machine.js";
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
@@ -123,41 +123,28 @@ class ChatThread extends LitElement {
       gap: var(--space-sm);
       padding: var(--space-xs) var(--space-md) 0;
     }
-    /* The chapter label, as the note editor draws it: a rounded tag naming the chapter
-       the chat is linked to, accent while linked to one, holding the Link or Unlink
-       button. The header keeps its height whether or not it shows, and the label is as
-       tall without its button as with it, so the transcript never jumps. On a narrow
-       panel the chapter's name gives way before the button that acts. */
+    /* The chapter label, as the note editor draws it: plain muted text naming the
+       chapter the chat is linked to, its Link or Unlink button shown only while the pointer
+       or the keyboard is on the label. Hidden, the button keeps its room, and the header
+       keeps its height whether or not the label shows, so the transcript never jumps. A tap
+       on a phone puts the keyboard on the label, which shows the button. */
     .place {
       flex: 1;
       min-width: 0;
       display: flex;
-      min-height: calc(var(--text-caption) * var(--leading-tight) + 4 * var(--space-2xs) + 2 * var(--border-width));
+      min-height: calc(var(--text-caption) * var(--leading-tight) + 2 * var(--border-width));
     }
     .chapter {
       flex: 0 1 auto;
       min-width: 0;
-      box-sizing: border-box;
       display: inline-flex;
       align-items: center;
       gap: var(--space-xs);
-      padding: var(--space-2xs);
-      padding-inline-start: var(--space-sm);
-      border: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-full);
-      background: var(--color-canvas-soft);
-      color: var(--color-body-mid);
+      color: var(--color-mute);
       font-size: var(--text-caption);
       line-height: var(--leading-tight);
       white-space: nowrap;
-    }
-    .chapter:not(:has(button)) {
-      padding-inline-end: var(--space-sm);
-    }
-    .chapter.linked {
-      border-color: var(--color-accent);
-      background: var(--color-accent-subtle);
-      color: var(--color-ink);
+      outline: none;
     }
     .chapter > span {
       flex: 0 10 auto;
@@ -171,19 +158,27 @@ class ChatThread extends LitElement {
     .relink {
       flex: 0 1 auto;
       appearance: none;
-      border: none;
-      border-radius: var(--radius-full);
-      padding: var(--space-2xs) var(--space-xs);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 0 var(--space-2xs);
       margin: 0;
-      background: var(--color-canvas);
-      color: var(--color-ink);
+      background: transparent;
+      color: var(--color-body-mid);
       font: inherit;
-      font-weight: var(--weight-semibold);
       white-space: nowrap;
       cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+    }
+    /* The whole line is the label's hover area, so a button that turns narrower under
+       the pointer (Link to … into Unlink) stays shown and pressing again reverses it. */
+    .place:hover .relink,
+    .place:focus-within .relink {
+      opacity: 1;
+      pointer-events: auto;
     }
     .relink:hover {
-      background: var(--color-surface-hover);
+      color: var(--color-ink);
     }
     .relink:focus-visible {
       outline: none;
@@ -618,8 +613,8 @@ class ChatThread extends LitElement {
     .status.failed {
       color: var(--color-danger);
     }
-    /* The whole chat has finished turns not yet on the server (5): a quiet caption so
-       the reader knows not to close the page yet. */
+    /* The chat's finished turns have waited too long for the server (5): a quiet caption
+       so the reader knows not to close the page yet. */
     .unsaved {
       margin: 0;
       font-size: var(--text-caption);
@@ -785,7 +780,7 @@ class ChatThread extends LitElement {
   // The chapter label (machine.js: chapterLabelOf decides what it says and offers).
   #chapter(label) {
     if (!label) return nothing;
-    return html`<span class=${label.linked ? "chapter linked" : "chapter"}
+    return html`<span class="chapter" tabindex=${label.action ? "-1" : nothing}
       ><span>${label.text}</span>${label.action
         ? html`<button
             class="relink"
@@ -817,7 +812,7 @@ class ChatThread extends LitElement {
         if (snapshot.matches("showing") && highlightable(chat, turn.id)) return this.#assistant(turn, this.#highlighting(snapshot, turn.id, sent ?? []));
         return this.#assistant(turn, sent ? { list: sent, comments: sent, markable: false } : null);
       })}
-      ${chat?.pending ? html`<p class="unsaved">Not saved yet</p>` : nothing}
+      ${notSynced(context) ? html`<p class="unsaved">Not synced</p>` : nothing}
     `;
   }
 

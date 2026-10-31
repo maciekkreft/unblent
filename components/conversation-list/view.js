@@ -387,31 +387,35 @@ class ConversationList extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-body-mid);
     }
-    /* The chapter switch, above the list, as note-list draws it: two buttons in one
-       rounded box, the pressed one raised, as the viewport switch draws its choice. */
+    /* The chapter switch, the top row of the list: two equal halves across the list's
+       width in one rectangular box, the pressed one raised. Its edges stand on the rows'
+       edges, with the same space above it as beside it and below it. */
     .switch {
       flex: none;
       display: flex;
       gap: var(--space-2xs);
-      align-self: flex-start;
-      margin: var(--space-xs) var(--space-sm) 0;
+      margin: var(--space-2xs) var(--space-2xs) 0;
       padding: var(--space-2xs);
       background: var(--color-canvas-soft);
-      border: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-full);
+      border-radius: var(--radius-sm);
       font-size: var(--text-sm);
     }
     .switch button {
+      flex: 1;
+      min-width: 0;
       border: none;
       background: none;
       cursor: pointer;
       padding: var(--space-2xs) var(--space-sm);
-      border-radius: var(--radius-full);
+      border-radius: calc(var(--radius-sm) - var(--space-2xs));
       font-family: inherit;
       font-size: inherit;
       color: var(--color-body);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .switch button:hover {
+    .switch button:hover:not([aria-pressed="true"]) {
       background: var(--color-surface-hover);
     }
     .switch button:focus-visible {
@@ -421,7 +425,11 @@ class ConversationList extends LitElement {
     .switch button[aria-pressed="true"] {
       color: var(--color-ink);
       font-weight: var(--weight-semibold);
-      background: var(--color-surface-active);
+      background: var(--color-canvas);
+      box-shadow: var(--shadow-card);
+    }
+    .switch button[aria-pressed="true"]:focus-visible {
+      box-shadow: var(--shadow-card), var(--focus-ring);
     }
     /* The line between the items linked to no chapter and the rest. */
     .line {
@@ -513,7 +521,7 @@ class ConversationList extends LitElement {
     return placement(this.#actor.snapshot.context, ids, current, below);
   }
 
-  #keydown(event, rows) {
+  #keydown(event, rows, switched) {
     const context = this.#actor.snapshot.context;
     // While a row is cut, Escape stays in the list (12): it deletes the row with its
     // countdown, and the container never sees it as Back.
@@ -548,6 +556,12 @@ class ConversationList extends LitElement {
     } else if (step || vim === "first" || vim === "last") {
       const at = rows.findIndex((r) => r.id === current);
       const to = vim === "first" ? 0 : vim === "last" ? rows.length - 1 : at + step;
+      // Above the first row stands the switch, when the list shows one.
+      if (switched && (to < 0 || vim === "first")) {
+        event.preventDefault();
+        this.#toSwitch();
+        return;
+      }
       const next = rows[Math.min(rows.length - 1, Math.max(0, to))];
       if (!next || next.id === current) return;
       event.preventDefault();
@@ -707,7 +721,7 @@ class ConversationList extends LitElement {
   // dock-desk's Ctrl+h/j/k/l (12) focuses a panel by its host: land on the roving row,
   // or the first button while there is no row.
   focus(options) {
-    const target = this.renderRoot?.querySelector('[tabindex="0"]') ?? this.renderRoot?.querySelector("button");
+    const target = this.renderRoot?.querySelector('.list [tabindex="0"]') ?? this.renderRoot?.querySelector("button");
     if (target) target.focus(options);
     else super.focus(options);
   }
@@ -731,8 +745,8 @@ class ConversationList extends LitElement {
       ${snapshot.matches("failed")
         ? html`<p class="empty">Chats need a connection.</p>`
         : html`
-            ${groups ? this.#switch(groups) : nothing}
-            <ul class="list" role="listbox" aria-label="Chats" @keydown=${(e) => this.#keydown(e, rows)}>
+            ${groups ? this.#switch(groups, rows) : nothing}
+            <ul class="list" role="listbox" aria-label="Chats" @keydown=${(e) => this.#keydown(e, rows, Boolean(groups))}>
               ${groups ? this.#grouped(rows, groups, row) : rows.map(row)}
             </ul>
           `}
@@ -740,15 +754,44 @@ class ConversationList extends LitElement {
   }
 
   // The chapter switch: two buttons, the pressed one the list as it stands, so its state
-  // is seen and Tab reaches it before the rows.
-  #switch({ unit, all }) {
+  // is seen. It is the top row of the list's keyboard path (12, "Vim keys"): k or the up
+  // arrow on the first row reaches it, h and l or the left and right arrows change it, and
+  // j or the down arrow goes back to the first row. Only the pressed half is a Tab stop.
+  #switch({ unit, all }, rows) {
     const set = (value) => this.#actor.send({ type: "_chapters", all: value });
     return html`
-      <div class="switch" role="group" aria-label="Which chats">
-        <button type="button" aria-pressed=${all ? "false" : "true"} @click=${() => set(false)}>This ${unit}</button>
-        <button type="button" aria-pressed=${all ? "true" : "false"} @click=${() => set(true)}>All ${unit}s</button>
+      <div class="switch" role="group" aria-label="Which chats" @keydown=${(e) => this.#switchKeydown(e, rows, all)}>
+        <button type="button" aria-pressed=${all ? "false" : "true"} tabindex=${all ? -1 : 0} @click=${() => set(false)}>This ${unit}</button>
+        <button type="button" aria-pressed=${all ? "true" : "false"} tabindex=${all ? 0 : -1} @click=${() => set(true)}>All ${unit}s</button>
       </div>
     `;
+  }
+
+  // The keyboard on the switch. Every Vim letter the list owns is spent here too, so none
+  // is typed into a hidden editor (WebKit).
+  #switchKeydown(event, rows, all) {
+    const vimKeys = this.#actor.snapshot?.context.vimKeys === true && !event.ctrlKey && !event.metaKey && !event.altKey;
+    const vim = this.#vim(event);
+    const left = event.key === "ArrowLeft" || (vimKeys && event.key === "h");
+    const right = event.key === "ArrowRight" || (vimKeys && event.key === "l");
+    if (left || right) {
+      event.preventDefault();
+      if (right !== all) this.#actor.send({ type: "_chapters", all: right });
+      this.renderRoot.querySelectorAll(".switch button")[right ? 1 : 0]?.focus();
+      return;
+    }
+    if (event.key === "ArrowDown" || vim === "down" || vim === "last") {
+      event.preventDefault();
+      const next = vim === "last" ? rows[rows.length - 1] : rows[0];
+      if (next) this.#follow(next.id);
+      return;
+    }
+    if (event.key === "ArrowUp" || vim) event.preventDefault();
+  }
+
+  // The keyboard moves up from the first row onto the switch, on its pressed half.
+  #toSwitch() {
+    this.renderRoot.querySelector('.switch [aria-pressed="true"]')?.focus();
   }
 
   // While the subject has an open chapter: the fixed rows, then the chats linked to no

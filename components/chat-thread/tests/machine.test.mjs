@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canPin, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -37,7 +37,7 @@ const recorded = [];
 const see = (value, schema) => recorded.push({ value, schema });
 
 function start(options = {}) {
-  const { openId = null, chatsById = {}, readError = {}, pinned = null, vimKeys = false, subject = null } = options;
+  const { openId = null, chatsById = {}, readError = {}, pinned = null, vimKeys = false, subject = null, clock } = options;
   const input = {
     ask: (target, name, payload) => {
       const key = `${target}: ${name}`;
@@ -57,7 +57,7 @@ function start(options = {}) {
       throw new Error(`unexpected ask ${key}`);
     },
   };
-  const actor = createActor(machine, { input });
+  const actor = createActor(machine, { input, ...(clock ? { clock } : {}) });
   const toggled = [];
   const relinked = [];
   actor.on("conversation.relinked", (e) => {
@@ -80,6 +80,24 @@ const state = (h) => {
 };
 const conv = (h) => h.actor.getSnapshot().context.conversation;
 const emptyChat = (id, over = {}) => ({ id, title: "", about: [], start: "", turns: [], pending: false, updatedAt: 0, ...over });
+
+test("Not synced shows only while the open chat's turns have waited NOT_SYNCED_MS for the server", async () => {
+  const clock = new SimulatedClock();
+  const h = start({ openId: CHAT, chatsById: { [CHAT]: emptyChat(CHAT, { pending: true }) }, clock });
+  await until(() => state(h) === "showing", "showing");
+  const synced = () => notSynced(h.actor.getSnapshot().context);
+  clock.increment(NOT_SYNCED_MS - 1);
+  assert.equal(synced(), false, "an ordinary save says nothing");
+  h.actor.send({ type: "conversation.changed", ...emptyChat(CHAT, { pending: true }) });
+  clock.increment(NOT_SYNCED_MS - 1);
+  assert.equal(synced(), false, "news restarts the wait");
+  clock.increment(1);
+  assert.equal(synced(), true, "offline or failing: Not synced");
+  h.actor.send({ type: "conversation.changed", ...emptyChat(CHAT2, { pending: false }) });
+  assert.equal(synced(), true, "another chat's news changes nothing");
+  h.actor.send({ type: "conversation.changed", ...emptyChat(CHAT, { pending: false }) });
+  assert.equal(synced(), false, "the server has it");
+});
 
 test("no chat open lands on the empty page", async () => {
   const h = start({ openId: null });

@@ -271,7 +271,10 @@ export const machine = setup({
       "which note is open from the editor. While the subject has an open chapter (a book's " +
       "chapter, or the Journal's day), a switch above the list reads \"This chapter\" and " +
       "\"All chapters\" (\"This day\" and \"All days\" in the Journal). It starts on This " +
-      "chapter and the choice is kept in this browser. This chapter shows first the notes about " +
+      "chapter and the choice is kept in this browser. The switch is two equal halves across " +
+      "the list in one rectangular box, and the top row of its keyboard path: k or the up " +
+      "arrow on the first row reaches it, h and l or the left and right arrows change it, and " +
+      "j or the down arrow goes back to the first row. This chapter shows first the notes about " +
       "the book linked to no chapter, under \"Not linked to a chapter\" when there are any, " +
       "then, under the open chapter's title, its notes; an open note of another chapter is listed apart. All " +
       "chapters lists every note about the book. A note row linked to a chapter names the " +

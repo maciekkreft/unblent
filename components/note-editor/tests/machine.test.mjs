@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, isStaged, showing, startsTyping } from "../machine.js";
+import { machine, titleOf, parseBody, serialize, aboutTitleOf, chapterLabelOf, relinkOf, sourceLinksIn, passageOf, linkMissing, isStaged, showing, startsTyping, notSynced, NOT_SYNCED_MS } from "../machine.js";
 
 // The editor's decisions, tested in full. The marker-stripping title and the
 // parseBody/serialize transform between the wire markdown and the marker-free document
@@ -117,6 +117,40 @@ test("keystrokes inside the window are coalesced into one save, titled by its fi
   clock.increment(THROTTLE_MS);
   assert.equal(saved.length, 2);
   assert.deepEqual(saved[1].body, "ab\nmore\nagain");
+});
+
+test("Not synced shows only once a change has waited NOT_SYNCED_MS for the server, and goes when it lands", async () => {
+  const { actor, clock } = await started();
+  actor.send({ type: "_typed", body: "T" });
+  clock.increment(THROTTLE_MS);
+  const pending = { id: ID, title: "T", body: "T", version: 1, pending: true, updatedAt: 1 };
+  actor.send({ type: "note.changed", ...pending });
+  clock.increment(NOT_SYNCED_MS - 1);
+  assert.equal(notSynced(actor.getSnapshot().context), false, "an ordinary save says nothing");
+  // Another pending change (more typing) starts the wait again.
+  actor.send({ type: "note.changed", ...pending, body: "T", version: 2 });
+  clock.increment(NOT_SYNCED_MS - 1);
+  assert.equal(notSynced(actor.getSnapshot().context), false);
+  clock.increment(1);
+  assert.equal(notSynced(actor.getSnapshot().context), true, "offline or failing: Not synced");
+  actor.send({ type: "note.changed", ...pending, version: 2, pending: false });
+  assert.equal(notSynced(actor.getSnapshot().context), false, "the server has it");
+  // Acknowledged in time, nothing ever shows.
+  actor.send({ type: "note.changed", ...pending, version: 3 });
+  actor.send({ type: "note.changed", ...pending, version: 3, pending: false });
+  clock.increment(NOT_SYNCED_MS);
+  assert.equal(notSynced(actor.getSnapshot().context), false);
+});
+
+test("Not synced belongs to its note: another note's wait shows nothing, and a note opened still unsynced says so", async () => {
+  const { actor, clock } = await started({ follows: true, ask: answering({ list: { notes: [] }, read: { note: { ...NOTE, id: ID2, pending: true } } }) });
+  actor.send({ type: "note.changed", ...NOTE, pending: true });
+  clock.increment(NOT_SYNCED_MS);
+  assert.equal(notSynced(actor.getSnapshot().context), false, "the editor holds no note");
+  actor.send({ type: "note.selected", id: ID2 });
+  await settle();
+  clock.increment(NOT_SYNCED_MS);
+  assert.equal(notSynced(actor.getSnapshot().context), true, "the note read pending, and stayed so");
 });
 
 test("a blur while dirty saves at once", async () => {

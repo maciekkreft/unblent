@@ -250,7 +250,10 @@ export const machine = setup({
       "never missing. While the subject has an open chapter (a book's chapter, or the " +
       "Journal's day), a switch above the list reads \"This chapter\" and \"All chapters\" " +
       "(\"This day\" and \"All days\" in the Journal). It starts on This chapter and the " +
-      "choice is kept in this browser. This chapter shows first the chats about the book " +
+      "choice is kept in this browser. The switch is two equal halves across the list in one " +
+      "rectangular box, and the top row of its keyboard path: k or the up arrow on the first " +
+      "row reaches it, h and l or the left and right arrows change it, and j or the down arrow " +
+      "goes back to the first row. This chapter shows first the chats about the book " +
       "linked to no chapter, under \"Not linked to a chapter\" when there are any, then, under " +
       "the open chapter's title, its chats; an open chat of another chapter is listed apart. All chapters lists " +
       "every chat about the book. A chat row linked to a chapter names the chapter's title " +

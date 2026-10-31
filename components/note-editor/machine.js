@@ -24,6 +24,11 @@ import { setup, assign, fromPromise, fromCallback, enqueueActions, emit, spawnCh
 
 const THROTTLE_MS = 200;
 
+// How long a note's change may wait for the server before the editor says Not synced:
+// longer than notes' idle window and a round trip (5), so the words show only while the
+// device is offline or the server keeps failing, never during an ordinary save.
+export const NOT_SYNCED_MS = 5000;
+
 // The wire form of a note is markdown: a line prefixed "# "/"## "/"### " is a
 // Title/Heading/Subheading, an unprefixed line is Body. The CM6 document the user
 // edits is marker-free (view.js), so parseBody/serialize are the one place the two
@@ -234,6 +239,23 @@ const takeKnown = assign({ notes: ({ context, event }) => knownOf(event.output) 
 
 const assignTyped = assign({ body: ({ event }) => event.body });
 
+// notes' pending flag (5) for any note, from a note.changed or a read reply: each pending
+// news restarts the wait, and the server's acknowledgement ends it. Kept per note, so a
+// note left unsynced says so again at once when it is opened again.
+const watchSync = (of) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const note = of(event);
+    if (!note?.id) return;
+    enqueue.cancel(`unsynced:${note.id}`);
+    if (note.pending === true) enqueue.raise({ type: "_unsynced", id: note.id }, { delay: NOT_SYNCED_MS, id: `unsynced:${note.id}` });
+    else if (context.unsynced.includes(note.id)) enqueue.assign({ unsynced: without(context.unsynced, note.id) });
+  });
+const syncOfChange = watchSync((event) => event);
+const syncOfRead = watchSync((event) => event.output?.note);
+
+// Whether the open note's change has waited too long for the server (NOT_SYNCED_MS).
+export const notSynced = (context) => context.id != null && context.unsynced.includes(context.id);
+
 // The note shown is announced (6.4) by every editor but the stage's: `pins` takes the
 // announced note as the pinned one, and a note on the stage is never the panel's.
 const announceOpened = (context, enqueue, id) => {
@@ -405,7 +427,10 @@ export const machine = setup({
       "Edits one note as a single page whose lines have four levels, Title, Heading, Subheading " +
       "and Body, set from four buttons at the bottom that mark the level of the line under the " +
       "cursor, flash when a level changes, and show their Vim keys while Vim keys is on. It " +
-      "saves a short time into typing and when the editor loses focus. With Vim keys on, a new " +
+      "saves a short time into typing and when the editor loses focus, without saying so each " +
+      "time: a muted \"Not synced\" shows under the note only while its change has waited " +
+      "more than five seconds for the server (offline, or the server failing), and goes when " +
+      "the server has it. With Vim keys on, a new " +
       "note picked in the list (its New note row, or o or O there) starts in insert mode when " +
       "the keyboard arrives, so the user types at once; an existing note, the empty page " +
       "waiting for a subject and a note tab on the stage start in normal mode. With `subject` it opens " +
@@ -417,10 +442,11 @@ export const machine = setup({
       "note is pinned or the keyboard is in it, and the next chapter change after the keyboard " +
       "has left it follows again. Moving into a part with no chapter keeps the note. A new note is linked to " +
       "the subject at its first save, and to the chapter open in it (the Journal's open day), " +
-      "the About line names the book, and a rounded label beside it names the chapter the note " +
+      "the About line names the book, and plain muted text under it names the chapter the note " +
       "is linked to, as the chapter's title read when it was linked, or \"Whole book\" " +
       "(\"Whole Journal\") when it is linked to no chapter. While the note's book is the " +
-      "subject and a chapter is open, the label holds one button: Unlink, when the note is " +
+      "subject and a chapter is open, the label offers one button, shown only while the pointer " +
+      "or the keyboard is on the label (a tap on a phone): Unlink, when the note is " +
       "linked to the open chapter, which links it to the whole book, or \"Link to\" and the " +
       "open chapter's title otherwise, which also moves it from another chapter; the label " +
       "turns at once, and pressing again reverses it. A keystroke made " +
@@ -513,6 +539,8 @@ export const machine = setup({
     pushRegister: input.pushRegister,
     // Source links a follow found gone (UI state): their tags are drawn removed.
     removed: [],
+    // The notes whose change has waited longer than NOT_SYNCED_MS for the server.
+    unsynced: [],
     // The ids of every note notes lists, for the source links' tags; null until it answers.
     notes: null,
     // Whether a pin restore is in flight, so a successful load starts pinned and a
@@ -550,6 +578,10 @@ export const machine = setup({
     _focused: { actions: assign({ focused: true }) },
     _blurred: { actions: assign({ focused: false }) },
     "dock.changed": { actions: assign({ layouts: ({ context }) => context.layouts + 1 }) },
+    _unsynced: {
+      guard: ({ context, event }) => !context.unsynced.includes(event.id),
+      actions: assign({ unsynced: ({ context, event }) => [...context.unsynced, event.id] }),
+    },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A command addressing this instance (4.4).
     load: { target: ".loading", actions: "open" },
@@ -683,7 +715,7 @@ export const machine = setup({
         // now holds, and stay in the current state so a keystroke made since is not lost.
         guard: ({ context, event }) =>
           event.id === context.id && context.sent != null && event.body === context.sent.body,
-        actions: [trackChanged, assign({ baseVersion: ({ event }) => event.version, about: ({ event }) => links(event.about) })],
+        actions: [trackChanged, syncOfChange, assign({ baseVersion: ({ event }) => event.version, about: ({ event }) => links(event.about) })],
       },
       {
         // A newer change from elsewhere: adopt it (the user's decision, 12), even
@@ -693,6 +725,7 @@ export const machine = setup({
         target: ".editing.clean",
         actions: [
           trackChanged,
+          syncOfChange,
           assign({
             body: ({ event }) => event.body,
             baseVersion: ({ event }) => event.version,
@@ -701,7 +734,7 @@ export const machine = setup({
           }),
         ],
       },
-      { actions: trackChanged },
+      { actions: [trackChanged, syncOfChange] },
     ],
   },
   states: {
@@ -788,7 +821,7 @@ export const machine = setup({
         "note.changed": {
           guard: ({ context, event }) => context.subjecting && context.subject != null && ofSubject(event, context.subject),
           target: "refollowing",
-          actions: trackChanged,
+          actions: [trackChanged, syncOfChange],
         },
       },
     },
@@ -804,15 +837,18 @@ export const machine = setup({
           {
             guard: ({ event }) => "note" in event.output,
             target: "editing.clean",
-            actions: assign({
-              body: ({ event }) => event.output.note.body,
-              baseVersion: ({ event }) => event.output.note.version,
-              sent: ({ event }) => ({ body: event.output.note.body }),
-              about: ({ event }) => links(event.output.note.about),
-              // A pin restore that found its note starts pinned (D10).
-              pinned: ({ context }) => context.restoring || context.pinned,
-              restoring: false,
-            }),
+            actions: [
+              syncOfRead,
+              assign({
+                body: ({ event }) => event.output.note.body,
+                baseVersion: ({ event }) => event.output.note.version,
+                sent: ({ event }) => ({ body: event.output.note.body }),
+                about: ({ event }) => links(event.output.note.about),
+                // A pin restore that found its note starts pinned (D10).
+                pinned: ({ context }) => context.restoring || context.pinned,
+                restoring: false,
+              }),
+            ],
           },
           {
             // A remembered pin whose note is gone (D10): choose from the start picture as

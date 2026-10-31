@@ -23,6 +23,27 @@ const asConversation = (event) => {
   return rest;
 };
 
+// How long a chat's finished turns may wait for the server before the thread says Not
+// synced: longer than a save's round trip, so the words show only while the device is
+// offline or the server keeps failing, never during an ordinary save (5).
+export const NOT_SYNCED_MS = 5000;
+
+// conversations' pending flag for any chat, from a conversation.changed or a read reply:
+// each pending news restarts the wait, and the server's acknowledgement ends it.
+const watchSync = (of) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const chat = of(event);
+    if (!chat?.id) return;
+    enqueue.cancel(`unsynced:${chat.id}`);
+    if (chat.pending === true) enqueue.raise({ type: "_unsynced", id: chat.id }, { delay: NOT_SYNCED_MS, id: `unsynced:${chat.id}` });
+    else if (context.unsynced.includes(chat.id)) enqueue.assign({ unsynced: context.unsynced.filter((id) => id !== chat.id) });
+  });
+const syncOfChange = watchSync((event) => event);
+const syncOfRead = watchSync((event) => event.output?.conversation);
+
+// Whether the open chat's finished turns have waited too long for the server.
+export const notSynced = (context) => context.openId != null && context.unsynced.includes(context.openId);
+
 // Render an assistant answer's markdown to a tree of blocks and inline runs, so the view
 // draws bold, headings, lists and tables as formatting rather than raw # and * (10). It is
 // ours, small and pure — no vendored library — the reverse of the HTML-to-markdown
@@ -682,14 +703,17 @@ export const machine = setup({
       "chat when the subject changes; opening another chat while it is on moves the pin to it, " +
       "and the pin is kept by `pins`, so it survives a reload. A chat with no message yet " +
       "cannot be pinned: its pin is shown unavailable, saying why, until the first message " +
-      "is sent, and then it is on unless the user turned pins off. At the top left a rounded " +
-      "label names the chapter the chat is linked to, as the chapter's title read when it " +
+      "is sent, and then it is on unless the user turned pins off. At the top left plain muted " +
+      "text names the chapter the chat is linked to, as the chapter's title read when it " +
       "was linked, or \"Whole book\" (\"Whole Journal\") when it is linked to no chapter; " +
       "a new chat shows the chapter it will be linked to. While the chat's book is the " +
-      "subject and a chapter is open, the label holds one button: Unlink, when the chat is " +
+      "subject and a chapter is open, the label offers one button, shown only while the pointer " +
+      "or the keyboard is on the label (a tap on a phone): Unlink, when the chat is " +
       "linked to the open chapter, which links it to the whole book, or \"Link to\" and the " +
       "open chapter's title otherwise, which also moves it from another chapter; the label " +
-      "turns at once, and pressing again reverses it. In the last finished " +
+      "turns at once, and pressing again reverses it. A muted \"Not synced\" shows under the " +
+      "chat only while its finished turns have waited more than five seconds for the server " +
+      "(offline, or the server failing), and goes when the server has them. In the last finished " +
       "answer the user selects a passage and writes a comment on it, as in Redline: the " +
       "passage is highlighted with a number and the comments are listed under the answer, " +
       "kept with the chat by `conversations` and sent with the next message, after which they " +
@@ -719,6 +743,8 @@ export const machine = setup({
     // Which chat is open on this device, and its contents, or null when none is open.
     openId: null,
     conversation: null,
+    // The chats whose finished turns have waited longer than NOT_SYNCED_MS for the server.
+    unsynced: [],
     // The chat `pins` holds pinned; the open chat is pinned while the two are the same.
     pin: null,
     pinsObserved: false,
@@ -796,9 +822,16 @@ export const machine = setup({
     // The fact's news about the open chat (4.3, fourth rule): adopt it whole. A change
     // for another chat is left to the bus to record as ignored. Held until the read
     // reply lands (4.2), so it never overtakes the starting picture.
-    "conversation.changed": {
-      guard: ({ context, event }) => event.id === context.openId,
-      actions: assign({ conversation: ({ event }) => asConversation(event) }),
+    "conversation.changed": [
+      {
+        guard: ({ context, event }) => event.id === context.openId,
+        actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event) })],
+      },
+      { actions: syncOfChange },
+    ],
+    _unsynced: {
+      guard: ({ context, event }) => !context.unsynced.includes(event.id),
+      actions: assign({ unsynced: ({ context, event }) => [...context.unsynced, event.id] }),
     },
     // The open chat was deleted (4.3): fall back to the empty page.
     "conversation.deleted": {
@@ -827,7 +860,7 @@ export const machine = setup({
           {
             guard: ({ event }) => "conversation" in event.output,
             target: "showing",
-            actions: assign({ conversation: ({ event }) => event.output.conversation }),
+            actions: [syncOfRead, assign({ conversation: ({ event }) => event.output.conversation })],
           },
           { guard: ({ event }) => event.output.error === "unavailable", target: "unavailable" },
           // A chat the server has no record of is an empty new chat (12): the empty page.
@@ -848,11 +881,11 @@ export const machine = setup({
             guard: ({ context, event }) =>
               event.id === context.openId && context.draft != null && lastAnswer(event)?.id !== context.draft.answerId,
             target: ".idle",
-            actions: assign({ conversation: ({ event }) => asConversation(event), draft: null }),
+            actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event), draft: null })],
           },
           {
             guard: ({ context, event }) => event.id === context.openId,
-            actions: assign({ conversation: ({ event }) => asConversation(event) }),
+            actions: [syncOfChange, assign({ conversation: ({ event }) => asConversation(event) })],
           },
         ],
         // A comment's Remove: the box closes, the comment leaves the saved list and stays

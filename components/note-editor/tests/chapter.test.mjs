@@ -43,10 +43,19 @@ for (const engine of ENGINES) {
         await page.locator("note-list").getByText("A note", { exact: true }).click();
         await until(async () => (await label(page)) === "Whole book Link to Chapter One");
         const button = page.locator("note-editor .relink");
+        const shown = () => button.evaluate((el) => getComputedStyle(el).opacity === "1");
+        await page.mouse.move(0, 0);
+        await until(async () => !(await shown())).catch(() => assert.fail("the button waits for the pointer or the keyboard"));
+        await page.locator("note-editor .chapter").hover();
+        await until(shown);
         await button.click();
         await until(async () => (await label(page)) === "Chapter One Unlink");
         await button.click();
         await until(async () => (await label(page)) === "Whole book Link to Chapter One");
+        await page.mouse.move(0, 0);
+        await until(async () => !(await shown()));
+        await button.focus();
+        await until(shown);
         assert.deepEqual(problems, []);
       } finally {
         await context.close();

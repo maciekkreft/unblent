@@ -7,7 +7,7 @@ import { EditorView, Decoration } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, sourceLinks, missingLinks, webLinks, toRegister } from "editor";
-import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing } from "./machine.js";
+import { machine, parseBody, serialize, aboutTitleOf, chapterLabelOf, isStaged, showing, startsTyping, linkMissing, notSynced } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import opened from "./events/note.opened.json" with { type: "json" };
 import pinToggled from "./events/pin.toggled.json" with { type: "json" };
@@ -341,40 +341,28 @@ class NoteEditor extends LitElement {
       white-space: nowrap;
     }
     /* The chapter label, on its own line under the About line so the book's name keeps
-       its room: a rounded tag naming the chapter the note is linked to, accent while
-       linked to one, holding the Link or Unlink button. The line keeps the label's height
-       whether or not it shows, and the label is as tall without its button as with it, so
-       the editor below never jumps, not when a button is pressed nor as the label comes and
-       goes. On a narrow panel the chapter's name gives way before the button that acts. */
+       its room: plain muted text naming the chapter the note is linked to. Its Link or
+       Unlink button shows only while the pointer or the keyboard is on the label, so the
+       line reads as a fact and not as a control; hidden, the button keeps its room, so
+       nothing moves as it comes and goes, and the line keeps its height whether or not the
+       label shows. A phone has no pointer that rests: a tap puts the keyboard on the label,
+       which shows the button. On a narrow panel the chapter's name gives way first. */
     .place {
       flex: none;
       display: flex;
-      min-height: calc(var(--text-caption) * var(--leading-tight) + 4 * var(--space-2xs) + 2 * var(--border-width));
+      min-height: calc(var(--text-caption) * var(--leading-tight) + 2 * var(--border-width));
     }
     .chapter {
       flex: 0 1 auto;
       min-width: 0;
-      box-sizing: border-box;
       display: inline-flex;
       align-items: center;
       gap: var(--space-xs);
-      padding: var(--space-2xs);
-      padding-inline-start: var(--space-sm);
-      border: var(--border-width) solid var(--color-border);
-      border-radius: var(--radius-full);
-      background: var(--color-canvas-soft);
-      color: var(--color-body-mid);
+      color: var(--color-mute);
       font-size: var(--text-caption);
       line-height: var(--leading-tight);
       white-space: nowrap;
-    }
-    .chapter:not(:has(button)) {
-      padding-inline-end: var(--space-sm);
-    }
-    .chapter.linked {
-      border-color: var(--color-accent);
-      background: var(--color-accent-subtle);
-      color: var(--color-ink);
+      outline: none;
     }
     .chapter > span {
       flex: 0 10 auto;
@@ -388,19 +376,27 @@ class NoteEditor extends LitElement {
     .relink {
       flex: 0 1 auto;
       appearance: none;
-      border: none;
-      border-radius: var(--radius-full);
-      padding: var(--space-2xs) var(--space-xs);
+      border: var(--border-width) solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 0 var(--space-2xs);
       margin: 0;
-      background: var(--color-canvas);
-      color: var(--color-ink);
+      background: transparent;
+      color: var(--color-body-mid);
       font: inherit;
-      font-weight: var(--weight-semibold);
       white-space: nowrap;
       cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+    }
+    /* The whole line is the label's hover area, so a button that turns narrower under
+       the pointer (Link to … into Unlink) stays shown and pressing again reverses it. */
+    .place:hover .relink,
+    .place:focus-within .relink {
+      opacity: 1;
+      pointer-events: auto;
     }
     .relink:hover {
-      background: var(--color-surface-hover);
+      color: var(--color-ink);
     }
     .relink:focus-visible {
       outline: none;
@@ -475,9 +471,9 @@ class NoteEditor extends LitElement {
       font-size: var(--text-caption);
       color: var(--color-mute);
     }
-    /* The status keeps the width of its widest usual word, so "Saved" turning into
-       "Unsaved" never changes where the footer wraps and the row never jumps. The
-       words stack in one grid cell; the hidden ones only give it their width. */
+    /* The status keeps the width of its widest usual words, so "Not synced" coming and
+       going never changes where the footer wraps and the row never jumps. The words
+       stack in one grid cell; the hidden ones only give it their width. */
     .status {
       margin: 0;
       display: inline-grid;
@@ -738,8 +734,9 @@ class NoteEditor extends LitElement {
     if (snapshot.matches("empty")) return "New note";
     if (snapshot.matches("blank")) return "New note";
     if (snapshot.matches("failed")) return "notes unavailable";
-    if (snapshot.matches({ editing: "dirty" })) return "Unsaved";
-    if (snapshot.matches({ editing: "clean" })) return "Saved";
+    // A save is not news (5, local-first): only a change the server has not had for a
+    // while is, because closing the device then would leave it on this device alone.
+    if (notSynced(snapshot.context)) return "Not synced";
     return "";
   }
 
@@ -801,7 +798,7 @@ class NoteEditor extends LitElement {
   // The chapter label (machine.js: chapterLabelOf decides what it says and offers).
   #chapter(label) {
     if (!label) return nothing;
-    return html`<span class=${label.linked ? "chapter linked" : "chapter"}
+    return html`<span class="chapter" tabindex=${label.action ? "-1" : nothing}
       ><span>${label.text}</span>${label.action
         ? html`<button class="relink" type="button" title=${label.action} @mousedown=${(e) => e.preventDefault()} @click=${this.#relink}>
             ${label.action}
@@ -876,7 +873,7 @@ class NoteEditor extends LitElement {
         <div class="footer">
           <p class="status">
             <span>${this.#status(snapshot)}</span><span class="sizer" aria-hidden="true">New note</span
-            ><span class="sizer" aria-hidden="true">Unsaved</span>
+            ><span class="sizer" aria-hidden="true">Not synced</span>
           </p>
           ${this.#levelBar(vimKeys)}
         </div>

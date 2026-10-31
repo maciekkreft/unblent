@@ -61,6 +61,32 @@ const slotted = (page) =>
     return el ? { tag: el.localName, role: el.dataset.role ?? null } : null;
   });
 
+// The note on screen has reached notes' store in this browser: a record holds the
+// editor's text, its level markers aside. A database not made yet is left unmade.
+const stored = (page, sel = "note-editor") =>
+  page.evaluate(
+    (sel) =>
+      new Promise((res) => {
+        const text = document.querySelector(sel).shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString();
+        const open = indexedDB.open("notes");
+        open.onupgradeneeded = () => open.transaction.abort();
+        open.onerror = () => res(false);
+        open.onsuccess = () => {
+          const db = open.result;
+          const all = db.transaction("notes", "readonly").objectStore("notes").getAll();
+          all.onsuccess = () => {
+            db.close();
+            res(all.result.some((r) => r.body.split("\n").map((l) => l.replace(/^#{1,3} /, "")).join("\n") === text));
+          };
+          all.onerror = () => {
+            db.close();
+            res(false);
+          };
+        };
+      }),
+    sel,
+  );
+
 // The notes stem page is the smallest page holding the editor with the list beside it.
 const STEM = "/workshop/design/notes";
 
@@ -244,7 +270,7 @@ for (const engine of ENGINES) {
       await until(async () => (await lines(page)).map((l) => l.text).join("\n") === "Alpha\nBeta\n\nGamma");
       assert.ok(!(await lines(page)).slice(2).some((l) => l.className.includes("cm-level-")), "new lines are Body");
 
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
@@ -282,7 +308,7 @@ for (const engine of ENGINES) {
       assert.ok(shape.rows.every((left) => Math.abs(left - shape.rows[0]) <= 1), `every row of the item starts under the first, saw ${shape.rows}`);
 
       // The text keeps the markdown marker, Enter putting the next item directly below.
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
       const body = await page.evaluate(() => document.querySelector("note-editor").shadowRoot.querySelector(".cm-content").cmView.rootView.view.state.doc.toString());
       assert.match(body, /^- one item .*\n- two$/);
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
@@ -309,7 +335,7 @@ for (const engine of ENGINES) {
 
       await page.locator("#notes-editor .cm-content").click();
       await page.keyboard.type("Still here");
-      await until(async () => (await page.locator("#notes-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page, "#notes-editor"));
       // The one failed request is the missing component the stored choice names; the
       // browser also logs it as a console error, which names no URL.
       const missing = "/static/components/no-such-editor/view.js";
@@ -476,7 +502,7 @@ for (const engine of ENGINES) {
       await until(async () => (await lines(page))[0]?.text === "iAlpha");
       assert.equal(await page.locator("note-editor .cm-fat-cursor").count(), 0, "no block cursor");
       assert.equal(await page.locator("note-editor button.level kbd").count(), 0, "the buttons show names only");
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
 
       await page.evaluate((v) => localStorage.setItem("settings", v), VIM);
       await page.reload();
@@ -503,7 +529,7 @@ for (const engine of ENGINES) {
       await page.locator("note-editor .cm-content").click();
       await page.keyboard.type("iAlpha");
       await page.keyboard.press("Escape");
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
 
       await page.reload();
       await vimReady(page);
@@ -569,7 +595,7 @@ for (const engine of ENGINES) {
       ];
       await until(async () => (await shown()).length === 4);
       assert.deepEqual(await shown(), want);
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
       const body = await page.evaluate(
         () =>
           new Promise((res, rej) => {
@@ -778,7 +804,7 @@ for (const engine of ENGINES) {
       });
       assert.deepEqual(tag, { count: 1, label: "The quote", icon: true, line: "see The quote end", tinted: true, struck: false });
       assert.equal(await docText(page), `see ${link} end`);
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });
@@ -831,7 +857,7 @@ for (const engine of ENGINES) {
       // Enter on the tag in normal mode follows it, and nothing opens.
       await page.keyboard.type("0llll");
       await page.keyboard.press("Enter");
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
       await page.reload();
       await page.waitForFunction(() => document.querySelector("note-editor")?.shadowRoot?.querySelector(".cm-source-link"));
       await until(struck);
@@ -868,7 +894,7 @@ for (const engine of ENGINES) {
       assert.equal(tab.url(), "https://example.com/a");
       assert.equal(page.url(), `${BASE_URL}${STEM}`, "the app stays where it was");
       assert.equal(await docText(page), "Read [the site](https://example.com/a) now\nnext", "the text stays as typed");
-      await until(async () => (await page.locator("note-editor .status > span:first-child").textContent())?.trim() === "Saved");
+      await until(() => stored(page));
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
       await context.close();
     });

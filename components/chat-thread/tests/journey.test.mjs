@@ -188,7 +188,10 @@ for (const engine of ENGINES) {
       run: async (v) => {
         await send(v.page, "keep me");
         await v.see((s) => want(s.lastAnswer.includes("keep me"), "no answer to keep me"));
-        await v.see((s) => want(!s.thread.includes("Not saved yet"), "the chat is not saved yet")); // saved to the server
+        // The server has the answer, so the reload reads it back from there.
+        await until(() =>
+          v.page.evaluate(async () => (await (await fetch("/api/conversations")).json()).conversations.some((c) => c.answer.includes("keep me"))),
+        );
         await v.page.reload({ waitUntil: "domcontentloaded" });
         await inputReady(v.page);
         await v.see((s) => want(s.thread.includes("keep me"), "the chat is gone after the reload"));
