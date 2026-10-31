@@ -414,8 +414,7 @@ class ConversationList extends LitElement {
     .switch button:hover {
       background: var(--color-surface-hover);
     }
-    .switch button:focus-visible,
-    .show-all:focus-visible {
+    .switch button:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
@@ -428,26 +427,6 @@ class ConversationList extends LitElement {
     .line {
       margin: var(--space-xs) var(--space-sm);
       border-top: var(--border-width) solid var(--color-border);
-    }
-    .none,
-    .more {
-      padding: var(--space-xs) var(--space-sm);
-      font-size: var(--text-sm);
-      color: var(--color-body-mid);
-    }
-    .show-all {
-      appearance: none;
-      background: none;
-      border: 0;
-      padding: 0;
-      margin: 0;
-      font: inherit;
-      cursor: pointer;
-      color: var(--color-accent);
-      border-radius: var(--radius-sm);
-    }
-    .show-all:hover {
-      text-decoration: underline;
     }
   `;
 
@@ -774,27 +753,15 @@ class ConversationList extends LitElement {
 
   // While the subject has an open chapter: the fixed rows, then the chats linked to no
   // chapter, then a line and the rest. Under This chapter the rest is the open chapter's
-  // chats, or a text saying it has none, then how many chats the other chapters hold, with
-  // Show all; under All chapters it is every chapter's. The line shows only with something on
-  // both sides. The line and the texts are not options, so the keyboard moves over the rows alone.
-  #grouped(rows, { unit, all, loose, here, rest, more }, row) {
-    const day = unit === "day";
+  // chats; under All chapters it is every chapter's. The line shows only with something on
+  // both sides. The line is not an option, so the keyboard moves over the rows alone.
+  #grouped(rows, { all, loose, here, rest }, row) {
     const linked = all ? rest : here;
     const lead = rows.slice(0, rows.length - loose.length - linked.length);
     return html`
       ${rows.slice(0, lead.length + loose.length).map(row)}
-      ${loose.length && (linked.length || !all) ? html`<li class="line" role="presentation"></li>` : nothing}
-      ${linked.length
-        ? rows.slice(lead.length + loose.length).map(row)
-        : all
-          ? nothing
-          : html`<li class="none" role="presentation">No chats ${day ? "on this day" : "in this chapter"} yet.</li>`}
-      ${more && !all
-        ? html`<li class="more" role="presentation">
-            ${more} more ${day ? "on other days" : "in other chapters"} ·
-            <button type="button" class="show-all" @click=${() => this.#actor.send({ type: "_chapters", all: true })}>Show all</button>
-          </li>`
-        : nothing}
+      ${loose.length && linked.length ? html`<li class="line" role="presentation"></li>` : nothing}
+      ${rows.slice(lead.length + loose.length).map(row)}
     `;
   }
 

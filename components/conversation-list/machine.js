@@ -73,19 +73,17 @@ const linkTo = (chat, subject) =>
 // subject that has an open chapter; null otherwise, and then the list is `shown` with no
 // switch. `all` is the user's choice, This chapter by default. Under either choice the
 // chats linked to no chapter come first, because they belong to every chapter, then the
-// open chapter's (`here`) or every chapter's (`rest`); `more` counts the chats about the
-// subject that stay out of sight in other chapters. The open chat, if it is one of those,
-// is listed apart instead (`apart`), and not counted.
+// open chapter's (`here`) or every chapter's (`rest`). The open chat of another chapter
+// is listed apart instead (`apart`).
 export const chaptered = (context) => {
-  const { following, subject, allChapters, open } = context;
+  const { following, subject, allChapters } = context;
   if (!following || !subject?.chapter) return null;
   const chats = shown(context);
   const chapter = (c) => linkTo(c, subject)?.chapter ?? null;
   const loose = chats.filter((c) => chapter(c) == null);
   const here = chats.filter((c) => chapter(c) === subject.chapter);
   const rest = chats.filter((c) => chapter(c) != null);
-  const more = chats.filter((c) => chapter(c) != null && chapter(c) !== subject.chapter && c.id !== open).length;
-  return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest, more };
+  return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest };
 };
 
 // The open chat, when it is not among the shown chats (12): a pinned chat after the stage
@@ -254,9 +252,7 @@ export const machine = setup({
       "(\"This day\" and \"All days\" in the Journal). It starts on This chapter and the " +
       "choice is kept in this browser. This chapter shows first the chats about the book " +
       "linked to no chapter, under \"Not linked to a chapter\" when there are any, then, under " +
-      "the open chapter's title, its chats or \"No chats in this chapter yet.\" (\"on this " +
-      "day\" in the Journal), then \"N more in other chapters\" with Show all, which switches " +
-      "to All chapters; an open chat of another chapter is listed apart. All chapters lists " +
+      "the open chapter's title, its chats; an open chat of another chapter is listed apart. All chapters lists " +
       "every chat about the book. A chat row linked to a chapter names the chapter's title " +
       "before its second line; a chat linked to the whole book shows nothing extra. That " +
       "apart row's tag says where the chat is from: \"From \" and its chapter's title when it " +

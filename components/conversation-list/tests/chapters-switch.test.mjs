@@ -40,7 +40,7 @@ const reads = (page) =>
 
 for (const engine of ENGINES) {
   // Rendering and layout, and a gesture: the switch groups the chats by the open chapter,
-  // and Show all turns it to All chapters, a choice kept in this browser.
+  // and All chapters shows every chapter's, a choice kept in this browser.
   test(`the chapter switch narrows the chats to the open chapter and back in ${engine.name}`, async () => {
     const cookie = forgeCookie("conversation-list-chapters");
     await put(cookie, `/api/books/${BOOK}`, "application/epub+zip", readFileSync(SAMPLE));
@@ -61,9 +61,9 @@ for (const engine of ENGINES) {
         await until(
           async () =>
             (await reads(page)) ===
-            "This chapter | New chat | Loose chat |  | First chapter chat | 1 more in other chapters · Show all",
+            "This chapter | New chat | Loose chat |  | First chapter chat",
         );
-        await page.locator("conversation-list .show-all").click();
+        await page.locator("conversation-list .switch button", { hasText: "All chapters" }).click();
         const all = "All chapters | New chat | Loose chat |  | First chapter chat | Second chapter chat";
         await until(async () => (await reads(page)) === all);
         assert.equal(await page.evaluate(() => localStorage.getItem("conversation-list:chapters")), "all");

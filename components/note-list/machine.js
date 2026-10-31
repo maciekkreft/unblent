@@ -105,19 +105,17 @@ const linkTo = (note, subject) =>
 // an open chapter; null otherwise, and then the list is `shown` with no switch. `all` is
 // the user's choice, This chapter by default. Under either choice the notes linked to no
 // chapter come first, because they belong to every chapter, then the open chapter's
-// (`here`) or every chapter's (`rest`); `more` counts the notes about the subject that stay
-// out of sight in other chapters. The open note, if it is one of those, is listed apart
-// instead (`apart`), and not counted.
+// (`here`) or every chapter's (`rest`). The open note of another chapter is listed apart
+// instead (`apart`).
 export const chaptered = (context) => {
-  const { following, subject, allChapters, open } = context;
+  const { following, subject, allChapters } = context;
   if (!following || !subject?.chapter) return null;
   const notes = shown(context);
   const chapter = (n) => linkTo(n, subject)?.chapter ?? null;
   const loose = notes.filter((n) => chapter(n) == null);
   const here = notes.filter((n) => chapter(n) === subject.chapter);
   const rest = notes.filter((n) => chapter(n) != null);
-  const more = notes.filter((n) => chapter(n) != null && chapter(n) !== subject.chapter && n.id !== open).length;
-  return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest, more };
+  return { unit: isDay(subject.chapter) ? "day" : "chapter", all: Boolean(allChapters), loose, here, rest };
 };
 
 // The note the editor has open, when it is not among the shown notes (12): a pinned
@@ -275,9 +273,7 @@ export const machine = setup({
       "\"All chapters\" (\"This day\" and \"All days\" in the Journal). It starts on This " +
       "chapter and the choice is kept in this browser. This chapter shows first the notes about " +
       "the book linked to no chapter, under \"Not linked to a chapter\" when there are any, " +
-      "then, under the open chapter's title, its notes or \"No notes in this chapter yet.\" " +
-      "(\"on this day\" in the Journal), then \"N more in other chapters\" with Show all, " +
-      "which switches to All chapters; an open note of another chapter is listed apart. All " +
+      "then, under the open chapter's title, its notes; an open note of another chapter is listed apart. All " +
       "chapters lists every note about the book. A note row linked to a chapter names the " +
       "chapter's title before its second line; a note linked to the whole book shows nothing " +
       "extra. That apart row's tag says where the note is from: \"From \" and its chapter's " +

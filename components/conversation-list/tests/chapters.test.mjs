@@ -26,20 +26,18 @@ const subject = (chapter, chapterTitle) => ({ kind: "book", id: BOOK, title: "Bo
 const context = (over = {}) => ({ chats, following: true, subject: subject("chapter-two", "Chapter Two"), handed: new Set(), open: null, allChapters: false, cut: null, ...over });
 const idsOf = (rows) => rows.map((n) => n.id);
 
-test("under This chapter the chats linked to no chapter come first, then the open chapter's, and the rest are counted", () => {
+test("under This chapter the chats linked to no chapter come first, then the open chapter's", () => {
   const g = chaptered(context());
   assert.equal(g.unit, "chapter");
   assert.equal(g.all, false);
   assert.deepEqual(idsOf(g.loose), [LOOSE]);
   assert.deepEqual(idsOf(g.here), [TWO, TWO_B]);
-  assert.equal(g.more, 1, "Chapter One's chat; the other book's is not about the subject");
   assert.deepEqual(idsOf(g.rest), [TWO, ONE, TWO_B], "every chapter's, in the user's order");
 });
 
-test("a chapter with no chats yet has an empty group and counts every other chapter's", () => {
+test("a chapter with no chats yet has an empty group", () => {
   const g = chaptered(context({ subject: subject("chapter-three", "Chapter Three") }));
   assert.deepEqual(idsOf(g.here), []);
-  assert.equal(g.more, 3);
 });
 
 test("a Journal day is a chapter named by its date, so the switch speaks of days", () => {
@@ -47,7 +45,6 @@ test("a Journal day is a chapter named by its date, so the switch speaks of days
   const g = chaptered(context({ chats: day, subject: subject("2026-10-29", "Thursday 29 October") }));
   assert.equal(g.unit, "day");
   assert.deepEqual(idsOf(g.here), [ONE]);
-  assert.equal(g.more, 1);
 });
 
 test("there is no switch without an open chapter, or when the list does not follow the stage", () => {
@@ -68,9 +65,7 @@ test("the switch starts on This chapter, comes back from input, and _chapters tu
   assert.equal(start({ allChapters: true }).getSnapshot().context.allChapters, true);
 });
 
-test("under This chapter the open chat of another chapter is listed apart and not counted; under All it is in the list", () => {
-  const g = chaptered(context({ open: ONE }));
-  assert.equal(g.more, 0);
+test("under This chapter the open chat of another chapter is listed apart; under All it is in the list", () => {
   assert.equal(apart(context({ open: ONE }))?.id, ONE);
   assert.equal(source(chats[2], {}, subject("chapter-two", "Chapter Two")), "From Chapter One");
   assert.equal(apart(context({ open: ONE, allChapters: true })), null);
