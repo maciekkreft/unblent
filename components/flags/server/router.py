@@ -27,7 +27,7 @@ _SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
 
 # The features that have a flag, in the order the Feature flags tab shows them; the
 # browser half of this component holds the same list (machine.js).
-FEATURES = ("chats", "evaluators", "choice-points", "highlights", "undo")
+FEATURES = ("chats", "evaluators", "choice-points", "undo")
 
 # The features that start off (3.1): one with no row in `turned_on` is off, so a fresh
 # data directory and a server that never stored it both hide it until the admin turns

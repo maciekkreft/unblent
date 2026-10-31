@@ -91,6 +91,27 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       }
     });
 
+    // Browser: a reload against real storage.
+    test("a press on a heading folds that evaluator alone, and it stays folded after a reload", async () => {
+      const { context, page, problems, tab } = await open(browser, false);
+      try {
+        const kind = tab.getByRole("button", { name: "Kind or harsh" });
+        assert.equal(await kind.getAttribute("aria-expanded"), "true", "open at first");
+        await kind.click();
+        await until(async () => (await kind.getAttribute("aria-expanded")) === "false");
+        assert.equal(await tab.locator(`section[data-id="${ID}"] input.title`).count(), 0, "folded, only the heading shows");
+        assert.equal(await tab.getByRole("button", { name: "Your values" }).getAttribute("aria-expanded"), "true", "the other stays open");
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await tab.locator(`section.evaluator[data-id="${ID}"]`).waitFor();
+        assert.equal(await kind.getAttribute("aria-expanded"), "false", "still folded after a reload");
+        await kind.click();
+        await until(async () => (await tab.locator(`section[data-id="${ID}"] input.title`).count()) === 1);
+        assert.deepEqual(problems, [], problems.join("; "));
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: focus and keys.
     test("j and k, and the arrows, walk the tab top to bottom and back, through fields, choices and boxes", async () => {
       const { context, page, problems, tab } = await open(browser, true);
@@ -98,6 +119,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const path = [
           "try",
           "button:New evaluator",
+          "button:Kind or harsh",
           "text:Name the evaluator",
           "box:Description of Kind or harsh",
           "checkbox:Ask question 1",
@@ -109,6 +131,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           "box:No means (optional)",
           "button:Add a question",
           "button:Delete evaluator",
+          "button:Your values",
         ];
         await tab.locator("a.try").focus();
         // Down with j, except out of the one-line field, where j is typed and the arrow moves.
@@ -136,12 +159,21 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.keyboard.press("ArrowDown");
         assert.equal(await where(page), "button:New evaluator");
         // l on the kind changes it to Pick one, and h brings Yes / no back.
-        for (const key of ["j", "ArrowDown", "j", "j", "j"]) await page.keyboard.press(key);
+        for (const key of ["j", "j", "ArrowDown", "j", "j", "j"]) await page.keyboard.press(key);
         assert.equal(await where(page), "radio:yesno");
         await page.keyboard.press("l");
         await until(async () => (await tab.locator('input[type=radio][value="pick"]').isChecked()) === true);
         await page.keyboard.press("h");
         await until(async () => (await tab.locator('input[type=radio][value="yesno"]').isChecked()) === true);
+        // Enter on a heading folds its evaluator, and j then passes it as one stop.
+        await tab.getByRole("button", { name: "Kind or harsh" }).focus();
+        await page.keyboard.press("Enter");
+        await until(async () => (await tab.locator(`section[data-id="${ID}"] input.title`).count()) === 0);
+        await page.keyboard.press("j");
+        assert.equal(await where(page), "button:Your values", "a folded evaluator is one stop");
+        await page.keyboard.press("k");
+        await page.keyboard.press("Enter");
+        await until(async () => (await tab.locator(`section[data-id="${ID}"] input.title`).count()) === 1);
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

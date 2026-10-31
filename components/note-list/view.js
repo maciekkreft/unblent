@@ -2,17 +2,11 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, shown, highlights, showing, chaptered, placement } from "./machine.js";
+import { machine, shown, showing, chaptered, placement } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
-import highlightsSelected from "./events/highlights.selected.json" with { type: "json" };
 import moved from "./events/note.moved.json" with { type: "json" };
 import removalStarted from "./events/removal.started.json" with { type: "json" };
-
-// The Highlights row's id (Decision 2): a fixed constant, never a note id, so the machine
-// never mistakes it for a note. It is only a name the view routes on; the machine hears
-// _pickHighlights, not this id.
-const HIGHLIGHTS = "highlights";
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo
 // window; the token is the one clock, shared with the bar's animation.
@@ -34,15 +28,6 @@ class ActorController {
     // The undo window comes from --duration-undo, read off the host so a stylesheet
     // or a test can set it; the machine only ever sees the number (importable in Node).
     const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
-    // Whether the Highlights were the open row, kept in this browser (3.1) because the
-    // panel keeps showing them across a reload.
-    this.key = `note-list${this.host.id ? `#${this.host.id}` : ""}:highlights`;
-    let highlightsOpen = false;
-    try {
-      highlightsOpen = localStorage.getItem(this.key) === "open";
-    } catch {
-      // No storage: the mark lives only for this page.
-    }
     // Which way the chapter switch stands, kept in this browser (3.1) so the choice
     // follows the device; This chapter unless All chapters was chosen.
     this.chaptersKey = `note-list${this.host.id ? `#${this.host.id}` : ""}:chapters`;
@@ -62,9 +47,6 @@ class ActorController {
         // the notes about it. Parsed by the time hostConnected runs. Off is exactly
         // today's behaviour.
         following: this.host.subject,
-        // The `highlights` attribute: offer the Highlights row.
-        highlightsRow: this.host.highlights,
-        highlightsOpen,
         allChapters,
         // A try page (8) shows the list signed out.
         tryPage: location.pathname.startsWith("/try/"),
@@ -72,28 +54,14 @@ class ActorController {
       events: {
         "note.selected": selected,
         "note.discarded": discarded,
-        "highlights.selected": highlightsSelected,
         "note.moved": moved,
         "removal.started": removalStarted,
       },
     });
     this.subscription = this.actor.subscribe((snapshot) => {
-      this.#keep(snapshot.context.highlightsOpen);
       this.#keepAll(snapshot.context.allChapters);
       this.host.requestUpdate();
     });
-  }
-
-  #kept = null;
-  #keep(open) {
-    if (open === this.#kept) return;
-    this.#kept = open;
-    try {
-      if (open) localStorage.setItem(this.key, "open");
-      else localStorage.removeItem(this.key);
-    } catch {
-      // No storage: nothing to keep.
-    }
   }
 
   #keptAll = false;
@@ -145,11 +113,10 @@ const THRESHOLD = 0.35; // past this fraction, releasing deletes
 
 class NoteList extends LitElement {
   // The attributes the tag understands: `subject` (D5) follows the stage, showing only
-  // the notes about the subject; `highlights` offers the Highlights row there. Reflected
-  // so a page's bare attribute reads as true and the manifest attribute is visible.
+  // the notes about the subject. Reflected so a page's bare attribute reads as true and
+  // the manifest attribute is visible.
   static properties = {
     subject: { type: Boolean, reflect: true },
-    highlights: { type: Boolean, reflect: true },
   };
 
   static styles = css`
@@ -333,12 +300,6 @@ class NoteList extends LitElement {
     .row:focus-within .time {
       visibility: hidden;
     }
-    /* The Highlights row has no bin to reveal (Decision 5), so its time stays put on
-       hover rather than vanishing to make room for a trash that is not there. */
-    .row.highlights:hover .time,
-    .row.highlights:focus-within .time {
-      visibility: visible;
-    }
     .bin:hover {
       color: var(--color-danger);
     }
@@ -478,22 +439,13 @@ class NoteList extends LitElement {
     const groups = chaptered(snapshot.context);
     const notes = groups ? [...groups.loose, ...(groups.all ? groups.rest : groups.here)] : shown(snapshot.context);
     const { draft } = snapshot.context;
-    // The Highlights row (Decision 1): under the New note row and above the notes, shown
-    // only while the subject has a highlight. It is not a note; the view sets it apart.
-    const hs = highlights(snapshot.context);
-    const lead = [
-      ...(draft ? [{ id: draft, draft: true }] : []),
-      ...(hs ? [{ id: HIGHLIGHTS, highlights: true, count: hs.count, updatedAt: hs.updatedAt }] : []),
-    ];
-    return [...lead, ...notes];
+    return [...(draft ? [{ id: draft, draft: true }] : []), ...notes];
   }
 
-  // The keyboard's row: the one it moved to, else the open one — the Highlights row
-  // while the Highlights are open, else the open note — else the first.
-  #focusRow(rows, { open, highlightsOpen }) {
+  // The keyboard's row: the one it moved to, else the open note, else the first.
+  #focusRow(rows, { open }) {
     const has = (id) => rows.some((r) => r.id === id);
     if (this.#focusId && has(this.#focusId)) return this.#focusId;
-    if (highlightsOpen && has(HIGHLIGHTS)) return HIGHLIGHTS;
     if (open && has(open)) return open;
     return rows[0]?.id ?? null;
   }
@@ -523,9 +475,9 @@ class NoteList extends LitElement {
   }
 
   // The neighbours a move is placed between (12), worked out by the machine (placement)
-  // from the note rows as shown; the fixed rows are not notes a move can stand next to.
+  // from the note rows as shown; the New note row is not a note a move can stand next to.
   #neighbours(rows, current, below) {
-    const ids = rows.filter((r) => !r.draft && !r.highlights).map((r) => r.id);
+    const ids = rows.filter((r) => !r.draft).map((r) => r.id);
     return placement(this.#actor.snapshot.context, ids, current, below);
   }
 
@@ -617,9 +569,7 @@ class NoteList extends LitElement {
 
   #pick(id) {
     this.#focusId = id;
-    // The Highlights row is not a note (Decision 2): it sends its own gesture, so the
-    // machine never sees this fixed id as a note pick.
-    this.#actor.send(id === HIGHLIGHTS ? { type: "_pickHighlights" } : { type: "_pick", id });
+    this.#actor.send({ type: "_pick", id });
   }
 
   #discard(event, id) {
@@ -694,11 +644,11 @@ class NoteList extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { open, discarding, highlightsOpen, cut, subject } = snapshot.context;
+    const { open, discarding, cut, subject } = snapshot.context;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, snapshot.context);
     const groups = chaptered(snapshot.context);
-    const row = (r) => this.#row(r, open, focusId, discarding, highlightsOpen, cut, subject);
+    const row = (r) => this.#row(r, open, focusId, discarding, cut, subject);
     // The failed state is the one time no rows show: notes could not answer, so the
     // next-note row would write into a picture we do not have. Otherwise the list is
     // always at least the next-note row, so there is no empty state.
@@ -769,7 +719,7 @@ class NoteList extends LitElement {
     `;
   }
 
-  #row(r, open, focusId, discarding, highlightsOpen, cut, subject) {
+  #row(r, open, focusId, discarding, cut, subject) {
     const isDiscarding = discarding.has(r.id);
     const isCut = cut === r.id;
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
@@ -777,7 +727,6 @@ class NoteList extends LitElement {
     const classes = [
       "row",
       r.draft ? "draft" : "",
-      r.highlights ? "highlights" : "",
       isDiscarding ? "discarding" : "",
       isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
@@ -786,41 +735,16 @@ class NoteList extends LitElement {
       .filter(Boolean)
       .join(" ");
 
-    // The Highlights row (Decision 5): a note-shaped row — a name with the highlighter
-    // mark, a count subtitle, the latest time trailing — but not a note: no bin, no swipe,
-    // and it reads as the selected row while it is the picked one (Decision 7).
-    if (r.highlights) {
-      return html`
-        <li
-          class=${classes}
-          role="option"
-          data-id=${r.id}
-          aria-selected=${highlightsOpen}
-          tabindex=${r.id === focusId ? 0 : -1}
-          @click=${() => this.#clickRow(r.id)}
-        >
-          <span class="slide">
-            <span class="text">
-              <span class="name"><span class="mark">${icon("highlighter")}</span>Highlights</span>
-              <span class="subtitle">${r.count} highlight${r.count === 1 ? "" : "s"}</span>
-            </span>
-            <span class="trailing"><span class="time">${when(r.updatedAt)}</span></span>
-          </span>
-        </li>
-      `;
-    }
-
     // The next-note row is one centered line, not a note with a blank second line, and
     // it has no delete: it is the blank page to write on, not an existing note. It reads as
-    // the open row when the editor is on the blank note, but never while the Highlights row
-    // is the picked one (Decision 7): only one row is ever selected.
+    // the open row when the editor is on the blank note.
     if (r.draft) {
       return html`
         <li
           class=${classes}
           role="option"
           data-id=${r.id}
-          aria-selected=${r.id === open && !highlightsOpen}
+          aria-selected=${r.id === open}
           tabindex=${r.id === focusId ? 0 : -1}
           @click=${() => this.#clickRow(r.id)}
         >
@@ -850,7 +774,7 @@ class NoteList extends LitElement {
         class=${classes}
         role="option"
         data-id=${r.id}
-        aria-selected=${r.id === open && !highlightsOpen}
+        aria-selected=${r.id === open}
         tabindex=${r.id === focusId ? 0 : -1}
         @click=${() => this.#clickRow(r.id)}
         @pointerdown=${(e) => this.#pointerdown(e, r.id)}

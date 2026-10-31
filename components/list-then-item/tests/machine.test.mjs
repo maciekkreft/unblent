@@ -45,13 +45,13 @@ test("a remembered shown is kept when it names an item, dropped otherwise", () =
 test("two items on different gestures each show their own item, and back shows the list", () => {
   const items = [
     { name: "note-editor", showsOn: "note.selected" },
-    { name: "highlight-notes", showsOn: "highlights.selected" },
+    { name: "evaluator-editor", showsOn: "evaluator.selected" },
   ];
   const a = start(items);
   a.send({ type: "note.selected", id: "x" });
   assert.equal(a.getSnapshot().context.shown, "note-editor", "a note pick shows the editor");
-  a.send({ type: "highlights.selected", about: { kind: "book", id: "bk1" } });
-  assert.equal(a.getSnapshot().context.shown, "highlight-notes", "the Highlights pick shows the document");
+  a.send({ type: "evaluator.selected", id: "e1" });
+  assert.equal(a.getSnapshot().context.shown, "evaluator-editor", "an evaluator pick shows its editor");
   a.send({ type: "_back" });
   assert.equal(a.getSnapshot().context.shown, null, "back shows the list");
 });

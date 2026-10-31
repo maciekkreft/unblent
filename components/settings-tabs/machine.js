@@ -7,7 +7,7 @@ import { setup, assign, fromPromise } from "xstate";
 // children arrive through `input`, read from the DOM by the view, so the machine stays
 // a pure definition importable in Node.
 
-// Administration is the admin's alone, and hidden while the admin views as someone (12).
+// The People tab is the admin's alone, and hidden while the admin views as someone (12).
 export const adminOf = (picture) =>
   Boolean(picture && !picture.error && picture.userId != null && picture.admin === true && !picture.viewingAs);
 

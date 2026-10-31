@@ -37,15 +37,15 @@ out = {}
 out["fresh"] = call("GET")
 out["notAdmin"] = call("PUT", someone, {"feature": "chats", "on": False})
 out["viewing"] = call("PUT", viewing, {"feature": "chats", "on": False})
-out["bad"] = [call("PUT", admin, b)[0] for b in ({"feature": "news", "on": False}, {"feature": "chats"}, {"feature": "chats", "on": "no"}, {"feature": "chats", "on": False, "x": 1}, [])]
-out["off"] = call("PUT", admin, {"feature": "highlights", "on": False})
+out["bad"] = [call("PUT", admin, b)[0] for b in ({"feature": "news", "on": False}, {"feature": "highlights", "on": False}, {"feature": "chats"}, {"feature": "chats", "on": "no"}, {"feature": "chats", "on": False, "x": 1}, [])]
+out["off"] = call("PUT", admin, {"feature": "choice-points", "on": False})
 call("PUT", admin, {"feature": "chats", "on": False})
 out["twice"] = call("PUT", admin, {"feature": "chats", "on": False})
 out["signedOut"] = call("GET")
 out["someone"] = call("GET", someone)
 out["admin"] = call("GET", admin)
 out["adminViewing"] = call("GET", viewing)
-out["back"] = call("PUT", admin, {"feature": "highlights", "on": True})
+out["back"] = call("PUT", admin, {"feature": "choice-points", "on": True})
 out["undoOn"] = call("PUT", admin, {"feature": "undo", "on": True})
 out["undoOnTwice"] = call("PUT", admin, {"feature": "undo", "on": True})
 out["undoOff"] = call("PUT", admin, {"feature": "undo", "on": False})
@@ -64,10 +64,10 @@ test("anyone reads which features are off; only the admin switches one, and ever
     assert.deepEqual(out.fresh, [200, { off: ["undo"], hidden: ["undo"] }], "every feature is on at first, except Undo, which starts off");
     assert.deepEqual(out.notAdmin, [403, { error: "not-admin" }]);
     assert.deepEqual(out.viewing, [403, { error: "not-admin" }], "not while the admin views as someone");
-    assert.deepEqual(out.bad, [400, 400, 400, 400, 400]);
-    assert.deepEqual(out.off, [200, { off: ["highlights", "undo"], hidden: ["highlights", "undo"] }], "the admin sees what everyone sees");
-    assert.deepEqual(out.twice, [200, { off: ["chats", "highlights", "undo"], hidden: ["chats", "highlights", "undo"] }], "turning off twice is once, in the tab's order");
-    assert.deepEqual(out.signedOut, [200, { off: ["chats", "highlights", "undo"], hidden: ["chats", "highlights", "undo"] }]);
+    assert.deepEqual(out.bad, [400, 400, 400, 400, 400, 400], "an unknown feature, a removed one included, is refused");
+    assert.deepEqual(out.off, [200, { off: ["choice-points", "undo"], hidden: ["choice-points", "undo"] }], "the admin sees what everyone sees");
+    assert.deepEqual(out.twice, [200, { off: ["chats", "choice-points", "undo"], hidden: ["chats", "choice-points", "undo"] }], "turning off twice is once, in the tab's order");
+    assert.deepEqual(out.signedOut, [200, { off: ["chats", "choice-points", "undo"], hidden: ["chats", "choice-points", "undo"] }]);
     assert.deepEqual(out.someone, out.signedOut);
     assert.deepEqual(out.admin, out.signedOut);
     assert.deepEqual(out.adminViewing, out.signedOut);

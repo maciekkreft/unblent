@@ -762,35 +762,6 @@ test("open? answers the note the editor holds, and nothing on the empty page", a
   assert.deepEqual(await askOpen(actor), { note: null }, "a new note with nothing written");
 });
 
-test("open? answers the Highlights while they are in front, in reading order, until a note is picked", async () => {
-  const actor = await library();
-  actor.send({ type: "note.opened", id: ID });
-  actor.send({ type: "highlights.selected", about: BOOK });
-  const { highlights } = await askOpen(actor);
-  assert.deepEqual(highlights.about, BOOK);
-  assert.deepEqual(highlights.notes.map((n) => n.id), [H1, H2]);
-
-  // The editor may change underneath (a re-follow); the Highlights stay in front.
-  actor.send({ type: "note.opened", id: null });
-  assert.ok("highlights" in (await askOpen(actor)));
-
-  // A pick brings the editor back, even one a kept editor refuses or one naming the
-  // note it already holds, which announce nothing new.
-  actor.send({ type: "note.opened", id: ID });
-  actor.send({ type: "highlights.selected", about: BOOK });
-  actor.send({ type: "note.selected", id: ID });
-  assert.equal((await askOpen(actor)).note.id, ID);
-});
-
-test("open? follows the subject for the Highlights, and answers nothing when there is none", async () => {
-  const actor = await library();
-  actor.send({ type: "highlights.selected", about: BOOK });
-  actor.send({ type: "subject.changed", subject: { kind: "book", id: "bk2", title: "Two", view: "book-reader" } });
-  assert.deepEqual((await askOpen(actor)).highlights, { about: { kind: "book", id: "bk2" }, notes: [] });
-  actor.send({ type: "subject.changed", subject: null });
-  assert.deepEqual(await askOpen(actor), { note: null });
-});
-
 test("open? waits for the store, and a deleted open note is not answered", async () => {
   let resolveAll;
   const store = fakeStore();

@@ -355,7 +355,7 @@ export const machine = setup({
       "`flags` answers, while the stored layout keeps its place for when the feature comes " +
       "back on (a page without `flags` hides nothing); and `admin`, which draws that child only for " +
       "the admin, and not while the admin views as someone, as the gear's sheet does with its " +
-      "Administration tabs. These are read from each child and are not attributes of `dock-desk` itself. While " +
+      "People and Feature flags tabs. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +
       "the shown tab one place earlier or later; the stage keeps the page's order. " +
       "A child that announces tabs of its own (`tabs.shown`) is drawn, wherever it sits and " +

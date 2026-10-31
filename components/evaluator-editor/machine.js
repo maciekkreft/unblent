@@ -21,7 +21,7 @@ const blankOption = (id) => ({ id, name: "", description: "", removing: false })
 const live = (items) => items.filter((x) => !x.removing);
 
 // The icons an option may be given for its mark on a choice point line (choice-point-cards).
-export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning", "gavel", "prohibit"];
+export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning", "gavel", "prohibit", "lightning", "calendar-blank", "share-fat", "trash-simple"];
 
 // The answer a question expects, while it names one the question has: yes or no, or one of
 // its options. An option waiting out its undo window still counts, so the expectation is

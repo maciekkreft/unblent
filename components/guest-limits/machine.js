@@ -1,6 +1,6 @@
 import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 
-// A view component (3.1): the Limits and Guest keys parts of Administration (12). It owns
+// A view component (3.1): the Limits and Guest keys parts of the People tab (12). It owns
 // no fact: the limits and the guest keys belong to `llm`, reached by one query for the
 // starting picture and spending.changed after (4.3, fourth rule); every gesture is
 // emitted, and spending.changed is the only assignment of the picture. It asks only once it is shown
@@ -49,7 +49,7 @@ export const machine = setup({
   id: "guest-limits",
   meta: {
     description:
-      "The Limits and Guest keys parts of Administration, shown only to the admin, laid " +
+      "The Limits and Guest keys parts of the People tab of the gear's sheet, shown only to the admin, laid " +
       "out like Settings: a name on the left, its control on the right. Limits are in " +
       "dollars and counted since the start: each guest in total, all guests in total, " +
       "and each provider for all guests, which starts with no own limit. A note says " +

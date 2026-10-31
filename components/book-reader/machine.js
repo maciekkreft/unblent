@@ -146,8 +146,7 @@ export const union = (ranges) =>
 // one commented and one blank highlight keeps just the comment.
 export const joined = (bodies) => bodies.filter((b) => b.trim() !== "").join("\n\n");
 
-// A highlight's title is its comment's first line that says anything (12), the same rule the
-// highlights editor uses (highlight-notes titleOf), so a merged note's title reads from its
+// A highlight's title is its comment's first line that says anything (12), so a merged note's title reads from its
 // joined comment and a list row can still tell a commented highlight from a bare one.
 const titleOf = (body) => {
   const line = body.split("\n").find((l) => l.trim() !== "");

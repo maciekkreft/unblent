@@ -30,7 +30,7 @@ const blankOption = (id) => ({ id, name: "", description: "", removing: false })
 const live = (items) => items.filter((x) => !x.removing);
 
 // The icons an option may be given for its mark on a choice point line (choice-point-cards).
-export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning", "gavel", "prohibit"];
+export const OPTION_ICONS = ["footprints", "person-simple-walk", "brain", "heart", "trophy", "hand-palm", "question", "check", "warning", "gavel", "prohibit", "lightning", "calendar-blank", "share-fat", "trash-simple"];
 
 // The answer a question expects, while it names one the question has: yes or no, or one of
 // its options, kept whichever kind the question is, so switching kind and back brings it
@@ -424,11 +424,16 @@ export const machine = setup({
       "evaluators, opens the Evaluators try page in a new tab, where lines written in its " +
       "Evaluate box are checked by the evaluators switched on there. Under it, + New evaluator " +
       "adds an empty evaluator at the top, kept with the Journal and saved once something is " +
-      "written in it. Then every evaluator of the account, one under the other and fully open, " +
-      "the way Generators shows its generators, in the order the user set: whichever book it " +
+      "written in it. Then every evaluator of the account, one under the other, in the order " +
+      "the user set: whichever book it " +
       "was once kept with, since evaluators belong to the account. There is no On tick box: " +
       "what checks what is chosen in the Settings tab under the Jev key, and the chat may use " +
-      "any evaluator. Each evaluator shows its name, Description (what it checks, which the " +
+      "any evaluator. Each evaluator has a heading with its name and a caret that folds and " +
+      "unfolds it on its own: a press on the heading, or Enter while the keyboard is on it, " +
+      "turns it. Folded, only the heading shows, and the keyboard's path passes it as one stop. " +
+      "Which evaluators are folded is kept in this browser; every evaluator is open at first, " +
+      "and a new evaluator starts open, since the user is about to write it. Open, an " +
+      "evaluator shows its name, Description (what it checks, which the " +
       "chat reads to choose one), its questions and Delete evaluator. Each question has a tick " +
       "box that switches it on or off (one switched off is greyed but stays editable, kept " +
       "but not asked), Remove, Yes / no or Pick one, its text, Expected answer (None or one of " +
@@ -465,6 +470,9 @@ export const machine = setup({
     // How many times + New evaluator made one, so the view puts the keyboard in its name.
     news: 0,
     vimKeys: false,
+    // The evaluators folded shut, by id. UI state the view keeps in localStorage (3.1) and
+    // hands back through input, so the folds follow the browser.
+    folded: new Set(input.folded ?? []),
     // Whether someone is signed in (3.4): null until session answers.
     signedIn: null,
   }),
@@ -485,6 +493,17 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
+    // A press on an evaluator's heading, or Enter on it: fold it, or unfold it.
+    _fold: {
+      actions: assign({
+        folded: ({ context, event }) => {
+          const next = new Set(context.folded);
+          if (next.has(event.id)) next.delete(event.id);
+          else next.add(event.id);
+          return next;
+        },
+      }),
+    },
   },
   initial: "loading",
   states: {

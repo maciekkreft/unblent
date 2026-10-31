@@ -9,7 +9,7 @@ test("a waiting switch shows what was asked; the next picture settles or refuses
   const context = { off: ["chats"], waiting: { evaluators: false } };
   assert.equal(onOf(context, "chats"), false);
   assert.equal(onOf(context, "evaluators"), false, "shown as asked while it waits");
-  assert.equal(onOf(context, "highlights"), true);
+  assert.equal(onOf(context, "undo"), true);
   assert.deepEqual(settle({ evaluators: false }, ["evaluators"]), { waiting: {}, refused: null });
   assert.deepEqual(settle({ evaluators: false }, []), { waiting: {}, refused: "evaluators" });
 });

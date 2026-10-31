@@ -63,22 +63,9 @@ const isAbout = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id);
 
 // A highlight of the subject: a link to it that carries a place (12). The list hides
-// highlight notes — they belong to the highlights editor, not the note list (Decision 2).
+// highlight notes: the user sees a highlight in the book reader, never as a note (13).
 const isHighlight = (note, subject) =>
   subject != null && links(note).some((l) => l.kind === subject.kind && l.id === subject.id && l.place);
-
-// The Highlights row (Decision 1, 5, 6), the Highlights note to the user (13): while following, with a subject on the stage, one fixed row standing for every highlight of the subject — null
-// unless at least one note is a highlight of it. Its count and latest time come from the
-// notes the list already holds (no new query), so it is pure like `shown`.
-// None without the `highlights` attribute, and none while `flags` reports the highlights
-// feature hidden, or has not answered yet (`hidden` is null), the same as `flags` itself
-// with no answer (3.1).
-export const highlights = ({ notes, following, highlightsRow, subject, hidden }) => {
-  if (!following || !highlightsRow || subject == null) return null;
-  if (hidden === null || hidden?.includes("highlights")) return null;
-  const hs = notes.filter((n) => isHighlight(n, subject));
-  return hs.length ? { count: hs.length, updatedAt: Math.max(...hs.map((n) => n.updatedAt)) } : null;
-};
 
 // The rows to show (D6): while following, with a subject on the stage, only the notes
 // about it; only when nothing on the stage is a subject (a null subject, or the attribute
@@ -120,7 +107,7 @@ export const chaptered = (context) => {
 // Where a note placed at a row of the list (p, P, o, O; 12) goes in the whole order the
 // user set: right below or above that row, next to it in every list that shows both, even
 // while a subject or a chapter hides the notes between it and its neighbour on screen.
-// `ids` are the note rows as shown; from a fixed row (New note, Highlights) the note goes
+// `ids` are the note rows as shown; from the New note row the note goes
 // above the first shown note. The note being moved is never its own
 // neighbour.
 export const placement = ({ notes, cut }, ids, current, below) => {
@@ -203,10 +190,6 @@ export const machine = setup({
       input.following ? input.ask("subject", "read", {}) : Promise.resolve({ subject: null })),
     // Whether anyone is signed in; session.changed is held for this ask until its reply lands.
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
-    // Which features are hidden, for the Highlights row, which only a following list has;
-    // flags.changed is held for this ask until its reply lands.
-    flags: fromPromise(({ input }) =>
-      input.following && input.highlightsRow ? input.ask("flags", "read", {}) : Promise.resolve({ hidden: [] })),
   },
 }).createMachine({
   id: "note-list",
@@ -222,8 +205,8 @@ export const machine = setup({
       "and u on a row counting down takes the delete back. If the keyboard leaves the list " +
       "while a row is cut or counting down (a row opened, another panel, a click elsewhere), " +
       "the delete moves to the dark notice in the corner with its Undo. o makes a new note " +
-      "below the cursor row and O above it, opened in the editor. The New note and Highlights " +
-      "rows stay put: dd does nothing there. A moved or new note goes right below or above the " +
+      "below the cursor row and O above it, opened in the editor. The New note row stays " +
+      "put: dd does nothing there. A moved or new note goes right below or above the " +
       "row it was placed at, also in the whole order, so notes hidden by the subject or the " +
       "chapter stay where they were. With `subject` it lists only the " +
       "notes about the subject, never a note apart from them, also while the editor keeps open a " +
@@ -238,31 +221,18 @@ export const machine = setup({
       "then, under the open chapter's title, its notes. All " +
       "chapters lists every note about the book. A note row linked to a chapter names the " +
       "chapter's title before its second line; a note linked to the whole book shows nothing " +
-      "extra. While the subject has at least one highlight, a " +
-      "fixed Highlights row under New note shows how many there are and the time of the latest, " +
-      "and picking it shows the highlights editor in the note editor's place, under the same " +
-      "Back bar. The Highlights row has no record of its own, so it cannot be deleted. Whether " +
-      "the Highlights are the open row is kept in this browser across a reload, as the panel " +
-      "keeps showing them, so the row stays marked and the keyboard comes back to it. " +
-      "Highlights are never listed as separate notes. The Highlights row shows only on a page " +
-      "that gives the list the `highlights` attribute, so the Mac page, which leaves it off, " +
-      "lists no Highlights row while the book still shows its highlights. There is no Highlights row while " +
-      "`flags` reports the highlights feature hidden, or until it answers; a page without " +
-      "`flags` hides nothing. Signed out it shows only \"Sign in to " +
-      "see your notes.\": no New note, no Highlights row and no notes. The notes stay kept in " +
+      "extra. Highlights are never listed as notes: the book reader shows them. Signed out " +
+      "it shows only \"Sign in to see your notes.\": no New note and no notes. The notes stay kept in " +
       "this browser and come back when the user signs in, without a reload; a delete still " +
       "in its undo window when the user signs out is taken back. On a try page a visitor not " +
       "yet signed in still sees the list.",
     kind: "view",
-    emits: ["note.selected", "note.discarded", "highlights.selected", "note.moved", "removal.started"],
+    emits: ["note.selected", "note.discarded", "note.moved", "removal.started"],
     // The subject attribute (D5): off is exactly today's behaviour — no subject ask,
     // no filtering, every note shown. On, the list shows only the notes about the
-    // subject on the stage, with the Highlights row above them while the subject has
-    // a highlight, and the chapter switch while the subject has an open chapter.
-    // The highlights attribute: on, the Highlights row is offered while following; off,
-    // highlights are still kept out of the list but nothing stands for them.
-    attributes: ["subject", "highlights"],
-    asks: ["notes: list", "subject: read", "settings: read", "session: read", "flags: read"],
+    // subject on the stage, with the chapter switch while the subject has an open chapter.
+    attributes: ["subject"],
+    asks: ["notes: list", "subject: read", "settings: read", "session: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -273,14 +243,6 @@ export const machine = setup({
     // Whether the page set the `subject` attribute (D5); it arrives through input so
     // the machine stays importable in Node.
     following: Boolean(input.following),
-    // Whether the page set the `highlights` attribute: the Highlights row is offered.
-    highlightsRow: Boolean(input.highlightsRow),
-    // Whether the Highlights row is the picked one (Decision 7). UI state: set when it is
-    // picked, cleared by any note.selected, the gesture that puts a note in the panel in
-    // their place. The view keeps it in localStorage (3.1) and hands it back through
-    // input, because the panel keeps showing the Highlights across a reload and the
-    // keyboard must come back to their row, not to the note the editor still holds.
-    highlightsOpen: Boolean(input.highlightsOpen),
     // The chapter switch (plan step 3): true on All chapters. UI state the view keeps in
     // localStorage (3.1) and hands back through input, so the choice follows the device.
     allChapters: Boolean(input.allChapters),
@@ -314,20 +276,12 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
-    // The features `flags` reports hidden, for the Highlights row (8); null until it answers.
-    hidden: null,
   }),
   // The subject read runs for the machine's whole life (3.5), so the notes-load
   // transition (loading → ready) never cancels it: its reply lands on its own and sets
   // the subject, and the notes reply never writes the subject, so a slow notes reply
   // cannot re-apply the read's stale null over a subject.changed that arrived first.
   invoke: [
-    {
-      src: "flags",
-      input: ({ context }) => ({ ask: context.ask, following: context.following, highlightsRow: context.highlightsRow }),
-      onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
-      onError: { actions: assign({ hidden: [] }) },
-    },
     {
       src: "readSubject",
       input: ({ context }) => ({ ask: context.ask, following: context.following }),
@@ -370,7 +324,6 @@ export const machine = setup({
   },
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
-    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     // Who is signed in now (4.3). Signing out hides the rows and keeps them; a delete the
     // user can no longer see is taken back, so nothing goes without its Undo.
     "session.changed": [
@@ -470,10 +423,7 @@ export const machine = setup({
       guard: shows,
       actions: enqueueActions(({ context, event, enqueue }) => {
         handOff(context, enqueue);
-        enqueue.assign({
-          highlightsOpen: false,
-          placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null },
-        });
+        enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
         enqueue.emit({ type: "note.selected", id: context.draft });
       }),
     },
@@ -496,18 +446,13 @@ export const machine = setup({
     },
     // The editor announced the note it now shows (6.4): that row reads as the open note.
     // The draft is untouched — the next-note row stands whatever else is open, and its
-    // id is only a name, so opening it again lands the editor in blank all the same. It
-    // does not clear the Highlights row's mark (Decision 7): after a reload the editor
-    // announces the note it holds while the panel still shows the Highlights.
+    // id is only a name, so opening it again lands the editor in blank all the same.
     "note.opened": { actions: assign({ open: ({ event }) => event.id }) },
-    // A note put in the panel, from this list or anywhere else: the Highlights give way.
-    "note.selected": { actions: assign({ highlightsOpen: false }) },
     // The chapter switch, or Show all: which notes the list shows; nothing is emitted.
     _chapters: { actions: assign({ allChapters: ({ event }) => Boolean(event.all) }) },
     // The user picked a row (7.2, internal gesture): announce it, but only for a note
     // that exists or the next-note draft, never a stale id. `open` is not set here;
     // it follows the editor's note.opened, the same for the draft as any other row.
-    // Picking a note clears the Highlights row's picked mark (Decision 7).
     // Opening a row while another is cut or counting down hands that delete to the
     // corner notice, so it never goes out of sight (12).
     _pick: {
@@ -518,22 +463,8 @@ export const machine = setup({
         (context.notes.some((n) => n.id === event.id) || context.draft === event.id),
       actions: [
         enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
-        assign({ highlightsOpen: false, placing: null }),
+        assign({ placing: null }),
         emit(({ event }) => ({ type: "note.selected", id: event.id })),
-      ],
-    },
-    // The user picked the Highlights row (7.2, internal gesture; Decision 2, 7): announce
-    // the gesture the container consumes to show the highlights document, and mark the row
-    // as the picked one. Guarded on the row actually being shown, so a stale pick is inert.
-    _pickHighlights: {
-      guard: ({ context }) => shows({ context }) && highlights(context) != null,
-      actions: [
-        enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
-        assign({ highlightsOpen: true }),
-        emit(({ context }) => ({
-          type: "highlights.selected",
-          about: { kind: context.subject.kind, id: context.subject.id },
-        })),
       ],
     },
   },

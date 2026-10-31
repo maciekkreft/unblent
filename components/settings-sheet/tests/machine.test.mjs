@@ -28,7 +28,7 @@ const PAGES = [
 // so the grouping and the choice are still tested.
 const COMPONENTS = [
   { name: "note-editor", role: null },
-  { name: "highlight-notes", role: null },
+  { name: "chat-input", role: null },
   { name: "notes", role: null },
 ];
 const WITH_ROLE = [

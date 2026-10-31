@@ -64,7 +64,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await page.locator("dock-desk .controls button.pill").click();
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
 
         const row = page.locator(`people-list tr[data-user="${guest.userId}"]`);
         await row.waitFor();

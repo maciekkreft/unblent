@@ -1,6 +1,6 @@
 import { setup, assign, emit, fromPromise } from "xstate";
 
-// A view component (3.1): the People part of Administration (12). It owns no fact: the
+// A view component (3.1): the first part of the People tab (12). It owns no fact: the
 // accounts belong to `session` and what guests spent to `llm`, each reached by one query
 // for the starting picture and its event after (4.3, fourth rule). It asks only once it
 // is shown (`_shown`, sent by the view), so nobody but the admin, the one account the
@@ -119,7 +119,7 @@ export const machine = setup({
   id: "people-list",
   meta: {
     description:
-      "The People part of Administration, shown only to the admin. At the top, tiles " +
+      "The first part of the People tab of the gear's sheet, shown only to the admin. At the top, tiles " +
       "show what all guests spent of their limit, what each provider's guest key spent, " +
       "and how many guests there are. Below, a table lists every account: you as admin " +
       "first, then guests newest first, each with when they were first and last seen, " +

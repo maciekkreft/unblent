@@ -8,7 +8,7 @@ import { setup, assign, emit, enqueueActions } from "xstate";
 // definition importable in Node.
 
 // The features that have a flag (3.1). Pages name them in `flag="…"` (8).
-export const FEATURES = ["chats", "evaluators", "choice-points", "highlights", "undo"];
+export const FEATURES = ["chats", "evaluators", "choice-points", "undo"];
 
 const list = (value) => (Array.isArray(value) ? value.filter((f) => typeof f === "string") : null);
 
@@ -50,7 +50,7 @@ export const machine = setup({}).createMachine({
   meta: {
     description:
       "Owns which features are off for everyone, the admin included: Chats, Evaluators, " +
-      "Choice points, Highlights and Undo. The admin turns them on and off in the Feature flags " +
+      "Choice points and Undo. The admin turns them on and off in the Feature flags " +
       "tab. Undo starts off, on a new server as on one that has never stored it, until the " +
       "admin turns it on. The last answer of the server is kept on this device, so a reload or " +
       "an offline start hides the same features; with no answer yet every feature that has " +

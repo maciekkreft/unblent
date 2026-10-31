@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
-import { machine, shown, highlights, plain, showing } from "../machine.js";
+import { machine, shown, plain, showing } from "../machine.js";
 
 // The undo window, driven by a SimulatedClock so the countdown is tested without
 // waiting real time (the view reads the value from --duration-undo).
@@ -24,17 +24,15 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, highlightsRow = true, highlightsOpen = false, tryPage = false } = {}) {
+function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, tryPage = false } = {}) {
   const selected = [];
   const discarded = [];
-  const highlighted = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following, highlightsRow, highlightsOpen, tryPage }, clock });
+  const actor = createActor(machine, { input: { ask, mint, undoMs, following, tryPage }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
-  actor.on("highlights.selected", (e) => highlighted.push(e.about));
   actor.start();
-  return { actor, selected, discarded, highlighted, clock };
+  return { actor, selected, discarded, clock };
 }
 
 const answeringList = (notes) => (target, name) =>
@@ -49,8 +47,6 @@ const answering = ({ notes = [], subject = null }) => (target, name) => {
 
 const ids = (actor) => actor.getSnapshot().context.notes.map((n) => n.id);
 const shownIds = (actor) => shown(actor.getSnapshot().context).map((n) => n.id);
-const hl = (actor) => highlights(actor.getSnapshot().context);
-const highlightsOpen = (actor) => actor.getSnapshot().context.highlightsOpen;
 
 test("the starting picture is notes: list, sorted newest first", async () => {
   const asked = [];
@@ -326,7 +322,7 @@ test("the open note not about the subject is not listed: the list shows only the
   assert.deepEqual(shownIds(actor), [B], "about the new subject, it is listed");
 });
 
-// --- Highlights are hidden from the list (Decision 2) ------------------------------
+// --- Highlights are hidden from the list (13) ------------------------------------
 
 // bk1 is on the stage; A is a plain note about it, H is a highlight of it (a placed
 // link), B a plain note about another book.
@@ -350,140 +346,6 @@ test("a highlight of the subject is kept but never shown in the list", async () 
   await tick();
   assert.deepEqual(ids(actor), [C, B, A], "every note is kept");
   assert.deepEqual(shownIds(actor), [A], "the highlight is hidden; the plain note shows");
-});
-
-// --- The Highlights row (Decision 1, 4, 5, 6, 7) -----------------------------------
-
-// A second highlight of bk1, newer than C in withHighlight (updatedAt 30), so a count of
-// two carries the greater time.
-const DHIGH = {
-  type: "note.changed",
-  id: MINTED,
-  title: "Second highlight",
-  body: "d",
-  version: 1,
-  pending: false,
-  updatedAt: 50,
-  about: [{ kind: "book", id: "bk1", place: { chapter: 1 }, quote: { exact: "y" } }],
-};
-
-test("highlights() counts the subject's highlights with the latest time", async () => {
-  const { actor } = list({ following: true, ask: withHighlight() });
-  await tick();
-  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "one highlight (note C), its time");
-});
-
-test("there is no Highlights row while flags hides the feature, or before it answers", async () => {
-  const { actor } = list({ following: true, ask: withHighlight() });
-  await tick();
-  actor.send({ type: "flags.changed", off: ["highlights"], hidden: ["highlights"] });
-  assert.equal(hl(actor), null, "hidden");
-  actor.send({ type: "flags.changed", off: ["highlights"], hidden: [] });
-  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "the admin sees it");
-  assert.equal(highlights({ ...actor.getSnapshot().context, hidden: null }), null, "no answer yet");
-});
-
-test("without the highlights attribute there is no Highlights row, flags is not asked, and highlights stay out of the list", async () => {
-  const asked = [];
-  const answer = withHighlight();
-  const { actor } = list({
-    following: true,
-    highlightsRow: false,
-    ask: (target, name, payload) => {
-      asked.push(target + ": " + name);
-      return answer(target, name, payload);
-    },
-  });
-  await tick();
-  assert.equal(hl(actor), null, "no Highlights row");
-  assert.ok(!asked.includes("flags: read"), "flags is not asked");
-  assert.ok(!shownIds(actor).includes(C), "the highlight is not listed as a note");
-});
-
-test("highlights() is null when not following, or with no subject", async () => {
-  const notFollowing = list({ following: false, ask: withHighlight() });
-  await tick();
-  assert.equal(hl(notFollowing.actor), null, "not following the stage");
-
-  const noSubject = list({
-    following: true,
-    ask: answering({ notes: [], subject: null }),
-  });
-  await tick();
-  assert.equal(hl(noSubject.actor), null, "no subject on the stage");
-});
-
-test("a highlight of another subject is not counted", async () => {
-  const { actor } = list({ following: true, ask: withHighlight() });
-  await tick();
-  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 });
-  // bk2 has only the plain note B (no place), so nothing is a highlight of it.
-  actor.send({ type: "subject.changed", subject: { kind: "book", id: "bk2", title: "Two" } });
-  assert.equal(hl(actor), null, "the highlight of bk1 is not counted under bk2");
-});
-
-test("note.changed raises the count and note.deleted lowers it, to null at zero", async () => {
-  const { actor } = list({ following: true, ask: withHighlight() });
-  await tick();
-  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 });
-  actor.send(DHIGH);
-  assert.deepEqual(hl(actor), { count: 2, updatedAt: 50 }, "the second highlight raises the count and time");
-  actor.send({ type: "note.deleted", id: MINTED });
-  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 }, "deleting one lowers it");
-  actor.send({ type: "note.deleted", id: C });
-  assert.equal(hl(actor), null, "no highlights left: the row is gone");
-});
-
-test("_pickHighlights emits highlights.selected with the subject and marks the row open", async () => {
-  const { actor, highlighted } = list({ following: true, ask: withHighlight() });
-  await tick();
-  actor.send({ type: "_pickHighlights" });
-  assert.deepEqual(highlighted, [{ kind: "book", id: "bk1" }], "the gesture carries the subject");
-  assert.equal(highlightsOpen(actor), true, "the Highlights row reads as the open one");
-});
-
-test("_pick and note.selected clear the Highlights row's open mark; the editor's note.opened does not", async () => {
-  const picked = list({ following: true, ask: withHighlight() });
-  await tick();
-  picked.actor.send({ type: "_pickHighlights" });
-  picked.actor.send({ type: "_pick", id: A });
-  assert.equal(highlightsOpen(picked.actor), false, "picking a note clears it");
-
-  const opened = list({ following: true, ask: withHighlight() });
-  await tick();
-  opened.actor.send({ type: "_pickHighlights" });
-  opened.actor.send({ type: "note.opened", id: A });
-  assert.equal(highlightsOpen(opened.actor), true, "the editor announcing the note it holds leaves it");
-  assert.equal(opened.actor.getSnapshot().context.open, A, "while that note is the open note");
-  opened.actor.send({ type: "note.selected", id: B });
-  assert.equal(highlightsOpen(opened.actor), false, "a note put in the panel from anywhere clears it");
-
-  const empty = list({ following: true, ask: withHighlight() });
-  await tick();
-  empty.actor.send({ type: "note.opened", id: A });
-  empty.actor.send({ type: "_pickHighlights" });
-  empty.actor.send({ type: "note.opened", id: null });
-  assert.equal(highlightsOpen(empty.actor), true, "the empty page is not a note opened (12)");
-  assert.equal(empty.actor.getSnapshot().context.open, null, "and no row reads as the open note");
-});
-
-test("_pickHighlights with no highlights emits nothing and does not mark the row", async () => {
-  const { actor, highlighted } = list({
-    following: true,
-    ask: answering({ notes: [{ id: A, title: "A", updatedAt: 10, about: [{ kind: "book", id: "bk1" }] }], subject: { kind: "book", id: "bk1", title: "One" } }),
-  });
-  await tick();
-  assert.equal(hl(actor), null, "no highlight, so no row");
-  actor.send({ type: "_pickHighlights" });
-  assert.deepEqual(highlighted, [], "the guard refused the stale pick");
-  assert.equal(highlightsOpen(actor), false);
-});
-
-test("the Highlights row's open mark comes back from input after a reload", async () => {
-  const { actor } = list({ following: true, ask: withHighlight(), highlightsOpen: true });
-  await tick();
-  actor.send({ type: "note.opened", id: A });
-  assert.equal(highlightsOpen(actor), true);
 });
 
 // --- The stage survives a reload: the subject race (3.5) ----------------------------
@@ -615,14 +477,13 @@ test("on a try page a visitor not yet signed in sees the list", async () => {
   assert.equal(showing(actor.getSnapshot().context), "show");
 });
 
-test("signed out no row can be opened, deleted or the Highlights picked", async () => {
-  const { actor, selected, highlighted, discarded, clock } = list({ following: true, ask: withSession(SIGNED_OUT) });
+test("signed out no row can be opened or deleted", async () => {
+  const { actor, selected, discarded, clock } = list({ following: true, ask: withSession(SIGNED_OUT) });
   await tick();
   actor.send({ type: "_pick", id: A });
-  actor.send({ type: "_pickHighlights" });
   actor.send({ type: "_discard", id: A });
   clock.increment(UNDO_MS * 2);
-  assert.deepEqual([selected, highlighted, discarded], [[], [], []]);
+  assert.deepEqual([selected, discarded], [[], []]);
 });
 
 test("signing in brings the notes back without a reload; signing out hides them and takes back a delete", async () => {
@@ -631,7 +492,6 @@ test("signing in brings the notes back without a reload; signing out hides them 
   assert.deepEqual(shownIds(actor), [A], "still kept while hidden");
   actor.send({ type: "session.changed", ...SIGNED_IN });
   assert.equal(showing(actor.getSnapshot().context), "show");
-  assert.deepEqual(hl(actor), { count: 1, updatedAt: 30 });
   actor.send({ type: "_discard", id: A });
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(actor.getSnapshot().context), "sign-in");
@@ -749,10 +609,9 @@ test("o opens a new note and moves it to its place once the user writes in it", 
   assert.equal(moved.length, 1, "only once");
 });
 
-test("dd does nothing on a row that is not a note (New note, Highlights)", async () => {
+test("dd does nothing on the New note row", async () => {
   const { actor } = keyed(placed);
   await tick();
   actor.send({ type: "_cut", id: MINTED });
-  actor.send({ type: "_cut", id: "highlights" });
   assert.equal(actor.getSnapshot().context.cut, null);
 });

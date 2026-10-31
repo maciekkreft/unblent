@@ -116,12 +116,12 @@ test("deleting the open book clears the subject", async () => {
 });
 
 test("a view about the subject coming to the front keeps the subject and announces nothing", async () => {
-  // The reader showed the book; bringing highlight-notes to the front does not
+  // The reader showed the book; bringing the note editor to the front does not
   // replace it, because it is a view about the subject (3.1).
   const { actor, changed } = start({ stage: "book-reader", openId: "b1", books: { b1: { id: "b1", title: "Dune" } } });
   await flush();
   changed.length = 0;
-  actor.send({ type: "dock.changed", stage: "highlight-notes", docks: {} });
+  actor.send({ type: "dock.changed", stage: "note-editor", docks: {} });
   await flush();
   assert.equal(changed.length, 0);
   assert.deepEqual(await readSubject(actor), { subject: { kind: "book", id: "b1", title: "Dune", view: "book-reader" } });

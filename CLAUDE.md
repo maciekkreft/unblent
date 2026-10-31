@@ -14,6 +14,11 @@ The architecture is the spec. If a request conflicts with it, name the section a
   document facts), the same as for a conflict.
 - Smallest scope first: one component or one piece of infrastructure per task.
   Decisions and contracts are agreed before any code (section 9, step 2).
+- At the end of planning or brainstorming, and before showing the plan, simplify it:
+  cut its scope down to the basics and remove every part the basics do not need.
+  We do not know yet whether anything more than the basics is needed, and every
+  extra part makes later changes harder. List what was removed, so the owner can
+  ask for any of it back.
 - Run `python3 checks/check.py --help` for what to run when. `check.py --changed`
   must pass before reporting done: every static rule, then in WebKit the changed
   components' own tests, one smoke test per page that holds them, and the

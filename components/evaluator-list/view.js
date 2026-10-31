@@ -189,6 +189,10 @@ const GLYPHS = {
   warning: () => icon("warning"),
   gavel: () => icon("gavel"),
   prohibit: () => icon("prohibit"),
+  lightning: () => icon("lightning"),
+  "calendar-blank": () => icon("calendar-blank"),
+  "share-fat": () => icon("share-fat"),
+  "trash-simple": () => icon("trash-simple"),
 };
 
 // The Evaluate box is a CodeMirror editor built on the editor kit (10), so marks can stand

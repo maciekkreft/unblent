@@ -6,8 +6,8 @@ import { dirname, resolve } from "node:path";
 import { randomInt } from "node:crypto";
 
 // The lists on the product page, from the keyboard, with "Vim keys" on: one journey (9),
-// approved in checks/journeys.json. One account with a long Books shelf, a long Notes list
-// and a book's Highlights; the page loads once and the steps move along the lists. What
+// approved in checks/journeys.json. One account with a long Books shelf and a long Notes
+// list; the page loads once and the steps move along the lists. What
 // each list does with j, k, G and gg alone is tested in that list's own tests; here it is
 // how the lists sit on the desk: a list scrolls to the row the keyboard moved to, the
 // keyboard comes back to a row from what the row opened, and a letter on a row types
@@ -43,7 +43,7 @@ const SHELF = 12;
 const shelfId = (k) => `01K00000000000000000000B${String(k).padStart(2, "0")}`;
 
 // A user set up straight through the server (5): the sample book open with one highlight,
-// so Notes shows its Highlights row, three notes about it and thirty more, and twelve more
+// which Notes never lists, three notes about it and thirty more, and twelve more
 // copies of the book, so the Notes list and the Books shelf are longer than their panels.
 const seedUser = async () => {
   const cookie = forgeCookie("lists");
@@ -81,7 +81,7 @@ const ready = (page) =>
     return (
       r?.querySelector(".footer .chap")?.textContent.trim() === "Chapter One" &&
       r.querySelector(".strip")?.textContent.includes("A short opening") &&
-      document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li.row:not(.draft):not(.highlights)").length === n &&
+      document.querySelector("note-list")?.shadowRoot?.querySelectorAll("li.row:not(.draft)").length === n &&
       Boolean(r.activeElement)
     );
   }, NOTES.length + EXTRA);
@@ -172,20 +172,6 @@ const onNotesRow = {
     await press(v.page, "Control+l");
   },
 };
-const onNewNote = {
-  state: "the keyboard on New note",
-  check: (s) => onRow(s, "New note"),
-  reach: async (v) => {
-    await onNotesRow.reach(v);
-    await v.see(onNotesRow.check);
-    await press(v.page, "g", "g");
-  },
-};
-const notesListed = {
-  state: "Notes showing its list",
-  check: (s) => want(s.notes === "note-list", `Notes shows ${s.notes}`),
-  reach: () => {},
-};
 
 for (const engine of ENGINES) {
   // Browser: focus and keys.
@@ -273,45 +259,6 @@ for (const engine of ENGINES) {
         await v.see((s) => want(s.deep === "button" && s.deepText === "This chapter", `the keyboard is on ${s.deep} "${s.deepText}", not the switch`));
         await press(v.page, "j");
         await v.see((s) => all(onRow(s, "New note"), at(s, "first")));
-      },
-    },
-    {
-      name: "j from New note lands on Highlights, and Enter opens them with the keyboard inside",
-      from: onNewNote,
-      run: async (v) => {
-        await press(v.page, "j");
-        await v.see((s) => onRow(s, "Highlights"));
-        await press(v.page, "Enter");
-        await v.see((s) => want(s.notes === "highlight-notes" && s.focus.includes("highlight-notes"), `Notes shows ${s.notes}, the keyboard in ${s.focus}`));
-      },
-    },
-    {
-      name: "Escape from the Highlights puts the keyboard on their row, and j goes on to the notes",
-      run: async (v) => {
-        await press(v.page, "Escape");
-        await v.see((s) => all(want(s.notes === "note-list", `Notes shows ${s.notes}`), onRow(s, "Highlights")));
-        await press(v.page, "j");
-        await v.see((s) => onRow(s, "Note three"));
-      },
-    },
-    {
-      name: "the Highlights left open are open after a reload, and Ctrl+l puts the keyboard in them",
-      from: notesListed,
-      run: async (v) => {
-        await clickRow(v.page, "note-list", "Highlights");
-        await v.see((s) => want(s.notes === "highlight-notes", `Notes shows ${s.notes}`));
-        await v.reload();
-        await press(v.page, "Control+l");
-        await v.see((s) => want(s.notes === "highlight-notes" && s.focus.includes("highlight-notes"), `Notes shows ${s.notes}, the keyboard in ${s.focus}`));
-      },
-    },
-    {
-      name: "after the reload, Escape puts the keyboard on the Highlights row, and j goes on to the notes",
-      run: async (v) => {
-        await press(v.page, "Escape");
-        await v.see((s) => all(want(s.notes === "note-list", `Notes shows ${s.notes}`), onRow(s, "Highlights")));
-        await press(v.page, "j");
-        await v.see((s) => onRow(s, "Note three"));
       },
     },
   ]));

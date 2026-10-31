@@ -2,8 +2,8 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
 // The gear's sheet on the product page (12): everyone sees Settings and Generators, and
-// the admin sees Administration, which shows People, Limits and Guest keys;
-// Administration never asks the server for anyone else.
+// the admin sees the People tab, which shows People, Limits and Guest keys;
+// the People tab never asks the server for anyone else.
 // Who is the admin, who came and what they spent are answered by request routing, so
 // nothing here makes an admin in the throwaway registry or spends anything; what the
 // server answers is tested in session's and llm's own tests.
@@ -51,7 +51,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: rendering and layout.
-    test(`the admin sees Administration beside Settings in ${engine.name}`, async () => {
+    test(`the admin sees People beside Settings in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
         context.setDefaultTimeout(4000);
@@ -75,10 +75,10 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
         await until(async () => (await tabs(page)).length === 5);
-        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "Administration", "Feature flags"]);
+        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "People", "Feature flags"]);
         assert.deepEqual(await slotted(page), ["settings-sheet"], "Settings is shown first");
 
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
         assert.deepEqual(await slotted(page), ["people-list", "guest-limits"]);
         await until(async () => (await page.locator("people-list tbody tr").count()) === 3);
         const people = await text(page, "people-list");
@@ -144,7 +144,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
         // A reload cancels what is still loading, which the watch reports as a failure.
         await page.locator("people-list tbody tr").first().waitFor();
         await page.waitForLoadState("networkidle");
@@ -158,7 +158,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test(`everyone else sees Settings and Generators, and Administration asks nothing, in ${engine.name}`, async () => {
+    test(`everyone else sees Settings and Generators, and the People tab asks nothing, in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
         context.setDefaultTimeout(4000);
@@ -171,9 +171,9 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await openGear(page);
         await page.locator("settings-sheet h3").first().waitFor();
         await until(async () => (await tabs(page)).length === 3);
-        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators"], "no Administration");
+        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators"], "no People tab");
         assert.deepEqual(await slotted(page), ["settings-sheet"]);
-        assert.deepEqual(asked, [], "Administration never asks for anyone but the admin");
+        assert.deepEqual(asked, [], "the People tab never asks for anyone but the admin");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await context.close();

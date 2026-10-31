@@ -178,7 +178,7 @@ class DeviceConnect extends LitElement {
         ${this.#notYou()}`;
     } else if (state === "off") {
       body = html`<h1>Sync is not turned on for this account</h1>
-        <p>The admin can turn on Can sync for ${name || "this account"} in Settings › Administration. Then open this page again from the Mac app.</p>
+        <p>The admin can turn on Can sync for ${name || "this account"} in Settings › People. Then open this page again from the Mac app.</p>
         ${this.#notYou()}`;
     } else if (state === "failed") {
       body = html`<h1>Connect your Mac</h1>

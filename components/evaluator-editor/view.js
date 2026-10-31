@@ -42,6 +42,10 @@ const GLYPHS = {
   warning: ["Warning", icon("warning")],
   gavel: ["Gavel", icon("gavel")],
   prohibit: ["No entry", icon("prohibit")],
+  lightning: ["Lightning", icon("lightning")],
+  "calendar-blank": ["Calendar", icon("calendar-blank")],
+  "share-fat": ["Pass on", icon("share-fat")],
+  "trash-simple": ["Bin", icon("trash-simple")],
 };
 const CHOICES = OPTION_ICONS.map((name) => [name, ...GLYPHS[name]]);
 

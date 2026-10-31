@@ -134,29 +134,13 @@ function replyRead(context, id, reply) {
   reply(visible(stored) ? { note: { ...withoutPosition(stored), about: stored.about ?? [], pending: context.outbox.has(id) } } : { error: "not-found" });
 }
 
-// The link a highlight of `about` carries: the one naming it with a place (12).
-const placeOf = (record, about) =>
-  (record.about ?? []).find((l) => l.kind === about.kind && l.id === about.id && l.place)?.place;
-
 const fullNote = (context, record) => ({ ...withoutPosition(record), about: record.about ?? [], pending: context.outbox.has(record.id) });
 
-// The open note (12, "Which note is open"): the Highlights of the subject while they are
-// in front of the Notes pair, which the user sees as one note (13), each highlight in
-// reading order; otherwise the note the editor holds. A new note nothing was written in
-// has no record yet, so it is answered as nothing open.
+// The open note (12, "Which note is open"): the note the editor holds. A new note nothing
+// was written in has no record yet, so it is answered as nothing open. The reply schema
+// keeps its Highlights branch, because a contract only grows (7.1); it is never answered.
 function replyOpen(context, reply) {
-  const { front, subject, editorId } = context.open;
-  if (front === "highlights" && subject) {
-    const notes = [...context.notes.values()]
-      .filter((r) => visible(r) && placeOf(r, subject))
-      .sort((a, b) => {
-        const pa = placeOf(a, subject), pb = placeOf(b, subject);
-        return pa.chapter - pb.chapter || pa.start.block - pb.start.block || pa.start.offset - pb.start.offset;
-      })
-      .map((r) => fullNote(context, r));
-    return reply({ highlights: { about: subject, notes } });
-  }
-  const stored = front === "note" && editorId ? context.notes.get(editorId) : null;
+  const stored = context.openId ? context.notes.get(context.openId) : null;
   reply({ note: visible(stored) ? fullNote(context, stored) : null });
 }
 
@@ -436,10 +420,9 @@ export const machine = setup({
       "versions itself, and signing in uploads every note with its history. A note's `about` " +
       "names what it is about, none, one or many: a save without `about` keeps the links, a " +
       "save with it replaces them, and a link to a book that carries a place and a quote makes " +
-      "the note a highlight. The open note is the one in front in the Notes pair, the note in " +
-      "the editor or the subject's Highlights, kept in memory on this device; `notes: open` " +
-      "answers with it in full, or with the Highlights in reading order, and is offered to the " +
-      "chat as \"Reading the open note\". A deleted note is kept as a tombstone with its title " +
+      "the note a highlight. The open note is the note in the editor, kept in memory on this " +
+      "device; `notes: open` answers with it in full, and is offered to the chat as \"Reading " +
+      "the open note\". A deleted note is kept as a tombstone with its title " +
       "and body, so it can still be shown or restored. Each note has a place in the list, the " +
       "same on every device: a new note goes first, an edit never moves a note, and a move " +
       "from the list puts it between its new neighbours. A place is last write wins: it " +
@@ -466,9 +449,8 @@ export const machine = setup({
     leaving: false,
     // The browser joins the next account keeping this copy (12, keep).
     keep: false,
-    // Which note is open (12): what is in front of the Notes pair, the editor's note, and
-    // the subject whose Highlights those are. Memory only, on this device.
-    open: { front: "note", editorId: null, subject: null },
+    // Which note is open (12): the editor's note. Memory only, on this device.
+    openId: null,
     // The "owed" flags for a trigger that arrives mid-sync: resync means drain
     // again, pull whether that next sync must also pull.
     resync: false,
@@ -483,19 +465,7 @@ export const machine = setup({
     "session.changed": {
       actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
     },
-    "note.opened": { actions: assign({ open: ({ context, event }) => ({ ...context.open, editorId: event.id }) }) },
-    "note.selected": { actions: assign({ open: ({ context }) => ({ ...context.open, front: "note" }) }) },
-    "highlights.selected": {
-      actions: assign({ open: ({ context, event }) => ({ ...context.open, front: "highlights", subject: event.about }) }),
-    },
-    "subject.changed": {
-      actions: assign({
-        open: ({ context, event }) => ({
-          ...context.open,
-          subject: event.subject ? { kind: event.subject.kind, id: event.subject.id } : null,
-        }),
-      }),
-    },
+    "note.opened": { actions: assign({ openId: ({ event }) => event.id }) },
   },
   states: {
     loading: {

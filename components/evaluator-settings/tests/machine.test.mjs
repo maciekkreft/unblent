@@ -37,7 +37,7 @@ const EV_B = { id: B, book: JOURNAL, name: "Kind", on: false, position: "a", rem
 const EV_YOURS = { id: YOURS, book: JOURNAL, name: "Your values", on: true, removing: false, derivedFrom: "values", questions: [] };
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const start = async ({ evaluators = [EV_A, EV_B, EV_YOURS], session = { userId: "u1" }, vimKeys } = {}) => {
+const start = async ({ evaluators = [EV_A, EV_B, EV_YOURS], session = { userId: "u1" }, vimKeys, folded } = {}) => {
   let n = 0;
   const clock = new SimulatedClock();
   const asked = [];
@@ -52,6 +52,7 @@ const start = async ({ evaluators = [EV_A, EV_B, EV_YOURS], session = { userId: 
       },
       mint: () => `01K6TEST000000000000000M${String(++n).padStart(2, "0")}`,
       throttleMs: 200,
+      folded,
     },
   });
   const emitted = [];
@@ -76,6 +77,18 @@ test("every evaluator of the account is shown, whichever book it is kept with an
   const { asked, ctx } = await start();
   assert.ok(asked.includes("evaluators: list"));
   assert.deepEqual(shownOf(ctx()).map((d) => d.id), [B, A, YOURS]);
+});
+
+test("each evaluator folds and unfolds on its own; the folds come back from input, and a new one is open", async () => {
+  const { actor, ctx } = await start({ folded: [B] });
+  assert.deepEqual([...ctx().folded], [B], "kept folds come back");
+  actor.send({ type: "_fold", id: A });
+  assert.deepEqual([...ctx().folded].sort(), [A, B].sort());
+  actor.send({ type: "_fold", id: B });
+  assert.deepEqual([...ctx().folded], [A], "folding again unfolds");
+  actor.send({ type: "_new" });
+  const fresh = shownOf(ctx())[0];
+  assert.equal(ctx().folded.has(fresh.id), false, "a new evaluator starts open");
 });
 
 test("signed out the tab knows it, so it shows only the sign-in line", async () => {

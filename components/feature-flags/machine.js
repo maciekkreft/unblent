@@ -13,7 +13,6 @@ export const FEATURES = [
   { id: "chats", name: "Chats", says: "The Chats tab, where people talk with the language model about what they read." },
   { id: "evaluators", name: "Evaluators", says: "The Evaluators tab of Settings, where people write questions Jev answers about a text, and the checks under the Jev key." },
   { id: "choice-points", name: "Choice points", says: "The choice point sheets under a journal day, and their checks in Settings." },
-  { id: "highlights", name: "Highlights", says: "The Highlights row at the top of a book's notes." },
   { id: "undo", name: "Undo", says: "The Undo and Redo buttons beside the gear and their keys. Removing a value still offers Undo in its notice." },
 ];
 
@@ -45,7 +44,7 @@ export const machine = setup({
     description:
       "The Feature flags tab of the gear's sheet, shown only to the admin. One switch per " +
       "feature that can be hidden from everyone, the admin included (Chats, Evaluators, Choice " +
-      "points, Highlights, Undo), each with a sentence saying what turning it off hides. A switch " +
+      "points, Undo), each with a sentence saying what turning it off hides. A switch " +
       "moves at once when pressed, hides or shows the feature for the admin at once and for " +
       "everyone else at their next start; pressing it again is the undo. A switch that " +
       "cannot be saved, for example offline, goes back to where it was and a line under " +

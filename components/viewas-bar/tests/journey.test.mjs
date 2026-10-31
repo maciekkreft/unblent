@@ -92,7 +92,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
 
         // Administration › People › View as.
         await page.locator("dock-desk .controls button.pill").click();
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
         await page.locator(`people-list button[aria-label="View as ${guest.name}"]`).click();
 
         // The guest's try page, under the bar, with the admin's notes gone from this browser.

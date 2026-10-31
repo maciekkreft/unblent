@@ -41,6 +41,10 @@ const GLYPHS = {
   warning: ["Warning", icon("warning")],
   gavel: ["Gavel", icon("gavel")],
   prohibit: ["No entry", icon("prohibit")],
+  lightning: ["Lightning", icon("lightning")],
+  "calendar-blank": ["Calendar", icon("calendar-blank")],
+  "share-fat": ["Pass on", icon("share-fat")],
+  "trash-simple": ["Bin", icon("trash-simple")],
 };
 const CHOICES = OPTION_ICONS.map((name) => [name, ...GLYPHS[name]]);
 
@@ -48,6 +52,8 @@ const CHOICES = OPTION_ICONS.map((name) => [name, ...GLYPHS[name]]);
 // by its editable content, and of two radios the chosen one, as Tab stops there; the icon
 // panel keeps its own keys and is not on the path.
 const STOPS = "a[href], button, input:not([type=radio]), input[type=radio]:checked, select, .cm-content";
+
+const FOLDED_KEY = "evaluator-settings:folded";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -57,11 +63,31 @@ class ActorController {
   }
 
   hostConnected() {
+    // Which evaluators are folded, kept in this browser (3.1) under the component's name.
+    let folded = [];
+    try {
+      const kept = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]");
+      if (Array.isArray(kept)) folded = kept.filter((id) => typeof id === "string");
+    } catch {
+      // No storage, or something unreadable in it: every evaluator starts open.
+    }
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid },
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, folded },
       events: { "evaluator.saved": saved, "removal.started": started },
     });
-    this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
+    let keptFolds = this.actor.getSnapshot().context.folded;
+    this.subscription = this.actor.subscribe((snapshot) => {
+      if (snapshot.context.folded !== keptFolds) {
+        keptFolds = snapshot.context.folded;
+        try {
+          if (keptFolds.size) localStorage.setItem(FOLDED_KEY, JSON.stringify([...keptFolds]));
+          else localStorage.removeItem(FOLDED_KEY);
+        } catch {
+          // No storage: the folds last for this page.
+        }
+      }
+      this.host.requestUpdate();
+    });
   }
 
   hostDisconnected() {
@@ -131,12 +157,37 @@ class EvaluatorSettings extends LitElement {
       padding-top: var(--space-lg);
       border-top: var(--border-width) solid var(--color-border);
     }
-    .read .name {
+    /* The heading folds its evaluator: a caret that points right while folded and down
+       while open, so the state is seen (Don Norman: visible signifiers). */
+    .heading {
       margin: 0;
       font-size: var(--text-subtitle);
       font-weight: var(--weight-semibold);
       line-height: var(--leading-tight);
+    }
+    button.fold {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      width: 100%;
+      padding: var(--space-2xs) 0;
+      border-color: transparent;
+      background: transparent;
+      font-weight: inherit;
+      text-align: left;
       color: var(--color-ink);
+    }
+    button.fold:hover {
+      background: transparent;
+      color: var(--color-accent-hover);
+    }
+    .caret {
+      display: inline-flex;
+      color: var(--color-mute);
+      transition: transform var(--duration-fast) var(--ease);
+    }
+    button.fold[aria-expanded="true"] .caret {
+      transform: rotate(90deg);
     }
     .read .where,
     .read .text,
@@ -782,7 +833,19 @@ class EvaluatorSettings extends LitElement {
           ${icon("plus")}New evaluator
         </button>
       </div>
-      ${shownOf(context).map((d) => (d.derivedFrom ? this.#derived(d) : this.#evaluator(d, context)))}
+      ${shownOf(context).map((d) => (d.derivedFrom ? this.#derived(d, context) : this.#evaluator(d, context)))}
+    `;
+  }
+
+  // The heading of an evaluator, a button that folds it or unfolds it. Enter on it is the
+  // button's own press; j and k pass it as any other stop (12, "Vim keys").
+  #heading(d, name, open) {
+    return html`
+      <h2 class="heading">
+        <button type="button" class="fold" aria-expanded=${open ? "true" : "false"} @click=${() => this.#send({ type: "_fold", id: d.id })}>
+          <span class="caret">${icon("caret-right")}</span>${name}
+        </button>
+      </h2>
     `;
   }
 
@@ -790,6 +853,7 @@ class EvaluatorSettings extends LitElement {
     const kept = context.evaluators.some((r) => r.id === d.id);
     const questions = d.questions.filter((q) => !q.removing);
     const name = d.name.trim() || "New evaluator";
+    const open = !context.folded.has(d.id);
     return html`
       <section
         class="evaluator"
@@ -801,6 +865,14 @@ class EvaluatorSettings extends LitElement {
           if (!e.currentTarget.contains(e.relatedTarget)) this.#send({ type: "_blur" });
         }}
       >
+        ${this.#heading(d, name, open)}
+        ${open ? this.#body(d, name, kept, questions) : nothing}
+      </section>
+    `;
+  }
+
+  #body(d, name, kept, questions) {
+    return html`
         <label class="field">
           <span class="caption">Name</span>
           <input
@@ -833,17 +905,30 @@ class EvaluatorSettings extends LitElement {
             ? html`<button type="button" class="quiet" @click=${() => this.#send({ type: "_delete", evaluator: d.id })}>Delete evaluator</button>`
             : nothing}
         </div>
-      </section>
     `;
   }
 
   // An evaluator built from another fact (Your values): its questions read only, with
   // where they are changed, and no Delete, since it cannot be deleted.
-  #derived(d) {
+  #derived(d, context) {
     const questions = d.questions.filter((q) => !q.removing);
+    const open = !context.folded.has(d.id);
     return html`
-      <section class="evaluator read" data-id=${d.id} aria-label=${d.name}>
-        <h2 class="name">${d.name}</h2>
+      <section
+        class="evaluator read"
+        data-id=${d.id}
+        aria-label=${d.name}
+        @mousedown=${(e) => this.#pressed(e)}
+        @focusin=${(e) => (this.#last = e.composedPath()[0])}
+      >
+        ${this.#heading(d, d.name, open)}
+        ${open ? this.#readBody(d, questions) : nothing}
+      </section>
+    `;
+  }
+
+  #readBody(d, questions) {
+    return html`
         ${d.description ? html`<p class="text description">${d.description}</p>` : nothing}
         <p class="where">It asks one question for each of your values. Change your values in the Values sheet, under the day's text in the Journal.</p>
         ${questions.length
@@ -868,7 +953,6 @@ class EvaluatorSettings extends LitElement {
               )}
             </div>`
           : html`<p class="mute empty">No values are written yet, so there is nothing to ask.</p>`}
-      </section>
     `;
   }
 

@@ -4,11 +4,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
-// The reader's highlights and the Highlights row on the subject stem page: one journey (9),
-// approved in checks/journeys.json. One account with the sample book open and nothing else;
-// the page loads once. A drag makes the one highlight every later step reads, the bubble
-// removes it with Undo, the Highlights row shows it in the Notes pair, docked and staged,
-// and a removal that outlasts its window stays gone after a reload. Which notes the list
+// The reader's highlights on the subject stem page: one journey (9), approved in
+// checks/journeys.json. One account with the sample book open and nothing else; the page
+// loads once. A drag makes the one highlight every later step reads, the bubble removes it
+// with Undo, and a removal that outlasts its window stays gone after a reload. Which notes the list
 // shows and which the editor opens as the stage moves are note-list's bus test.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, journey, until, forgeCookie, signedIn, shortUndo } = await import(process.env.UNBLENT_KIT);
@@ -125,13 +124,6 @@ const clickFirstMark = async (page) => {
 const clickBubble = (page, sel) =>
   page.evaluate((s) => document.querySelector("book-reader").shadowRoot.querySelector(`.bubble ${s}`)?.click(), sel);
 
-const clickHighlightsRow = (page) =>
-  page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.highlights").click());
-const clickNotesBack = (page) =>
-  page.evaluate(() => document.querySelector("list-then-item#notes").shadowRoot.querySelector(".bar button").click());
-const clickNew = (page) =>
-  page.evaluate(() => document.querySelector("note-list").shadowRoot.querySelector(".row.draft")?.click());
-
 // Bring a view to the front of the stage: its stage tab when it is already on the stage,
 // else the desk's "Return <label> to the stage" action (shown while the desk is being
 // arranged; workshop arranges by default).
@@ -150,7 +142,6 @@ const look = ({ page }) =>
     const strip = reader?.querySelector(".strip");
     const list = document.querySelector("note-list")?.shadowRoot;
     const pair = document.querySelector("list-then-item#notes")?.shadowRoot;
-    const row = list?.querySelector(".row.highlights");
     return {
       // The reader's first chapter has laid out enough text to drag over.
       text: Boolean(strip && strip.children.length && strip.textContent.trim().length > 20),
@@ -158,15 +149,12 @@ const look = ({ page }) =>
       marks: [...(strip?.querySelectorAll("mark") ?? [])].map((m) => m.textContent),
       removing: strip?.querySelector("mark")?.classList.contains("removing") ?? false,
       bubble: reader?.querySelector(".bubble")?.textContent.replace(/\s+/g, " ").trim() ?? null,
-      // The titles the list shows (the draft, the apart row and the Highlights row excluded).
-      titles: [...(list?.querySelectorAll(".row:not(.draft):not(.apart):not(.highlights)") ?? [])].map((r) =>
+      // The titles the list shows (the draft and the apart row excluded).
+      titles: [...(list?.querySelectorAll(".row:not(.draft):not(.apart)") ?? [])].map((r) =>
         r.querySelector(".name").textContent.trim(),
       ),
-      row: row ? { subtitle: row.querySelector(".subtitle").textContent.trim(), selected: row.getAttribute("aria-selected") } : null,
-      // What the Notes pair has assigned to its slot, and its Back bar (null over the list).
+      // What the Notes pair has assigned to its slot.
       notes: pair?.querySelector("slot")?.assignedElements().map((el) => el.localName) ?? [],
-      bar: pair?.querySelector(".bar button span")?.textContent.trim() ?? null,
-      quotes: [...(document.querySelector("highlight-notes")?.shadowRoot?.querySelectorAll(".cm-quote-text") ?? [])].map((m) => m.textContent),
       staged:
         document.querySelector("dock-desk")?.shadowRoot?.querySelector('.stage [role="tab"][aria-selected="true"]')?.textContent.trim() ?? null,
     };
@@ -194,7 +182,6 @@ const oneHighlight = {
       want(s.staged === TITLE, `the stage shows ${s.staged}, not ${TITLE}`),
       want(s.marks.length > 0, "no highlight is painted"),
       want(!s.removing, "the highlight is being removed"),
-      want(s.row?.subtitle === "1 highlight", `the Highlights row reads ${s.row?.subtitle}`),
       want(s.notes.includes("note-list"), `Notes shows ${s.notes}, not its list`),
     ),
   reach: highlight,
@@ -267,51 +254,12 @@ for (const engine of ENGINES) {
       },
     },
     {
-      // The Highlights row stands in the list with the count (Decision 1, 2, 5, 7); picking it
-      // shows the document under the Notes Back bar, the highlight is never a plain note, and
-      // Back returns to the list with the row selected until New note is picked.
-      name: "the Highlights row opens the document in the Notes pair and keeps the book the subject",
-      from: oneHighlight,
-      run: async (v) => {
-        const s = await v.look();
-        assert.deepEqual(s.titles, [], "the highlight is not among the plain notes");
-        assert.equal(s.row.selected, "false", "the row is not selected before it is picked");
-
-        await clickHighlightsRow(v.page);
-        const shown = await v.see((s) => want(s.notes.includes("highlight-notes") && s.quotes.length > 0, "the Highlights document is not shown"));
-        assert.equal(shown.bar, "Notes", "the document opens under the Notes Back bar");
-        assert.deepEqual(shown.titles, [], "still no plain note for the highlight");
-
-        await clickNotesBack(v.page);
-        await v.see((s) => want(s.notes.includes("note-list") && s.row?.selected === "true", "the list is not back with the Highlights row selected"));
-        await clickNew(v.page);
-        await v.see((s) => want(s.notes.includes("note-editor") && s.row?.selected === "false", "New note did not show the editor and clear the row"));
-      },
-    },
-    {
-      // The document stays inside the Notes pair when Notes is brought to the stage (12): the
-      // book remains the subject and the highlight is never listed as a plain note.
-      name: "the highlights document holds the Notes pair when it is staged",
-      from: {
-        state: "one highlight on the staged book",
-        check: (s) => all(want(s.staged === TITLE, `the stage shows ${s.staged}`), want(s.row?.subtitle === "1 highlight", `the Highlights row reads ${s.row?.subtitle}`)),
-        reach: highlight,
-      },
-      run: async (v) => {
-        await clickHighlightsRow(v.page);
-        await v.see((s) => want(s.notes.includes("highlight-notes") && s.quotes.length > 0, "the Highlights document is not shown"));
-        await toStage(v.page, "Notes");
-        const s = await v.see((s) => want(s.staged === "Notes" && s.quotes.length > 0, `the stage shows ${s.staged} with ${s.quotes.length} quotes`));
-        assert.deepEqual(s.titles, [], "Notes does not list the highlight with the document staged");
-      },
-    },
-    {
       // Remove, and let the short window run out: the mark goes and the note becomes a
       // tombstone on the server, so a reload pulls it and paints no mark.
       name: "a removed highlight stays gone after a reload",
       from: {
         state: "one highlight on the book",
-        check: (s) => want(s.row?.subtitle === "1 highlight", `the Highlights row reads ${s.row?.subtitle}`),
+        check: (s) => want(s.marks.length > 0, "no highlight is painted"),
         reach: highlight,
       },
       run: async (v) => {

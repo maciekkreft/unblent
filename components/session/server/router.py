@@ -344,7 +344,7 @@ _DONE = ("Done. Go back to Unblent.",
 _CANCELLED = ("Not connected. Go back to Unblent.", "You can close this tab. Nothing changed on your Mac.")
 _STALE = ("This link has expired.", "Go back to Unblent and press Connect account again.")
 _SYNC_OFF = ("Sync is not turned on for this account.",
-             "Go back to Unblent. The account's owner can turn it on in Administration.")
+             "Go back to Unblent. The account's owner can turn it on in Settings › People.")
 _OFFLINE = ("Unblent could not reach your account.",
             "Check the internet connection, then reload this tab or press Connect account again.")
 

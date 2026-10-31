@@ -243,7 +243,8 @@ export const machine = setup({
       "when the stage changes\", off at first, so the Notes and Chats panels follow what is on " +
       "the stage until the user turns it on. Your account holds the chat " +
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
-      "which lookups the chat may use, which `conversations` keeps. Every change is saved at " +
+      "which lookups the chat may use, which `conversations` keeps, in the fold What the chat " +
+      "may read right after the cache lifetime and before the Jev part. Every change is saved at " +
       "once by the fact that owns it. Your account also holds the Jev key, which `llm` keeps. " +
       "Echo is offered as a provider only in the workshop profile. In the Mac app the provider " +
       "Ollama (on this Mac) has no key box: a row says Running at its address, or that Ollama isn't " +

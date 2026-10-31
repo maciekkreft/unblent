@@ -60,7 +60,7 @@ async function start({ notes = [], openId = null, slow = 0, notesInput = {}, kee
     notes: { store, now: (() => { let n = 100; return () => ++n; })(), api: null, revoke: () => {}, ...notesInput },
     subject: { ask: stage(openId) },
     settings: { product: true, stored: { workshop: null, product: JSON.stringify({ keepOpen }), profile: null }, save: { workshop: () => {}, product: () => {}, profile: () => {} } },
-    "note-list": { mint, undoMs: 20, following: true, highlightsOpen: false },
+    "note-list": { mint, undoMs: 20, following: true },
     "notice-stack": { fadeMs: 30 },
     "note-editor": {
       mint,

@@ -48,7 +48,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const problems = watch(page);
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await page.locator("dock-desk .controls button.pill").click();
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Administration" }).click();
+        await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
 
         const own = page.locator(`people-list tr[data-user="${adminId}"]`).getByRole("switch", { name: "Can sync, you" });
         await own.waitFor();

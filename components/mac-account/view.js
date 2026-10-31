@@ -271,7 +271,7 @@ class MacAccount extends LitElement {
       <div class="action">
         <button type="button" class="secondary unavailable" disabled aria-describedby="why">Disconnect</button>
         <span class="small" id="why">
-          To disconnect this Mac, turn sync on again for this account in Administration on app.unblent.com.
+          To disconnect this Mac, turn sync on again for this account in Settings › People on app.unblent.com.
         </span>
       </div>`;
   }

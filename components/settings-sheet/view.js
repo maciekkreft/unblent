@@ -30,7 +30,6 @@ const COPIED_MS = 2000;
 const FEEDBACK_URL = "https://github.com/maciekkreft/unblent/issues/new/choose";
 const TTLS = ["5m", "1h"];
 const TTL_LABELS = { "5m": "5 minutes", "1h": "1 hour" };
-const TTL_NOTE = "1 hour costs more to start and pays off from the third question within the hour.";
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
 // the token is the one clock, shared with the bar's animation.
@@ -690,7 +689,6 @@ class SettingsSheet extends LitElement {
             )
           : nothing}
         ${this.#check("Vim keys", settings.vimKeys, () => this.#actor.send({ type: "_toggleVim" }))}
-        <p class="hint">Move around the desk, the lists and the Reader with the keyboard.</p>
         ${settings.vimKeys
           ? html`<details class="keys-fold">
               <summary>Show the keys</summary>
@@ -834,11 +832,10 @@ class SettingsSheet extends LitElement {
                 <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
                   ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
                 </select>
-                <span class="help">${TTL_NOTE}</span>
               </label>
             `}
-        ${llm.jev ? this.#judging(llm, evaluators, checks) : this.#checks(checks, evaluators)}
         ${this.#tools(toolList, tools, profile)}
+        ${llm.jev ? this.#judging(llm, evaluators, checks) : this.#checks(checks, evaluators)}
       </div>
     `;
   }

@@ -51,7 +51,7 @@ export const machine = setup({
       "the tab says changes are waiting on this Mac, and a notice says why. When the admin has " +
       "turned sync off for the account, it says Sync was turned off for this account, and " +
       "Disconnect is shown greyed out with the reason: the account's books could not be " +
-      "fetched, so sync must be turned on again for this account in Administration on " +
+      "fetched, so sync must be turned on again for this account in Settings › People on " +
       "app.unblent.com before this Mac can disconnect. Nothing waiting on the Mac is thrown " +
       "away meanwhile.",
     kind: "view",

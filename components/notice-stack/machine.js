@@ -165,11 +165,11 @@ export const machine = setup({
       "Shows what a fact could not do for the user as notices that can be dismissed: a refused " +
       "sign-in, a book that could not be added, and a save conflict. A conflict offers Keep mine, which saves " +
       "the user's copy again, because `notes` otherwise keeps the server's copy. Something the " +
-      "user deleted or removed, a guest's account in Administration among them, shows as a " +
+      "user deleted or removed, a guest's account in the People tab among them, shows as a " +
       "dark notice with Undo for the undo window; hovering or " +
       "focusing it holds the window, and when the window runs out or the notice is dismissed the " +
       "removal is final. Leaving the page makes every open removal final. Reset use, Block and " +
-      "Unblock on a guest in Administration take effect at once and show the same dark notice, " +
+      "Unblock on a guest in the People tab take effect at once and show the same dark notice, " +
       "whose Undo does the opposite. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
       "because `notes` does not keep conflicts. A step that is a delete (12, Undo) shows a " +
