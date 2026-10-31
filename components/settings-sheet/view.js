@@ -158,7 +158,8 @@ class SettingsSheet extends LitElement {
       flex-direction: column;
       gap: var(--space-sm);
     }
-    .judging .group {
+    /* The two headings of Your account: Generating, for the chat, and Evaluating. */
+    .group {
       color: var(--color-body-mid);
       font-size: var(--text-sm);
     }
@@ -792,6 +793,7 @@ class SettingsSheet extends LitElement {
     const ollama = llm.provider === "ollama" ? ollamaView(llm) : null;
     return html`
       <div class="account">
+        <span class="group">Generating</span>
         <label class="field">
           <span>Provider</span>
           <select @change=${(e) => this.#actor.send({ type: "_setProvider", provider: e.target.value })}>

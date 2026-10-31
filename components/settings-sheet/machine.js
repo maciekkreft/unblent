@@ -271,7 +271,8 @@ export const machine = setup({
       "leaving saves, Escape keeps the old one and an empty address brings back the default. The Model " +
       "list shows the models downloaded in Ollama; when gemma4:e2b-mlx is not among them a line gives the " +
       "Terminal command ollama pull gemma4:e2b-mlx with Copy and Try again. Thinking is On or Off, and the " +
-      "cache lifetime is not shown for Ollama. The Evaluating group holds the Jev key on the website. In the Mac app " +
+      "cache lifetime is not shown for Ollama. Those rows stand under the heading Generating, as the checks' " +
+      "rows stand under Evaluating. The Evaluating group holds the Jev key on the website. In the Mac app " +
       "it has the same rows as the chat: Provider, Ollama (on this Mac), the default, or Jev (your own key); with " +
       "Ollama the same Ollama row as the chat's, then Model, every model downloaded in Ollama with " +
       "kev:0.8b-mlx-bf16 first, Kev until the user chooses another; choosing the previous one again is the undo. " +
