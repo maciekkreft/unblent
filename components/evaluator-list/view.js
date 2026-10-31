@@ -327,6 +327,8 @@ const ERRORS = {
   blocked: "This trial has ended.",
   busy: "Jev is busy. Try again in a moment.",
   failed: "Jev could not answer. Try again.",
+  "local-off": "Ollama isn't running on this Mac. Open Ollama, then try again.",
+  "no-model": "Nimble v3 isn't downloaded. In Terminal, run ollama pull nimble-v3, then try again.",
 };
 
 class EvaluatorList extends LitElement {

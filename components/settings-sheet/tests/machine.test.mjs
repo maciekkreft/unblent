@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, merge, checksShown, ollamaView, addressOf } from "../machine.js";
+import { machine, merge, checksShown, ollamaView, addressOf, deciderView, deciderReady } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMAS = {
@@ -536,6 +536,56 @@ test("evaluator.changed and evaluator.deleted keep the list to choose from (4.3)
   actor.send({ type: "evaluator.changed", evaluator: { ...EVALUATORS[1], name: "Renamed" } });
   actor.send({ type: "evaluator.deleted", id: E1, book: BOOK });
   assert.deepEqual(actor.getSnapshot().context.evaluators.map((e) => e.name), ["Renamed"]);
+});
+
+// The Mac app's picture with Nimble v3 deciding (3.4): both deciders offered, Jev keyless.
+const NIMBLE_PICTURE = {
+  ...OLLAMA_PICTURE,
+  jev: { keySet: false },
+  decider: { provider: "ollama", model: "nimble-v3:latest", ready: true },
+  deciders: ["ollama", "jev"],
+};
+
+test("Decisions shows only where two deciders are offered, with Ollama's state (3.4)", () => {
+  assert.equal(deciderView(LLM_PICTURE), null, "a picture without deciders: nothing new");
+  assert.equal(deciderView({ ...LLM_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: true }, deciders: ["jev"] }), null, "the website");
+  assert.deepEqual(deciderView(NIMBLE_PICTURE), { provider: "ollama", offered: ["ollama", "jev"], running: true, ready: true });
+  const off = { ...NIMBLE_PICTURE, ollama: { address: "http://localhost:11434", running: false }, decider: { ...NIMBLE_PICTURE.decider, ready: false } };
+  assert.deepEqual(deciderView(off), { provider: "ollama", offered: ["ollama", "jev"], running: false, ready: false });
+  const missing = { ...NIMBLE_PICTURE, decider: { ...NIMBLE_PICTURE.decider, ready: false } };
+  assert.equal(deciderView(missing).running, true);
+  assert.equal(deciderView(missing).ready, false, "running, but nimble-v3 is not downloaded");
+  const jev = { ...NIMBLE_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } };
+  assert.deepEqual(deciderView(jev), { provider: "jev", offered: ["ollama", "jev"] });
+});
+
+test("a decider can answer: the picture's word, else a saved Jev key", () => {
+  assert.equal(deciderReady(NIMBLE_PICTURE), true, "Nimble v3 needs no Jev key");
+  assert.equal(deciderReady({ ...NIMBLE_PICTURE, decider: { ...NIMBLE_PICTURE.decider, ready: false } }), false);
+  assert.equal(deciderReady({ jev: { keySet: true } }), true, "a picture from before deciders");
+  assert.equal(deciderReady({ jev: { keySet: false } }), false);
+  assert.equal(deciderReady(null), false, "signed out");
+});
+
+test("choosing a decider emits only decider, and only one offered and not already chosen", async () => {
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, llm: NIMBLE_PICTURE });
+  actor.send({ type: "_setDecider", decider: "ollama" });
+  actor.send({ type: "_setDecider", decider: "anthropic" });
+  assert.deepEqual(emittedLlm, [], "the current one, or one not offered, changes nothing");
+  actor.send({ type: "_setDecider", decider: "jev" });
+  assert.deepEqual(emittedLlm, [{ type: "llm.edited", decider: "jev" }]);
+  actor.send({ type: "llm.changed", ...NIMBLE_PICTURE, decider: { provider: "jev", model: "jev-latest", ready: false } });
+  assert.deepEqual(actor.getSnapshot().context.llm.decider, { provider: "jev", model: "jev-latest", ready: false }, "adopted");
+  assert.deepEqual(actor.getSnapshot().context.llm.deciders, ["ollama", "jev"], "adopted");
+  actor.send({ type: "_setDecider", decider: "ollama" });
+  assert.deepEqual(emittedLlm[1], { type: "llm.edited", decider: "ollama" }, "choosing the previous one again is the undo");
+});
+
+test("on the website no decider can be chosen", async () => {
+  const web = { ...LLM_PICTURE, jev: { keySet: true }, decider: { provider: "jev", model: "jev-latest", ready: true }, deciders: ["jev"] };
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, llm: web });
+  actor.send({ type: "_setDecider", decider: "ollama" });
+  assert.deepEqual(emittedLlm, []);
 });
 
 test("every payload matches its schema", () => {
