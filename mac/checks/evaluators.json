@@ -1,0 +1,144 @@
+{
+  "evaluators": [
+    {
+      "id": "01M4X3Y65ADSW3PS8N71AKEDQ8",
+      "book": "00000000000000000000000JRN",
+      "name": "Goal Type",
+      "description": "",
+      "on": false,
+      "questions": [
+        {
+          "id": "01M4X451KYQP5ENT2JVJGANPHC",
+          "on": true,
+          "kind": "pick",
+          "text": "Which kind of therapy goal it is?",
+          "yes": "",
+          "no": "",
+          "expect": "01M4X4B6F4RMKP0TA3R7J52RJB",
+          "options": [
+            {
+              "id": "01M4X4B6F4RMKP0TA3R7J52RJB",
+              "name": "Behavioral Goal",
+              "description": "Answer question: \"What I want to do?\"",
+              "icon": "footprints"
+            },
+            {
+              "id": "01M4X4B6F4THRB65VSQWTSQCRA",
+              "name": "Emotional Goal",
+              "description": "Answer question: \"How I want to feel?\"",
+              "icon": "heart"
+            },
+            {
+              "id": "01M4X4CK2PZ78CHXXA3ABHT7N6",
+              "name": "Outcome Goal",
+              "description": "Answer question: \"What I want to get or have?\"",
+              "icon": "trophy"
+            }
+          ]
+        }
+      ],
+      "position": null
+    },
+    {
+      "id": "01M5X6SXS6EYHNEEKHPNY8N553",
+      "book": "00000000000000000000000JRN",
+      "name": "Value Type",
+      "description": "",
+      "on": false,
+      "questions": [
+        {
+          "id": "01M5X6SXS63AT2WX9NY81TZEE0",
+          "on": true,
+          "kind": "pick",
+          "text": "What does this value describe?",
+          "yes": "",
+          "no": "",
+          "expect": "01M5X6SXS6ZWE9YCWQA3C6BME0",
+          "options": [
+            {
+              "id": "01M5X6SXS6ZWE9YCWQA3C6BME0",
+              "name": "A way of acting",
+              "description": "How the person wants to behave, again and again, which never gets finished. A single word counts when people usually mean it as acting: adventure, caring, curiosity, excitement, safety.",
+              "icon": "footprints"
+            },
+            {
+              "id": "01M5X6SXS6BMMJCVZYXE74JJHF",
+              "name": "A goal",
+              "description": "Something that can be done, reached, ticked off or owned: moving to Italy, a fit body, earning money.",
+              "icon": "trophy"
+            },
+            {
+              "id": "01M5X6SXS6DQ69D3TB8HWM6ANZ",
+              "name": "A feeling",
+              "description": "A state the person wants to feel or stop feeling: calm, happy, in control, not anxious. Only feelings, not actions.",
+              "icon": "heart"
+            },
+            {
+              "id": "01M5X6SXS61DF0CJQD17QYF17P",
+              "name": "What others give",
+              "description": "Something other people would have to do, think or give: recognition, respect, being liked.",
+              "icon": "hand-palm"
+            },
+            {
+              "id": "01M5YS5YZ9KQHVDAJMGAPQVPQX",
+              "name": "A rule",
+              "description": "Something the person feels they must obey, written with should, must, have to, always or never.",
+              "icon": "gavel"
+            },
+            {
+              "id": "01M5YS5YZ95ZTG3QQBV1RGH901",
+              "name": "Something to stop",
+              "description": "Not doing something, which a dead person does better: stop procrastinating, stop wasting time.",
+              "icon": "prohibit"
+            }
+          ]
+        }
+      ],
+      "position": null
+    },
+    {
+      "id": "01M5X6SXS6P22R51FZ1R8TJFW0",
+      "book": "00000000000000000000000JRN",
+      "name": "Value Example",
+      "description": "",
+      "on": false,
+      "questions": [
+        {
+          "id": "01M5X6SXS6ZMYQBT1X3BYA2DW2",
+          "on": true,
+          "kind": "pick",
+          "text": "How does the example relate to the value?",
+          "yes": "",
+          "no": "",
+          "expect": "01M5YS5YZ9QGJ6309YA3NZM2MH",
+          "options": [
+            {
+              "id": "01M5YS5YZ9QGJ6309YA3NZM2MH",
+              "name": "Fits the value",
+              "description": "Something the person can do that acts on the value, even if it is a goal or an activity.",
+              "icon": "footprints"
+            },
+            {
+              "id": "01M5YS5YZ98KHJZN45RHFKGW60",
+              "name": "A feeling",
+              "description": "A state the person wants to feel, not something they do.",
+              "icon": "heart"
+            },
+            {
+              "id": "01M5YS5YZ9YWZSNAYCKH7RJA6P",
+              "name": "What others give",
+              "description": "Something other people would have to do, think or give.",
+              "icon": "hand-palm"
+            },
+            {
+              "id": "01M5YS5YZ94D4ZA91NB4CAKSAS",
+              "name": "Unrelated",
+              "description": "It has nothing to do with the value."
+            }
+          ]
+        }
+      ],
+      "position": null
+    }
+  ]
+}

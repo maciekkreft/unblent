@@ -1,0 +1,40 @@
+{
+  "boxes": [
+    {
+      "field": "away",
+      "evaluator": null,
+      "questions": [],
+      "also": []
+    },
+    {
+      "field": "towards",
+      "evaluator": "01M4X3Y65ADSW3PS8N71AKEDQ8",
+      "questions": [
+        {
+          "id": "01M4X451KYQP5ENT2JVJGANPHC",
+          "show": true,
+          "expect": "01M4X4B6F4RMKP0TA3R7J52RJB",
+          "when": null,
+          "icons": {
+            "01M4X4B6F4RMKP0TA3R7J52RJB": "check",
+            "01M4X4B6F4THRB65VSQWTSQCRA": "brain",
+            "01M4X4CK2PZ78CHXXA3ABHT7N6": "warning",
+            "01M4X4HNZCKDAVBR8V60TKQJ5A": "warning"
+          }
+        }
+      ],
+      "also": [
+        {
+          "evaluator": "0000000000000000000000YVAS",
+          "questions": []
+        }
+      ]
+    },
+    {
+      "field": "thoughts",
+      "evaluator": null,
+      "questions": [],
+      "also": []
+    }
+  ]
+}
