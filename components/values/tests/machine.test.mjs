@@ -171,19 +171,35 @@ test("an edit today replaces today's version, minting the next version, and the 
   assert.equal(store.rows.get("2026-10-14").version, 2);
 });
 
-test("a save naming any day but today is ignored, also yesterday's in the hour after midnight", async () => {
+test("a save naming any day but today is ignored; without a journal, today is the device's date", async () => {
   const { actor, changed, clock } = start(fakeStore(), { day: "2026-10-14" });
   await ready(actor);
   actor.send(saved("2026-10-13", [parent]));
   actor.send(saved("2026-10-15", [parent]));
   assert.equal(changed.length, 0);
-  // From noon to half past midnight: the journal still lets yesterday's text be edited,
-  // and its values stay as they were.
-  clock.increment(12.5 * HOUR);
+  clock.increment(12.5 * HOUR); // 00:30
   actor.send(saved("2026-10-14", [parent]));
   assert.equal(changed.length, 0);
   actor.send(saved("2026-10-15", [parent]));
   assert.deepEqual(changed.map((c) => c.day), ["2026-10-15"]);
+});
+
+test("today is the journal's day: yesterday's values are written until the journal's day ends at 2:00", async () => {
+  // At 1:30 the journal still calls the 14th today.
+  const ask = (target) => Promise.resolve(target === "journal" ? { today: "2026-10-14" } : { userId: null, registrationOpen: true });
+  const { actor, changed, clock } = start(fakeStore(), { day: "2026-10-14", ask });
+  clock.increment(13.5 * HOUR);
+  await ready(actor);
+  actor.send(saved("2026-10-15", [parent]));
+  assert.equal(changed.length, 0, "the calendar's new day is not today yet");
+  actor.send(saved("2026-10-14", [parent]));
+  assert.deepEqual(changed.map((c) => c.day), ["2026-10-14"]);
+  // At 2:00 the journal announces the new today.
+  actor.send({ type: "journal.changed", days: [], projects: [], detectors: [], answers: [], open: null, today: "2026-10-15", reason: null });
+  actor.send(saved("2026-10-14", [parent, health]));
+  assert.equal(changed.length, 1, "yesterday is closed");
+  actor.send(saved("2026-10-15", [parent, health]));
+  assert.deepEqual(changed.map((c) => c.day), ["2026-10-14", "2026-10-15"]);
 });
 
 test("a save that leaves the values as they stand writes no version", async () => {

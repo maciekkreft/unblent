@@ -48,6 +48,11 @@
         ],
         "description": "The day that can still be edited, or null when none can, and a new page for today is shown."
       },
+      "today": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "Today's journal day, YYYY-MM-DD: the device's local date, or the one before it until 2:00 the next night. Every part that needs today takes it from here."
+      },
       "reason": {
         "enum": [
           "signed-out",

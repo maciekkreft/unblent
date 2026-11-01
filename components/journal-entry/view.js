@@ -723,7 +723,7 @@ class JournalEntry extends LitElement {
     if (snapshot.matches("failed")) return html`<p class="empty page">The journal is unavailable.</p>`;
     const { context } = snapshot;
     const { picture, fresh, vimKeys } = context;
-    // The actor's midnight announcement (shownDay) is what redraws a new page then.
+    // The journal's announcement at 2:00 (shownDay) is what redraws a new page then.
     const { day, editable } = shown(picture, selectedOf(context), fresh, Date.now());
     const conflict = conflictOn(context.conflict, day);
     // The slot under the text takes the view a page nests in the entry, as chat-thread

@@ -70,19 +70,14 @@ export const selectedOf = (context) =>
 
 // The day the entry shows: the earlier day picked in the Days list, read only; else the
 // open day; else a new page for today under a fresh id, which becomes a day at its
-// first character.
+// first character. Today is the journal's to say (13, Journal); the device's date stands
+// in only before it has said.
 export const shown = (picture, selected, fresh, now) => {
   const open = picture.days.find((d) => d.id === picture.open);
   const picked = selected && selected !== picture.open ? picture.days.find((d) => d.id === selected) : null;
   if (picked) return { day: picked, editable: false };
   if (open) return { day: open, editable: true };
-  return { day: { id: fresh, day: dateOf(now), text: "", editedAt: now, version: 1, waiting: [], unanswered: [] }, editable: true };
-};
-
-// The next local midnight after `now`, when a new page's date changes.
-const midnightAfter = (now) => {
-  const d = new Date(now);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+  return { day: { id: fresh, day: picture.today ?? dateOf(now), text: "", editedAt: now, version: 1, waiting: [], unanswered: [] }, editable: true };
 };
 
 // A conflict on the shown day, or null. Either copy can be kept, on any day: the journal
@@ -110,10 +105,10 @@ export function labels({ mine, theirs }) {
   return { twice: true, mineLabel: written(mine.editedAt), theirsLabel: written(theirs.editedAt) };
 }
 
-const EMPTY = { days: [], open: null };
+const EMPTY = { days: [], open: null, today: null };
 
-// What the entry reads of the journal: its days and which one is open.
-const picture = (event) => ({ days: event.days, open: event.open });
+// What the entry reads of the journal: its days, which one is open, and today's date.
+const picture = (event) => ({ days: event.days, open: event.open, today: event.today ?? null });
 
 const isPicture = (r) => Array.isArray(r?.days);
 
@@ -141,21 +136,14 @@ const savable = (context) =>
 // The shown day's date, and whether it can still be written, leave as day.shown, once
 // when the page has loaded and again only when either changes, so a view about one day
 // (nested under the text) needs no copy of the rule above or of the journal's "today
-// only" rule, which keeps yesterday open for an hour past its last edit. Every
-// transition that can move them ends with this.
+// only" rule, which keeps yesterday open until 2:00. Every transition that can move them
+// ends with this; the journal's announcement at 2:00 is one.
 const announce = enqueueActions(({ context, enqueue }) => {
   const view = shown(context.picture, selectedOf(context), context.fresh, context.now());
   const { day } = view.day;
   if (day === context.shownDay && view.editable === context.shownWritable) return;
   enqueue.assign({ shownDay: day, shownWritable: view.editable });
   enqueue.emit({ type: "day.shown", day, writable: view.editable });
-});
-
-// Nobody acts at midnight, yet a new page then takes the new day's date. The second past
-// it keeps the clock safely on the new day.
-const atMidnight = enqueueActions(({ context, enqueue }) => {
-  const now = context.now();
-  enqueue.raise({ type: "_midnight" }, { id: "midnight", delay: midnightAfter(now) - now + 1000 });
 });
 
 const save = (left) =>
@@ -326,8 +314,7 @@ export const machine = setup({
       "each was last written (Written at 09:14, with the date when the two differ and the seconds when both fall in one minute), and the user keeps one; for a few seconds after, Undo, with a bar " +
       "showing the time left, brings both copies back. It announces which day it shows and whether " +
       "it can still be written, when the page has loaded and whenever either changes, also at " +
-      "midnight on today's empty page and when yesterday's hour of writing past midnight runs " +
-      "out, and it holds a view a page nests in it under the day's text, which scrolls with " +
+      "2:00, when the journal's day ends, and it holds a view a page nests in it under the day's text, which scrolls with " +
       "the text and follows the announced day. With Vim keys on, typing :q or :quit in the " +
       "editor, on any day, closes the journal's book. With Vim keys on, p pastes text or a link copied in the reader with Vim keys, paragraphs kept. A source link to a highlight, pasted " +
       "from the reader's Copy link (or with p after the reader's y while Vim keys is on), is " +
@@ -448,7 +435,6 @@ export const machine = setup({
       },
     },
     ready: {
-      entry: atMidnight,
       initial: "clean",
       states: {
         clean: {
@@ -503,7 +489,6 @@ export const machine = setup({
           }),
         },
         _keptElapsed: { actions: assign({ kept: null }) },
-        _midnight: { actions: [announce, atMidnight] },
       },
     },
     failed: {},

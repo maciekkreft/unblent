@@ -8,7 +8,7 @@ import { Validator } from "@cfworker/json-schema";
 import { machine, conflictOn, labels, shown, longDate, parseBody, serialize, selectedOf, linkMissing, showing as accountShown, textEdge, nestedStep, flagShown } from "../machine.js";
 
 // The entry's decisions (3.2): which day is shown, whether it can be typed in, and what
-// is saved when. Times are built with the local Date constructor, so the midnight cases
+// is saved when. Times are built with the local Date constructor, so the 2:00 cases
 // hold in any time zone.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -414,26 +414,21 @@ test("following the journal book announces each chapter's day, and the last chap
   assert.deepEqual(days, ["2026-10-12", "2026-10-10", "2026-10-11", "2026-10-12"]);
 });
 
-test("at midnight today's empty page announces the new day, and an earlier day stays put", async () => {
-  let now = at(12, 23, 59);
-  const { actor, days, clock } = await startShowing(picture(), () => now);
-  assert.deepEqual(days, ["2026-10-12"]);
-  now = at(13, 0, 0) + 1000;
-  clock.increment(at(13) - at(12, 23, 59) + 1000);
+test("today's empty page takes the date the journal calls today, and an earlier day stays put", async () => {
+  const now = at(13, 1, 0);
+  const { actor, days } = await startShowing(picture({ today: "2026-10-12" }), () => now);
+  assert.deepEqual(days, ["2026-10-12"], "at 1:00 the journal's today is still the day before");
+  // The journal's announcement at 2:00 names the new today.
+  actor.send(changed(picture({ today: "2026-10-13" })));
   assert.deepEqual(days, ["2026-10-12", "2026-10-13"]);
-  // The next midnight is set again from the new day.
-  now = at(14, 0, 0) + 1000;
-  clock.increment(at(14) - at(13));
-  assert.deepEqual(days, ["2026-10-12", "2026-10-13", "2026-10-14"]);
-  // A day written yesterday, picked in the Days list, does not move at midnight.
-  actor.send(changed(picture({ days: [day(SUNDAY, "2026-10-11", "One.")], open: null })));
+  // A day written yesterday, picked in the Days list, does not move with today.
+  actor.send(changed(picture({ days: [day(SUNDAY, "2026-10-11", "One.")], open: null, today: "2026-10-13" })));
   actor.send({ type: "day.selected", id: SUNDAY });
-  now = at(15, 0, 0) + 1000;
-  clock.increment(at(15) - at(14));
-  assert.deepEqual(days, ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-11"]);
+  actor.send(changed(picture({ days: [day(SUNDAY, "2026-10-11", "One.")], open: null, today: "2026-10-14" })));
+  assert.deepEqual(days, ["2026-10-12", "2026-10-13", "2026-10-11"]);
 });
 
-test("yesterday kept open past midnight is announced writable, and announced again when the journal closes it", async () => {
+test("yesterday kept open until 2:00 is announced writable, and announced again when the journal closes it", async () => {
   const late = day(TODAY, "2026-10-12", "Late.", { editedAt: at(12, 23, 50) });
   const said = [];
   const now = at(13, 0, 10);
@@ -468,7 +463,7 @@ const opened = async (session, tryPage = false) => {
       now: () => at(12, 21),
       tryPage,
     },
-    // The midnight timer runs on this clock, so it never keeps the test alive.
+    // Timers run on this clock, so they never keep the test alive.
     clock: new SimulatedClock(),
   });
   actor.start();
@@ -519,7 +514,7 @@ async function linked(listed) {
       now: () => at(12, 21),
       pushRegister: (text) => pushed.push(text),
     },
-    // The midnight timer runs on a clock nobody moves, so the test ends.
+    // Timers run on a clock nobody moves, so the test ends.
     clock: new SimulatedClock(),
   });
   const emitted = [];

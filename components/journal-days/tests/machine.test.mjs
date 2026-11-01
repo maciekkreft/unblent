@@ -21,7 +21,7 @@ const DAYS = [day(SAT, "2026-10-10", "I should call.\nRead two chapters."), day(
 
 test("rows are newest first, with the short date, the first line and the paragraph count", () => {
   assert.deepEqual(
-    rows(DAYS, null, at(13, 9)).map((r) => [r.date, r.first, r.count, r.pill]),
+    rows(DAYS, null, "2026-10-13").map((r) => [r.date, r.first, r.count, r.pill]),
     [
       ["Tue 13 Oct", "", 0, "today"],
       ["Mon 12 Oct", "Woke up tired.", 1, null],
@@ -32,11 +32,9 @@ test("rows are newest first, with the short date, the first line and the paragra
   );
 });
 
-test("the open day shows a pill instead of its count: today, or past midnight when it closes", () => {
-  assert.deepEqual(rows(DAYS, MON, at(12, 22))[0], { id: null, day: MON, date: "Mon 12 Oct", first: "Woke up tired.", count: 1, pill: "today", choices: 0 });
-  const late = [...DAYS.slice(0, 2), day(MON, "2026-10-12", "Woke up tired.", at(13, 0, 12))];
-  assert.equal(rows(late, MON, at(13, 0, 25))[0].pill, "open till 01:12");
-  assert.equal(rows(DAYS, MON, at(12, 22)).length, 3, "no new page while a day is open");
+test("the open day shows a today pill instead of its count, also past midnight", () => {
+  assert.deepEqual(rows(DAYS, MON, "2026-10-12")[0], { id: null, day: MON, date: "Mon 12 Oct", first: "Woke up tired.", count: 1, pill: "today", choices: 0 });
+  assert.equal(rows(DAYS, MON, "2026-10-12").length, 3, "no new page while a day is open");
 });
 
 test("the line says where the journal is kept", () => {
@@ -111,7 +109,7 @@ async function withChoices(reply) {
   const actor = createActor(machine, { input: { ask: (target) => Promise.resolve(answers[target]) } });
   actor.start();
   await flush();
-  const perDay = () => Object.fromEntries(rows(actor.getSnapshot().context.days, MON, at(12, 22), counts(actor.getSnapshot().context.choicePoints)).map((r) => [r.date, r.choices]));
+  const perDay = () => Object.fromEntries(rows(actor.getSnapshot().context.days, MON, "2026-10-12", counts(actor.getSnapshot().context.choicePoints)).map((r) => [r.date, r.choices]));
   return { actor, perDay };
 }
 
@@ -147,7 +145,7 @@ test("with no choice points to ask, the list still works and shows no counts", a
 });
 
 test("the new page for today counts today's choice points", () => {
-  const today = rows(DAYS, null, at(13, 9), { "2026-10-13": 2 })[0];
+  const today = rows(DAYS, null, "2026-10-13", { "2026-10-13": 2 })[0];
   assert.deepEqual([today.date, today.choices], ["Tue 13 Oct", 2]);
 });
 

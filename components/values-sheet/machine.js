@@ -40,10 +40,10 @@ const reportsOf = (values) => Object.fromEntries((Array.isArray(values) ? values
 
 const isDay = (v) => typeof v === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v);
 
-// Only today's page writes the values (the values fact ignores any other day): not
-// yesterday's in the hour after midnight the journal keeps its text open, so a version
-// never changes after its day. A day the journal says cannot be written is read only too.
-export const writable = (context) => context.day === dateOf(context.now()) && context.dayWritable !== false;
+// The values are written exactly while the day's own text is: the journal page says so
+// in day.shown, until 2:00 the next night (13, Journal), and the values fact keeps the
+// same day. Before it has said, only today's date is written on.
+export const writable = (context) => context.dayWritable ?? context.day === dateOf(context.now());
 
 // Your values is added to a day or taken off it only where the values fact accepts it:
 // on today's page, by the same rule as a save.
@@ -81,7 +81,8 @@ export function shownValues(context) {
 export function changedLine(context) {
   const day = context.version?.day;
   if (!day) return "";
-  const today = dateOf(context.now());
+  // A writable day is today's journal day, also past midnight.
+  const today = writable(context) ? context.day : dateOf(context.now());
   return day === today ? "" : `Last changed ${dayName(day, today)}`;
 }
 
@@ -448,8 +449,8 @@ export const machine = setup({
       "text or a link copied in the reader with Vim keys, its paragraphs joined into the " +
       "box's one line; Enter or Tab " +
       "moves on to the next box. A day shows the values as they stood on that day. They are " +
-      "written on today's page only, as the journal page says from day.shown; from midnight " +
-      "yesterday's sheet is read only, even in the hour its text stays open. On an earlier " +
+      "written exactly while the day's own text is, as the journal page says from day.shown: " +
+      "until 2:00 the next night, when the journal's day ends. On an earlier " +
       "day the sheet is read only, with Close instead of Done, and says Changed since · see " +
       "today's when the values changed after that day, which shows the current values in " +
       "place, read only, with Back. Done, or Escape, folds the sheet; with Vim keys on, the " +

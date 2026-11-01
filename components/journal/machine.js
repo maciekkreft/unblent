@@ -13,7 +13,9 @@ const isId = (v) => typeof v === "string" && ULID.test(v);
 const str = (v) => (typeof v === "string" ? v : "");
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
-export const HOUR = 60 * 60 * 1000;
+// A journal day ends at this local hour of the next night (13, Journal). The one copy of
+// the rule: every other part takes today from journal.changed's `today`.
+export const DAY_ENDS = 2;
 
 const pad = (n) => String(n).padStart(2, "0");
 
@@ -23,11 +25,14 @@ export const dateOf = (ms) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
-// The local midnight that ends `day`. Built from the calendar date, so a day that is 23
-// or 25 hours long across a clock change still ends at its own midnight.
+// Today's journal day at `now`: the calendar date, or the one before it until DAY_ENDS.
+export const todayOf = (ms) => (new Date(ms).getHours() < DAY_ENDS ? dateOf(new Date(ms).setHours(-1, 0, 0, 0)) : dateOf(ms));
+
+// The local DAY_ENDS that ends `day`, the night after it. Built from the calendar date, so
+// a day that is 23 or 25 hours long across a clock change still ends at its own hour.
 const endOf = (day) => {
   const [y, m, d] = day.split("-").map(Number);
-  return new Date(y, m - 1, d + 1).getTime();
+  return new Date(y, m - 1, d + 1, DAY_ENDS).getTime();
 };
 
 // --- Two days of one date --------------------------------------------------------------
@@ -79,18 +84,17 @@ export const clashOn = (days, date) => {
   return list.length > 1 ? { kept: list[0], other: list[1] } : null;
 };
 
-// The day that can still be edited at `now`, or null: the one whose date is today, or
-// that was edited less than an hour ago, so writing past midnight keeps going in the
-// same entry. A new day is only started while none is open, so at most one qualifies;
-// the latest edited wins should a clock change ever let two.
+// The day that can still be edited at `now`, or null: the one whose date is today's
+// journal day, so writing past midnight keeps going in the same entry until DAY_ENDS.
+// Two records of one date can both arrive (clashOn); the latest edited wins.
 export const openDay = (days, now) =>
   visible(days)
-    .filter((d) => d.day === dateOf(now) || now - d.editedAt < HOUR)
+    .filter((d) => d.day === todayOf(now))
     .reduce((a, b) => (a && a.editedAt >= b.editedAt ? a : b), null);
 
-// The earliest moment the open day can close. Only a schedule: whether it is open is
-// always decided by openDay, so a clock set back merely re-checks early.
-const closesAt = (day) => Math.max(endOf(day.day), day.editedAt + HOUR);
+// The next moment today's journal day ends. Only a schedule: what is open is always
+// decided by openDay, so a clock set back merely re-checks early.
+const closesAt = (now) => endOf(todayOf(now));
 
 const version = (v) => (Number.isInteger(v) && v >= 1 ? v : 1);
 
@@ -135,7 +139,7 @@ const daySaved = (days, { id, text }, now) => {
     return mint(days, days.map((d) => (d.id === id ? { ...d, text, editedAt: now } : d)));
   }
   if (open || text === "") return null;
-  return [...days, { id, day: dateOf(now), text, editedAt: now, version: 1 }];
+  return [...days, { id, day: todayOf(now), text, editedAt: now, version: 1 }];
 };
 
 // The user kept one of the two copies journal.conflicted showed: a save, not left, of
@@ -164,7 +168,8 @@ const kept = (context, { id, text, left }) => {
 // answers, because contracts only grow (7.1); the journal holds none, so they are empty,
 // and the reason Jev is not reading is that no detector is on.
 const body = (c) => {
-  const open = openDay(c.days, c.now());
+  const now = c.now();
+  const open = openDay(c.days, now);
   return {
     days: visible(c.days)
       .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id))
@@ -173,6 +178,7 @@ const body = (c) => {
     detectors: [],
     answers: [],
     open: open?.id ?? null,
+    today: todayOf(now),
     reason: "no-detector",
   };
 };
@@ -187,7 +193,7 @@ const opened = (c) => {
   if (!c.shown) return { shown: null };
   const { day, writable } = c.shown;
   const record = visible(c.days).find((d) => d.day === day);
-  return { shown: { day, text: record?.text ?? "", writable: writable ?? day === dateOf(c.now()) } };
+  return { shown: { day, text: record?.text ?? "", writable: writable ?? day === todayOf(c.now()) } };
 };
 
 // journal: days. `from` alone names one day; both ends are included.
@@ -217,14 +223,12 @@ const persist = (store, held, next, enqueue) => {
   for (const r of next) if (!same(was.get(r.id), r)) enqueue(() => store.put(TABLE, r).catch(() => {}));
 };
 
-// The open day closes by time alone, once its date has passed and an hour after its last
-// edit, with nobody acting, so a timer wakes the fact then to re-check it and announce
-// the closing. It is re-armed after every change, since an edit moves the moment.
+// Today's journal day ends by time alone, with nobody acting, so a timer wakes the fact
+// then to announce the new today and the open day's closing.
 const arm = (enqueue, days, now) => {
   enqueue.cancel("close");
-  const open = openDay(days, now);
   // setTimeout fires at once past 2^31 ms, so a clock set far back would otherwise spin.
-  if (open) enqueue.raise({ type: "_close" }, { id: "close", delay: Math.min(closesAt(open) - now, 2 ** 31 - 1) });
+  enqueue.raise({ type: "_close" }, { id: "close", delay: Math.min(closesAt(now) - now, 2 ** 31 - 1) });
 };
 
 // Two records of the date the page shows are put to the user as a conflict, the way a
@@ -251,7 +255,7 @@ const tell = (enqueue, c, again = false) => {
 
 const announce = (enqueue, c) => {
   const picture = body(c);
-  enqueue.assign({ open: picture.open });
+  enqueue.assign({ open: picture.open, today: picture.today });
   enqueue.emit({ type: "journal.changed", ...picture });
   tell(enqueue, c);
 };
@@ -600,10 +604,11 @@ export const machine = setup({
     description:
       "Owns the journal: one entry per day. It works offline and syncs to the account when " +
       "signed in, the same way notes do; signed out it is kept in this browser, and signing in " +
-      "moves it to the account. A day's date is the local date when its first character was " +
-      "typed and never changes. Only one day can be edited: the one whose date is today, or " +
-      "that was edited less than an hour ago, so writing past midnight keeps going in the same " +
-      "entry; a save to any other day is refused. When a day was saved on two devices at once, " +
+      "moves it to the account. A journal day runs from 2:00 to 2:00 the next night, so " +
+      "writing past midnight keeps going in the same entry until 2:00; a day's date is that " +
+      "journal day when its first character was typed and never changes. Only today's day can " +
+      "be edited; a save to any other day is refused, and the journal announces which day is " +
+      "today, so nothing else reads the clock for it. When a day was saved on two devices at once, " +
       "or two records hold the same date (two devices each started it offline, or a journal was " +
       "added to an account that already had that date), the journal shows one day per date, the " +
       "newest, and puts both copies to the page showing that date; keeping one saves its text to " +
@@ -624,6 +629,7 @@ export const machine = setup({
   context: ({ input }) => ({
     days: [],
     open: null,
+    today: null,
     // The day the journal page shows (day.shown), in memory only, for journal: open.
     shown: null,
     // The conflicts announced and not yet settled, by the id they named: the two copies'
@@ -672,7 +678,7 @@ export const machine = setup({
             const c = { ...context, days, outbox };
             const { userId } = output;
             const now = context.now();
-            enqueue.assign({ days, outbox, userId, cursor: output.cursor, open: openDay(days, now)?.id ?? null });
+            enqueue.assign({ days, outbox, userId, cursor: output.cursor, open: openDay(days, now)?.id ?? null, today: todayOf(now) });
             arm(enqueue, days, now);
             // Signed in since this browser last synced, perhaps in another tab, is a
             // sign-in like any other.
@@ -726,7 +732,7 @@ export const machine = setup({
         _close: {
           actions: enqueueActions(({ context, enqueue }) => {
             const now = context.now();
-            if ((openDay(context.days, now)?.id ?? null) !== context.open) announce(enqueue, context);
+            if ((openDay(context.days, now)?.id ?? null) !== context.open || todayOf(now) !== context.today) announce(enqueue, context);
             arm(enqueue, context.days, now);
           }),
         },

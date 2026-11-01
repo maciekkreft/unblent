@@ -36,12 +36,6 @@ class ActorController {
   }
 }
 
-// The next local midnight after `now`, when "today" moves on and the pills change.
-const midnightAfter = (now) => {
-  const d = new Date(now);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
-};
-
 class JournalDays extends LitElement {
   // A panel's focus lands in what it shows (dock-desk): delegating it puts the keyboard
   // on the first row.
@@ -148,13 +142,6 @@ class JournalDays extends LitElement {
   `;
 
   #actor = new ActorController(this);
-  #timer = null;
-
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    clearTimeout(this.#timer);
-  }
-
   // Vim letters (12, "Vim keys"): only while the preference is on, never with a modifier
   // held (those belong to the browser and the desk), and never inside a field, where a
   // letter is typed text. gg is two presses, so a first g waits a moment for the second.
@@ -197,15 +184,11 @@ class JournalDays extends LitElement {
     if (account === "sign-in") return html`<p class="empty">Sign in to write in your journal.</p>`;
     if (snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="empty">The journal is unavailable.</p>`;
-    const { days, open, signedIn, current, choicePoints } = snapshot.context;
-    const now = Date.now();
-    // Nobody acts at midnight, so a timer redraws the pills when "today" moves on.
-    clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => this.requestUpdate(), midnightAfter(now) - now + 1000);
+    const { days, open, today, signedIn, current, choicePoints } = snapshot.context;
     return html`
       <div class="scroll">
         <ul class="list" aria-label="Days" @keydown=${(e) => this.#keydown(e)}>
-          ${rows(days, open, now, counts(choicePoints)).map(
+          ${rows(days, open, today, counts(choicePoints)).map(
             (r) => html`<li>
               <button
                 type="button"

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "The journal page now shows this day: once when the page has loaded, and again each time the user moves it to another day, a new day begins at midnight, or the shown day can no longer be written. A view about one day follows it.",
+  "description": "The journal page now shows this day: once when the page has loaded, and again each time the user moves it to another day, a new journal day begins at 2:00, or the shown day can no longer be written. A view about one day follows it.",
   "type": "object",
   "properties": {
     "day": {
@@ -10,7 +10,7 @@
     },
     "writable": {
       "type": "boolean",
-      "description": "Whether the shown day can still be written: today's page, or yesterday's while the journal keeps it open for an hour after its last edit. When it is absent, only the day whose date is today counts as writable."
+      "description": "Whether the shown day can still be written: today's page, also past midnight until the journal's day ends at 2:00. When it is absent, only the day whose date is today counts as writable."
     }
   },
   "required": [

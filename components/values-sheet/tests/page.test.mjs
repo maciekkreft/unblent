@@ -33,6 +33,8 @@ const dayOf = (ms) => {
   const at = new Date(ms);
   return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
 };
+// Today's journal day: it ends at 2:00 the next night (13, Journal).
+const today = () => dayOf(Date.now() - 2 * 3600e3);
 const ID = (n) => `01J0000000000000000000VAR${n}`;
 
 // Two evaluators and the values checks that use them, and today's values "Honest" and
@@ -56,7 +58,7 @@ async function withMarks(context) {
     { id: ID(1), name: "Honest", meaning: "Tell the truth" },
     { id: ID(2), name: "Get rich", meaning: "" },
   ];
-  assert.equal((await put(`values/${dayOf(Date.now())}`, { values, baseVersion: null })).status(), 200);
+  assert.equal((await put(`values/${today()}`, { values, baseVersion: null })).status(), 200);
   const page = await context.newPage();
   await page.route("**/api/llm", async (route) => {
     const res = await route.fetch();
@@ -126,7 +128,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       await signedIn(context, forgeCookie("values-placed"));
       try {
         const values = [{ id: ID(1), name: "Honest", meaning: "" }];
-        const yesterday = dayOf(Date.now() - 86400000);
+        const yesterday = dayOf(Date.now() - 2 * 3600e3 - 86400000);
         assert.equal((await context.request.put(`${BASE_URL}/api/values/${yesterday}`, { data: { values, baseVersion: null } })).status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
@@ -166,7 +168,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           { id: ID(2), name: "Bee", meaning: "" },
           { id: ID(3), name: "Kind", meaning: "" },
         ];
-        assert.equal((await context.request.put(`${BASE_URL}/api/values/${dayOf(Date.now())}`, { data: { values, baseVersion: null } })).status(), 200);
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${today()}`, { data: { values, baseVersion: null } })).status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
@@ -222,7 +224,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           { id: ID(2), name: "Kind", meaning: "Gentle with myself too" },
           { id: ID(3), name: "Calm", meaning: "" },
         ];
-        const put = await context.request.put(`${BASE_URL}/api/values/${dayOf(Date.now())}`, { data: { values, baseVersion: null } });
+        const put = await context.request.put(`${BASE_URL}/api/values/${today()}`, { data: { values, baseVersion: null } });
         assert.equal(put.status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
@@ -386,7 +388,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const source = createHash("sha256").update(JSON.stringify({ value: "Get rich", example: "A house", reads: "A goal" })).digest("hex");
         const result = { generator: "value-suggestion", item: ID(1), text: "Building security.", source, baseVersion: null };
         assert.equal((await put(`generators/results/value-suggestion:${ID(1)}`, result)).status(), 200);
-        assert.equal((await put(`values/${dayOf(Date.now())}`, { values: [{ id: ID(1), name: "Get rich", meaning: "A house" }], baseVersion: null })).status(), 200);
+        assert.equal((await put(`values/${today()}`, { values: [{ id: ID(1), name: "Get rich", meaning: "A house" }], baseVersion: null })).status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
         await page.route("**/api/llm", async (route) => {
@@ -426,7 +428,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
           { id: ID(1), name: "Calm", meaning: "" },
           { id: ID(2), name: "Kind", meaning: "" },
         ];
-        assert.equal((await context.request.put(`${BASE_URL}/api/values/${dayOf(Date.now())}`, { data: { values, baseVersion: null } })).status(), 200);
+        assert.equal((await context.request.put(`${BASE_URL}/api/values/${today()}`, { data: { values, baseVersion: null } })).status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });
@@ -473,7 +475,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         const put = (path, data) => context.request.put(`${BASE_URL}/api/${path}`, { data });
         assert.equal((await put("journal/days", { record: { id: "01J00000000000000000000DAY", day, text: "Earlier", editedAt: then }, baseVersion: null })).status(), 200);
         assert.equal((await put(`values/${day}`, { values: [{ id: ID(1), name: "Calm", meaning: "" }], baseVersion: null })).status(), 200);
-        assert.equal((await put(`values/${dayOf(Date.now())}`, { values: [{ id: ID(2), name: "Brave", meaning: "" }], baseVersion: null })).status(), 200);
+        assert.equal((await put(`values/${today()}`, { values: [{ id: ID(2), name: "Brave", meaning: "" }], baseVersion: null })).status(), 200);
         const page = await context.newPage();
         const problems = watch(page);
         await page.goto(PAGE, { waitUntil: "domcontentloaded" });

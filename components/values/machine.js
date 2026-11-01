@@ -16,12 +16,15 @@ const str = (v) => (typeof v === "string" ? v : "");
 
 const pad = (n) => String(n).padStart(2, "0");
 
-// The device's local date at `ms`, as YYYY-MM-DD: "today" is the user's day, not UTC's,
-// the same day the journal calls today.
+// The device's local date at `ms`, as YYYY-MM-DD: "today" is the user's day, not UTC's.
 const dateOf = (ms) => {
   const d = new Date(ms);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
+
+// Today's journal day, as the journal says it (13, Journal): it runs until 2:00 the next
+// night. A page without the journal falls back to the device's date.
+const todayOf = (context) => context.today ?? dateOf(context.now());
 
 // --- Records --------------------------------------------------------------------------
 
@@ -153,14 +156,13 @@ function commitPlace(context, enqueue, day, placed, step) {
   if (context.userId != null) enqueue.raise({ type: "_drain" });
 }
 
-// Only today's version is written: a save naming any other day is ignored, also
-// yesterday's in the hour after midnight while its journal text is still open, so a
-// version never changes after its day. A save that leaves the values as they are in
+// Only the version of today's journal day is written: a save naming any other day is
+// ignored, so a version never changes after its day. A save that leaves the values as they are in
 // force today is no change, so opening the sheet and closing it writes no version.
 // Every change is a step (12, Undo); rows the save names as finished close the stretch
 // of typing they belong to, also when the save changes nothing.
 function applySave(context, event, enqueue) {
-  if (!isDay(event.day) || event.day !== dateOf(context.now())) return;
+  if (!isDay(event.day) || event.day !== todayOf(context)) return;
   const values = valuesOf(event.values);
   const held = inForce(context, event.day);
   const before = held ? held.values : [];
@@ -190,7 +192,7 @@ function applySave(context, event, enqueue) {
 // Your values is added to or taken off today's page only, by the same rule as a save; a
 // placement that leaves the day as it shows is no change. Either is one step.
 function applyPlace(context, event, enqueue) {
-  if (!isDay(event.day) || event.day !== dateOf(context.now()) || typeof event.placed !== "boolean") return;
+  if (!isDay(event.day) || event.day !== todayOf(context) || typeof event.placed !== "boolean") return;
   if (placedOn(context, event.day) === event.placed) return;
   const id = context.mint();
   commitPlace(context, enqueue, event.day, event.placed, id);
@@ -276,7 +278,7 @@ function applyStep(context, event, enqueue) {
   const settle = (outcome, reason) =>
     enqueue.emit({ type: "step.settled", id: event.id, owner: "values", outcome, ...(reason ? { reason } : {}) });
   const p = event.payload ?? {};
-  const today = dateOf(context.now());
+  const today = todayOf(context);
   enqueue.assign({ stretch: null });
   if (p.kind === "values" && Array.isArray(p.values)) {
     if (inForce(context, today)?.step !== event.id) return settle("refused", "changed");
@@ -364,14 +366,16 @@ export const machine = setup({
     load: fromPromise(async ({ input }) => {
       const { store, ask } = input;
       await claim(store, ask);
-      const [versions, places, outbox, cursor, userId] = await Promise.all([
+      const [versions, places, outbox, cursor, userId, journal] = await Promise.all([
         store.all(),
         store.placesAll(),
         store.outboxAll(),
         store.metaGet("cursor"),
         store.metaGet("userId"),
+        Promise.resolve(ask?.("journal", "read", {})).catch(() => null),
       ]);
-      return { versions, places, outbox, cursor: cursor ?? 0, userId: userId ?? null };
+      const today = isDay(journal?.today) ? journal.today : null;
+      return { versions, places, outbox, cursor: cursor ?? 0, userId: userId ?? null, today };
     }),
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
@@ -416,8 +420,9 @@ export const machine = setup({
       "optional example of living it. Every version is kept by day: a day's version " +
       "is the list as it stood at the end of that day, and only today's is written, so an " +
       "edit made today replaces today's version and an earlier day's never changes; a save " +
-      "naming any other day is ignored, also yesterday's in the hour after midnight while " +
-      "its journal text is still open. A save that leaves the values as they stand is no " +
+      "naming any other day is ignored. Today is the journal's day, which runs until 2:00 " +
+      "the next night, as the journal announces it; on a page without the journal it is the " +
+      "device's date. A save that leaves the values as they stand is no " +
       "change and writes no version. A removed value is gone from today's version only; " +
       "earlier days keep theirs, so their marks stay as they were checked. " +
       "`values: read` answers the version in force on a day, the latest one on or before it, " +
@@ -445,10 +450,12 @@ export const machine = setup({
     shape: "replicated",
     emits: ["values.changed", "step.recorded", "step.settled"],
     owns: "the client's values and their versions by day",
-    asks: ["session: read"],
+    asks: ["session: read", "journal: read"],
   },
   context: ({ input }) => ({
     versions: new Map(),
+    // Today's journal day, from journal: read and journal.changed; null without a journal.
+    today: null,
     placements: new Map(),
     outbox: new Map(),
     store: input.store,
@@ -475,6 +482,10 @@ export const machine = setup({
     "session.changed": {
       actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
     },
+    "journal.changed": {
+      guard: ({ event }) => isDay(event.today),
+      actions: assign({ today: ({ event }) => event.today }),
+    },
   },
   initial: "loading",
   states: {
@@ -490,6 +501,7 @@ export const machine = setup({
             outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.day, row])),
             cursor: ({ event }) => event.output.cursor,
             userId: ({ event }) => event.output.userId,
+            today: ({ context, event }) => context.today ?? event.output.today,
           }),
         },
         onError: {

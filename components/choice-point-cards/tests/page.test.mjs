@@ -193,7 +193,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await signedIn(context, forgeCookie("values-mark"));
         const id = (tail) => "01J" + "0".repeat(23 - tail.length) + tail;
         const [parent, health] = [id("V1"), id("V2")];
-        const at = new Date();
+        // Today's journal day: it ends at 2:00 the next night (13, Journal).
+        const at = new Date(Date.now() - 2 * 3600e3);
         const today = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
         const values = [
           { id: parent, name: "Being a present parent", meaning: "" },
@@ -344,7 +345,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       context.setDefaultTimeout(4000);
       await signedIn(context, forgeCookie("choice-points"));
       try {
-        const now = new Date();
+        // Today's journal day: it ends at 2:00 the next night (13, Journal).
+        const now = new Date(Date.now() - 2 * 3600e3);
         const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
         const put = await context.request.put(`${BASE_URL}/api/choice-points/01K7TEST00000000000000CPK1`, {
           data: { day: today, situation: "Dinner", thoughts: "", away: "a1\na2", towards: "t1" },

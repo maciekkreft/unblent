@@ -826,7 +826,7 @@ class ChoicePointCards extends LitElement {
       const effects = [];
       box.vimOn = vimOn;
       setVim(box.view, vimOn);
-      // Yesterday's sheet open as its hour after midnight runs out turns read only in place.
+      // Yesterday's sheet open as the journal's day ends at 2:00 turns read only in place.
       if (box.readOn !== spec.read) {
         box.readOn = spec.read;
         effects.push(box.read.reconfigure(readOnly(spec)));

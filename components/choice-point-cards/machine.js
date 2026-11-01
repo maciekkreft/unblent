@@ -35,7 +35,7 @@ export const isEmpty = (d) => FIELDS.every((k) => !d[k].trim());
 const held = (context, id) => context.choicePoints.find((r) => r.id === id);
 
 // Choice points are written exactly while the day's own text is: the journal page says so
-// in day.shown, which keeps yesterday open for an hour past its last edit. Before it has
+// in day.shown, which keeps yesterday open until 2:00 (13, Journal). Before it has
 // said, or from a sender that does not say, only today's date is written on. An earlier
 // day's choice points open to be read.
 export const writable = (context) => context.dayWritable ?? context.day === dateOf(context.now());
@@ -339,7 +339,7 @@ export function statusOf(context, id) {
 // day's marks still name that day's values.
 const changedOn = (context, evaluator) => {
   const was = context.evaluators.find((e) => e.id === evaluator.id);
-  return evaluator.derivedFrom && was && context.day !== dateOf(context.now()) ? { ...evaluator, questions: was.questions } : evaluator;
+  return evaluator.derivedFrom && was && !writable(context) ? { ...evaluator, questions: was.questions } : evaluator;
 };
 
 // The keys of the list of cards (12, "Vim keys"): the arrows always, and with Vim keys on
@@ -421,8 +421,8 @@ export const machine = setup({
       "in this browser. A choice point folded with all four boxes empty is " +
       "removed, also one kept before; there is no Delete button and no Undo, because an empty " +
       "one holds nothing to lose. Choice points are written exactly while the day's own text " +
-      "is, as the journal page says: today's page, and yesterday's for the hour after midnight " +
-      "the journal keeps it open; when that hour runs out an open sheet becomes read only. On " +
+      "is, as the journal page says: today's page, also past midnight until the journal's day " +
+      "ends at 2:00; then an open sheet becomes read only. On " +
       "an earlier day there is no New choice point row, and a card opens its sheet " +
       "to be read, with boxes that cannot be typed in and a Close button instead of Done. It " +
       "follows the day the journal page shows from day.shown, and shows today until the page " +
@@ -559,7 +559,7 @@ export const machine = setup({
       }),
     },
     // Moving to another day settles the open choice points and asks for the new day's.
-    // The same day closing to writing (the hour after midnight runs out) saves what was
+    // The same day closing to writing (the journal's day ends at 2:00) saves what was
     // typed while it was open, and the open sheets stay, now to be read.
     "day.shown": [
       {

@@ -7,22 +7,6 @@ import { setup, assign, emit, fromPromise } from "xstate";
 // day.selected (4.3, fifth rule). The ask arrives through input, so this stays
 // a pure definition importable in Node.
 
-const HOUR = 60 * 60 * 1000;
-
-const pad = (n) => String(n).padStart(2, "0");
-
-// The device's local date at `ms`, as YYYY-MM-DD, as the journal dates a day.
-const dateOf = (ms) => {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
-// A local time as HH:MM on the 24-hour clock, as the entry's banner names it.
-const clock = (ms) => {
-  const d = new Date(ms);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-};
-
 // A row's date, "Mon 12 Oct".
 export const shortDate = (day) => {
   const [y, m, d] = day.split("-").map(Number);
@@ -45,19 +29,20 @@ export const counts = (choicePoints) => {
 
 export const choiceLabel = (n) => (n === 1 ? "1 choice point" : `${n} choice points`);
 
-// The rows, newest first. The day that can still be edited shows a pill instead of its
-// paragraph count: "today", or past midnight when it closes. With no day open, the new
-// page for today is the first row, so it can be picked back after reading an earlier
-// day. A row's id is what day.selected carries: null for the open day or the new page.
-export const rows = (days, open, now, perDay = {}) => {
+// The rows, newest first. The day that can still be edited shows a "today" pill instead
+// of its paragraph count. With no day open, the new page for `today`, the journal's
+// today (13, Journal), is the first row, so it can be picked back after reading an
+// earlier day. A row's id is what day.selected carries: null for the open day or the
+// new page.
+export const rows = (days, open, today, perDay = {}) => {
   const out = [...days]
     .sort((a, b) => b.day.localeCompare(a.day) || b.id.localeCompare(a.id))
     .map((d) => {
       const isOpen = d.id === open;
-      const pill = isOpen ? (d.day === dateOf(now) ? "today" : `open till ${clock(d.editedAt + HOUR)}`) : null;
+      const pill = isOpen ? "today" : null;
       return { id: isOpen ? null : d.id, day: d.id, date: shortDate(d.day), first: lines(d.text)[0] ?? "", count: lines(d.text).length, pill, choices: perDay[d.day] ?? 0 };
     });
-  if (open === null) out.unshift({ id: null, day: null, date: shortDate(dateOf(now)), first: "", count: 0, pill: "today", choices: perDay[dateOf(now)] ?? 0 });
+  if (open === null && today) out.unshift({ id: null, day: null, date: shortDate(today), first: "", count: 0, pill: "today", choices: perDay[today] ?? 0 });
   return out;
 };
 
@@ -93,7 +78,7 @@ export const machine = setup({
     description:
       "The Days dock of the journal: one row per day, newest first, with the short date, the " +
       "first line and how many paragraphs it has; the day that can still be edited shows a " +
-      "\"today\" or \"open till HH:MM\" pill instead of the count. Picking a row shows that day " +
+      "\"today\" pill instead of the count, also past midnight until the journal's day ends at 2:00. Picking a row shows that day " +
       "in the entry. A line says where the journal is kept: on your account when signed in, in " +
       "this browser when signed out on a try page. A day with choice points says how many after its count or " +
       "pill, \"· 1 choice point\" or \"· 3 choice points\"; one being deleted is not counted " +
@@ -112,6 +97,8 @@ export const machine = setup({
     ask: input.ask,
     days: [],
     open: null,
+    // Today's journal day, as the journal says it (13, Journal).
+    today: null,
     // Whether someone is signed in (3.4): null until session answers.
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
@@ -160,7 +147,7 @@ export const machine = setup({
           {
             guard: ({ event }) => isPicture(event.output),
             target: "ready",
-            actions: assign(({ event }) => ({ days: event.output.days, open: event.output.open })),
+            actions: assign(({ event }) => ({ days: event.output.days, open: event.output.open, today: event.output.today ?? null })),
           },
           // The journal could not answer: an honest failure rather than an empty list.
           { target: "failed" },
@@ -185,6 +172,7 @@ export const machine = setup({
       actions: assign(({ context, event }) => ({
         days: event.days,
         open: event.open,
+        today: event.today ?? context.today,
         current: context.current && context.current !== event.open && event.days.some((d) => d.id === context.current) ? context.current : null,
       })),
     },

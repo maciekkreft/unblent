@@ -101,7 +101,8 @@ for (const engine of ENGINES) {
     await put(`/api/books/${SAMPLE_ID}/opened`, "application/json", "{}");
     // Each note is linked to the chapter its book opens at, since the editor opens only a
     // note of the open chapter: the sample book's first, and the Journal's today.
-    const now = new Date();
+    // Today's journal day: it ends at 2:00 the next night (13, Journal).
+    const now = new Date(Date.now() - 2 * 3600e3);
     const today = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
     for (const [id, title, book, chapter, chapterTitle] of [
       [NOTE_ONE, "Plans", SAMPLE_ID, "chapter-one", "Chapter One"],
@@ -192,7 +193,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
   // its child again, and the journal's save makes the stage draw again.
   test(`typing near the end of a long journal day leaves the page where it is in ${engine.name}`, async () => {
     const cookie = forgeCookie("book-stage");
-    const now = new Date();
+    // Today's journal day: it ends at 2:00 the next night (13, Journal).
+    const now = new Date(Date.now() - 2 * 3600e3);
     const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const text = Array.from({ length: 40 }, (_, i) => `Line ${i + 1}`).join("\n\n");
     const res = await fetch(`${BASE_URL}/api/journal/days`, {

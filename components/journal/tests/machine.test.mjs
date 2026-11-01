@@ -5,12 +5,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, openDay, dateOf, HOUR, tidy, visible, clashOn } from "../machine.js";
+import { machine, openDay, dateOf, todayOf, tidy, visible, clashOn } from "../machine.js";
 
 // The actor is where the journal's decisions live (3.2): it is driven with a fake store,
 // a clock the test sets, and a SimulatedClock for the timer that closes the open day.
-// Times are built with the local Date constructor, so the midnight cases hold in any
-// time zone.
+// Times are built with the local Date constructor, so the 2:00 cases hold in any time
+// zone.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Schemas are read, never imported (11.2); the gestures' schemas live with their emitters.
@@ -94,22 +94,18 @@ const write = (s, id, text) => s.send({ type: "day.saved", id, text }, DAY_SAVED
 
 // --- Pure functions -------------------------------------------------------------------
 
-test("a day is open while its date is today, or for an hour after its last edit", () => {
+test("a day is open until 2:00 the night after its date", () => {
   const day = (d, editedAt) => ({ id: D1, day: d, text: "x", editedAt, version: 1 });
-  const lateNight = day("2026-10-11", at(11, 23, 40));
-  assert.equal(openDay([lateNight], at(11, 23, 59))?.id, D1, "still its own day");
-  assert.equal(openDay([lateNight], at(12, 0, 30))?.id, D1, "just past midnight, edited 50 minutes ago");
-  assert.equal(openDay([lateNight], at(12, 0, 39))?.id, D1);
-  assert.equal(openDay([lateNight], at(12, 0, 40)), null, "an hour after the last edit, past its date");
-  const morning = day("2026-10-12", at(12, 8));
-  assert.equal(openDay([morning], at(12, 23, 59))?.id, D1, "an hour gone but its date is today");
-  assert.equal(openDay([morning], at(13, 0, 0)), null, "closes at its midnight once the hour is long gone");
-  const pastMidnight = day("2026-10-11", at(12, 0, 30));
-  assert.equal(openDay([pastMidnight], at(12, 1, 29))?.id, D1, "an edit after midnight keeps it open another hour");
-  assert.equal(openDay([pastMidnight], at(12, 1, 30)), null);
+  const evening = day("2026-10-11", at(11, 21));
+  assert.equal(openDay([evening], at(11, 23, 59))?.id, D1, "still its own day");
+  assert.equal(openDay([evening], at(12, 1, 59))?.id, D1, "past midnight, before 2:00");
+  assert.equal(openDay([evening], at(12, 2, 0)), null, "closed at 2:00");
+  assert.equal(openDay([day("2026-10-12", at(12, 8))], at(12, 1, 0)), null, "a day dated tomorrow is not today yet");
   assert.equal(openDay([], at(12, 10)), null);
+  assert.equal(todayOf(at(12, 1, 59)), "2026-10-11");
+  assert.equal(todayOf(at(12, 2, 0)), "2026-10-12");
+  assert.equal(todayOf(at(1, 0, 30)), "2026-09-30", "across a month");
   assert.equal(dateOf(at(12, 0, 0)), "2026-10-12");
-  assert.equal(dateOf(at(11, 23, 59)), "2026-10-11");
 });
 
 // --- Days -----------------------------------------------------------------------------
@@ -149,38 +145,44 @@ test("a save to a day that is not open is refused, and a second day cannot start
   assert.deepEqual(s.read().days.map((d) => [d.id, d.text]), [[D1, "Old"], [D2, "Today"]], "oldest first");
 });
 
-test("the open day closes by time alone and the journal says so", async () => {
+test("the open day closes at 2:00 by time alone and the journal says so", async () => {
   const s = await start({ time: at(12, 23, 30) });
   write(s, D1, "Late");
-  s.advance(40 * MIN); // 00:10, edited 40 minutes ago
+  s.advance(90 * MIN); // 01:00
   write(s, D1, "Late\nStill going");
   const n = s.emitted.length;
-  s.advance(59 * MIN); // 01:09
+  s.advance(59 * MIN); // 01:59
   assert.equal(s.emitted.length, n, "still open: nothing to announce");
   assert.equal(s.read().open, D1);
-  s.advance(1 * MIN); // 01:10, an hour after the last edit
+  s.advance(1 * MIN); // 02:00
   assert.equal(s.emitted.length, n + 1);
-  assert.equal(s.emitted.at(-1).open, null);
+  assert.deepEqual([s.emitted.at(-1).open, s.emitted.at(-1).today], [null, "2026-10-13"]);
   assert.deepEqual(s.emitted.at(-1), { type: "journal.changed", ...s.read() });
-  s.advance(5 * HOUR);
-  assert.equal(s.emitted.length, n + 1, "no timer is left running");
   write(s, D1, "Too late");
   assert.equal(s.read().days[0].text, "Late\nStill going");
 });
 
-test("a day written in the morning closes at its midnight", async () => {
+test("a page started at 1:00 belongs to the day before", async () => {
+  const s = await start({ time: at(12, 1, 0) });
+  assert.equal(s.read().today, "2026-10-11");
+  write(s, D1, "Small hours");
+  assert.equal(s.read().days[0].day, "2026-10-11");
+  assert.equal(s.read().open, D1);
+});
+
+test("the journal announces the new today at 2:00 even with no day open", async () => {
   const s = await start({ time: at(12, 9) });
-  write(s, D1, "Morning");
-  const n = s.emitted.length;
-  s.advance(at(13, 0) - at(12, 9) - 1);
-  assert.equal(s.emitted.length, n);
+  assert.equal(s.emitted.length, 0);
+  s.advance(at(13, 2) - at(12, 9) - 1);
+  assert.equal(s.emitted.length, 0);
   s.advance(1);
-  assert.equal(s.emitted.length, n + 1);
-  assert.equal(s.read().open, null);
+  assert.equal(s.emitted.at(-1).today, "2026-10-13");
+  s.advance(24 * 60 * MIN);
+  assert.equal(s.emitted.at(-1).today, "2026-10-14", "and again the next night");
 });
 
 test("a day loaded while it is still open closes on time", async () => {
-  const s = await start({ store: fakeStore({ days: [{ id: D1, day: "2026-10-11", text: "x", editedAt: at(11, 23, 50), version: 1 }] }), time: at(12, 0, 20) });
+  const s = await start({ store: fakeStore({ days: [{ id: D1, day: "2026-10-11", text: "x", editedAt: at(11, 23, 50), version: 1 }] }), time: at(12, 1, 30) });
   assert.equal(s.read().open, D1);
   s.advance(30 * MIN);
   assert.equal(s.read().open, null);

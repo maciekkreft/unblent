@@ -75,7 +75,8 @@ export function htmlOf(text) {
 function journalBook(picture, now) {
   if (!picture || !Array.isArray(picture.days)) return null;
   const days = picture.days.map((d) => ({ day: d.day, text: d.text }));
-  if (picture.open == null) days.push({ day: dateOf(now), text: "" });
+  // Today is the journal's to say (13, Journal); the device's date stands in for an older answer.
+  if (picture.open == null) days.push({ day: picture.today ?? dateOf(now), text: "" });
   const chapters = days.map((d) => ({ title: dayTitle(d.day, now), day: d.day }));
   return {
     id: JOURNAL,

@@ -130,14 +130,14 @@ test("an earlier day shows the panel only if it was added, and is never placed f
   actor.send({ type: "_place" });
   actor.send({ type: "_open" });
   assert.equal(ctx().open, false);
-  actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: false });
   await flush();
   assert.equal(isPlaced(ctx()), true);
   actor.send({ type: "_open" });
   assert.equal(ctx().open, true);
   actor.send({ type: "_unplace" });
   actor.send({ type: "_done" });
-  assert.deepEqual(places, [], "yesterday's panel stays, even in its hour after midnight");
+  assert.deepEqual(places, [], "yesterday's panel stays once its day has closed");
 });
 
 test("a placement from another device arrives on values.changed and keeps the version's day", async () => {
@@ -173,12 +173,13 @@ test("it asks the shown day's version, and follows day.shown", async () => {
   assert.equal(ctx().day, YESTERDAY);
 });
 
-test("only today's page writes, also not yesterday in its hour after midnight", async () => {
+test("the values are written exactly while the day's text is, also yesterday's until 2:00", async () => {
   const { actor, ctx } = await start();
   assert.equal(writable(ctx()), true);
   actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
   await flush();
-  assert.equal(writable(ctx()), false, "yesterday's text may be open, its values are not");
+  assert.equal(writable(ctx()), true, "yesterday's text is still open, and so are its values");
+  assert.equal(changedLine(ctx()), "", "an open day is today's journal day");
   actor.send({ type: "day.shown", day: TODAY, writable: false });
   await flush();
   assert.equal(writable(ctx()), false, "a day the journal closes is read only");
@@ -233,7 +234,7 @@ test("removing a value saves without it at once, after what was typed elsewhere"
 
 test("an earlier day is read only and says when the values changed since", async () => {
   const { actor, emitted, ctx } = await start({ [EARLIER]: [v(1, "Honest")], [TODAY]: [v(1, "Honest"), v(2, "Kind")] });
-  actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: false });
   await flush();
   assert.deepEqual(ctx().version, { day: EARLIER, values: [v(1, "Honest")], changedSince: true });
   actor.send({ type: "_open" });
@@ -480,7 +481,7 @@ test("Escape while a row is cut removes it at once", async () => {
 
 test("an earlier day's rows do not move", async () => {
   const { actor, emitted, ctx } = await start({ [EARLIER]: [v(1, "A"), v(2, "B")] });
-  actor.send({ type: "day.shown", day: YESTERDAY, writable: true });
+  actor.send({ type: "day.shown", day: YESTERDAY, writable: false });
   await flush();
   actor.send({ type: "_open" });
   actor.send({ type: "_move", id: id(2), to: 0 });
