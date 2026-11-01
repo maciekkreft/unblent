@@ -95,14 +95,19 @@ test("a day's date is set when it is born and never changes", async () => {
   assert.equal(moved.record.day, "2026-10-12");
 });
 
-test("a delete always wins and is kept as a tombstone; an edit onto it is a conflict", async () => {
+test("a delete always wins and is kept as a tombstone; an edit onto it is a conflict, a restore write brings it back", async () => {
   const cookie = signIn();
   await put("days", { record: day("a"), baseVersion: null }, cookie);
   const gone = await (await put("days", { record: day("a"), deleted: true }, cookie)).json();
   assert.deepEqual([gone.record.deleted, gone.record.version], [true, 2]);
-  const edit = await put("days", { record: day("revived"), baseVersion: 2 }, cookie);
+  const edit = await put("days", { record: day("revived"), baseVersion: 1 }, cookie);
   assert.equal(edit.status, 409, "a day's edit onto its tombstone is a conflict");
   assert.equal((await edit.json()).record.deleted, true);
+  // A restore write (5) names the tombstone's own version.
+  const restored = await put("days", { record: day("back"), baseVersion: 2 }, cookie);
+  assert.equal(restored.status, 200);
+  const back = (await restored.json()).record;
+  assert.deepEqual([back.deleted, back.text, back.version], [false, "back", 3]);
 });
 
 test("the pull returns the days changed since a cursor, tombstones included", async () => {

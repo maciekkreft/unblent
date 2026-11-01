@@ -71,6 +71,9 @@ test("a delete is a tombstone that always wins and is pulled like a change", asy
   assert.deepEqual([gone.deleted, gone.version], [true, 2]);
   const late = await (await put(ID, body({ situation: "Revived" }), cookie)).json();
   assert.deepEqual([late.deleted, late.situation, late.version], [true, "Meeting ran late", 2], "a write onto a tombstone returns it");
+  const restored = await (await put(ID, body({ situation: "Back", baseVersion: 2 }), cookie)).json();
+  assert.deepEqual([restored.deleted, restored.situation, restored.version], [false, "Back", 3], "a restore write names the tombstone's version (5)");
+  await put(ID, body({ deleted: true, baseVersion: 3 }), cookie);
   const all = await (await pull(0, cookie)).json();
   assert.deepEqual(all.choicePoints.map((c) => [c.id, c.deleted]), [[ID2, false], [ID, true]]);
   const later = await (await pull(all.cursor, cookie)).json();

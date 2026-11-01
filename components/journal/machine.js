@@ -1,4 +1,5 @@
 import { setup, enqueueActions, fromPromise, and, assign } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the journal (3.1), replicated (5): its days. journal-entry,
 // where the user writes, emits day.saved (4.3, fifth rule); this fact keeps it, stores
@@ -109,13 +110,15 @@ const dayRecord = (d) =>
         editedAt: Number.isInteger(d.editedAt) ? d.editedAt : 0,
         version: version(d.version),
         ...(d.deleted === true ? { deleted: true } : {}),
+        // The step that last wrote the day in this browser (12, Undo); the server never has it.
+        ...(typeof d.step === "string" ? { step: d.step } : {}),
       }
     : null;
 
 // --- Changes --------------------------------------------------------------------------
 
-// A day as another device would be told it: the version is not part of it.
-const content = (r) => JSON.stringify(r, (k, v) => (k === "version" ? undefined : v));
+// A day as another device would be told it: the version and the step are not part of it.
+const content = (r) => JSON.stringify(r, (k, v) => (k === "version" || k === "step" ? undefined : v));
 
 // The next list with versions minted locally (5, while signed out): a day whose content
 // changed takes the next version; a new one starts at 1.
@@ -323,7 +326,7 @@ const announce = (enqueue, c) => {
 
 // What the server keeps of a day: not its version (the server's to assign) or the
 // tombstone flag (sent beside it).
-const wire = ({ version: _, deleted: __, ...r }) => r;
+const wire = ({ version: _, deleted: __, step: ___, ...r }) => r;
 
 // One row per day, so three offline edits become one write. The base stays the one the
 // first unsynced change was on, which is what the server compares the write against.
@@ -419,7 +422,9 @@ const applySync = (context, output, enqueue) => {
       enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
     }
     const was = held(r.id);
-    keep(drained || !was ? r : { ...was, version: r.version });
+    // The server now holds what this browser wrote, so the step that wrote it still can be undone.
+    const stamp = was?.step && content(was) === content(r) ? { step: was.step } : {};
+    keep(drained || !was ? { ...r, ...stamp } : { ...was, version: r.version });
   }
 
   // A day's text was written on a version another device had moved past. The server's
@@ -446,10 +451,9 @@ const applySync = (context, output, enqueue) => {
     if (!r) continue;
     const was = held(r.id);
     if (was && r.version <= was.version) continue;
-    // A delete always wins (5): a live copy never brings back a local tombstone.
-    if (was?.deleted && !r.deleted) continue;
     // A change still in the outbox goes up next and comes back as a conflict carrying
-    // this copy.
+    // this copy; a delete always wins there (5). Otherwise a live copy of a local
+    // tombstone at a higher version is a restore write made elsewhere (5).
     if (context.outbox.has(rowKey(r))) continue;
     keep(r);
   }
@@ -472,7 +476,23 @@ const applySync = (context, output, enqueue) => {
   }
 };
 
-// A choice is remembered, until the next change to that day, as the records it changed
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// A day as a step names it: its text, when it was last written, whether it is deleted, and
+// `prior`, the step that wrote it before this one, so an Undo leaves the day as that step
+// left it and the step before can be undone next.
+const entry = (d, prior = d.step) => ({
+  id: d.id,
+  text: d.text,
+  editedAt: d.editedAt,
+  ...(d.deleted ? { deleted: true } : {}),
+  ...(prior ? { prior } : {}),
+});
+// What a day undone back past every step this browser knows of is stamped with.
+const before = (e, step) => e.prior ?? `^${step}`;
+
+// A choice is one step, shown with the short notice since it deletes a copy (12, Undo).
+// It is also remembered, until the next change to that day, as the records it changed
 // and the conflict it settled, so conflict.reopened can put both back (reopened).
 const saved = enqueueActions(({ context, event, enqueue }) => {
   const choice = kept(context, event);
@@ -480,20 +500,93 @@ const saved = enqueueActions(({ context, event, enqueue }) => {
     const settled = context.pending.get(event.id);
     const pending = new Map(context.pending);
     pending.delete(event.id);
-    const before = context.days.filter((d) => d.id === event.id || d.id === settled.other);
-    const undo = new Map(context.undo).set(event.id, { before, text: event.text, other: settled.other, told: settled.told });
-    enqueue.assign({ pending, undo });
-    update({ ...context, pending }, enqueue, choice);
+    const was = context.days.filter((d) => d.id === event.id || d.id === settled.other);
+    const undo = new Map(context.undo).set(event.id, { before: was, text: event.text, other: settled.other, told: settled.told });
+    const step = context.mintStep();
+    const touched = new Set(was.map((d) => d.id));
+    const next = choice.map((d) => (touched.has(d.id) ? { ...d, step } : d));
+    enqueue.assign({ pending, undo, stretch: null });
+    update({ ...context, pending }, enqueue, next);
+    enqueue.emit({
+      type: "step.recorded",
+      id: step,
+      owner: "journal",
+      label: "keep one copy of the day",
+      // A copy saved on another device is put to the page again by the journal itself.
+      undo: { kind: "days", days: was.map((d) => entry(d)), ...(settled.other ? {} : { conflict: settled.told }) },
+      redo: { kind: "days", days: next.filter((d) => touched.has(d.id)).map((d) => entry(d, was.find((w) => w.id === d.id).step ?? null)) },
+      notice: true,
+    });
     return;
   }
   const days = daySaved(context.days, event, context.now());
-  if (!days) return;
+  const open = context.stretch;
+  if (!days) {
+    if (event.left && open?.day === event.id) enqueue.assign({ stretch: null });
+    return;
+  }
   if (context.undo.has(event.id)) {
     const undo = new Map(context.undo);
     undo.delete(event.id);
     enqueue.assign({ undo });
   }
-  update(context, enqueue, days);
+  // One stretch of typing in today's page is one step, from the first save until the
+  // editor says the user left it; a save while that stretch last wrote the day joins it.
+  const was = context.days.find((d) => d.id === event.id);
+  const joins = open != null && open.day === event.id && was?.step === open.id;
+  const step = joins ? open.id : context.mintStep();
+  const first = joins ? open.before : entry(was ?? { id: event.id, text: "" });
+  const next = days.map((d) => (d.id === event.id ? { ...d, step } : d));
+  update(context, enqueue, next);
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "journal",
+    label: "edit the journal page",
+    undo: { kind: "days", days: [{ id: first.id, text: first.text, ...(first.prior ? { prior: first.prior } : {}) }], open: true },
+    redo: { kind: "days", days: [{ id: event.id, text: event.text, ...(first.prior ? { prior: first.prior } : {}) }], open: true },
+  });
+  enqueue.assign({ stretch: event.left ? null : { id: step, day: event.id, before: first } });
+});
+
+// An Undo or Redo of one of this fact's steps. It is applied only while every day it
+// names is as the step left it, last written in this browser by that step; anything
+// written since, here, in another tab or on another device, refuses it as changed. Text
+// typed in a day can be taken back only while the day can still be written (13), so a
+// closed day refuses it as closed; a kept copy can be taken back on any day, as it was
+// kept. A deleted copy comes back with a restore write (5).
+const applyStep = enqueueActions(({ context, event, enqueue }) => {
+  if (event.owner !== "journal") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "journal", outcome, ...(reason ? { reason } : {}) });
+  enqueue.assign({ stretch: null });
+  const p = event.payload ?? {};
+  const undoing = event.type === "step.undone";
+  const entries = Array.isArray(p.days) ? p.days.filter((e) => isId(e?.id) && typeof e.text === "string") : [];
+  if (p.kind !== "days" || !entries.length || entries.length !== p.days.length) return settle("refused", "changed");
+  const held = entries.map((e) => context.days.find((d) => d.id === e.id));
+  const expected = (e) => (undoing ? event.id : before(e, event.id));
+  if (held.some((d, i) => !d || d.step !== expected(entries[i]))) return settle("refused", "changed");
+  const now = context.now();
+  if (p.open && entries.some((e) => openDay(context.days, now)?.id !== e.id)) return settle("refused", "closed");
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const next = context.days.map((d) => {
+    const e = byId.get(d.id);
+    if (!e) return d;
+    const { deleted: _, ...live } = d;
+    const editedAt = Number.isInteger(e.editedAt) ? e.editedAt : now;
+    return { ...live, text: e.text, editedAt, ...(e.deleted ? { deleted: true } : {}), step: undoing ? before(e, event.id) : event.id };
+  });
+  // Undoing a choice puts the conflict to the page again; two records of one date are told
+  // again by update, as any clash is (tell). Making the choice again settles it.
+  const pending = new Map(context.pending);
+  const told = undoing && p.conflict && isId(p.conflict.id) ? p.conflict : null;
+  if (told) pending.set(told.id, { copies: [told.mine.text, told.theirs.text], other: null, told });
+  else for (const e of entries) pending.delete(e.id);
+  enqueue.assign({ pending });
+  update({ ...context, pending }, enqueue, mint(context.days, next));
+  if (told) enqueue.emit({ type: "journal.conflicted", ...told });
+  settle("applied");
 });
 
 // The user took back a choice (conflict.reopened): the day the conflict named gets back
@@ -675,9 +768,7 @@ export const machine = setup({
       "or two records hold the same date (two devices each started it offline, or a journal was " +
       "added to an account that already had that date), the journal shows one day per date, the " +
       "newest, and puts both copies to the page showing that date; keeping one saves its text to " +
-      "that day, also once it has closed, and deletes the other record; taking the choice " +
-      "back restores the day's text and the other copy, as a new record of that date, and " +
-      "puts both copies to the page again. A second record that is " +
+      "that day, also once it has closed, and deletes the other record. A second record that is " +
       "empty or holds the same text is deleted without asking. When no day can be edited, the journal opens " +
       "an empty page for today. The chat may read it through three lookups: the day the journal " +
       "page shows, with its text and whether it can still be written, remembered from what the " +
@@ -686,12 +777,20 @@ export const machine = setup({
       "list of the written days, newest first, each with its date, its summary (the journal summary " +
       "generator's sentence, or the day's first line when there is none or the reader is signed out) " +
       "and its length in words, narrowed by dates and by words the day contains, at most 20 unless " +
-      "more are asked for (up to 50), with how many more match.",
+      "more are asked for (up to 50), with how many more match. Two changes are steps Undo and " +
+      "Redo reverse (section 12): one stretch of typing in today's page, from the first save " +
+      "until the editor says the user left it, and keeping one copy, which asks for the short " +
+      "notice. Undo of a kept copy brings the day's text and the other copy back, the other " +
+      "record with a restore write the server accepts, and puts both copies to the page again, " +
+      "also on a closed day. Typing in a day can be undone only while the day can be written: " +
+      "after 2:00 it is refused as closed. A step is refused when a day it names was written " +
+      "since by anything else. Taking a choice back through conflict.reopened still works " +
+      "until that event is retired.",
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days",
-    steps: { "day.saved": "pending", "day.shown": "navigation", "conflict.reopened": "pending" },
-    emits: ["journal.changed", "journal.conflicted"],
+    steps: { "day.saved": "step", "day.shown": "navigation", "conflict.reopened": "pending" },
+    emits: ["journal.changed", "journal.conflicted", "step.recorded", "step.settled"],
     asks: ["session: read", "generators: results"],
   },
   context: ({ input }) => ({
@@ -724,6 +823,10 @@ export const machine = setup({
     now: input.now,
     // Mints the id of a record put back as a new one (reopened).
     mint: input.mint,
+    mintStep: input.mintStep ?? ulid,
+    // The stretch of typing still open (12, Undo): { id, day, before }, the step's id, the
+    // day typed in and that day as it was before the stretch; null when none is.
+    stretch: null,
     ask: input.ask,
     api: input.api,
   }),
@@ -775,6 +878,8 @@ export const machine = setup({
         "index?": { actions: queue },
         "day.shown": { actions: remember },
         "generation.changed": { actions: summarised },
+        "step.undone": { actions: queue },
+        "step.redone": { actions: queue },
       },
     },
     ready: {
@@ -799,6 +904,8 @@ export const machine = setup({
         "index?": { actions: ({ context, event }) => event.reply(indexOf(context, event.payload)) },
         "day.saved": { actions: saved },
         "conflict.reopened": { actions: reopened },
+        "step.undone": { actions: applyStep },
+        "step.redone": { actions: applyStep },
         // The outbox drains only while someone is signed in (5); signing out keeps it,
         // to go up at the next sign-in.
         "session.changed": {

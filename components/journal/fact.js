@@ -4,6 +4,8 @@ import { machine } from "./machine.js";
 import { openJournal } from "./store.js";
 import changed from "./events/journal.changed.json" with { type: "json" };
 import conflicted from "./events/journal.conflicted.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import open from "./queries/open.json" with { type: "json" };
 import days from "./queries/days.json" with { type: "json" };
@@ -45,7 +47,7 @@ const api = {
 
 const actor = mount(machine, {
   input: { store: openJournal(), now: () => Date.now(), mint: ulid, api, ask: (target, name, payload) => ask(machine, target, name, payload) },
-  events: { "journal.changed": changed, "journal.conflicted": conflicted },
+  events: { "journal.changed": changed, "journal.conflicted": conflicted, "step.recorded": recorded, "step.settled": settled },
   queries: { read, open, days, index },
 });
 

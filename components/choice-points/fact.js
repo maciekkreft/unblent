@@ -3,6 +3,8 @@ import { machine } from "./machine.js";
 import { openChoicePoints } from "./store.js";
 import changed from "./events/choice-point.changed.json" with { type: "json" };
 import deleted from "./events/choice-point.deleted.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store and
@@ -44,7 +46,7 @@ const api = {
 
 const actor = mount(machine, {
   input: { store, api, ask: (target, name, payload) => ask(machine, target, name, payload) },
-  events: { "choice-point.changed": changed, "choice-point.deleted": deleted },
+  events: { "choice-point.changed": changed, "choice-point.deleted": deleted, "step.recorded": recorded, "step.settled": settled },
   queries: { list },
 });
 

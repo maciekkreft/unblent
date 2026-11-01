@@ -120,14 +120,12 @@ for (const engine of ENGINES) {
       await until(async () => (await times(page, "Written on the Mac.")) === 1);
       assert.equal(await times(page, "Written on the phone."), 0, "the other copy is gone");
       assert.equal(await page.locator(`journal-days .row[data-day="${SUNDAY_PHONE}"]`).count(), 1, "still one day for the date");
-      // Undo takes the keyboard in place of the button pressed, and brings both copies back.
-      const undo = entry(page).locator(".kept button");
-      await until(() => undo.evaluate((b) => b.getRootNode().activeElement === b));
-      await undo.click();
+      // The choice is one step (12, Undo): the short notice's Undo brings both copies back.
+      await page.locator("notice-stack", { hasText: "Keep one copy of the day" }).waitFor();
+      await page.locator("notice-stack .undo").click();
       await conflict.waitFor();
       assert.equal(await conflict.locator(".mine pre").textContent(), "Written on the Mac.");
       assert.equal(await conflict.locator(".theirs pre").textContent(), "Written on the phone.");
-      assert.equal(await entry(page).locator(".kept").count(), 0);
     });
 
     run("with Vim keys on, the editor shows Vim's block cursor", async (page) => {

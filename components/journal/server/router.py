@@ -160,9 +160,12 @@ def _write(name: str, kind: _Kind, columns: dict, base: int | None, deleted: boo
     # returns the tombstone unchanged.
     if deleted:
         return (_full(kind, row), 200) if row["deleted"] else (update(row["version"] + 1, True), 200)
-    # A write onto a tombstone loses to the delete, the newer fact: a day's edit comes
-    # back as a conflict.
+    # A restore write (5, Undo in 12) names the tombstone's own version as its base and
+    # brings the record back as a new version. Any other write onto a tombstone loses to
+    # the delete, the newer fact: a day's edit comes back as a conflict.
     if row["deleted"]:
+        if base == row["version"]:
+            return update(row["version"] + 1, False), 200
         return _full(kind, row), (409 if kind.conflicts else 200)
     # What the server already holds is not a change: no new version and no new seq. It
     # is checked before the base, so a resend of a write already applied is harmless.

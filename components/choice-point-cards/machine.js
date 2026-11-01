@@ -119,8 +119,8 @@ const typable = ({ context, event }) =>
   writable(context) && opened(context, event) && FIELDS.includes(event.field) && typeof event.value === "string";
 
 // Done folds the one sheet: it is saved with every line finished. Folded with every box
-// empty, a kept one is removed, by saving it empty; a new one was never kept, so nothing
-// is sent. There is no Delete and no Undo: an empty choice point holds nothing to lose.
+// empty, a kept one is deleted, by saving it empty, which `choice-points` makes a step
+// Undo takes back (12, Undo); a new one was never kept, so nothing is sent.
 const fold = enqueueActions(({ context, event, enqueue }) => {
   const draft = draftIn(context, event.id);
   if (writable(context) && isEmpty(draft) && held(context, draft.id)) enqueue.emit({ type: "choice-point.saved", ...draft });
@@ -419,8 +419,9 @@ export const machine = setup({
       "Pressing a card opens it again. Each choice point folds and unfolds on its own, so " +
       "several can be open at once; the ones left open stay open after a reload, kept per day " +
       "in this browser. A choice point folded with all four boxes empty is " +
-      "removed, also one kept before; there is no Delete button and no Undo, because an empty " +
-      "one holds nothing to lose. Choice points are written exactly while the day's own text " +
+      "deleted, also one kept before, at once, with the short notice whose Undo brings it back; " +
+      "there is no Delete button. Undo and Redo also take back a stretch of typing in a choice " +
+      "point, and an open sheet follows them while nothing typed in it waits to be saved. Choice points are written exactly while the day's own text " +
       "is, as the journal page says: today's page, also past midnight until the journal's day " +
       "ends at 2:00; then an open sheet becomes read only. On " +
       "an earlier day there is no New choice point row, and a card opens its sheet " +

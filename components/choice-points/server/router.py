@@ -3,7 +3,8 @@ choice-points fact. Every route needs a signed-in user (require_user) and resolv
 user's own SQLite file, so isolation holds by construction and the code reads as if for
 a single user. version is assigned here. The last write wins, so a write is never
 refused for a stale base; a delete always wins (5), so a write onto a tombstone comes
-back as the tombstone rather than reviving it.
+back as the tombstone rather than reviving it, except a restore write, which names the
+tombstone's own version.
 """
 
 import re
@@ -98,8 +99,17 @@ async def put_choice_point(choice_point_id: str, request: Request, user_id: str 
                 (choice_point_id, day, *texts, (base or 0) + 1, _next_seq(connection), int(deleted)),
             )
             return _reread(connection, choice_point_id)
-        # A write onto a tombstone, or a second delete, returns the tombstone unchanged.
+        # A restore write (5, Undo in 12) names the tombstone's own version as its base and
+        # brings the choice point back as a new version. Any other write onto a tombstone,
+        # or a second delete, returns the tombstone unchanged.
         if row["deleted"]:
+            if not deleted and base == row["version"]:
+                connection.execute(
+                    "UPDATE choice_points SET situation = ?, thoughts = ?, away = ?, towards = ?, version = ?, seq = ?, deleted = 0"
+                    " WHERE id = ?",
+                    (*texts, row["version"] + 1, _next_seq(connection), choice_point_id),
+                )
+                return _reread(connection, choice_point_id)
             return _record(row)
         # What the server already holds is not a change: no new version and no new seq,
         # so a resend of a write already applied is harmless.

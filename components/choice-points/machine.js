@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the choice points (3.1), replicated (5) the way
 // `evaluators` is: local-first, cached in the browser, numbering versions itself while
@@ -26,7 +27,7 @@ const createdAt = (id) => new Date([...id.slice(0, 10)].reduce((ms, c) => ms * 3
 
 // One fixed shape and key order, so two copies of the same content compare equal as
 // text.
-const record = (r) => ({
+const toRecord = (r) => ({
   id: r.id,
   day: r.day,
   situation: str(r.situation),
@@ -35,6 +36,8 @@ const record = (r) => ({
   towards: str(r.towards),
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   ...(r.deleted === true ? { deleted: true } : {}),
+  // The step that last wrote it in this browser (12, Undo); the server never has it.
+  ...(typeof r.step === "string" ? { step: r.step } : {}),
 });
 
 // What a write carries, and what decides whether a change is a new version.
@@ -45,7 +48,7 @@ const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b))
 const visible = (r) => r && !r.deleted;
 
 const announce = (context, r) => {
-  const { deleted, version, ...rest } = r;
+  const { deleted, version, step, ...rest } = r;
   // `removing` stays in the announced shape because a contract only grows (7.1); no
   // choice point has an undo window, so it is always false.
   return { ...rest, createdAt: createdAt(r.id), version, pending: context.outbox.has(r.id), removing: false };
@@ -89,6 +92,76 @@ function commit(context, enqueue, next) {
 
 const outboxRow = (r, baseVersion) => ({ id: r.id, ...content(r), baseVersion, ...(r.deleted ? { deleted: true } : {}) });
 
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// A choice point as a step names it: its texts, whether it is deleted, and `prior`, the
+// step that wrote it before this one, so an Undo leaves it as that step left it and the
+// step before can be undone next.
+const entry = (r, prior = r.step) => ({
+  kind: "choice-point",
+  id: r.id,
+  ...Object.fromEntries(TEXTS.map((k) => [k, r[k]])),
+  deleted: Boolean(r.deleted),
+  ...(prior ? { prior } : {}),
+});
+// What a choice point undone back past every step this browser knows of is stamped with.
+const before = (e, step) => e.prior ?? `^${step}`;
+
+// What a step is about, as people read it after "Undo:": the situation's first line.
+const NAME_MAX = 40;
+function nameOf(r) {
+  const line = str(r.situation).split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  if (!line) return "a choice point";
+  return `choice point ${line.length > NAME_MAX ? `${line.slice(0, NAME_MAX).trimEnd()}…` : line}`;
+}
+
+// Every save that changes a choice point is a step. One stretch of typing in one choice
+// point is one step, from its first save until a save names lines the user finished; a
+// save while that stretch last wrote it joins it. Adding one is the first save's step,
+// whose Undo deletes it again; a delete is a step of its own, which asks for the notice.
+function recordStep(context, enqueue, was, next, event) {
+  const open = context.stretch;
+  const finished = Array.isArray(event.finished) && event.finished.length > 0;
+  const removing = Boolean(next.deleted);
+  const joins = !removing && open != null && open.id === next.id && was?.step === open.step;
+  const step = joins ? open.step : context.mint();
+  const first = joins ? open.before : was ? entry(was) : entry({ ...next, deleted: true }, null);
+  commit(context, enqueue, { ...next, step });
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "choice-points",
+    label: `${removing ? "delete" : first.deleted ? "add" : "edit"} ${nameOf(removing ? was : next)}`,
+    undo: first,
+    redo: entry({ ...next, step }, first.prior ?? null),
+    ...(removing ? { notice: true } : {}),
+  });
+  const stretch = removing || finished ? null : { step, id: next.id, before: first };
+  context.stretch = stretch;
+  enqueue.assign({ stretch });
+}
+
+// An Undo or Redo of one of this fact's steps. It is applied only while the choice point
+// is as the step left it, last written in this browser by that step; anything written
+// since, here, in another tab or on another device, refuses it. A deleted choice point
+// comes back with a restore write (5).
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "choice-points") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "choice-points", outcome, ...(reason ? { reason } : {}) });
+  context.stretch = null;
+  enqueue.assign({ stretch: null });
+  const p = event.payload ?? {};
+  const undoing = event.type === "step.undone";
+  const current = isId(p.id) ? context.choicePoints.get(p.id) : null;
+  if (p.kind !== "choice-point" || !current || TEXTS.some((k) => typeof p[k] !== "string")) return settle("refused", "changed");
+  if (current.step !== (undoing ? event.id : before(p, event.id))) return settle("refused", "changed");
+  const { deleted: _, ...live } = current;
+  const texts = Object.fromEntries(TEXTS.map((k) => [k, p[k]]));
+  commit(context, enqueue, { ...live, ...texts, ...(p.deleted ? { deleted: true } : {}), step: undoing ? before(p, event.id) : event.id });
+  settle("applied");
+}
+
 // A text of only spaces and blank lines counts as empty, the same rule the sheet folds by
 // (choice-point-cards isEmpty), so a sheet left with a stray blank line is not kept.
 const blank = (texts) => TEXTS.every((k) => texts[k].trim() === "");
@@ -106,23 +179,31 @@ function applySave(context, event, enqueue) {
   const texts = Object.fromEntries(TEXTS.map((k) => [k, str(event[k])]));
   if (!was) {
     if (!isDay(event.day) || blank(texts)) return;
-    return commit(context, enqueue, record({ id: event.id, day: event.day, ...texts }));
+    return recordStep(context, enqueue, null, toRecord({ id: event.id, day: event.day, ...texts }), event);
   }
-  if (blank(texts)) return commit(context, enqueue, { ...was, deleted: true });
+  if (blank(texts)) return recordStep(context, enqueue, was, { ...was, deleted: true }, event);
   const next = { ...was, ...texts };
-  if (same(was, next)) return;
-  commit(context, enqueue, next);
+  if (same(was, next)) {
+    // Lines finished with nothing new to save still end the stretch of typing.
+    if (event.finished?.length && context.stretch?.id === event.id) {
+      context.stretch = null;
+      enqueue.assign({ stretch: null });
+    }
+    return;
+  }
+  recordStep(context, enqueue, was, next, event);
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
 function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.payload.day, message.reply);
   else if (message.type === "choice-point.saved") applySave(context, message, enqueue);
+  else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "choice-point.saved"].map((t) => [t, { actions: queue }]),
+  ["list?", "choice-point.saved", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]),
 );
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
@@ -174,7 +255,7 @@ async function keepFor(store, from, userId, api) {
     } else {
       const [records, outbox] = await Promise.all([store.all(), store.outboxAll()]);
       const queued = new Set(outbox.map((row) => row.id));
-      for (const r of records.filter((r) => isId(r?.id) && isDay(r?.day)).map(record)) {
+      for (const r of records.filter((r) => isId(r?.id) && isDay(r?.day)).map(toRecord)) {
         if (r.deleted || queued.has(r.id)) continue;
         const row = outboxRow(r, r.version);
         await store.outboxPut(row);
@@ -251,8 +332,12 @@ export const machine = setup({
       "chat may use it as a lookup, Reading choice points. A " +
       "choice point the user opened and left with all four boxes empty, or holding only spaces " +
       "and blank lines, is not kept, and a save that empties all four boxes of a kept one the " +
-      "same way removes it at once, without an undo window; " +
-      "its tombstone keeps the texts it had. It works " +
+      "same way deletes it at once; its tombstone keeps the texts it had. Every change is a " +
+      "step Undo and Redo reverse (section 12): one stretch of typing in one choice point, " +
+      "from its first save until a save names lines the user finished, and a delete, which " +
+      "asks for the short notice. Undo of a new choice point's first stretch deletes it, and a " +
+      "deleted one comes back with a restore write the server accepts. A step is refused when " +
+      "the choice point was written since by anything else. It works " +
       "signed out, numbering versions itself, and syncs to the account when signed in " +
       "(section 5); signing in uploads every choice point with its history. The last write " +
       "wins, so two devices never conflict, and a deleted choice point is kept as a tombstone, " +
@@ -260,9 +345,9 @@ export const machine = setup({
       "none has an undo window; the field stays because a contract only grows.",
     kind: "fact",
     shape: "replicated",
-    emits: ["choice-point.changed", "choice-point.deleted"],
+    emits: ["choice-point.changed", "choice-point.deleted", "step.recorded", "step.settled"],
     owns: "the choice points kept with each journal day",
-    steps: { "choice-point.saved": "pending" },
+    steps: { "choice-point.saved": "step" },
     asks: ["session: read"],
   },
   context: ({ input }) => ({
@@ -271,6 +356,10 @@ export const machine = setup({
     store: input.store,
     api: input.api,
     ask: input.ask,
+    mint: input.mint ?? ulid,
+    // The stretch of typing still open (12, Undo): { step, id, before }, the step's id, the
+    // choice point typed in and how it was before the stretch; null when none is.
+    stretch: null,
     userId: null,
     cursor: 0,
     queued: [],
@@ -298,7 +387,7 @@ export const machine = setup({
           target: "checkingSession",
           actions: assign({
             choicePoints: ({ event }) =>
-              new Map(event.output.choicePoints.filter((r) => isId(r?.id) && isDay(r?.day)).map((r) => [r.id, record(r)])),
+              new Map(event.output.choicePoints.filter((r) => isId(r?.id) && isDay(r?.day)).map((r) => [r.id, toRecord(r)])),
             outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.id, row])),
             cursor: ({ event }) => event.output.cursor,
             userId: ({ event }) => event.output.userId,
@@ -340,6 +429,8 @@ export const machine = setup({
       on: {
         "list?": { actions: ({ context, event }) => replyList(context, event.payload.day, event.reply) },
         "choice-point.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         // Signing in enqueues the whole cache, tombstones included, so what was made
         // signed out becomes the account's (5); a different user resets the cursor.
         "session.changed": {
@@ -454,7 +545,7 @@ export const machine = setup({
 // Announced as a change or, for a tombstone of a choice point this tab was showing, as gone.
 function adopt(context, server, enqueue) {
   const held = context.choicePoints.get(server.id);
-  const r = record(server);
+  const r = toRecord(server);
   context.choicePoints.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
   if (r.deleted) {
@@ -476,12 +567,17 @@ function applySync(context, output, enqueue) {
     if (ack.deleted) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
-      adopt(context, ack, enqueue);
+      // This browser's own delete keeps the step that made it, so it can still be undone.
+      if (held?.deleted && JSON.stringify(content(held)) === JSON.stringify(content(toRecord(ack)))) {
+        const r = { ...held, version: ack.version };
+        context.choicePoints.set(r.id, r);
+        enqueue(() => context.store.put(r).catch(() => {}));
+      } else adopt(context, ack, enqueue);
       continue;
     }
     // A newer edit made during the sync leaves a newer row, which stays pending on the
     // acknowledged version; otherwise the row is drained.
-    const drained = row && JSON.stringify(content(record(row))) === JSON.stringify(content(record(ack)));
+    const drained = row && JSON.stringify(content(toRecord(row))) === JSON.stringify(content(toRecord(ack)));
     if (drained) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
@@ -491,7 +587,7 @@ function applySync(context, output, enqueue) {
       enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
     }
     // Keep the latest local content (a mid-sync edit), take the server's version.
-    const r = held ? { ...held, version: ack.version } : record(ack);
+    const r = held ? { ...held, version: ack.version } : toRecord(ack);
     context.choicePoints.set(r.id, r);
     enqueue(() => context.store.put(r).catch(() => {}));
     if (visible(r)) enqueue.emit({ type: "choice-point.changed", choicePoint: announce(context, r) });
@@ -501,16 +597,16 @@ function applySync(context, output, enqueue) {
     if (!isId(server?.id) || !isDay(server?.day)) continue;
     const current = context.choicePoints.get(server.id);
     if (current && server.version <= current.version) continue;
-    // A local tombstone is never revived, and a local change not yet sent is the later
-    // write, so it wins (last write wins) and is sent at the next drain.
-    if (current && current.deleted) continue;
+    // A local change not yet sent is the later write, so it wins (last write wins) and is
+    // sent at the next drain; a delete there always wins (5). Otherwise a live copy of a
+    // local tombstone at a higher version is a restore write made elsewhere (5).
     if (context.outbox.has(server.id) && !server.deleted) continue;
     if (server.deleted && context.outbox.has(server.id)) {
       context.outbox.delete(server.id);
       enqueue(() => context.store.outboxDelete(server.id).catch(() => {}));
     }
     if (server.deleted && !current) {
-      const r = record(server);
+      const r = toRecord(server);
       context.choicePoints.set(r.id, r);
       enqueue(() => context.store.put(r).catch(() => {}));
       continue;

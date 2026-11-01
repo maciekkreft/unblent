@@ -201,7 +201,7 @@ test("index takes a day's summary from the journal summary generator while signe
       api: { put: async () => ({}), pull: async () => ({ cursor: 0, days: [] }) },
       ask: (target, name, payload) => (target === "session" ? signedIn.ask() : ask(machine, target, name, payload)),
     },
-    events: Object.fromEntries(["journal.changed", "journal.conflicted"].map((n) => [n, JSON.parse(readFileSync(new URL(`../events/${n}.json`, import.meta.url)))])),
+    events: Object.fromEntries(["journal.changed", "journal.conflicted", "step.recorded", "step.settled"].map((n) => [n, JSON.parse(readFileSync(new URL(`../events/${n}.json`, import.meta.url)))])),
     queries: Object.fromEntries(["read", "open", "days", "index"].map((n) => [n, JSON.parse(readFileSync(new URL(`../queries/${n}.json`, import.meta.url)))])),
   });
   const page = standIn();
