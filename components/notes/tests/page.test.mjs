@@ -73,8 +73,6 @@ const listState = (page, title) =>
     const bin = row.querySelector(".bin");
     return {
       present: true,
-      discarding: row.classList.contains("discarding"),
-      hasUndo: Boolean(row.querySelector(".undo")),
       binVisible: bin ? getComputedStyle(bin).visibility === "visible" : false,
     };
   }, title);
@@ -86,25 +84,6 @@ const clickBin = (page, title) =>
       ?.querySelector(".bin")
       ?.click();
   }, title);
-const clickUndo = (page, title) =>
-  page.evaluate((title) => {
-    const root = document.querySelector("note-list").shadowRoot;
-    [...root.querySelectorAll(".row")]
-      .find((r) => r.querySelector(".name")?.textContent.trim() === title)
-      ?.querySelector(".undo")
-      ?.click();
-  }, title);
-// Set a short undo window and remount the list so the actor reads the new value
-// (--duration-undo is read once, at mount); the note itself is kept by the fact.
-const shortUndo = (page, ms = 150) =>
-  page.evaluate((ms) => {
-    const el = document.querySelector("note-list");
-    el.style.setProperty("--duration-undo", `${ms}ms`);
-    const parent = el.parentNode;
-    const next = el.nextSibling;
-    el.remove();
-    parent.insertBefore(el, next);
-  }, ms);
 // A left swipe on a row, synthesised as a mouse drag (which fires pointer events):
 // press near the trailing edge and drag left past the delete threshold.
 const swipeRow = async (page, title) => {
@@ -422,7 +401,7 @@ for (const engine of ENGINES) {
     };
 
     // Browser: a gesture.
-    test("the trash starts an undoable delete", async () => {
+    test("the trash deletes at once, and the notice's Undo brings the note back", async () => {
       const { page, problems, debug } = await open();
       await write(page, "First\nbody");
       await until(async () => (await listState(page, "First")).present);
@@ -431,20 +410,16 @@ for (const engine of ENGINES) {
       await page.locator("note-list .row", { hasText: "First" }).hover();
       await until(async () => (await listState(page, "First")).binVisible);
 
-      // Clicking it turns the row into its own undo: struck through, an Undo button,
-      // and a draining bar. Nothing is a fact yet (the default window is long).
+      // Clicking it deletes the note at once (12, Undo), and the short notice names it.
       await clickBin(page, "First");
-      await until(async () => {
-        const s = await listState(page, "First");
-        return s.discarding && s.hasUndo;
-      });
+      await until(() => debug.some((l) => DISCARDED.test(l)));
+      await until(async () => !(await listState(page, "First")).present);
+      const notice = page.locator("notice-stack", { hasText: "Delete note First" });
+      await notice.waitFor();
 
-      // Undo brings it straight back, and no note.discarded was ever emitted.
-      await clickUndo(page, "First");
-      await until(async () => !(await listState(page, "First")).discarding);
-      await new Promise((r) => setTimeout(r, 100));
-      assert.ok(!debug.some((l) => DISCARDED.test(l)), "undo emits no discard");
-      assert.equal((await listState(page, "First")).present, true, "the note is still there");
+      // Its Undo brings the note back where it was.
+      await page.locator("notice-stack .undo").click();
+      await until(async () => (await listState(page, "First")).present);
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     });
 
@@ -452,8 +427,6 @@ for (const engine of ENGINES) {
     test("a left swipe deletes a note on the desk", async () => {
       const { page, problems, debug } = await open();
       await write(page, "Swiped\nbody");
-      await until(async () => (await listState(page, "Swiped")).present);
-      await shortUndo(page);
       await until(async () => (await listState(page, "Swiped")).present);
       await swipeRow(page, "Swiped");
       await until(() => debug.some((l) => DISCARDED.test(l)));
@@ -468,7 +441,7 @@ for (const engine of ENGINES) {
       await write(page, "Touch\nbody");
       await until(async () => (await listState(page, "Touch")).present);
       await swipeRow(page, "Touch");
-      await until(async () => (await listState(page, "Touch")).discarding);
+      await until(async () => !(await listState(page, "Touch")).present);
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
     });
   });

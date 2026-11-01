@@ -54,14 +54,15 @@ const stage = (openId = null) => (target, name, payload) => {
 let minted = 0;
 const mint = () => `01ARZ3NDEKTSV4RRFFQ69G5M${String(minted++ % 100).padStart(2, "0")}`;
 
-async function start({ notes = [], openId = null, slow = 0, notesInput = {}, keepOpen = false, names = ["notes", "subject", "settings", "note-list", "note-editor"] } = {}) {
+async function start({ notes = [], openId = null, slow = 0, notesInput = {}, keepOpen = false, names = ["notes", "subject", "settings", "note-list", "note-editor"], extra = {} } = {}) {
   const store = notesStore(notes, { slow });
   const wired = await wire(names, {
     notes: { store, now: (() => { let n = 100; return () => ++n; })(), api: null, revoke: () => {}, ...notesInput },
     subject: { ask: stage(openId) },
     settings: { product: true, stored: { workshop: null, product: JSON.stringify({ keepOpen }), profile: null }, save: { workshop: () => {}, product: () => {}, profile: () => {} } },
-    "note-list": { mint, undoMs: 20, following: true },
+    "note-list": { mint, following: true },
     "notice-stack": { fadeMs: 30 },
+    ...extra,
     "note-editor": {
       mint,
       focus: () => {},
@@ -171,10 +172,10 @@ test("the auto-reopened book scopes the list to its notes, not every note", asyn
   }
 });
 
-// A delete is a fact only when its undo window ends (5): the row goes, the note becomes a
-// tombstone in the store, the editor that showed it falls to the empty page, and the
-// next start, from the same store, does not bring it back.
-test("a delete commits when its window ends and stays gone", async () => {
+// A delete happens at once (12, Undo): the row goes, the note becomes a tombstone in the
+// store, the editor that showed it falls to the empty page, and the next start, from the
+// same store, does not bring it back.
+test("a delete happens at once and stays gone", async () => {
   const first = note(NOTE_ONE, "First\nbody");
   const h = await start({ notes: [first] });
   try {
@@ -200,13 +201,19 @@ test("a delete commits when its window ends and stays gone", async () => {
 });
 
 // A cut row placed with p reaches `notes` as note.moved, and the list's order is the
-// one notes keeps; a delete handed to the corner notice is deleted by `notes` when the
-// notice's window ends (12, Vim keys; 5, an item's place is last write wins).
-test("a move goes through notes, and a handed-off delete is settled by the corner notice", async () => {
+// one notes keeps; a cut deleted when the keyboard leaves the list goes at once, and the
+// corner notice's Undo, through `undo`, brings it back (12, Vim keys; 12, Undo).
+test("a move goes through notes, and a cut deleted on leaving comes back with the notice's Undo", async () => {
   const one = note(NOTE_ONE, "One");
   const two = { ...note(NOTE_TWO, "Two"), updatedAt: 20 };
   const none = { ...note(NOTE_NONE, "Three"), updatedAt: 5 };
-  const h = await start({ notes: [one, two, none], names: ["notes", "note-list", "notice-stack"] });
+  const rows = new Map();
+  const undoStore = { read: async (account) => rows.get(account), write: async (account, lists) => void rows.set(account, structuredClone(lists)) };
+  const h = await start({
+    notes: [one, two, none],
+    names: ["notes", "note-list", "notice-stack", "undo"],
+    extra: { undo: { store: undoStore, tell: () => {} } },
+  });
   try {
     const order = () => h.list().notes.map((n) => n.title);
     await until(() => order().join() === "Two,One,Three");
@@ -215,9 +222,11 @@ test("a move goes through notes, and a handed-off delete is settled by the corne
     await until(() => order().join() === "One,Two,Three");
     h.actors["note-list"].send({ type: "_cut", id: NOTE_NONE });
     h.actors["note-list"].send({ type: "_left" });
-    await until(() => shown(h.list()).length === 2);
-    await until(() => order().join() === "One,Two", 2000);
-    assert.equal(h.emitted("removal.settled").length, 1);
+    await until(() => order().join() === "One,Two");
+    const notices = () => [...h.actors["notice-stack"].getSnapshot().context.notices.values()];
+    await until(() => notices().some((n) => n.key === "step"));
+    h.actors["notice-stack"].send({ type: "_act", key: "step", index: 0 });
+    await until(() => order().join() === "One,Two,Three");
   } finally {
     h.unwire();
   }

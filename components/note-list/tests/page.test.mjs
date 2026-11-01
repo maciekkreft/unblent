@@ -83,7 +83,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys on, dd cuts a row and p places it; Escape on a cut deletes it on the row, keeping the keyboard", async () => {
+    test("with Vim keys on, dd cuts a row and p places it; Escape on a cut deletes it, keeping the keyboard, and u brings it back", async () => {
       const { context, page, problems } = await open(true);
       try {
         const rowClass = (title) => inList(page, (root, t) => [...root.querySelectorAll(".row")].find((r) => r.querySelector(".name").textContent.trim() === t)?.className, title);
@@ -98,16 +98,18 @@ for (const engine of ENGINES) {
         await until(async () => (await rowTitles(page)).join() === "New note,First,Second");
         await until(async () => (await focusedTitle(page)) === "Second");
         assert.ok(!(await rowClass("Second")).includes("cut"));
-        // Cut again, then Escape: the delete counts down on the row and the list keeps the keyboard.
+        // Cut again, then Escape: the row is deleted at once and the list keeps the
+        // keyboard; u is then the global Undo, which brings the row back (12).
         await page.keyboard.press("d");
         await page.keyboard.press("d");
         await until(async () => (await rowClass("Second")).includes("cut"));
         await page.keyboard.press("Escape");
-        await until(async () => (await rowClass("Second")).includes("discarding"));
-        assert.equal(await focusedTitle(page), "Second");
+        await until(async () => (await rowTitles(page)).join() === "New note,First");
+        await until(async () => (await focusedTitle(page)) === "First");
         await page.keyboard.press("u");
-        await until(async () => !(await rowClass("Second")).includes("discarding"));
-        assert.equal(await editorBody(page), "Second\nbody", "no letter was typed into the note");
+        await until(async () => (await rowTitles(page)).join() === "New note,First,Second");
+        // The editor showed Second, so its delete left the empty page, and nothing was typed there.
+        assert.equal(await editorBody(page), "", "no letter was typed into the editor");
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

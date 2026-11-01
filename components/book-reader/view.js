@@ -10,9 +10,7 @@ import linkCopied from "./events/link.copied.json" with { type: "json" };
 import textCopied from "./events/text.copied.json" with { type: "json" };
 import closed from "./events/book.closed.json" with { type: "json" };
 
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window
-// (the note-list idiom); the token is the one clock, shared with the bubble bar's
-// animation, so they cannot disagree.
+// A CSS duration token ("3s", "300ms") as milliseconds, for the timers the view keeps.
 const toMs = (text, fallback = 3000) => {
   const t = (text || "").trim();
   const n = parseFloat(t);
@@ -28,14 +26,10 @@ class ActorController {
   }
 
   hostConnected() {
-    // The undo window comes from --duration-undo, read off the host so a stylesheet or a
-    // test can set it; the machine only ever sees the number (importable in Node).
-    const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         mint: ulid,
-        undoMs,
         // The attributes are parsed by the time hostConnected runs, so the actor is born
         // knowing whether it paints and makes highlights (Decision 3).
         highlighting: this.host.highlights,
@@ -313,11 +307,6 @@ class BookReader extends LitElement {
     .strip mark.commented {
       box-shadow: inset 0 calc(-1 * var(--border-width)) 0 var(--color-accent);
     }
-    /* A highlight counting down to its removal (session 3): dimmed while its bubble
-       offers Undo, so the user sees what is going. */
-    .strip mark.removing {
-      opacity: 0.5;
-    }
     /* The highlight a followed source link points at glows for about a second, so the eye
        finds the passage on the page: the accent selection tone and a soft accent ring,
        fading back to the plain highlight. A shadow, not a border, so the text never moves. */
@@ -332,8 +321,7 @@ class BookReader extends LitElement {
       }
     }
     /* The highlight bubble (Decision 3): a small overlay above the tapped mark's first
-       line, inside the clipped .page. Copy, Copy link and Remove; during the undo window it reads
-       Removed · Undo with the draining bar note-list uses. Placed by --bx/--by set in JS
+       line, inside the clipped .page. Copy, Copy link and Remove. Placed by --bx/--by set in JS
        (#positionBubble), so no literal length places it; it lifts above the text and a
        press on it never turns the page (#pointerdown stops there). */
     .bubble {
@@ -378,29 +366,6 @@ class BookReader extends LitElement {
     }
     .bubble .act.remove:hover {
       color: var(--color-danger);
-    }
-    .bubble .act.undo {
-      color: var(--color-accent);
-    }
-    /* The draining bar is the visible echo of the machine's timer; both read
-       --duration-undo, so they cannot disagree (the note-list idiom). It stays under
-       reduced motion because it is the only sign of how long is left. */
-    .bubble .bar {
-      position: absolute;
-      inset-inline: 0;
-      inset-block-end: 0;
-      height: var(--space-2xs);
-      background: var(--color-accent);
-      transform-origin: left;
-      animation: drain var(--duration-undo) linear forwards;
-    }
-    @keyframes drain {
-      from {
-        transform: scaleX(1);
-      }
-      to {
-        transform: scaleX(0);
-      }
     }
     /* A definition list (the O'Reilly idiom for a set of named things): each term set
        apart, its definition indented beneath it so the pairing reads at a glance. */
@@ -1357,11 +1322,7 @@ class BookReader extends LitElement {
       } else if (key === "d" && !this.#visual) {
         if (dHeld) this.#removeAtCursor();
         else this.#dAt = Date.now();
-      } else if (key === "u") {
-        // With nothing counting down here, u is the global Undo's (12), so it passes on.
-        if (!this.#undoKey()) return false;
-      }
-      else if (key === "Enter" && this.#visual) this.#endVisual(true);
+      } else if (key === "Enter" && this.#visual) this.#endVisual(true);
       else if (key === "Escape" && this.#visual) this.#endVisual(false);
       else return false;
     }
@@ -1422,23 +1383,13 @@ class BookReader extends LitElement {
     this.#copyText(h.quote.exact, "text");
   }
 
-  // d d: Remove on the highlight holding the cursor, its bubble opened so Removed · Undo
-  // is seen. With no highlight there, d d does nothing.
+  // d d: Remove on the highlight holding the cursor. With no highlight there, d d does
+  // nothing.
   #removeAtCursor() {
     const h = this.#highlightAtCursor();
     if (!h) return;
     this.#openBubble(h.id);
     this.#removeActive();
-  }
-
-  // u: brings back the open bubble's highlight while it counts down, or else the one
-  // holding the cursor. False when neither is counting down.
-  #undoKey() {
-    const discarding = this.#actor.snapshot.context.discarding;
-    const id = [this.#active, this.#highlightAtCursor()?.id].find((x) => x != null && discarding.has(x));
-    if (id == null) return false;
-    this.#actor.send({ type: "_undo", id });
-    return true;
   }
 
   // y on a passage marked with v or Ctrl+v copies it and makes no highlight; Enter
@@ -1531,31 +1482,16 @@ class BookReader extends LitElement {
     }, COPIED_MS);
   }
 
-  // Remove and undo (Decision 3): the mouse's gesture is one message, the machine runs
-  // the delayed delete; the bubble stays open, reading Removed · Undo while the window
-  // drains and Copy · Copy link · Remove again once undone.
+  // Remove (Decision 3): the gesture is one message; the highlight goes at once, its mark
+  // and bubble with it, and the short notice offers Undo (12, Undo).
   #removeActive() {
     if (this.#active) this.#actor.send({ type: "_remove", id: this.#active });
-  }
-
-  #undoActive() {
-    if (this.#active) this.#actor.send({ type: "_undo", id: this.#active });
   }
 
   // Marks repaint from scratch, so the glowing highlight's class is set again each render.
   #reflectGlow() {
     for (const mark of this.#strip?.querySelectorAll("mark") ?? []) {
       mark.classList.toggle("glow", this.#glowing != null && mark.dataset.id === this.#glowing);
-    }
-  }
-
-  // Dim the marks counting down to a removal, so the whole passage shows it is going,
-  // not only the bubble (Decision 3). Runs every render, cheap, always in step with the
-  // machine's discarding set.
-  #reflectDiscarding(snapshot) {
-    const discarding = snapshot.context.discarding;
-    for (const mark of this.#strip.querySelectorAll("mark")) {
-      mark.classList.toggle("removing", discarding.has(mark.dataset.id));
     }
   }
 
@@ -2075,9 +2011,8 @@ class BookReader extends LitElement {
       }, ms + 100);
     }
     this.#reflectGlow();
-    // The removal countdown dims its marks; the open bubble is placed after the marks
-    // are painted. A highlight the fact has removed (its window elapsed) closes the bubble.
-    this.#reflectDiscarding(snapshot);
+    // The open bubble is placed after the marks are painted. A highlight the fact has
+    // removed closes the bubble.
     if (this.#active != null) {
       if (snapshot.context.highlights.some((h) => h.id === this.#active)) this.#positionBubble();
       else this.#closeBubble();
@@ -2085,31 +2020,21 @@ class BookReader extends LitElement {
     if (this.#pending) this.#positionMake();
   }
 
-  // The bubble for the open highlight (session 3): Copy, Copy link and Remove, or, while the removal
-  // window drains, Removed · Undo with the bar. Rendered inside .page so it is placed
+  // The bubble for the open highlight (session 3): Copy, Copy link and Remove. Rendered inside .page so it is placed
   // against the same box #positionBubble measures; a press on it never turns the page.
   #bubble(snapshot) {
     if (this.#active == null) return nothing;
     const h = snapshot.context.highlights.find((x) => x.id === this.#active);
     if (!h) return nothing;
-    const removing = snapshot.context.discarding.has(this.#active);
     return html`
       <div class="bubble" role="group" aria-label="Highlight" @pointerdown=${(e) => e.stopPropagation()}>
-        ${removing
-          ? html`
-              <span class="removed">Removed ·</span>
-              <button class="act undo" type="button" @click=${() => this.#undoActive()}>Undo</button>
-              <span class="bar"></span>
-            `
-          : html`
-              <button class="act copy" type="button" @click=${() => this.#copy("text", h)}>
-                ${this.#copied === "text" ? "Copied" : "Copy"}
-              </button>
-              <button class="act copy-link" type="button" @click=${() => this.#copy("link", h)}>
-                ${this.#copied === "link" ? "Copied" : "Copy link"}
-              </button>
-              <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
-            `}
+        <button class="act copy" type="button" @click=${() => this.#copy("text", h)}>
+          ${this.#copied === "text" ? "Copied" : "Copy"}
+        </button>
+        <button class="act copy-link" type="button" @click=${() => this.#copy("link", h)}>
+          ${this.#copied === "link" ? "Copied" : "Copy link"}
+        </button>
+        <button class="act remove" type="button" @click=${() => this.#removeActive()}>Remove</button>
       </div>
     `;
   }

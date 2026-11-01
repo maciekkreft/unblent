@@ -125,10 +125,19 @@ async def put_note(note_id: str, request: Request, user_id: str = Depends(requir
                 (title, body, version, now, _next_seq(connection), note_id),
             )
             return _reread(connection, note_id)
-        # An edit onto a tombstone loses to the delete: the deletion is the newer fact,
-        # so it comes back as a conflict carrying the tombstone (5), never a revival.
+        # A restore write (5, Undo in 12) names the tombstone's own version as its base
+        # and brings the note back as a new version. Any other edit onto a tombstone loses
+        # to the delete: the deletion is the newer fact, so it comes back as a conflict
+        # carrying the tombstone, never a revival.
         if row["deleted"]:
-            return JSONResponse({"note": _record(row)}, status_code=409)
+            if base != row["version"]:
+                return JSONResponse({"note": _record(row)}, status_code=409)
+            restored_about = about if about is not None else json.loads(row["about"])
+            connection.execute(
+                "UPDATE notes SET title = ?, body = ?, version = ?, updated_at = ?, seq = ?, deleted = 0, about = ? WHERE id = ?",
+                (title, body, row["version"] + 1, now, _next_seq(connection), json.dumps(restored_about), note_id),
+            )
+            return _reread(connection, note_id)
         # The same text and the same links as the server holds is not a change (5,
         # idempotent writes): the current record comes back, no new version, no bump of
         # seq. This is checked before the base, so a resend of a write already applied

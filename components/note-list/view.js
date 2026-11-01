@@ -6,16 +6,6 @@ import { machine, shown, showing, chaptered, placement } from "./machine.js";
 import selected from "./events/note.selected.json" with { type: "json" };
 import discarded from "./events/note.discarded.json" with { type: "json" };
 import moved from "./events/note.moved.json" with { type: "json" };
-import removalStarted from "./events/removal.started.json" with { type: "json" };
-
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo
-// window; the token is the one clock, shared with the bar's animation.
-const toMs = (text, fallback = 3000) => {
-  const t = (text || "").trim();
-  const n = parseFloat(t);
-  if (Number.isNaN(n)) return fallback;
-  return t.endsWith("ms") ? n : n * 1000;
-};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -25,9 +15,6 @@ class ActorController {
   }
 
   hostConnected() {
-    // The undo window comes from --duration-undo, read off the host so a stylesheet
-    // or a test can set it; the machine only ever sees the number (importable in Node).
-    const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     // Which way the chapter switch stands, kept in this browser (3.1) so the choice
     // follows the device; This chapter unless All chapters was chosen.
     this.chaptersKey = `note-list${this.host.id ? `#${this.host.id}` : ""}:chapters`;
@@ -42,7 +29,6 @@ class ActorController {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
         mint: ulid,
-        undoMs,
         // The `subject` attribute (D5): present means follow the stage and show only
         // the notes about it. Parsed by the time hostConnected runs. Off is exactly
         // today's behaviour.
@@ -55,7 +41,6 @@ class ActorController {
         "note.selected": selected,
         "note.discarded": discarded,
         "note.moved": moved,
-        "removal.started": removalStarted,
       },
     });
     this.subscription = this.actor.subscribe((snapshot) => {
@@ -134,8 +119,7 @@ class NoteList extends LitElement {
       margin: 0;
       padding: var(--space-2xs);
     }
-    /* A row clips its swipe layers and its undo bar, and is the positioning context
-       for both. A drag is horizontal; vertical stays a native scroll (touch-action).
+    /* A row clips its swipe layers, and is the positioning context for them. A drag is horizontal; vertical stays a native scroll (touch-action).
        Text is never selected on a press, so a swipe does not start a selection. */
     .row {
       position: relative;
@@ -303,13 +287,6 @@ class NoteList extends LitElement {
     .bin:hover {
       color: var(--color-danger);
     }
-    /* A note counting down to its delete keeps its row so the user sees what is going,
-       struck through, its trash swapped for Undo, with a bar draining the window. */
-    .row.discarding .name,
-    .row.discarding .subtitle {
-      text-decoration: line-through;
-      color: var(--color-mute);
-    }
     /* A cut row (Vim's dd) waits greyed in place for p or P, with no countdown. */
     .row.cut .name,
     .row.cut .subtitle,
@@ -319,38 +296,6 @@ class NoteList extends LitElement {
     .row.cut:hover .time,
     .row.cut:focus-within .time {
       visibility: visible;
-    }
-    .undo {
-      display: inline-flex;
-      appearance: none;
-      background: none;
-      border: 0;
-      padding: 0;
-      margin: 0;
-      font: inherit;
-      font-size: var(--text-caption);
-      cursor: pointer;
-      color: var(--color-accent);
-    }
-    /* The bar is the visible echo of the machine's timer; both read --duration-undo,
-       so they cannot disagree. It stays under reduced motion because it is the only
-       sign of how long is left. */
-    .bar {
-      position: absolute;
-      inset-inline: 0;
-      inset-block-end: 0;
-      height: var(--space-2xs);
-      background: var(--color-accent);
-      transform-origin: left;
-      animation: drain var(--duration-undo) linear forwards;
-    }
-    @keyframes drain {
-      from {
-        transform: scaleX(1);
-      }
-      to {
-        transform: scaleX(0);
-      }
     }
     /* The chapter switch, the top row of the list: two equal halves across the list's
        width in one rectangular box, the pressed one raised. Its edges stand on the rows'
@@ -411,16 +356,15 @@ class NoteList extends LitElement {
 
   #actor = new ActorController(this);
 
-  // The keyboard leaving the list while a row is cut or counting down hands the delete
-  // to the corner notice (12). Checked once the focus has landed; a window losing focus
-  // (another app) is not leaving the list.
+  // The keyboard leaving the list while a row is cut deletes it (12). Checked once the
+  // focus has landed; a window losing focus (another app) is not leaving the list.
   constructor() {
     super();
     this.addEventListener("focusout", () =>
       setTimeout(() => {
         if (!document.hasFocus() || this.matches(":focus-within")) return;
         const context = this.#actor.snapshot?.context;
-        if (context && (context.cut || context.discarding.size)) this.#actor.send({ type: "_left" });
+        if (context?.cut) this.#actor.send({ type: "_left" });
       }),
     );
   }
@@ -483,20 +427,24 @@ class NoteList extends LitElement {
 
   #keydown(event, rows, switched) {
     const context = this.#actor.snapshot.context;
-    // While a row is cut, Escape stays in the list (12): it deletes the row with its
-    // countdown, and the container never sees it as Back.
+    // While a row is cut, Escape stays in the list (12): it deletes the row, and the
+    // container never sees it as Back.
     if (event.key === "Escape" && context.cut) {
       event.preventDefault();
+      const at = rows.findIndex((r) => r.id === context.cut);
+      const next = rows[at + 1] ?? rows[at - 1];
       this.#actor.send({ type: "_escape" });
+      if (next) this.#follow(next.id);
       return;
     }
     const vim = this.#vim(event);
     // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
     // last row): an uncancelled letter is typed wherever the browser still keeps a
-    // selection, and that may be a hidden editor (WebKit).
-    if (vim) event.preventDefault();
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
+    // selection, and that may be a hidden editor (WebKit). u is the list's only on the cut
+    // row; anywhere else it is the global Undo's (12).
     const current = this.#focusRow(rows, context);
+    if (vim && !(vim === "undo" && current !== context.cut)) event.preventDefault();
+    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key] ?? { down: 1, up: -1 }[vim];
     if (vim === "cut") {
       this.#actor.send({ type: "_cut", id: current });
     } else if (vim === "below" || vim === "above") {
@@ -505,9 +453,8 @@ class NoteList extends LitElement {
       if (current === id) this.#actor.send({ type: "_uncut" });
       else this.#actor.send({ type: "_paste", ...this.#neighbours(rows, current, vim === "below") });
       this.#follow(id);
-    } else if (vim === "undo") {
-      if (current === context.cut) this.#actor.send({ type: "_uncut" });
-      else if (context.discarding.has(current)) this.#actor.send({ type: "_undo", id: current });
+    } else if (vim === "undo" && current === context.cut) {
+      this.#actor.send({ type: "_uncut" });
     } else if (vim === "openBelow" || vim === "openAbove") {
       this.#actor.send({ type: "_place", ...this.#neighbours(rows, current, vim === "openBelow") });
     } else if (step || vim === "first" || vim === "last") {
@@ -549,13 +496,11 @@ class NoteList extends LitElement {
     });
   }
 
-  // A click or Enter on a row picks it — or, if it is counting down or cut, is the
-  // one-step undo, the whole row being the target so there is nothing small to hit.
+  // A click or Enter on a row picks it — or, if it is cut, puts it back, the whole row
+  // being the target so there is nothing small to hit.
   #activate(id) {
     if (!id) return;
-    const { discarding, cut } = this.#actor.snapshot.context;
-    if (discarding.has(id)) this.#actor.send({ type: "_undo", id });
-    else if (cut === id) this.#actor.send({ type: "_uncut" });
+    if (this.#actor.snapshot.context.cut === id) this.#actor.send({ type: "_uncut" });
     else this.#pick(id);
   }
 
@@ -579,7 +524,9 @@ class NoteList extends LitElement {
 
   #pointerdown(event, id) {
     if (event.button != null && event.button !== 0) return;
-    if (this.#actor.snapshot.context.discarding.has(id)) return;
+    // A swipe's delete removes its row at once, so the click its release would fire may
+    // land nowhere; a new press is never that click.
+    this.#swallowClick = false;
     const { width } = event.currentTarget.getBoundingClientRect();
     this.#drag = { id, pointerId: event.pointerId, x0: event.clientX, y0: event.clientY, width, dx: 0, dragging: false, abandoned: false, armed: false };
   }
@@ -644,11 +591,11 @@ class NoteList extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<p class="empty">Sign in to see your notes.</p>`;
-    const { open, discarding, cut, subject } = snapshot.context;
+    const { open, cut, subject } = snapshot.context;
     const rows = this.#rows(snapshot);
     const focusId = this.#focusRow(rows, snapshot.context);
     const groups = chaptered(snapshot.context);
-    const row = (r) => this.#row(r, open, focusId, discarding, cut, subject);
+    const row = (r) => this.#row(r, open, focusId, cut, subject);
     // The failed state is the one time no rows show: notes could not answer, so the
     // next-note row would write into a picture we do not have. Otherwise the list is
     // always at least the next-note row, so there is no empty state.
@@ -719,15 +666,13 @@ class NoteList extends LitElement {
     `;
   }
 
-  #row(r, open, focusId, discarding, cut, subject) {
-    const isDiscarding = discarding.has(r.id);
+  #row(r, open, focusId, cut, subject) {
     const isCut = cut === r.id;
     const d = this.#drag && this.#drag.id === r.id ? this.#drag : null;
     const dx = d ? d.dx : 0;
     const classes = [
       "row",
       r.draft ? "draft" : "",
-      isDiscarding ? "discarding" : "",
       isCut ? "cut" : "",
       d && d.dragging ? "dragging" : "",
       d && d.armed ? "armed" : "",
@@ -758,9 +703,7 @@ class NoteList extends LitElement {
     }
 
     const untitled = !r.title;
-    const trailing = isDiscarding
-      ? html`<button class="undo" type="button" aria-label="Undo delete">Undo</button>`
-      : isCut
+    const trailing = isCut
       ? html`<span class="time cut-mark">Cut</span>`
       : html`<span class="time">${when(r.updatedAt)}</span
           ><button class="bin" type="button" tabindex="-1" aria-label="Delete note" @click=${(e) => this.#discard(e, r.id)}>
@@ -790,7 +733,6 @@ class NoteList extends LitElement {
           </span>
           <span class="trailing">${trailing}</span>
         </span>
-        ${isDiscarding ? html`<span class="bar"></span>` : nothing}
       </li>
     `;
   }

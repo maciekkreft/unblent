@@ -156,7 +156,18 @@ test("a blur while dirty saves at once", async () => {
   actor.send({ type: "_typed", body: "quick" });
   actor.send({ type: "_blurred" });
   assert.equal(saved.length, 1);
+  assert.equal(saved[0].left, true, "the save says the user left the note (12, Undo)");
   assert.deepEqual(actor.getSnapshot().value, { editing: "clean" });
+});
+
+test("opening another note says the one typed in was left", async () => {
+  const { actor, clock, saved } = await started();
+  actor.send({ type: "_typed", body: "first" });
+  clock.increment(THROTTLE_MS);
+  const id = saved[0].id;
+  actor.send({ type: "load", id: ID });
+  assert.equal(saved.length, 2);
+  assert.deepEqual([saved[1].id, saved[1].body, saved[1].left], [id, "first", true]);
 });
 
 test("the echo of our own save bumps baseVersion and leaves a dirty draft untouched", async () => {
@@ -310,7 +321,11 @@ test("a pause that ends on the text notes already holds saves nothing", async ()
   actor.send({ type: "_typed", body: "Tx\nB" });
   actor.send({ type: "_typed", body: "T\nB" });
   actor.send({ type: "_blurred" });
-  assert.equal(saved.length, 1, "nor the blur");
+  assert.equal(saved.length, 2, "the blur only says the note was left (12, Undo)");
+  assert.equal(saved[1].body, "T\nB");
+  assert.equal(saved[1].left, true);
+  actor.send({ type: "_blurred" });
+  assert.equal(saved.length, 2, "a second blur has nothing to say");
 
   const loaded = await started({ ask: answering({ list: { notes: [] }, read: { note: NOTE } }) });
   loaded.actor.send({ type: "load", id: ID });

@@ -19,8 +19,9 @@ const TABLE = {
       {
         label: "keep-mine",
         // Based on theirs: after a conflict notes holds the server's copy at that
-        // version (5), so this save lands as a fresh edit on top of it.
-        emit: { type: "note.saved", id: p.id, title: p.mine.title, body: p.mine.body, baseVersion: p.theirs.version },
+        // version (5), so this save lands as a fresh edit on top of it. It is one
+        // finished choice, so it is a step of its own that Undo takes back (12, Undo).
+        emit: { type: "note.saved", id: p.id, title: p.mine.title, body: p.mine.body, baseVersion: p.theirs.version, left: true },
       },
     ],
   }),
@@ -164,7 +165,9 @@ export const machine = setup({
     description:
       "Shows what a fact could not do for the user as notices that can be dismissed: a refused " +
       "sign-in, a book that could not be added, and a save conflict. A conflict offers Keep mine, which saves " +
-      "the user's copy again, because `notes` otherwise keeps the server's copy. Something the " +
+      "the user's copy again, because `notes` otherwise keeps the server's copy; Undo takes " +
+      "that back in one step, to the server's copy. A deleted note or highlight shows the " +
+      "short notice below. Something the " +
       "user deleted or removed, a guest's account in the People tab among them, shows as a " +
       "dark notice with Undo for the undo window; hovering or " +
       "focusing it holds the window, and when the window runs out or the notice is dismissed the " +

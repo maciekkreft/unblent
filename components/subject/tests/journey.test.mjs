@@ -147,7 +147,6 @@ const look = ({ page }) =>
       text: Boolean(strip && strip.children.length && strip.textContent.trim().length > 20),
       pageno: reader?.querySelector(".pageno")?.textContent ?? "",
       marks: [...(strip?.querySelectorAll("mark") ?? [])].map((m) => m.textContent),
-      removing: strip?.querySelector("mark")?.classList.contains("removing") ?? false,
       bubble: reader?.querySelector(".bubble")?.textContent.replace(/\s+/g, " ").trim() ?? null,
       // The titles the list shows (the draft and the apart row excluded).
       titles: [...(list?.querySelectorAll(".row:not(.draft):not(.apart)") ?? [])].map((r) =>
@@ -181,7 +180,6 @@ const oneHighlight = {
     all(
       want(s.staged === TITLE, `the stage shows ${s.staged}, not ${TITLE}`),
       want(s.marks.length > 0, "no highlight is painted"),
-      want(!s.removing, "the highlight is being removed"),
       want(s.notes.includes("note-list"), `Notes shows ${s.notes}, not its list`),
     ),
   reach: highlight,
@@ -239,22 +237,22 @@ for (const engine of ENGINES) {
       },
     },
     {
-      // A click on a mark opens Copy · Remove; Remove starts the undo window (Removed · Undo,
-      // the mark dimmed), and Undo inside it brings the highlight back.
-      name: "the bubble's Undo brings a removed highlight back",
+      // A click on a mark opens Copy · Remove; Remove deletes the highlight at once and the
+      // short notice's Undo brings it back (12, Undo).
+      name: "the notice's Undo brings a removed highlight back",
       from: oneHighlight,
       run: async (v) => {
         await clickFirstMark(v.page);
         await v.see((s) => want(/Copy/.test(s.bubble ?? "") && /Remove/.test(s.bubble ?? ""), `the bubble reads ${s.bubble}`));
         await clickBubble(v.page, ".act.remove");
-        await v.see((s) => want(/Removed/.test(s.bubble ?? "") && s.removing, `the bubble reads ${s.bubble}, removing ${s.removing}`));
-        await clickBubble(v.page, ".act.undo");
-        const s = await v.see((s) => want(/Copy/.test(s.bubble ?? "") && !s.removing, `the bubble reads ${s.bubble}, removing ${s.removing}`));
+        await v.see((s) => want(s.marks.length === 0, `${s.marks.length} marks still painted`));
+        await v.page.locator("notice-stack .undo").click();
+        const s = await v.see((s) => want(s.marks.length > 0, "no mark is painted"));
         assert.ok(s.marks.length > 0, "the highlight is back after undo");
       },
     },
     {
-      // Remove, and let the short window run out: the mark goes and the note becomes a
+      // Remove: the mark goes at once and the note becomes a
       // tombstone on the server, so a reload pulls it and paints no mark.
       name: "a removed highlight stays gone after a reload",
       from: {

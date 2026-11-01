@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the notes (3.1), replicated (5): local-first, the
 // single place a note lives in the browser, syncing to the per-user server when
@@ -101,10 +102,14 @@ const listRow = (record) => ({
   position: positionOf(record),
 });
 
+// The steps that last wrote a record's text and its place in this browser (12, Undo) are
+// kept beside it for an Undo to compare, and never ride an event or a reply.
+const unstamped = ({ step, placeStep, ...rest }) => rest;
+
 // The one place a note.changed is built, so its subtitle is derived once (5 emit sites).
 const changed = (record, pending) => ({
   type: "note.changed",
-  ...record,
+  ...unstamped(record),
   subtitle: subtitleOf(record.body),
   about: record.about ?? [],
   position: positionOf(record),
@@ -112,7 +117,7 @@ const changed = (record, pending) => ({
 });
 
 // A read or open reply carries the note without its place: their schemas do not name it.
-const withoutPosition = ({ position, ...rest }) => rest;
+const withoutPosition = ({ position, step, placeStep, ...rest }) => rest;
 
 // A tombstone is a real record kept for the pull (5), but it is not a note anyone
 // reads or lists, and its `deleted` flag must never ride note.changed or a read reply
@@ -262,6 +267,16 @@ function applySave(context, event, enqueue) {
   // dropped rather than reviving it. The server refuses the same edit with a 409.
   if (current && current.deleted) return;
 
+  // The user left a note whose text notes already holds: the stretch of typing ends
+  // (12, Undo), and nothing is written, so a pause already saved is no conflict either.
+  if (event.left === true && current && title === current.title && body === current.body && event.about === undefined) {
+    if (context.stretch?.note === id) {
+      context.stretch = null;
+      enqueue.assign({ stretch: null });
+    }
+    return;
+  }
+
   // D2 (12): about present replaces the note's links, absent leaves them, a new note
   // gets []. So a save that omits about (every save but a new note's) is a no-op when
   // its text is unchanged, and a save that carries about is always a change.
@@ -282,18 +297,22 @@ function applySave(context, event, enqueue) {
       return;
     }
     if (current && title === current.title && body === current.body && event.about === undefined) return;
+    const step = stepFor(context, current, event, about);
     const version = current ? current.version + 1 : baseVersion === null ? 1 : baseVersion + 1;
-    const record = { id, title, body, version, updatedAt: context.now(), about, position };
+    const record = { id, title, body, version, updatedAt: context.now(), about, position, ...stamps(current, step) };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit(changed(record, false));
+    recordText(context, enqueue, step, record);
     return;
   }
 
   // Signed in: nothing pending and the same text is not a change (5, idempotent).
   if (current && title === current.title && body === current.body && !context.outbox.has(id) && event.about === undefined) return;
+  const same = current && title === current.title && body === current.body && event.about === undefined;
+  const step = same ? null : stepFor(context, current, event, about);
   const version = current ? current.version : 1;
-  const record = { id, title, body, version, updatedAt: context.now(), about, position };
+  const record = { id, title, body, version, updatedAt: context.now(), about, position, ...stamps(current, step) };
   context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const existing = context.outbox.get(id);
@@ -305,29 +324,60 @@ function applySave(context, event, enqueue) {
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit(changed(record, true));
+  recordText(context, enqueue, step, record);
   enqueue.raise({ type: "_drain" });
 }
 
-// The user let a note's undo window run out (note-list emits note.discarded, 4.3
-// fifth rule): mark it a tombstone and announce it gone. A delete is a write like any
-// other (5) — anonymous it mints the next version locally; signed in it is cached,
-// queued in the outbox as a delete (baseVersion pinned like an edit), and synced. It
-// keeps the note's title and body, so the tombstone still holds what was deleted. It
-// never rides note.changed; the news is note.deleted, which every view already knows.
+// The user deleted a note, in the list or as a highlight in the reader (note.discarded,
+// 4.3 fifth rule): it happens at once and is one step, shown with the short notice (12,
+// Undo). A removal.settled from the corner notice deletes the same way, without a step.
 function applyDiscard(context, event, enqueue) {
-  const { id } = event;
-  const current = context.notes.get(id);
+  const current = context.notes.get(event.id);
   if (!current || current.deleted) return;
+  // A highlight taken into the one just joined over it is part of that join's step.
+  const merge = context.merge;
+  if (event.type === "note.discarded" && merge?.ids.includes(current.id)) {
+    tombstone(context, enqueue, current, merge.id);
+    const ids = merge.ids.filter((id) => id !== current.id);
+    context.merge = ids.length ? { ...merge, ids } : null;
+    enqueue.assign({ merge: context.merge });
+    return;
+  }
+  const step = event.type === "note.discarded" ? context.mint() : null;
+  tombstone(context, enqueue, current, step);
+  context.stretch = null;
+  enqueue.assign({ stretch: null });
+  if (!step) return;
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "notes",
+    label: `delete ${nameOf(current)}`,
+    undo: { kind: "note", id: current.id, ...textOf(current), deleted: false },
+    redo: { kind: "note", id: current.id, deleted: true },
+    notice: true,
+  });
+}
 
+// Mark a note a tombstone and announce it gone. A delete is a write like any other (5):
+// anonymous it mints the next version locally; signed in it is cached, queued in the
+// outbox as a delete (baseVersion pinned like an edit), and synced. It keeps the note's
+// title and body, so the tombstone still holds what was deleted. It never rides
+// note.changed; the news is note.deleted, which every view already knows.
+function tombstone(context, enqueue, current, step) {
+  const { id } = current;
+  // The place the note showed in is written down, so an Undo brings it back there even
+  // when its place was only read from when it last changed (5).
+  const stamp = { position: positionOf(current), ...(step ? { step } : {}) };
   if (context.userId == null) {
-    const record = { ...current, deleted: true, version: current.version + 1, updatedAt: context.now() };
+    const record = { ...current, ...stamp, deleted: true, version: current.version + 1, updatedAt: context.now() };
     context.notes.set(id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
     enqueue.emit({ type: "note.deleted", id });
     return;
   }
 
-  const record = { ...current, deleted: true, updatedAt: context.now() };
+  const record = { ...current, ...stamp, deleted: true, updatedAt: context.now() };
   context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const existing = context.outbox.get(id);
@@ -357,19 +407,209 @@ function applyMove(context, event, enqueue) {
   };
   const position = between(neighbour(event.after), neighbour(event.before));
   if (position === current.position) return;
-  const record = { ...current, position };
-  context.notes.set(event.id, record);
+  // Every move is one step (12, Undo); its undo puts back the place the note showed in.
+  const step = context.mint();
+  place(context, enqueue, current, position, step);
+  context.stretch = null;
+  enqueue.assign({ stretch: null });
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "notes",
+    label: `move ${nameOf(current)}`,
+    undo: { kind: "place", id: current.id, position: positionOf(current) },
+    redo: { kind: "place", id: current.id, position },
+  });
+}
+
+// Set a note's place: last write wins (5), so it bumps no version.
+function place(context, enqueue, current, position, step) {
+  const record = { ...current, position, placeStep: step };
+  const { id } = current;
+  context.notes.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   if (context.userId == null) {
     enqueue.emit(changed(record, false));
     return;
   }
-  const existing = context.outbox.get(event.id);
-  const row = existing ? { ...existing, position } : { id: event.id, position };
-  context.outbox.set(event.id, row);
+  const existing = context.outbox.get(id);
+  const row = existing ? { ...existing, position } : { id: id, position };
+  context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit(changed(record, true));
   enqueue.raise({ type: "_drain" });
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+const textOf = (r) => ({ title: r.title, body: r.body, about: r.about ?? [] });
+
+// What a step is about, as people read it after "Undo:".
+const NAME_MAX = 40;
+function nameOf(record) {
+  if (highlightLink(record)) return "highlight";
+  const title = String(record.title ?? "").trim();
+  if (!title) return "an untitled note";
+  return `note ${title.length > NAME_MAX ? `${title.slice(0, NAME_MAX).trimEnd()}…` : title}`;
+}
+
+// The steps a written record keeps: the text's, new or carried over, and the place's.
+function stamps(current, step) {
+  const kept = {};
+  // Upkeep rewrote the record, so a step made before it no longer describes it.
+  const id = step?.upkeep ? null : step?.id ?? current?.step;
+  if (id) kept.step = id;
+  if (current?.placeStep) kept.placeStep = current.placeStep;
+  return kept;
+}
+
+// The step a save makes. A save of the note whose stretch of typing is still open, while
+// that stretch last wrote it, joins it: the same id, its undo kept by `undo`. Any other
+// save opens a new step; a new note's undo deletes it again. The stretch ends when the
+// editor says the user left the note; a save that changes the links of a note already
+// written (the chapter label) is a step of its own.
+function textStep(context, current, event) {
+  const open = context.stretch;
+  const joins = open != null && open.note === event.id && current?.step === open.id && event.about === undefined;
+  const closes = event.left === true || (current != null && event.about !== undefined && !joins);
+  if (joins) return { id: open.id, before: open.before, closes };
+  const before = current ? { kind: "note", id: current.id, ...textOf(current), deleted: false } : { kind: "note", id: event.id, deleted: true };
+  return { id: context.mint(), before, closes };
+}
+
+// The step a save makes, or none. Moving a highlight to where its quote now stands after
+// the book was imported again is the reader's own upkeep, not the user's action, so it is
+// no step. A highlight grown over others is joined with them: one step, whose undo brings
+// back every highlight as it was, and whose redo deletes the others again (12, Undo).
+function stepFor(context, current, event, about) {
+  if (reanchored(current, event)) return { upkeep: true };
+  const others = current ? joined(context, current.id, about) : [];
+  if (!others.length) return textStep(context, current, event);
+  const id = context.mint();
+  return {
+    id,
+    closes: true,
+    merge: others,
+    before: { kind: "notes", notes: [current, ...others].map((r) => ({ id: r.id, ...textOf(r), deleted: false })) },
+  };
+}
+
+// The links but for a highlight's place, to tell a save that only moved the place.
+const withoutPlace = (about) => JSON.stringify((about ?? []).map(({ place, ...rest }) => rest));
+function reanchored(current, event) {
+  if (!current || !highlightLink(current) || event.about === undefined) return false;
+  if (event.title !== current.title || event.body !== current.body) return false;
+  return withoutPlace(event.about) === withoutPlace(current.about);
+}
+
+// The other highlights of the same book whose passage the highlight's place now
+// overlaps; touching counts, as the reader joins them (book-reader overlaps).
+const ahead = (a, b) => a.block < b.block || (a.block === b.block && a.offset < b.offset);
+const overlaps = (p, q) => p.chapter === q.chapter && !(ahead(p.end, q.start) || ahead(q.end, p.start));
+function joined(context, id, about) {
+  const link = (about ?? []).find((l) => l.place && l.quote);
+  if (!link) return [];
+  return [...context.notes.values()].filter((r) => {
+    if (!visible(r) || r.id === id) return false;
+    const other = highlightLink(r);
+    return other != null && other.id === link.id && overlaps(other.place, link.place);
+  });
+}
+
+function recordText(context, enqueue, step, record) {
+  if (!step || step.upkeep) return;
+  if (step.merge) {
+    const others = step.merge.map((r) => ({ id: r.id, ...textOf(r), deleted: true }));
+    enqueue.emit({
+      type: "step.recorded",
+      id: step.id,
+      owner: "notes",
+      label: "join highlights",
+      undo: step.before,
+      redo: { kind: "notes", notes: [{ id: record.id, ...textOf(record), deleted: false }, ...others] },
+    });
+    context.stretch = null;
+    context.merge = { id: step.id, ids: step.merge.map((r) => r.id) };
+    enqueue.assign({ stretch: null, merge: context.merge });
+    return;
+  }
+  enqueue.emit({
+    type: "step.recorded",
+    id: step.id,
+    owner: "notes",
+    label: `${step.before.deleted ? "add" : "edit"} ${nameOf(record)}`,
+    undo: step.before,
+    redo: { kind: "note", id: record.id, ...textOf(record), deleted: false },
+  });
+  context.stretch = step.closes ? null : { id: step.id, note: record.id, before: step.before };
+  enqueue.assign({ stretch: context.stretch });
+}
+
+// A step's text written back. A tombstone comes back with a restore write (5): signed in
+// it names the tombstone's version as its base, which the server accepts and versions
+// like any change; while the delete itself is still in the outbox, the write replaces it.
+function rewrite(context, enqueue, current, text, step) {
+  const { deleted, ...kept } = current;
+  const { id } = current;
+  if (context.userId == null) {
+    const record = { ...kept, ...text, version: current.version + 1, updatedAt: context.now(), step };
+    context.notes.set(id, record);
+    enqueue(() => context.store.put(record).catch(() => {}));
+    enqueue.emit(changed(record, false));
+    return;
+  }
+  const record = { ...kept, ...text, updatedAt: context.now(), step };
+  context.notes.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  const existing = context.outbox.get(id);
+  const row = { id, ...text, baseVersion: hasText(existing) ? existing.baseVersion : current.version };
+  if (existing?.position !== undefined || current.deleted) row.position = positionOf(current);
+  context.outbox.set(id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
+}
+
+// An Undo or Redo of one of this fact's steps. It is applied only while what it would
+// reverse is as the step left it: the note's text, or its place, was last written in
+// this browser by that step. Anything written since, here, in another tab or on another
+// device, refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "notes") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "notes", outcome, ...(reason ? { reason } : {}) });
+  context.stretch = null;
+  context.merge = null;
+  enqueue.assign({ stretch: null, merge: null });
+  const p = event.payload ?? {};
+  const current = typeof p.id === "string" ? context.notes.get(p.id) : null;
+  if (p.kind === "note" && current) {
+    if (current.step !== event.id) return settle("refused", "changed");
+    if (p.deleted === true) {
+      if (!current.deleted) tombstone(context, enqueue, current, event.id);
+      return settle("applied");
+    }
+    if (typeof p.title !== "string" || typeof p.body !== "string") return settle("refused", "changed");
+    rewrite(context, enqueue, current, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [] }, event.id);
+    return settle("applied");
+  }
+  if (p.kind === "notes" && Array.isArray(p.notes)) {
+    const records = p.notes.map((n) => context.notes.get(n?.id));
+    if (records.some((r) => !r || r.step !== event.id)) return settle("refused", "changed");
+    p.notes.forEach((n, i) => {
+      const r = records[i];
+      if (n.deleted === true) {
+        if (!r.deleted) tombstone(context, enqueue, r, event.id);
+      } else rewrite(context, enqueue, r, { title: n.title, body: n.body, about: Array.isArray(n.about) ? n.about : r.about ?? [] }, event.id);
+    });
+    return settle("applied");
+  }
+  if (p.kind === "place" && visible(current) && isPosition(p.position)) {
+    if (current.placeStep !== event.id) return settle("refused", "changed");
+    if (p.position !== current.position) place(context, enqueue, current, p.position, event.id);
+    return settle("applied");
+  }
+  settle("refused", "changed");
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.
@@ -383,6 +623,7 @@ function flush(context, message, enqueue) {
   else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "note.moved") applyMove(context, message, enqueue);
   else if (message.type === "removal.settled") applyDiscard(context, message, enqueue);
+  else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -540,17 +781,26 @@ export const machine = setup({
       "same on every device: a new note goes first, an edit never moves a note, and a move " +
       "from the list puts it between its new neighbours. A place is last write wins: it " +
       "changes no version, so a move never conflicts with an edit. A note from before places " +
-      "keeps the order it had, newest first, until it is edited or moved. A delete handed to " +
-      "the corner notice happens when that notice's undo window ends.",
+      "keeps the order it had, newest first, until it is edited or moved. Every change is a " +
+      "step Undo and Redo reverse (section 12): one stretch of typing in one note, from " +
+      "the first save until the editor says the user left it or another note opens, a " +
+      "change of a note's links, a move, and a delete, which happens at once and asks for " +
+      "the short notice; a highlight's are named as a highlight. Undo of a new note deletes " +
+      "it, and a deleted note comes back with a restore write the server accepts. A step " +
+      "is refused when the note's text, or its place for a move, was written since by " +
+      "anything else. Joining highlights that overlap is one step, which Undo takes back to the " +
+      "highlights as they were; moving a highlight to its passage after the book is imported " +
+      "again is no step. A delete handed to the corner notice happens when that notice's " +
+      "undo window ends.",
     kind: "fact",
     shape: "replicated",
-    emits: ["note.changed", "note.deleted", "note.conflicted"],
+    emits: ["note.changed", "note.deleted", "note.conflicted", "step.recorded", "step.settled"],
     owns: "the notes",
     steps: {
       "note.opened": "navigation",
-      "note.saved": "pending",
-      "note.discarded": "pending",
-      "note.moved": "pending",
+      "note.saved": "step",
+      "note.discarded": "step",
+      "note.moved": "step",
       "removal.settled": "pending",
     },
     asks: ["session: read"],
@@ -562,6 +812,13 @@ export const machine = setup({
     now: input.now,
     api: input.api,
     ask: input.ask,
+    mint: input.mint ?? ulid,
+    // The stretch of typing still open (12, Undo): { id, note, before }, the step's id, the
+    // note typed in and its text before the stretch; null when none is.
+    stretch: null,
+    // A join of highlights whose others are still to be deleted (12, Undo): { id, ids },
+    // the join's step and the highlights it takes in; null when none is.
+    merge: null,
     userId: null,
     cursor: 0,
     queued: [],
@@ -585,7 +842,13 @@ export const machine = setup({
     "session.changed": {
       actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
     },
-    "note.opened": { actions: assign({ openId: ({ event }) => event.id }) },
+    // Another note opened in the editor ends the stretch of typing in the last one (12, Undo).
+    "note.opened": {
+      actions: assign({
+        openId: ({ event }) => event.id,
+        stretch: ({ context, event }) => (context.stretch?.note === event.id ? context.stretch : null),
+      }),
+    },
   },
   states: {
     loading: {
@@ -625,6 +888,8 @@ export const machine = setup({
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
         "removal.settled": { guard: ({ event }) => event.kind === "note", actions: queue },
+        "step.undone": { actions: queue },
+        "step.redone": { actions: queue },
       },
     },
     // The store is loaded; confirm who is signed in before flushing, so an early
@@ -662,6 +927,8 @@ export const machine = setup({
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
         "removal.settled": { guard: ({ event }) => event.kind === "note", actions: queue },
+        "step.undone": { actions: queue },
+        "step.redone": { actions: queue },
       },
     },
     ready: {
@@ -675,6 +942,8 @@ export const machine = setup({
         "note.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "note.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         "note.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         // A delete the list handed to the corner notice when the keyboard left it: the
         // notice's undo window ran out, so the note goes, as on note.discarded.
         "removal.settled": {
@@ -823,14 +1092,18 @@ function applySync(context, output, enqueue) {
       continue;
     }
     const row = context.outbox.get(ack.id);
-    const isDelete = Boolean((row && row.deleted) || ack.deleted);
+    const held = context.notes.get(ack.id);
+    // Whether the note is gone is what this browser holds now: an Undo during the sync
+    // may have restored a note whose delete is being acknowledged, or deleted one.
+    const isDelete = held ? Boolean(held.deleted) : Boolean(ack.deleted);
     // The row is fully drained when the server holds what it acknowledged; a newer
-    // edit during the sync leaves a newer row, so it stays pending and the outbox base
-    // advances. A delete has no newer edit (a tombstone refuses further saves), so a
-    // matching ack always drains it — its text differs from the server's, so it is the
-    // deleted flag, not the body, that decides.
+    // edit, delete or restore during the sync leaves a newer row, so it stays pending and
+    // the outbox base advances (a restore then names the tombstone's version, 5). A
+    // delete's text differs from the server's, so it is the deleted flag, not the body,
+    // that decides.
     const placed = row && (row.position === undefined || row.position === ack.position);
-    const drained = row && placed && (isDelete ? Boolean(ack.deleted) : !hasText(row) || (row.title === ack.title && row.body === ack.body));
+    const drained =
+      row && placed && Boolean(row.deleted) === Boolean(ack.deleted) && (row.deleted || !hasText(row) || (row.title === ack.title && row.body === ack.body));
     if (drained) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
@@ -839,7 +1112,6 @@ function applySync(context, output, enqueue) {
       context.outbox.set(ack.id, advanced);
       enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
     }
-    const held = context.notes.get(ack.id);
     // Keep the latest local text (a mid-sync edit), take the server's version.
     const record = {
       id: ack.id,
@@ -848,6 +1120,7 @@ function applySync(context, output, enqueue) {
       version: ack.version,
       updatedAt: ack.updatedAt,
       about: held ? held.about ?? [] : ack.about ?? [],
+      ...stamps(held, null),
     };
     const position = held && isPosition(held.position) ? held.position : ack.position;
     if (isPosition(position)) record.position = position;
@@ -895,16 +1168,18 @@ function applySync(context, output, enqueue) {
     if (current && note.version <= current.version) {
       // A move made elsewhere changes no version, so it is taken on its own.
       if (visible(current) && !note.deleted && !moving && isPosition(note.position) && note.position !== current.position) {
-        const record = { ...current, position: note.position };
+        // A place written elsewhere: a move this browser made can no longer be undone.
+        const { placeStep, ...record } = { ...current, position: note.position };
         context.notes.set(note.id, record);
         enqueue(() => context.store.put(record).catch(() => {}));
         enqueue.emit(changed(record, context.outbox.has(note.id)));
       }
       continue;
     }
-    // A delete always wins (5): a live copy from the server never resurrects a local
-    // tombstone, even at a higher version (the server refuses such a revival anyway).
-    if (current && current.deleted && !note.deleted) continue;
+    // A delete always wins (5): a live copy never resurrects a tombstone whose delete is
+    // still to be sent. Otherwise a live copy at a higher version is a restore write made
+    // elsewhere, the one revival the server accepts.
+    if (current && current.deleted && !note.deleted && context.outbox.get(note.id)?.deleted) continue;
     const record = { id: note.id, title: note.title, body: note.body, version: note.version, updatedAt: note.updatedAt, about: note.about ?? [] };
     const position = moving ? current?.position : isPosition(note.position) ? note.position : current?.position;
     if (isPosition(position)) record.position = position;

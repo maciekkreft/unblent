@@ -4,6 +4,8 @@ import { openNotes } from "./store.js";
 import changed from "./events/note.changed.json" with { type: "json" };
 import deleted from "./events/note.deleted.json" with { type: "json" };
 import conflicted from "./events/note.conflicted.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import open from "./queries/open.json" with { type: "json" };
@@ -59,7 +61,7 @@ const api = {
 
 const actor = mount(machine, {
   input: { store, now: () => Date.now(), api, ask: (target, name, payload) => ask(machine, target, name, payload) },
-  events: { "note.changed": changed, "note.deleted": deleted, "note.conflicted": conflicted },
+  events: { "note.changed": changed, "note.deleted": deleted, "note.conflicted": conflicted, "step.recorded": recorded, "step.settled": settled },
   queries: { list, read, open, find, highlights },
 });
 

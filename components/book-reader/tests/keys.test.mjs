@@ -378,20 +378,21 @@ for (const engine of ENGINES) {
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 
-    // d d inside a highlight does Remove, and u brings it back while it counts down.
+    // d d inside a highlight does Remove at once; the short notice's Undo brings it back
+    // (12, Undo). On the product page, which holds the notes and Undo.
     // Browser: focus and keys.
-    test(`d d removes a highlight and u brings it back in ${engine.name}`, async () => {
-      const { page, problems } = await open(true, { highlight: true });
+    test(`d d removes a highlight and the notice's Undo brings it back in ${engine.name}`, async () => {
+      const { page, problems } = await open(true, { highlight: true, product: true });
       await until(async () => (await marks(page)).join(" ") === "Chapter One");
       // Vim arrives with the settings reply; d d acts only once it has.
       await until(async () => {
         await page.keyboard.press("d");
         await page.keyboard.press("d");
-        return (await bubble(page)).join(" · ") === "Undo";
+        return (await marks(page)).length === 0;
       });
-      await page.keyboard.press("u");
-      await until(async () => (await bubble(page)).join(" · ") === "Copy · Copy link · Remove");
-      assert.equal((await marks(page)).join(" "), "Chapter One");
+      await page.locator("notice-stack", { hasText: "Delete highlight" }).waitFor();
+      await page.locator("notice-stack .undo").click();
+      await until(async () => (await marks(page)).join(" ") === "Chapter One");
       assert.deepEqual(problems, [], `${engine.name} reported: ${problems.join("; ")}`);
     });
 

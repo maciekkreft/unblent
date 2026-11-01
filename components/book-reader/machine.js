@@ -373,14 +373,6 @@ export const linkLabel = (exact) => {
 };
 export const sourceLink = (id, quote) => `[${linkLabel(quote?.exact)}](note:${id})`;
 
-// A Set with one id removed, as a new Set so assign sees a fresh value (the note-list
-// idiom): XState keeps context immutable, and the view re-renders on every snapshot.
-const without = (set, id) => {
-  const next = new Set(set);
-  next.delete(id);
-  return next;
-};
-
 // --- Re-anchoring after a re-import (session 7) -----------------------------------
 //
 // A book's text is re-extracted at import under a new content version, so a highlight
@@ -576,8 +568,9 @@ export const machine = setup({
       "Remove; Copy link puts a link to the highlight, its quote's first words as the label, " +
       "on the clipboard and in the Vim register of any editor, and with Vim keys on, y with " +
       "the cursor inside a highlight opens its bubble and does the same, and y y does Copy, " +
-      "its quote's text; d d there does Remove, and u brings the highlight back while its " +
-      "bubble reads Removed · Undo. With Vim keys on, y copies instead of highlighting: on a passage " +
+      "its quote's text; d d there does Remove. Remove deletes the highlight at once and shows " +
+      "the short notice with Undo; Undo and Redo take back making, joining and removing a " +
+      "highlight, each one step (section 12), and u is the global Undo. With Vim keys on, y copies instead of highlighting: on a passage " +
       "marked with v or Ctrl+v it copies the passage and makes no highlight, and y i s and " +
       "y i p copy the sentence or the paragraph holding the cursor; the text goes on the " +
       "clipboard and into the Vim register of any editor, blocks a blank line apart, and " +
@@ -611,11 +604,6 @@ export const machine = setup({
     // A ULID for a new highlight note (Decision 1); arrives through input so the machine
     // stays importable in Node.
     mint: input.mint,
-    // The window a removed highlight can be brought back within (the --duration-undo
-    // token, read in the view and passed in so the machine stays importable in Node):
-    // the same delayed delete note-list uses (session 3). A removal is not a fact until
-    // the window ends, so an undone removal never touched the note.
-    undoMs: input.undoMs,
     // The `highlights` attribute (Decision 3): off is exactly today's reader — no notes
     // asked, no painting, no highlight gesture. Arrives through input.
     highlighting: Boolean(input.highlighting),
@@ -623,11 +611,6 @@ export const machine = setup({
     // quote, commented). Reset when the book changes; kept current from note.changed and
     // note.deleted after the starting list (4.3).
     highlights: [],
-    // The highlight ids counting down to a removal, each with its own cancelable timer
-    // (session 3): the bubble shows Undo and the mark stays dimmed until the window ends,
-    // when note.discarded makes the removal a fact. Not reset on a book change, so a
-    // removal the user did not undo still completes if they navigate away.
-    discarding: new Set(),
     // A one-shot for the view: a drag wholly inside an existing highlight makes no new
     // note; instead the reader opens that highlight's bubble (Decision 6, session 3). The
     // bus cannot route an internal message to a view, so the id rides in context with a
@@ -833,6 +816,8 @@ export const machine = setup({
                 body: "",
                 baseVersion: null,
                 about: [{ kind: "book", id: context.book.id, place, quote: quoteOf(event.texts, range) }],
+                // One finished gesture, so one step of its own (12, Undo).
+                left: true,
               });
               return;
             }
@@ -879,30 +864,14 @@ export const machine = setup({
         },
         "note.deleted": {
           guard: ({ context }) => context.highlighting,
-          actions: enqueueActions(({ context, event, enqueue }) => {
-            enqueue.assign({
-              highlights: ({ context }) => context.highlights.filter((h) => h.id !== event.id),
-              discarding: ({ context }) => without(context.discarding, event.id),
-            });
-            // The fact confirms the removal (this device's own elapse, or another's):
-            // clear any countdown still standing for it (session 3).
-            if (context.discarding.has(event.id)) enqueue.cancel(`remove:${event.id}`);
-          }),
+          actions: assign({ highlights: ({ context, event }) => context.highlights.filter((h) => h.id !== event.id) }),
         },
-        // Remove a highlight (session 3): the same delayed delete as note-list. _remove
-        // begins the undo window (the bubble reads Removed · Undo, the mark stays dimmed),
-        // _undo cancels it, and only _elapsed makes the removal a fact — note.discarded,
-        // which notes tombstones and echoes back as note.deleted, dropping the mark.
-        // Nothing is emitted until the window ends, so an undone removal never touched
-        // the note. The bubble's Remove and, with Vim keys, d d send it; the bubble's Undo
-        // and u send _undo.
+        // Remove a highlight: the bubble's Remove and, with Vim keys, d d. A highlight is a
+        // note (13), so it is deleted at once, one step `notes` records with the short
+        // notice and its Undo (12, Undo); notes echoes note.deleted, dropping the mark.
         _remove: {
-          guard: ({ context, event }) =>
-            context.highlights.some((h) => h.id === event.id) && !context.discarding.has(event.id),
-          actions: enqueueActions(({ event, enqueue }) => {
-            enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
-            enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `remove:${event.id}` });
-          }),
+          guard: ({ context, event }) => context.highlights.some((h) => h.id === event.id),
+          actions: emit(({ event }) => ({ type: "note.discarded", id: event.id })),
         },
         // Text copied with Vim keys (y on a passage marked with v, yis, yip, or yy on a
         // highlight): announced whether or not the clipboard took it, so an editor's Vim
@@ -920,20 +889,6 @@ export const machine = setup({
             id: event.id,
             text: sourceLink(event.id, context.highlights.find((h) => h.id === event.id).quote),
           })),
-        },
-        _undo: {
-          guard: ({ context, event }) => context.discarding.has(event.id),
-          actions: enqueueActions(({ event, enqueue }) => {
-            enqueue.cancel(`remove:${event.id}`);
-            enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
-          }),
-        },
-        _elapsed: {
-          guard: ({ context, event }) => context.discarding.has(event.id),
-          actions: enqueueActions(({ event, enqueue }) => {
-            enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
-            enqueue.emit({ type: "note.discarded", id: event.id });
-          }),
         },
         // A page turn that ran past the chapter's edge (the view decides; an intra-
         // chapter turn never reaches here): load the neighbour and open its first page,
@@ -1123,7 +1078,7 @@ export const machine = setup({
                       ? { ...l, place: context.merge.place, quote: context.merge.quote }
                       : l,
                   );
-                  enqueue.emit({ type: "note.saved", id: survivorId, title: titleOf(body), body, baseVersion: survivor.version, about });
+                  enqueue.emit({ type: "note.saved", id: survivorId, title: titleOf(body), body, baseVersion: survivor.version, about, left: true });
                   for (const id of otherIds) enqueue.emit({ type: "note.discarded", id });
                 }
                 enqueue.assign({ merge: null });
@@ -1152,7 +1107,7 @@ export const machine = setup({
                   const about = (Array.isArray(note.about) ? note.about : []).map((l) =>
                     l.kind === "book" && l.id === context.book.id && l.place ? { ...l, place: item.place } : l,
                   );
-                  enqueue.emit({ type: "note.saved", id: note.id, title: note.title ?? "", body: note.body ?? "", baseVersion: note.version, about });
+                  enqueue.emit({ type: "note.saved", id: note.id, title: note.title ?? "", body: note.body ?? "", baseVersion: note.version, about, left: true });
                 }
                 enqueue.assign({ reanchor: null });
               }),

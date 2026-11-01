@@ -663,16 +663,13 @@ test("a drag entirely inside one highlight makes nothing (no merge, no save)", a
   assert.equal(ctx(actor).merge, null);
 });
 
-// --- The bubble: reveal a contained highlight, remove with undo (session 3) ---------
+// --- The bubble: reveal a contained highlight, remove it (session 3) ----------------
 //
 // A drag inside an existing highlight opens its bubble instead of making a note; the
-// bubble's Remove is the same delayed delete as note-list, driven here with a
-// SimulatedClock. All decisions are the actor's; the bubble's placement is the view's
-// (page.test.mjs).
+// bubble's Remove deletes the highlight at once, a step `notes` records (12, Undo). All
+// decisions are the actor's; the bubble's placement is the view's (page.test.mjs).
 
-const UNDO_MS = 3000;
-
-// Open a book highlighting, with an undo window and a note.discarded collector.
+// Open a book highlighting, with a note.discarded collector.
 async function openRemove({ notes = [] } = {}) {
   const clock = new SimulatedClock();
   const ask = (target, name) => {
@@ -682,7 +679,7 @@ async function openRemove({ notes = [] } = {}) {
     if (name === "chapter") return Promise.resolve({ title: "t", html: "<p>x</p>" });
     return Promise.resolve({});
   };
-  const actor = createActor(machine, { input: { ask, mint: () => HL_ID, highlighting: true, undoMs: UNDO_MS }, clock });
+  const actor = createActor(machine, { input: { ask, mint: () => HL_ID, highlighting: true }, clock });
   const discarded = [];
   actor.on("note.discarded", (e) => discarded.push(e));
   actor.start();
@@ -707,70 +704,17 @@ test("a drag wholly inside a highlight reveals its bubble instead of making a no
   assert.equal(ctx(actor).reveal.n, first + 1, "the nonce advances so the view re-opens the bubble");
 });
 
-test("_remove starts the undo window and only its elapse discards the highlight", async () => {
-  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
+test("_remove deletes the highlight at once, once", async () => {
+  const { actor, discarded } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
   actor.send({ type: "_remove", id: "n1" });
   await flush();
-  assert.ok(ctx(actor).discarding.has("n1"), "the highlight is counting down");
-  clock.increment(UNDO_MS - 1);
-  await flush();
-  assert.deepEqual(discarded, [], "nothing is discarded before the window closes");
-  clock.increment(1);
-  await flush();
-  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }], "the removal is a fact once the window ends");
-  assert.ok(!ctx(actor).discarding.has("n1"), "the countdown is cleared");
-});
-
-test("_undo cancels the window; an undone removal never becomes a fact", async () => {
-  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
-  actor.send({ type: "_remove", id: "n1" });
-  await flush();
-  actor.send({ type: "_undo", id: "n1" });
-  await flush();
-  assert.ok(!ctx(actor).discarding.has("n1"), "the countdown is cancelled");
-  clock.increment(UNDO_MS * 2);
-  await flush();
-  assert.deepEqual(discarded, [], "nothing is discarded after an undo");
-});
-
-test("a second _remove while counting down is a no-op (one discard, not two)", async () => {
-  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
-  actor.send({ type: "_remove", id: "n1" });
-  await flush();
-  actor.send({ type: "_remove", id: "n1" });
-  await flush();
-  clock.increment(UNDO_MS);
-  await flush();
-  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }], "the second remove did not schedule a second discard");
-});
-
-test("note.deleted clears a standing countdown and its timer for that id", async () => {
-  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
-  actor.send({ type: "_remove", id: "n1" });
-  await flush();
-  // The fact confirms the delete (another device, or this one's own elapse): the
-  // countdown is cleared and its timer cancelled, so no second discard fires.
+  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }]);
   actor.send({ type: "note.deleted", id: "n1" });
   await flush();
-  assert.ok(!ctx(actor).discarding.has("n1"), "the countdown is cleared");
   assert.deepEqual(ctx(actor).highlights, [], "the highlight is gone");
-  clock.increment(UNDO_MS * 2);
-  await flush();
-  assert.deepEqual(discarded, [], "no discard fires after the fact already removed it");
-});
-
-test("a chapter turn during the undo window does not cancel the removal", async () => {
-  const { actor, discarded, clock } = await openRemove({ notes: [highlightNote("n1", PLACE_HELLO)] });
   actor.send({ type: "_remove", id: "n1" });
   await flush();
-  // Turn into the next chapter mid-window (reading.ready → fetching → ready): the delayed
-  // removal must survive the substate change.
-  actor.send({ type: "_next" });
-  await flush();
-  assert.ok(actor.getSnapshot().matches({ reading: "ready" }), `expected reading.ready, got ${JSON.stringify(state(actor))}`);
-  clock.increment(UNDO_MS);
-  await flush();
-  assert.deepEqual(discarded, [{ type: "note.discarded", id: "n1" }], "the removal fired despite the chapter turn");
+  assert.equal(discarded.length, 1, "a highlight already gone is not deleted again");
 });
 
 // --- Re-anchoring after a re-import (session 7) -------------------------------------
@@ -917,7 +861,7 @@ test("_reanchor keeps a note the read cannot find from being re-saved", async ()
 });
 
 // The "Vim keys" preference (12): asked of settings at start, followed after.
-const VIM_INPUT = { mint: () => "01ARZ3NDEKTSV4RRFFQ69G5FZZ", undoMs: 100, highlighting: false };
+const VIM_INPUT = { mint: () => "01ARZ3NDEKTSV4RRFFQ69G5FZZ", highlighting: false };
 const vimAsk = (reply) => (target, name) =>
   Promise.resolve(target === "settings" && name === "read" ? reply : {});
 const vimActor = (reply) => createActor(machine, { input: { ...VIM_INPUT, ask: vimAsk(reply) } }).start();

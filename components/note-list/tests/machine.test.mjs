@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import { createActor, SimulatedClock } from "xstate";
 import { machine, shown, plain, showing } from "../machine.js";
 
-// The undo window, driven by a SimulatedClock so the countdown is tested without
-// waiting real time (the view reads the value from --duration-undo).
-const UNDO_MS = 100;
+// A long stretch of simulated time, to show nothing waits on a clock.
+const LATER = 10000;
 
 // The actor is driven with a fake ask and mint, the shapes view.js builds for real.
 const A = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -24,11 +23,11 @@ const minter = () => {
   return () => ids[i++] ?? `01ARZ3NDEKTSV4RRFFQ69G5F${i}`;
 };
 
-function list({ ask, mint = minter(), undoMs = UNDO_MS, following = false, tryPage = false } = {}) {
+function list({ ask, mint = minter(), following = false, tryPage = false } = {}) {
   const selected = [];
   const discarded = [];
   const clock = new SimulatedClock();
-  const actor = createActor(machine, { input: { ask, mint, undoMs, following, tryPage }, clock });
+  const actor = createActor(machine, { input: { ask, mint, following, tryPage }, clock });
   actor.on("note.selected", (e) => selected.push(e.id));
   actor.on("note.discarded", (e) => discarded.push(e.id));
   actor.start();
@@ -134,89 +133,37 @@ test("a list notes cannot answer yields an empty list without throwing", async (
   assert.deepEqual(ids(actor), []);
 });
 
-// --- Discard countdown (delayed delete, 5) ---------------------------------------
+// --- Delete (12, Undo) -----------------------------------------------------------
 
-const discardingHas = (actor, id) => actor.getSnapshot().context.discarding.has(id);
-
-test("a discard starts a countdown and emits note.discarded only when it elapses", async () => {
+test("a delete happens at once, once; its Undo is a step notes records", async () => {
   const { actor, discarded, clock } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
   await tick();
   actor.send({ type: "_discard", id: A });
-  assert.equal(discardingHas(actor, A), true, "the row is counting down");
-  assert.deepEqual(discarded, [], "nothing is a fact yet");
-
-  clock.increment(UNDO_MS - 1);
-  assert.deepEqual(discarded, [], "still nothing a tick before the window ends");
-  clock.increment(1);
-  assert.deepEqual(discarded, [A], "the window ran out: the delete is a fact");
-  assert.equal(discardingHas(actor, A), false, "and the countdown is over");
-  clock.increment(UNDO_MS * 5);
-  assert.deepEqual(discarded, [A], "it fires once, never again");
-});
-
-test("undo before the window ends cancels the delete and emits nothing", async () => {
-  const { actor, discarded, clock } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
-  await tick();
-  actor.send({ type: "_discard", id: A });
-  clock.increment(UNDO_MS - 1);
-  actor.send({ type: "_undo", id: A });
-  assert.equal(discardingHas(actor, A), false, "the row is back");
-  clock.increment(UNDO_MS * 2);
-  assert.deepEqual(discarded, [], "the cancelled timer never fires");
-});
-
-test("two rows count down independently", async () => {
-  const { actor, discarded, clock } = list({
-    ask: answeringList([{ id: A, title: "A", updatedAt: 10 }, { id: B, title: "B", updatedAt: 20 }]),
-  });
-  await tick();
-  actor.send({ type: "_discard", id: A });
-  clock.increment(40);
-  actor.send({ type: "_discard", id: B });
-  clock.increment(60); // A's window (100) ends, B's (started at 40) has 40 left
   assert.deepEqual(discarded, [A]);
-  clock.increment(40); // B's window ends
-  assert.deepEqual(discarded, [A, B]);
-});
-
-test("_pick on a counting-down row emits nothing: a click there is the undo", async () => {
-  const { actor, selected } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
-  await tick();
+  clock.increment(LATER);
+  assert.deepEqual(discarded, [A], "no timer follows it");
+  actor.send({ type: "note.deleted", id: A });
+  assert.deepEqual(ids(actor), [], "the row goes when notes says the note is gone");
   actor.send({ type: "_discard", id: A });
-  actor.send({ type: "_pick", id: A });
-  assert.deepEqual(selected, [], "a discarding row is not picked");
+  actor.send({ type: "_discard", id: C });
+  assert.deepEqual(discarded, [A], "a note not in the list is not deleted");
 });
 
-test("note.deleted clears the open row and any standing countdown", async () => {
-  const { actor, discarded, clock } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
+test("note.deleted clears the open row", async () => {
+  const { actor } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
   await tick();
   actor.send({ type: "note.opened", id: A });
-  actor.send({ type: "_discard", id: A });
-  actor.send({ type: "note.deleted", id: A }); // e.g. the same note deleted on another device
+  actor.send({ type: "note.deleted", id: A });
   assert.deepEqual(ids(actor), [], "the row is gone");
   assert.equal(actor.getSnapshot().context.open, null, "and no longer the open row");
-  assert.equal(discardingHas(actor, A), false, "the countdown is cleared");
-  clock.increment(UNDO_MS * 2);
-  assert.deepEqual(discarded, [], "the cancelled timer never fires");
 });
 
-test("a note.changed for a discarding row keeps it counting down", async () => {
-  const { actor, discarded, clock } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
+test("an Undo's note.changed brings a deleted row back", async () => {
+  const { actor } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10, position: "a" }]) });
   await tick();
-  actor.send({ type: "_discard", id: A });
-  actor.send({ type: "note.changed", id: A, title: "A edited", body: "x", version: 2, pending: true, updatedAt: 50 });
-  assert.equal(discardingHas(actor, A), true, "still counting down");
-  clock.increment(UNDO_MS);
-  assert.deepEqual(discarded, [A], "and it still elapses to a discard");
-});
-
-test("a discard of an unknown id does nothing", async () => {
-  const { actor, discarded, clock } = list({ ask: answeringList([{ id: A, title: "A", updatedAt: 10 }]) });
-  await tick();
-  actor.send({ type: "_discard", id: C });
-  assert.equal(discardingHas(actor, C), false);
-  clock.increment(UNDO_MS * 2);
-  assert.deepEqual(discarded, []);
+  actor.send({ type: "note.deleted", id: A });
+  actor.send({ type: "note.changed", id: A, title: "A", body: "x", version: 3, pending: false, updatedAt: 10, position: "a" });
+  assert.deepEqual(ids(actor), [A]);
 });
 
 // --- Following the stage: the subject's notes only (D5, D6) ------------------------
@@ -482,22 +429,21 @@ test("signed out no row can be opened or deleted", async () => {
   await tick();
   actor.send({ type: "_pick", id: A });
   actor.send({ type: "_discard", id: A });
-  clock.increment(UNDO_MS * 2);
+  clock.increment(LATER);
   assert.deepEqual([selected, discarded], [[], []]);
 });
 
-test("signing in brings the notes back without a reload; signing out hides them and takes back a delete", async () => {
-  const { actor, discarded, clock } = list({ following: true, ask: withSession(SIGNED_OUT) });
+test("signing in brings the notes back without a reload; signing out hides them and puts back a cut", async () => {
+  const { actor, discarded } = list({ following: true, ask: withSession(SIGNED_OUT) });
   await tick();
   assert.deepEqual(shownIds(actor), [A], "still kept while hidden");
   actor.send({ type: "session.changed", ...SIGNED_IN });
   assert.equal(showing(actor.getSnapshot().context), "show");
-  actor.send({ type: "_discard", id: A });
+  actor.send({ type: "_cut", id: A });
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(actor.getSnapshot().context), "sign-in");
-  clock.increment(UNDO_MS * 2);
-  assert.deepEqual(discarded, [], "the delete the user can no longer see is taken back");
-  assert.equal(discardingHas(actor, A), false);
+  assert.equal(actor.getSnapshot().context.cut, null);
+  assert.deepEqual(discarded, [], "the cut the user can no longer see is not deleted");
   assert.deepEqual(ids(actor).includes(A), true);
 });
 
@@ -506,9 +452,7 @@ test("signing in brings the notes back without a reload; signing out hides them 
 function keyed(notes) {
   const out = list({ ask: answeringList(notes) });
   out.moved = [];
-  out.started = [];
   out.actor.on("note.moved", (e) => out.moved.push({ id: e.id, after: e.after, before: e.before }));
-  out.actor.on("removal.started", (e) => out.started.push({ kind: e.kind, id: e.id, name: e.name }));
   return out;
 }
 const placed = [
@@ -530,7 +474,7 @@ test("dd cuts a row with no countdown; p or P places it and emits note.moved", a
   await tick();
   actor.send({ type: "_cut", id: A });
   assert.equal(actor.getSnapshot().context.cut, A);
-  clock.increment(UNDO_MS * 5);
+  clock.increment(LATER);
   assert.deepEqual(discarded, [], "a cut has no clock");
   actor.send({ type: "_paste", after: C, before: null });
   assert.deepEqual(moved, [{ id: A, after: C, before: null }]);
@@ -540,8 +484,8 @@ test("dd cuts a row with no countdown; p or P places it and emits note.moved", a
   assert.equal(moved.length, 1);
 });
 
-test("u on the cut row puts it back; a second dd deletes the first cut with its countdown", async () => {
-  const { actor, moved, discarded, clock } = keyed(placed);
+test("u on the cut row puts it back; a second dd deletes the first cut at once", async () => {
+  const { actor, moved, discarded } = keyed(placed);
   await tick();
   actor.send({ type: "_cut", id: A });
   actor.send({ type: "_uncut" });
@@ -549,51 +493,37 @@ test("u on the cut row puts it back; a second dd deletes the first cut with its 
   actor.send({ type: "_cut", id: A });
   actor.send({ type: "_cut", id: B });
   assert.equal(actor.getSnapshot().context.cut, B);
-  assert.ok(actor.getSnapshot().context.discarding.has(A));
-  clock.increment(UNDO_MS);
   assert.deepEqual(discarded, [A]);
   assert.deepEqual(moved, []);
 });
 
-test("Escape on a cut turns it into the ordinary delete, which u (an undo) takes back", async () => {
-  const { actor, discarded, clock } = keyed(placed);
+test("Escape on a cut deletes the row at once", async () => {
+  const { actor, discarded } = keyed(placed);
   await tick();
+  actor.send({ type: "_escape" });
+  assert.deepEqual(discarded, [], "Escape with nothing cut deletes nothing");
   actor.send({ type: "_cut", id: B });
   actor.send({ type: "_escape" });
   assert.equal(actor.getSnapshot().context.cut, null);
-  assert.ok(actor.getSnapshot().context.discarding.has(B));
-  actor.send({ type: "_undo", id: B });
-  clock.increment(UNDO_MS);
-  assert.deepEqual(discarded, []);
+  assert.deepEqual(discarded, [B]);
 });
 
-test("leaving the list hands a cut or counting-down row to the corner notice, hidden until it ends", async () => {
-  const { actor, started, discarded, clock } = keyed(placed);
+test("the keyboard leaving the list deletes the cut row", async () => {
+  const { actor, discarded } = keyed(placed);
   await tick();
-  actor.send({ type: "_discard", id: A });
   actor.send({ type: "_cut", id: B });
   actor.send({ type: "_left" });
-  assert.deepEqual(started, [
-    { kind: "note", id: A, name: "A" },
-    { kind: "note", id: B, name: "B" },
-  ]);
-  clock.increment(UNDO_MS * 2);
-  assert.deepEqual(discarded, [], "the notice settles it now, not the row's timer");
-  assert.deepEqual(shownIds(actor), [C]);
-  // Undo in the notice brings the row back; the notice's settle deletes the other in notes.
-  actor.send({ type: "removal.undone", kind: "note", id: A });
-  assert.deepEqual(shownIds(actor), [A, C]);
-  actor.send({ type: "note.deleted", id: B });
-  assert.deepEqual(ids(actor), [A, C]);
-  assert.equal(actor.getSnapshot().context.handed.size, 0);
+  assert.deepEqual(discarded, [B]);
+  actor.send({ type: "_left" });
+  assert.deepEqual(discarded, [B], "nothing cut, nothing deleted");
 });
 
-test("opening a row while one is cut hands the cut to the corner notice", async () => {
-  const { actor, started, selected } = keyed(placed);
+test("opening a row while one is cut deletes the cut", async () => {
+  const { actor, discarded, selected } = keyed(placed);
   await tick();
   actor.send({ type: "_cut", id: A });
   actor.send({ type: "_pick", id: C });
-  assert.deepEqual(started.map((s) => s.id), [A]);
+  assert.deepEqual(discarded, [A]);
   assert.deepEqual(selected, [C]);
 });
 

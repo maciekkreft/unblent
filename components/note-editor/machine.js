@@ -372,15 +372,16 @@ export const machine = setup({
       // What was sent, so the echo of this save (a note.changed carrying it back)
       // is told apart from a real change from elsewhere, and a later pause that
       // ends on the same text saves nothing.
-      enqueue.assign({ sent: { body: context.body } });
+      enqueue.assign({ sent: { body: context.body }, typed: true });
       enqueue.emit(savedEvent(context));
     }),
-    // Save only if there is something to send: used before following a subject change,
-    // where the draft may already be clean.
-    saveIfDirty: enqueueActions(({ context, enqueue }) => {
-      if (!dirty(context)) return;
-      enqueue.assign({ sent: { body: context.body } });
-      enqueue.emit(savedEvent(context));
+    // The user left the note (the keyboard left the editor, or another note opens): one
+    // last save says so, so `notes` ends the stretch of typing as one step (12, Undo). It
+    // carries the draft when it is dirty, and the text notes holds otherwise.
+    leave: enqueueActions(({ context, enqueue }) => {
+      if (context.id == null || !(context.typed || dirty(context))) return;
+      enqueue.assign({ sent: { body: context.body }, typed: false });
+      enqueue.emit({ ...savedEvent(context), left: true });
     }),
     // Take the subject the stage holds, from the start reply or from subject.changed, and
     // keep its title in the browser (3.1) so the About line can name a kept note's
@@ -403,8 +404,11 @@ export const machine = setup({
       enqueue.assign({ subject, titles });
       if (titles !== context.titles) enqueue(() => context.rememberTitles?.(titles));
     }),
-    // A pick opens its note, also while keepOpen is on.
-    open: assign(({ event }) => ({ id: event.id, body: "", baseVersion: null, sent: null, about: [] })),
+    // A pick opens its note, also while keepOpen is on; the note open before is left.
+    open: enqueueActions(({ event, enqueue }) => {
+      enqueue({ type: "leave" });
+      enqueue.assign({ id: event.id, body: "", baseVersion: null, sent: null, about: [], typed: false });
+    }),
     // keepOpen from the start reply, unless a settings.changed came first and is newer;
     // while it is on, the note kept in the browser reopens.
     takeStartKeep: enqueueActions(({ context, event, enqueue }) => {
@@ -423,7 +427,10 @@ export const machine = setup({
       "saves a short time into typing and when the editor loses focus, without saying so each " +
       "time: a muted \"Not synced\" shows under the note only while its change has waited " +
       "more than five seconds for the server (offline, or the server failing), and goes when " +
-      "the server has it. With Vim keys on, a new " +
+      "the server has it. Leaving the note, when the keyboard leaves the editor or another " +
+      "note opens, says so with one last save, so Undo takes back everything typed since " +
+      "the note was entered as one step (section 12); a change notes makes to the open " +
+      "note, such as an Undo, shows at once while nothing typed would be lost. With Vim keys on, a new " +
       "note picked in the list (its New note row, or o or O there) starts in insert mode when " +
       "the keyboard arrives, so the user types at once; an existing note, the empty page " +
       "waiting for a subject and a note tab on the stage start in normal mode. With `subject` it opens " +
@@ -530,6 +537,8 @@ export const machine = setup({
     vimKeys: false,
     // Whether the keyboard is in the editor (UI state), from the view's focus and blur.
     focused: false,
+    // Whether a save went out since the user last left the note (12, Undo).
+    typed: false,
     // Puts text or a source link copied in the reader in Vim's unnamed register, so p pastes it.
     pushRegister: input.pushRegister,
     // Source links a follow found gone (UI state): their tags are drawn removed.
@@ -571,7 +580,7 @@ export const machine = setup({
     // Whether the keyboard is in the note, so a chapter change does not swap the note the
     // user is writing in. Beside the states, so no state can miss the keyboard leaving.
     _focused: { actions: assign({ focused: true }) },
-    _blurred: { actions: assign({ focused: false }) },
+    _blurred: { actions: ["leave", assign({ focused: false })] },
     "dock.changed": { actions: assign({ layouts: ({ context }) => context.layouts + 1 }) },
     _unsynced: {
       guard: ({ context, event }) => !context.unsynced.includes(event.id),
@@ -663,7 +672,7 @@ export const machine = setup({
         guard: ({ context }) => context.subjecting,
         target: ".refollowing",
         actions: [
-          "saveIfDirty",
+          "leave",
           "takeSubject",
           assign({
             id: null,
@@ -682,7 +691,7 @@ export const machine = setup({
       {
         guard: ({ context, event }) => event.id === context.id,
         target: ".empty",
-        actions: [trackDeleted, assign({ id: null, body: "", baseVersion: null, sent: null, about: [] })],
+        actions: [trackDeleted, assign({ id: null, body: "", baseVersion: null, sent: null, about: [], typed: false })],
       },
       { actions: trackDeleted },
     ],
@@ -708,6 +717,22 @@ export const machine = setup({
           assign({
             body: ({ event }) => event.body,
             baseVersion: ({ event }) => event.version,
+            sent: ({ event }) => ({ body: event.body }),
+            about: ({ event }) => links(event.about),
+          }),
+        ],
+      },
+      {
+        // The text changed in this browser without a new version (an Undo or Keep mine
+        // while signed in, 12): adopted while nothing typed here would be lost.
+        guard: ({ context, event }) =>
+          event.id === context.id && context.sent != null && event.version === context.baseVersion && !dirty(context) && event.body !== context.body,
+        target: ".editing.clean",
+        actions: [
+          trackChanged,
+          syncOfChange,
+          assign({
+            body: ({ event }) => event.body,
             sent: ({ event }) => ({ body: event.body }),
             about: ({ event }) => links(event.about),
           }),
@@ -868,10 +893,7 @@ export const machine = setup({
             _typed: { actions: assignTyped },
             // The root's _blurred is not taken while this one is, so the keyboard leaving is
             // noted here too.
-            _blurred: [
-              { guard: "unchanged", target: "clean", actions: assign({ focused: false }) },
-              { target: "clean", actions: ["save", assign({ focused: false })] },
-            ],
+            _blurred: { target: "clean", actions: ["leave", assign({ focused: false })] },
           },
           after: {
             [THROTTLE_MS]: [{ guard: "unchanged", target: "clean" }, { target: "clean", actions: "save" }],

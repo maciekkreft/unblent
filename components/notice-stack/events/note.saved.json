@@ -7,6 +7,7 @@
     "title": { "type": "string" },
     "body": { "type": "string" },
     "baseVersion": { "type": ["integer", "null"], "minimum": 1 },
+    "left": { "type": "boolean", "description": "True when the user left the note with this save, which ends the stretch of typing that Undo takes back as one step (12, Undo). False when absent." },
     "about": {
       "type": "array",
       "items": {

@@ -46,7 +46,7 @@ test("keep mine emits note.saved based on theirs, once, and clears the notice", 
   actor.send({ type: "_act", key: `note.conflicted:${ID}`, index: 0 });
   await tick();
   assert.deepEqual(saved, [
-    { type: "note.saved", id: ID, title: "Mine", body: "mine", baseVersion: 3 },
+    { type: "note.saved", id: ID, title: "Mine", body: "mine", baseVersion: 3, left: true },
   ]);
   assert.equal(notices(actor).size, 0, "the notice is done");
 });

@@ -126,6 +126,21 @@ test("an edit onto a tombstone loses: a 409 carrying the deleted record", async 
   assert.equal(note.deleted, true);
 });
 
+test("a restore write names the tombstone's version: the note comes back as a new version", async () => {
+  const cookie = cookieFor(freshUser());
+  const id = noteId(1);
+  await put(id, { title: "a", body: "b", baseVersion: null, about: [{ kind: "book", id: "x" }] }, cookie);
+  const gone = await (await put(id, { title: "a", body: "b", deleted: true }, cookie)).json();
+  const res = await put(id, { title: "a", body: "b", baseVersion: gone.version }, cookie);
+  assert.equal(res.status, 200);
+  const back = await res.json();
+  assert.equal(back.version, gone.version + 1);
+  assert.equal(back.deleted, false);
+  assert.deepEqual(back.about, [{ kind: "book", id: "x" }], "the links come back with it");
+  const all = await (await list(0, cookie)).json();
+  assert.equal(all.notes.find((n) => n.id === id).deleted, false, "the pull carries the restore");
+});
+
 test("a delete for an unknown id is born a tombstone at version 1", async () => {
   const cookie = cookieFor(freshUser());
   const born = await (await put(noteId(9), { title: "a", body: "b", deleted: true }, cookie)).json();
