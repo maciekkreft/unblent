@@ -200,3 +200,17 @@ test("Vim keys follow settings: read, then settings.changed", async () => {
   actor.send({ type: "settings.changed", vimKeys: false });
   assert.equal(actor.getSnapshot().context.vimKeys, false);
 });
+
+test("the choice-point counts wait for flags, and go while Values and Choice Points is hidden", async () => {
+  let answer;
+  const flags = new Promise((r) => (answer = r));
+  const actor = createActor(machine, { input: { ask: (target) => (target === "flags" ? flags : Promise.resolve({ error: "no-answerer" })) } });
+  actor.start();
+  await flush();
+  assert.equal(actor.getSnapshot().context.hidden, null, "nothing counted until flags answers");
+  answer({ off: [], hidden: ["choice-points"] });
+  await flush();
+  assert.deepEqual(actor.getSnapshot().context.hidden, ["choice-points"]);
+  actor.send({ type: "flags.changed", off: [], hidden: [] });
+  assert.deepEqual(actor.getSnapshot().context.hidden, []);
+});

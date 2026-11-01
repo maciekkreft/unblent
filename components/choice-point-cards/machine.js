@@ -403,7 +403,7 @@ export const machine = setup({
   meta: {
     description:
       "Shows the choice points of the journal day on the page, under the day's text, in a " +
-      "section headed \"Choice points\". On today's page a \"New choice point\" row after the " +
+      "section named \"Choice points\" for screen readers, with no heading shown. On today's page a \"New choice point\" row after the " +
       "day's choice points, muted with a plus like the New note row, adds one and opens it in " +
       "place with the keyboard in Situation: the V drawing and four boxes, Away · hooked, " +
       "Towards · unhooked, Situation, and Thoughts & feelings. The boxes grow with what is " +

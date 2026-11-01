@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, rows, kept, counts, choiceLabel, showing } from "./machine.js";
+import { machine, rows, kept, counts, choiceLabel, showing, choicesShown } from "./machine.js";
 import selected from "./events/day.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -184,11 +184,11 @@ class JournalDays extends LitElement {
     if (account === "sign-in") return html`<p class="empty">Sign in to write in your journal.</p>`;
     if (snapshot.matches("loading")) return nothing;
     if (snapshot.matches("failed")) return html`<p class="empty">The journal is unavailable.</p>`;
-    const { days, open, today, signedIn, current, choicePoints } = snapshot.context;
+    const { days, open, today, signedIn, current, choicePoints, hidden } = snapshot.context;
     return html`
       <div class="scroll">
         <ul class="list" aria-label="Days" @keydown=${(e) => this.#keydown(e)}>
-          ${rows(days, open, today, counts(choicePoints)).map(
+          ${rows(days, open, today, choicesShown(hidden) ? counts(choicePoints) : {}).map(
             (r) => html`<li>
               <button
                 type="button"

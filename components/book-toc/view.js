@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
-import { machine, markedChapter, chapterCounts, choiceLabel, chapterSummaries, showing } from "./machine.js";
+import { machine, markedChapter, chapterCounts, choiceLabel, chapterSummaries, showing, choicesShown } from "./machine.js";
 import selected from "./events/chapter.selected.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -230,7 +230,7 @@ class BookToc extends LitElement {
 
     const marked = markedChapter(book.toc, snapshot.context.jump ?? book.chapter);
     const focusAt = this.#focusRow(rows, marked);
-    const perChapter = chapterCounts(book, snapshot.context.choicePoints);
+    const perChapter = choicesShown(snapshot.context.hidden) ? chapterCounts(book, snapshot.context.choicePoints) : {};
     const summaries = chapterSummaries(book, snapshot.context.summaries);
     return html`
       <div class="toc">

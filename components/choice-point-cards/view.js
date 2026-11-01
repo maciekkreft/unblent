@@ -281,14 +281,6 @@ class ChoicePointCards extends LitElement {
     section:focus {
       outline: none;
     }
-    h3 {
-      margin: 0;
-      font-size: var(--text-caption);
-      font-weight: var(--weight-semibold);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--color-body-mid);
-    }
     button {
       appearance: none;
       font: inherit;
@@ -956,8 +948,7 @@ class ChoicePointCards extends LitElement {
     const draftOf = (r) => drafts.find((d) => d.id === r.id);
     // An earlier day without choice points has nothing to show or add.
     if (!items.length && !failed && !writable(context)) return nothing;
-    return html`<section tabindex="-1" aria-labelledby="heading">
-      <h3 id="heading">Choice points</h3>
+    return html`<section tabindex="-1" aria-label="Choice points">
       ${failed ? html`<p class="empty">Choice points are unavailable.</p>` : nothing}
       ${items.length || writable(context)
         ? html`<div class="list" @keydown=${this.#rowKey}>

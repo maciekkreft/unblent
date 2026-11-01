@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, markedChapter, chapterCounts, counts, choiceLabel, chapterSummaries, showing } from "../machine.js";
+import { machine, markedChapter, chapterCounts, counts, choiceLabel, chapterSummaries, showing, choicesShown } from "../machine.js";
 
 // The actor is where the contents' decisions live (3.2): which book it shows, and the
 // chapter it marks. The mark is the chapter the user just chose (a jump the fact has
@@ -372,4 +372,15 @@ test("when generators cannot be asked the journal shows no summary and works as 
     actor.send({ type: "_select", id: ID, chapter: 0 });
     assert.equal(mark(actor), 0, "picking a day still works");
   }
+});
+
+test("the choice-point counts follow flags: shown with none hidden, gone while choice-points is", async () => {
+  assert.equal(choicesShown(null), false, "not until flags answers");
+  assert.equal(choicesShown([]), true);
+  assert.equal(choicesShown(["undo"]), true);
+  assert.equal(choicesShown(["choice-points"]), false);
+  const { actor } = start();
+  await flush();
+  actor.send({ type: "flags.changed", off: ["choice-points"], hidden: ["choice-points"] });
+  assert.deepEqual(actor.getSnapshot().context.hidden, ["choice-points"]);
 });

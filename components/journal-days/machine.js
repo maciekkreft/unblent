@@ -63,8 +63,18 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // visitor who is not yet a guest.
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
+// Whether the choice-point counts show: not while `flags` reports Values and Choice Points
+// hidden (3.1), nor until it answers (`hidden` is null), the same as a flagged view (8).
+export const choicesShown = (hidden) => hidden !== null && !hidden.includes("choice-points");
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is
+// an error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
 export const machine = setup({
   actors: {
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
     choicePoints: fromPromise(({ input }) => input.ask("choice-points", "list", {})),
@@ -83,7 +93,7 @@ export const machine = setup({
       "this browser when signed out on a try page. A day with choice points says how many after its count or " +
       "pill, \"· 1 choice point\" or \"· 3 choice points\"; one being deleted is not counted " +
       "while its Undo is offered, and counts again after an undo. When the choice points cannot " +
-      "be read, the rows show no counts and work as before. Signed out it shows no rows, only " +
+      "be read, or while Values and Choice Points is hidden, the rows show no counts and work as before. Signed out it shows no rows, only " +
       "\"Sign in to write in your journal.\", as the journal page does; the days stay kept in " +
       "this browser and come back when the user signs in, without a reload. On a try page a " +
       "visitor not yet signed in still sees the days. Up and Down move between the rows, and " +
@@ -91,7 +101,7 @@ export const machine = setup({
     kind: "view",
     emits: ["day.selected"],
     attributes: [],
-    asks: ["journal: read", "session: read", "choice-points: list", "settings: read"],
+    asks: ["journal: read", "session: read", "choice-points: list", "settings: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -103,6 +113,8 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
     // Every choice point by id, as held(): only the counts are shown.
     choicePoints: {},
     // The row last picked, as day.selected carried it; null is the open day or new page.
@@ -114,6 +126,12 @@ export const machine = setup({
   // Each fact's starting picture is asked on its own, so an event that follows one
   // reply is never overwritten by that reply arriving with the other.
   invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
     {
       src: "session",
       input: ({ context }) => ({ ask: context.ask }),
@@ -166,6 +184,7 @@ export const machine = setup({
     failed: {},
   },
   on: {
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // A picked day that is gone, or that has become the open one, is the open day again.
     "journal.changed": {

@@ -110,8 +110,18 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // shows them to a visitor who is not yet a guest.
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
 
+// Whether the choice-point counts show: not while `flags` reports Values and Choice Points
+// hidden (3.1), nor until it answers (`hidden` is null), the same as a flagged view (8).
+export const choicesShown = (hidden) => hidden !== null && !hidden.includes("choice-points");
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is
+// an error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
 export const machine = setup({
   actors: {
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     // The "Vim keys" device preference (12), owned by `settings`. settings.changed that
     // races it is held for us until the reply lands (settings: read supersededBy).
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
@@ -151,13 +161,14 @@ export const machine = setup({
       "the date, without the day being clicked; it updates when a new one arrives, and a day " +
       "without one, such as today until it closes, shows nothing more. " +
       "Any other book shows no counts and no summaries, and when the choice points or the " +
-      "summaries cannot be read the journal's contents show none of them and work as before. Signed out they show only \"Sign in to see " +
+      "summaries cannot be read the journal's contents show none of them and work as before; " +
+      "while Values and Choice Points is hidden the days show no counts, and the summaries stay. Signed out they show only \"Sign in to see " +
       "your books.\", and the same book's contents come back when the user signs in, without " +
       "a reload. On a try page a visitor not yet signed in still sees them.",
     kind: "view",
     emits: ["chapter.selected"],
     attributes: [],
-    asks: ["books: open", "books: read", "settings: read", "choice-points: list", "session: read", "generators: results"],
+    asks: ["books: open", "books: read", "settings: read", "choice-points: list", "session: read", "generators: results", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -180,9 +191,17 @@ export const machine = setup({
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
     tryPage: Boolean(input.tryPage),
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
   }),
   // Beside the states, so the preference arrives whatever the view is doing.
   invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
     {
       src: "settings",
       input: ({ context }) => ({ ask: context.ask }),
@@ -208,6 +227,7 @@ export const machine = setup({
   ],
   initial: "starting",
   on: {
+    "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
     // An equal version is taken: the removing flag changes without a new version.
