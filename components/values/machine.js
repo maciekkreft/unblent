@@ -450,6 +450,7 @@ export const machine = setup({
     shape: "replicated",
     emits: ["values.changed", "step.recorded", "step.settled"],
     owns: "the client's values and their versions by day",
+    steps: { "values.saved": "step", "values.placed": "step" },
     asks: ["session: read", "journal: read"],
   },
   context: ({ input }) => ({

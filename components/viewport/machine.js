@@ -16,6 +16,7 @@ export const machine = setup({}).createMachine({
       "writes the one attribute `data-viewport` on the page (7.5), and the base styles frame " +
       "the page as a phone from it, so no view changes.",
     kind: "fact", shape: "local-only", emits: ["viewport.changed"], owns: "the viewport the page is previewed in",
+    steps: { "viewport.selected": "navigation" },
   },
   context: ({ input }) => ({
     viewport: viewportFor(input.stored),

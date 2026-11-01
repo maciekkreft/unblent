@@ -116,6 +116,11 @@ export const machine = setup({}).createMachine({
     shape: "local-only",
     emits: ["settings.changed"],
     owns: "the user's page preferences, one copy per profile (product and workshop): the order and visibility of pages in the navigation, whether the viewport switch and the layout switch are shown, whether the desk layout is being arranged, whether editors take Vim keys, and whether the open note and chat are kept when the stage changes; it reports the active profile's copy",
+    steps: {
+      "settings.edited": "pending",
+      "layout.switched": "navigation",
+      "profile.switched": "identity",
+    },
   },
   context: ({ input }) => ({
     onProduct: input.product,

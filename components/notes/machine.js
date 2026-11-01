@@ -546,6 +546,13 @@ export const machine = setup({
     shape: "replicated",
     emits: ["note.changed", "note.deleted", "note.conflicted"],
     owns: "the notes",
+    steps: {
+      "note.opened": "navigation",
+      "note.saved": "pending",
+      "note.discarded": "pending",
+      "note.moved": "pending",
+      "removal.settled": "pending",
+    },
     asks: ["session: read"],
   },
   context: ({ input }) => ({

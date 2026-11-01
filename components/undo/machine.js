@@ -134,6 +134,7 @@ export const machine = setup({
     emits: ["step.undone", "step.redone", "step.settled", "step.dropped", "undo.changed"],
     asks: ["session: read"],
     owns: "the steps Undo and Redo walk, per account in this browser",
+    steps: { "step.requested": "undo" },
   },
   context: ({ input }) => ({
     store: input.store,

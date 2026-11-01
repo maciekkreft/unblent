@@ -644,6 +644,11 @@ export const machine = setup({
     kind: "fact",
     shape: "replicated",
     owns: "which evaluators check the values and their examples, and Jev's answers about each line",
+    steps: {
+      "value-checks.edited": "pending",
+      "values.saved": "follows",
+      "day.shown": "navigation",
+    },
     emits: ["values.checked", "value-checks.changed"],
     asks: ["llm: read", "llm: decide", "evaluators: list", "values: read", "session: read"],
   },

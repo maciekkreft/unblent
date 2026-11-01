@@ -55,6 +55,7 @@ export const machine = setup({}).createMachine({
     shape: "local-only",
     emits: ["redline.changed"],
     owns: "the text under review and the comments on it",
+    steps: { "redline.saved": "pending" },
   },
   context: ({ input }) => ({ redline: parse(input.stored), save: input.save }),
   on: {

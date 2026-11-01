@@ -146,6 +146,7 @@ export const machine = setup({
     kind: "fact",
     shape: "local-only",
     owns: "current subject",
+    steps: { "day.shown": "navigation" },
     emits: ["subject.changed"],
     asks: ["dock: read", "books: open", "books: read", "journal: open"],
   },

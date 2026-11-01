@@ -904,6 +904,16 @@ export const machine = setup({
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
     owns: "the account's evaluators",
+    steps: {
+      "evaluator.saved": "pending",
+      "evaluator.switched": "pending",
+      "evaluator.moved": "pending",
+      "starter.ticked": "pending",
+      "removal.started": "pending",
+      "removal.undone": "pending",
+      "removal.settled": "pending",
+      "evaluator.discarded": "pending",
+    },
     asks: ["session: read", "books: list", "values: read", "llm: decide", "flags: read"],
   },
   context: ({ input }) => ({

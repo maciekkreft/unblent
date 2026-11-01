@@ -79,6 +79,7 @@ export const machine = setup({}).createMachine({
     shape: "local-only",
     emits: ["dock.changed"],
     owns: "the desk layout: which view is on the stage, and for each side what is docked, which tab it shows and whether it is open",
+    steps: { "dock.arranged": "pending" },
   },
   context: ({ input }) => ({ layout: parse(input.stored), save: input.save }),
   on: {

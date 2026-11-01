@@ -690,6 +690,7 @@ export const machine = setup({
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days",
+    steps: { "day.saved": "pending", "day.shown": "navigation", "conflict.reopened": "pending" },
     emits: ["journal.changed", "journal.conflicted"],
     asks: ["session: read", "generators: results"],
   },

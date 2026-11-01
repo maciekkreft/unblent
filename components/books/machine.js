@@ -727,6 +727,18 @@ export const machine = setup({
     shape: "replicated",
     emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
     owns: "the books",
+    steps: {
+      "book.picked": "pending",
+      "book.progressed": "navigation",
+      "book.renamed": "pending",
+      "book.selected": "navigation",
+      "book.switched": "navigation",
+      "passage.selected": "navigation",
+      "chapter.selected": "navigation",
+      "day.selected": "navigation",
+      "book.discarded": "pending",
+      "removal.settled": "pending",
+    },
     asks: ["session: read", "journal: read"],
   },
   context: ({ input }) => ({

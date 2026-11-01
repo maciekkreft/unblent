@@ -734,6 +734,11 @@ export const machine = setup({
     kind: "fact",
     shape: "replicated",
     owns: "which evaluator checks each choice point box, and Jev's answers about each line",
+    steps: {
+      "checks.edited": "pending",
+      "choice-point.saved": "follows",
+      "day.shown": "navigation",
+    },
     emits: ["checks.changed", "lines.checked"],
     asks: ["llm: decide", "evaluators: list", "choice-points: list", "session: read"],
   },

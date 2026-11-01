@@ -235,6 +235,8 @@ def check_manifests(manifests: dict) -> None:
                 fail(path, "manifest check (7.3)", "a view component has no shape")
             if "owns" in meta:
                 fail(path, "manifest check (7.3)", "a view component owns no fact")
+            if "steps" in meta:
+                fail(path, "manifest check (7.3)", "a view component has no steps; the fact that takes in its events classes them")
             if not isinstance(meta.get("attributes"), list):
                 fail(path, "manifest check (7.3)", "a view component's meta.attributes must be a list, empty if none")
             # role is optional (7.3): a lowercase name for a slot of interchangeable
@@ -524,6 +526,77 @@ def check_supersession(manifests: dict) -> None:
             schemas[(comp.name, f.stem)] = _parse_schema(f"components/{comp.name}/queries/{f.stem}.json", f)
     for owner, q, detail in supersession_breaks(recs, schemas):
         fail(f"components/{owner}/queries/{q}.json", "supersession check (11.2)", detail)
+
+
+# --- Steps check (architecture.md 7.3, 11.2, 12) ----------------------------------
+
+# Section 7.3: "pending" stays allowed until the last part joins Undo (14).
+_STEP_CLASSES = ("step", "follows", "navigation", "spends", "identity", "keys", "undo", "pending")
+_STEP_WIRING = {"emits": ("step.recorded", "step.settled"), "consumes": ("step.undone", "step.redone")}
+
+
+def steps_breaks(recs: dict, parties: dict) -> tuple:
+    """Section 4.3's fifth rule makes every user action an event a view emits and a
+    fact consumes, so the full set of actions Undo must class is read from the
+    manifests (12). Pure over recs ({name: manifest}) and the event parties
+    _contract_parties builds, so a unit test needs no tree. Returns (breaks, pending):
+    breaks a list of (fact, detail), pending the number of "pending" entries."""
+    events = parties["events"]
+    views = {n for n, m in recs.items() if m["meta"].get("kind") == "view"}
+    out, pending = [], 0
+    owners = {}
+    for name, m in recs.items():
+        steps = m["meta"].get("steps")
+        if isinstance(steps, dict):
+            for ev, cls in steps.items():
+                if cls in ("step", "pending"):
+                    owners.setdefault(ev, set()).add(name)
+    for name, m in sorted(recs.items()):
+        if m["meta"].get("kind") != "fact":
+            continue
+        steps = m["meta"].get("steps", {})
+        if not (isinstance(steps, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in steps.items())):
+            out.append((name, "meta.steps must map event names to one of " + ", ".join(_STEP_CLASSES)))
+            continue
+        from_views = {}
+        for ev in m["consumes"]:
+            emitters = sorted(events.get(ev, {}).get("emitters", set()) & views)
+            if emitters:
+                from_views[ev] = emitters
+        for ev, emitters in from_views.items():
+            if ev not in steps:
+                out.append((name, f"`{name}` takes in `{ev}` from `{emitters[0]}`: say in `steps` of "
+                                  f"`components/{name}/machine.js` whether it is a step (architecture 12)"))
+        for ev, cls in steps.items():
+            if ev not in from_views:
+                out.append((name, f"`{ev}` in `steps` is not an event `{name}` takes in from a view; remove it"))
+                continue
+            if cls not in _STEP_CLASSES:
+                out.append((name, f"`{ev}` is classed {cls!r}; a class is one of " + ", ".join(_STEP_CLASSES)))
+            elif cls == "pending":
+                pending += 1
+            elif cls == "step":
+                missing = [e for e in _STEP_WIRING["emits"] if e not in m["meta"].get("emits", [])]
+                missing += [e for e in _STEP_WIRING["consumes"] if e not in m["consumes"]]
+                if missing:
+                    out.append((name, f"`{ev}` is a step, so `{name}` must emit step.recorded and step.settled "
+                                      f"and consume step.undone and step.redone; missing: {', '.join(missing)}"))
+            elif cls == "follows":
+                # A "pending" owner counts: its step is coming, and the follower's class is final.
+                if not owners.get(ev, set()) - {name}:
+                    out.append((name, f"`{ev}` follows a step, but no other fact marks `{ev}` as a step"))
+    return out, pending
+
+
+def check_steps(manifests: dict) -> None:
+    """Section 11.2, 12: every user action is classed for Undo. Defers the decision to
+    steps_breaks and prints how many actions still wait to become steps (14)."""
+    recs = {Path(p).parent.name: m for p, m in manifests.items()}
+    breaks, pending = steps_breaks(recs, _contract_parties(manifests))
+    for name, detail in breaks:
+        fail(f"components/{name}/machine.js", "steps check (11.2)", detail)
+    if pending:
+        print(f"steps: {pending} user actions are pending, not yet steps (architecture 14)")
 
 
 # --- Schema compatibility check (architecture.md 7.1, 7.2, 11.2) -----------------
@@ -2349,6 +2422,7 @@ def main() -> None:
     _timed(timings, "contract check", check_contracts, manifests)
     _timed(timings, "send check", check_sends, manifests)
     _timed(timings, "supersession check", check_supersession, manifests)
+    _timed(timings, "steps check", check_steps, manifests)
     _timed(timings, "schema compatibility", check_schema_compat, manifests)
     _timed(timings, "kit", check_kit, manifests)
     _timed(timings, "journeys", check_journeys)

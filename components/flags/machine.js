@@ -73,6 +73,7 @@ export const machine = setup({}).createMachine({
     kind: "fact",
     shape: "remote-only",
     owns: "which features each person sees",
+    steps: { "flag.switched": "pending" },
     emits: ["flags.changed"],
   },
   context: ({ input }) => {

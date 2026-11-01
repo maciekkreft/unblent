@@ -499,6 +499,12 @@ export const machine = setup({
     kind: "fact",
     shape: "replicated",
     owns: "the generators and the texts they wrote",
+    steps: {
+      "generation.requested": "spends",
+      "day.shown": "navigation",
+      "generator.edited": "pending",
+      "conversation.renamed": "follows",
+    },
     emits: ["generator.changed", "generation.changed"],
     asks: ["session: read", "journal: read", "choice-points: list", "value-checks: read", "values: read", "llm: generate", "flags: read"],
   },

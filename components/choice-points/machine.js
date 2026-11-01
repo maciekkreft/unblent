@@ -262,6 +262,7 @@ export const machine = setup({
     shape: "replicated",
     emits: ["choice-point.changed", "choice-point.deleted"],
     owns: "the choice points kept with each journal day",
+    steps: { "choice-point.saved": "pending" },
     asks: ["session: read"],
   },
   context: ({ input }) => ({

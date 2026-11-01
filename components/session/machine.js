@@ -196,6 +196,16 @@ export const machine = setup({
     shape: "replicated",
     emits: ["session.changed", "session.refused", "people.changed"],
     owns: "the signed-in user",
+    steps: {
+      "removal.settled": "pending",
+      "sync.allowed": "pending",
+      "signin.requested": "identity",
+      "viewas.requested": "identity",
+      "connect.requested": "identity",
+      "connect.confirmed": "identity",
+      "disconnect.requested": "identity",
+      "signout.requested": "identity",
+    },
   },
   context: ({ input }) => ({
     ...parse(input.stored),
