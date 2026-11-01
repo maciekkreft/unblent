@@ -8,14 +8,6 @@ import toolsEdited from "./events/tools.edited.json" with { type: "json" };
 import checksEdited from "./events/checks.edited.json" with { type: "json" };
 import valueChecksEdited from "./events/value-checks.edited.json" with { type: "json" };
 
-// Every script of the page has run once DOMContentLoaded has fired, so by then every
-// fact the page holds is mounted (8); a script that runs later finds it fired already.
-const loaded = () => {
-  const navigation = performance.getEntriesByType("navigation")[0];
-  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
-  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
-};
-
 // The account's thinking effort and cache lifetime shown in plain words (7.7). The
 // effort choices come from `llm: read`; an unknown one falls back to its own name. The
 // two cache lifetimes are the fixed product options; a longer one caches for longer and
@@ -65,7 +57,6 @@ class ActorController {
       // machine only ever receives the value, so it stays importable in Node.
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
-        loaded,
         answered: answers,
         current: location.pathname,
         // The `account` attribute (7.7): read from the host's light DOM, so the

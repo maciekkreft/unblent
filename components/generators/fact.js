@@ -6,14 +6,6 @@ import generationChanged from "./events/generation.changed.json" with { type: "j
 import list from "./queries/list.json" with { type: "json" };
 import results from "./queries/results.json" with { type: "json" };
 
-// Every script of the page has run once DOMContentLoaded has fired, so by then every
-// fact the page holds is mounted (8); a script that runs later finds it fired already.
-const loaded = () => {
-  const navigation = performance.getEntriesByType("navigation")[0];
-  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
-  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
-};
-
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store and
 // the sync `api` — and mounts it, so machine.js stays importable in Node. The api
 // reports 401 as unauthorized; anything else that fails throws, which the machine
@@ -56,7 +48,7 @@ const api = {
 const tryPage = location.pathname.startsWith("/try/");
 
 const actor = mount(machine, {
-  input: { store, api, tryPage, ask: (target, name, payload) => ask(machine, target, name, payload), loaded },
+  input: { store, api, tryPage, ask: (target, name, payload) => ask(machine, target, name, payload) },
   events: { "generator.changed": generatorChanged, "generation.changed": generationChanged },
   queries: { list, results },
 });

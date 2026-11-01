@@ -123,22 +123,11 @@ const typing = (target) => ({
   },
 });
 
-// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
-// no-answerer is asked once more after every script of the page has run (`loaded`, from
-// the browser entry), and only then means a page without `flags`. Until then nothing is
-// known, as with `flags` itself before its first answer (3.1).
-const readFlags = async (ask, loaded) => {
-  const reply = await ask("flags", "read", {});
-  if (reply?.error !== "no-answerer" || !loaded) return reply;
-  await loaded();
-  return ask("flags", "read", {});
-};
-
 export const machine = setup({
   actors: {
     list: fromPromise(({ input }) => input.ask("generators", "list", {})),
     // Which features are hidden (3.1); flags.changed is held until the reply lands.
-    flags: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // On a page without a settings fact the ask replies no-answerer and the boxes stay plain.
@@ -176,7 +165,6 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
-    loaded: input.loaded,
     throttleMs: input.throttleMs ?? 200,
     // How long the line saying what Run asked for stays.
     askedMs: input.askedMs ?? 4000,
@@ -200,7 +188,7 @@ export const machine = setup({
   invoke: [
     {
       src: "flags",
-      input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
+      input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
       onError: { actions: assign({ hidden: [] }) },
     },

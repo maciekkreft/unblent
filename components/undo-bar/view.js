@@ -4,14 +4,6 @@ import { icon } from "icons";
 import { machine, keyOf } from "./machine.js";
 import requested from "./events/step.requested.json" with { type: "json" };
 
-// Every script of the page has run once DOMContentLoaded has fired, so by then every
-// fact the page holds is mounted (8); a script that runs later finds it fired already.
-const loaded = () => {
-  const navigation = performance.getEntriesByType("navigation")[0];
-  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
-  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
-};
-
 // Icon names are literals (7.6). Redo is the same glyph mirrored, so the pair reads as
 // one control turning either way.
 const ARROW = icon("arrow-u-up-left");
@@ -31,7 +23,7 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload), loaded },
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
       events: { "step.requested": requested },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());

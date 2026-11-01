@@ -29,6 +29,50 @@ const subscribers = new Map();
 // state, not an event log (3.3): a hold ends at the reply or at `unanswered`.
 const holds = new Map(); // asker id → { open: Map<cid, string[]>, queue: [{ event, name, from, fromKind }] }
 
+// Section 4.2: while the page is still running its scripts, a query to a target not
+// mounted yet waits here for that target to mount, instead of being answered
+// no-answerer at once, because a page's scripts mount in any order (8). Waiting ends
+// when the target mounts (the query is delivered then) or when the page has finished
+// running its scripts (it is answered no-answerer then). Transient routing state, as
+// the holds are (3.3).
+const waiting = new Map(); // target → [{ deliver(answerer), giveUp() }]
+let loading = false;
+
+// Ends the loading window: every query still waiting is answered no-answerer, and
+// every later query to a target nobody mounted is answered at once.
+function finishLoading() {
+  if (!loading) return;
+  loading = false;
+  const all = [...waiting.values()].flat();
+  waiting.clear();
+  for (const w of all) w.giveUp();
+}
+
+// Opens the loading window by hand, for a test in Node, where there is no page: the
+// bus there keeps answering no-answerer at once unless a test calls this. Returns the
+// function that ends the window, standing in for the page finishing its scripts.
+export function pageLoading() {
+  loading = true;
+  return finishLoading;
+}
+
+// In the browser the window is open from the moment the bus is first imported until
+// DOMContentLoaded. The browser fires DOMContentLoaded only after every classic
+// deferred script and every module script the page's HTML names (not marked async) has
+// run, imports included (HTML, "the end"), and every fact of this system mounts at the
+// top level of its `fact.js` (3.2), so by then every fact the page holds is mounted.
+// `load` would also wait for images and fonts, which delays a real no-answerer for
+// nothing. A bus first imported after DOMContentLoaded (the navigation entry says it
+// has fired) never opens the window.
+if (typeof document !== "undefined") {
+  const navigation = globalThis.performance?.getEntriesByType?.("navigation")?.[0];
+  const fired = navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState === "complete";
+  if (!fired) {
+    loading = true;
+    document.addEventListener("DOMContentLoaded", finishLoading, { once: true });
+  }
+}
+
 // Section 3.3, 10: the bus's one tap. A listener is called synchronously with a
 // record of every routing decision. The bus still keeps nothing; the `trace` fact
 // component keeps the records. `seq` orders records within this tab (its module).
@@ -387,6 +431,13 @@ export function mount(machine, { input, events = {}, queries = {}, commands = {}
   mounted.set(address, actor);
   machines.set(address, machine);
   actor.start();
+  // 4.2: queries that waited for this fact are delivered now, in the order asked; the
+  // hold of each starts here, at its delivery.
+  const queued = waiting.get(address);
+  if (queued) {
+    waiting.delete(address);
+    for (const w of queued) w.deliver(actor);
+  }
   return actor;
 }
 
@@ -414,7 +465,8 @@ export function unmount(actor) {
 // `fromPromise`, the function arriving through `input`. Two cases are programming
 // errors and throw, like an undeclared emit: an ask the asker did not declare in
 // `meta.asks`, and a query aimed at a view (4.3, rule two). Two cases are honest
-// replies, because a reply always comes: nobody mounted under the target's name,
+// replies, because a reply always comes: nobody mounted under the target's name
+// (once the page has run its scripts; before that the query waits for the target),
 // or a target that does not handle the query. While the ask is open the bus holds
 // the events the query's schema names as superseding its answer, for this asker
 // alone, and releases them after the reply lands (4.2).
@@ -439,104 +491,124 @@ export function ask(machine, target, name, payload = {}, instance) {
     record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "undeclared ask", cid, payload });
     throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", not in meta.asks`);
   }
-  const answerer = mounted.get(target);
-  if (!answerer) {
-    record({ kind: "query", name, from, fromKind, to, outcome: "no-answerer", cid, payload });
-    return Promise.resolve({ error: "no-answerer" });
-  }
-  // A wildcard ask reaches a query only when that query's registered schema is a tool
-  // (7.7). Any other target — a view, or an unmarked or unknown query — is an undeclared
-  // ask, exactly as if the wildcard were not held; queryRegistry holds a schema only for
-  // a mounted fact's answered queries, so its absence covers both cases.
-  if (viaTool && !queryRegistry.get(key)?.tool) {
-    record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "undeclared ask", cid, payload });
-    throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", which is not a tool`);
-  }
-  const targetMachine = machines.get(target);
-  if (targetMachine.config.meta?.kind !== "fact") {
-    record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "query to a view", cid, payload });
-    throw new Error(`only a fact component answers queries: ${target} is a ${targetMachine.config.meta?.kind}`);
-  }
-  const type = `${name}?`;
-  if (!targetMachine.events.includes(type)) {
-    record({ kind: "query", name, from, fromKind, to, outcome: "unknown-query", cid, payload });
-    return Promise.resolve({ error: "unknown-query" });
-  }
-  // Section 3.3, 7.2: past the exits that do not deliver, the payload must match the
-  // query's schema. A wrong one is not delivered and the asker gets a reply saying so,
-  // because a query always gets a reply (4.2); no hold opens for it.
-  const payloadError = queryPayloadValidators.get(key)(payload);
-  if (payloadError) {
-    invalid("query", name, from, fromKind, to, cid, payloadError);
-    // A model's proposed tool input is expected to be wrong sometimes (7.7); only a
-    // component's own miswired ask is a defect worth shouting about.
-    if (!viaTool) console.error(`bus: invalid query ${name}: ${payloadError}`);
-    return Promise.resolve({ error: "invalid-payload" });
-  }
-  // Section 4.2: the hold opens only past the four non-holding exits, so a refused or
-  // unanswerable query holds nothing, and it opens before the answerer is sent to,
-  // so an event the answerer emits while handling this query is inside the window.
-  const superseded = queryRegistry.get(key).supersededBy ?? [];
-  if (superseded.length) openHold(from, cid, superseded);
-  const message = { type, cid, payload };
-  const handled = answerer.getSnapshot().can({ ...message, reply: () => {} });
-  return new Promise((resolve) => {
-    let answered = false;
-    // A reply always comes back to the asker (4.2); the trace records it as a
-    // `reply`. If none arrives within UNANSWERED_MS the trace notes `unanswered`
-    // and leaves the promise pending, as today; a late reply still settles it and
-    // records `replied`, reason "late".
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      if (answered) return;
-      timedOut = true;
-      record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
-      release(from, cid); // 4.2: no reply is coming for now, so stop holding; the promise stays pending.
-    }, UNANSWERED_MS);
-    const reply = (value) => {
-      if (answered) return;
-      answered = true;
-      clearTimeout(timer);
-      // Section 3.3, 7.2: the reply must match the query's schema. A wrong one does not
-      // reach the asker, which gets `invalid-reply` instead. The answerer is never thrown
-      // into, so one bad reply cannot take its actor down (4.2).
-      const replyError = queryReplyValidators.get(key)(value);
-      if (replyError) {
-        invalid("reply", name, target, "fact", [from], cid, replyError);
-        console.error(`bus: invalid reply ${name}: ${replyError}`);
-        resolve({ error: "invalid-reply" });
-        setTimeout(() => release(from, cid), 0);
-        return;
-      }
-      record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: redact(queryRegistry.get(key)?.reply, value) });
-      resolve(value);
-      // 4.2: a macrotask always runs after XState's `fromPromise` continuation (one
-      // microtask), so the asker's onDone adopts the reply before the held events
-      // land. Anything emitted between resolve and here is still held until release.
-      setTimeout(() => release(from, cid), 0);
-    };
-    // Completed after delivery, so it carries the answerer's resulting state
-    // (section 10); its place is reserved before, so a synchronous answerer's reply,
-    // made inside the send, follows the question in the transcript.
-    const place = reserve();
-    delivering(() => answerer.send({ ...message, reply }));
-    record(
-      {
-        kind: "query",
-        name,
-        from,
-        fromKind,
-        to,
-        ignored: handled ? [] : to,
-        outcome: handled ? "asked" : "ignored",
-        reason: handled ? null : `state ${JSON.stringify(answerer.getSnapshot().value)} does not handle it`,
-        cid,
-        payload: redact(queryRegistry.get(key)?.payload, payload),
-        states: { [target]: JSON.stringify(answerer.getSnapshot().value) },
+  const noAnswerer = (reason = null) => {
+    record({ kind: "query", name, from, fromKind, to, outcome: "no-answerer", reason, cid, payload });
+    return { error: "no-answerer" };
+  };
+  if (mounted.has(target)) return deliverAsk(mounted.get(target));
+  // 4.2: while the page is still running its scripts, the target may simply not be
+  // mounted yet, so the query waits for it. After that, nobody is coming.
+  if (!loading) return Promise.resolve(noAnswerer());
+  return new Promise((resolve, reject) => {
+    let list = waiting.get(target);
+    if (!list) waiting.set(target, (list = []));
+    list.push({
+      deliver: (answerer) => {
+        try {
+          deliverAsk(answerer).then(resolve, reject);
+        } catch (err) {
+          reject(err);
+        }
       },
-      place,
-    );
+      giveUp: () => resolve(noAnswerer("not mounted by load")),
+    });
   });
+
+  function deliverAsk(answerer) {
+    // A wildcard ask reaches a query only when that query's registered schema is a tool
+    // (7.7). Any other target — a view, or an unmarked or unknown query — is an undeclared
+    // ask, exactly as if the wildcard were not held; queryRegistry holds a schema only for
+    // a mounted fact's answered queries, so its absence covers both cases.
+    if (viaTool && !queryRegistry.get(key)?.tool) {
+      record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "undeclared ask", cid, payload });
+      throw new Error(`undeclared ask: ${machine.config.id} asked "${key}", which is not a tool`);
+    }
+    const targetMachine = machines.get(target);
+    if (targetMachine.config.meta?.kind !== "fact") {
+      record({ kind: "query", name, from, fromKind, to, outcome: "refused", reason: "query to a view", cid, payload });
+      throw new Error(`only a fact component answers queries: ${target} is a ${targetMachine.config.meta?.kind}`);
+    }
+    const type = `${name}?`;
+    if (!targetMachine.events.includes(type)) {
+      record({ kind: "query", name, from, fromKind, to, outcome: "unknown-query", cid, payload });
+      return Promise.resolve({ error: "unknown-query" });
+    }
+    // Section 3.3, 7.2: past the exits that do not deliver, the payload must match the
+    // query's schema. A wrong one is not delivered and the asker gets a reply saying so,
+    // because a query always gets a reply (4.2); no hold opens for it.
+    const payloadError = queryPayloadValidators.get(key)(payload);
+    if (payloadError) {
+      invalid("query", name, from, fromKind, to, cid, payloadError);
+      // A model's proposed tool input is expected to be wrong sometimes (7.7); only a
+      // component's own miswired ask is a defect worth shouting about.
+      if (!viaTool) console.error(`bus: invalid query ${name}: ${payloadError}`);
+      return Promise.resolve({ error: "invalid-payload" });
+    }
+    // Section 4.2: the hold opens only past the four non-holding exits, so a refused or
+    // unanswerable query holds nothing, and it opens before the answerer is sent to,
+    // so an event the answerer emits while handling this query is inside the window.
+    const superseded = queryRegistry.get(key).supersededBy ?? [];
+    if (superseded.length) openHold(from, cid, superseded);
+    const message = { type, cid, payload };
+    const handled = answerer.getSnapshot().can({ ...message, reply: () => {} });
+    return new Promise((resolve) => {
+      let answered = false;
+      // A reply always comes back to the asker (4.2); the trace records it as a
+      // `reply`. If none arrives within UNANSWERED_MS the trace notes `unanswered`
+      // and leaves the promise pending, as today; a late reply still settles it and
+      // records `replied`, reason "late".
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        if (answered) return;
+        timedOut = true;
+        record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "unanswered", reason: "no reply in 5s", cid, payload: null });
+        release(from, cid); // 4.2: no reply is coming for now, so stop holding; the promise stays pending.
+      }, UNANSWERED_MS);
+      const reply = (value) => {
+        if (answered) return;
+        answered = true;
+        clearTimeout(timer);
+        // Section 3.3, 7.2: the reply must match the query's schema. A wrong one does not
+        // reach the asker, which gets `invalid-reply` instead. The answerer is never thrown
+        // into, so one bad reply cannot take its actor down (4.2).
+        const replyError = queryReplyValidators.get(key)(value);
+        if (replyError) {
+          invalid("reply", name, target, "fact", [from], cid, replyError);
+          console.error(`bus: invalid reply ${name}: ${replyError}`);
+          resolve({ error: "invalid-reply" });
+          setTimeout(() => release(from, cid), 0);
+          return;
+        }
+        record({ kind: "reply", name, from: target, fromKind: "fact", to: [from], outcome: "replied", reason: timedOut ? "late" : null, cid, payload: redact(queryRegistry.get(key)?.reply, value) });
+        resolve(value);
+        // 4.2: a macrotask always runs after XState's `fromPromise` continuation (one
+        // microtask), so the asker's onDone adopts the reply before the held events
+        // land. Anything emitted between resolve and here is still held until release.
+        setTimeout(() => release(from, cid), 0);
+      };
+      // Completed after delivery, so it carries the answerer's resulting state
+      // (section 10); its place is reserved before, so a synchronous answerer's reply,
+      // made inside the send, follows the question in the transcript.
+      const place = reserve();
+      delivering(() => answerer.send({ ...message, reply }));
+      record(
+        {
+          kind: "query",
+          name,
+          from,
+          fromKind,
+          to,
+          ignored: handled ? [] : to,
+          outcome: handled ? "asked" : "ignored",
+          reason: handled ? null : `state ${JSON.stringify(answerer.getSnapshot().value)} does not handle it`,
+          cid,
+          payload: redact(queryRegistry.get(key)?.payload, payload),
+          states: { [target]: JSON.stringify(answerer.getSnapshot().value) },
+        },
+        place,
+      );
+    });
+  }
 }
 
 // A command (4.4): an instruction addressed to one mounted instance, never replied to.

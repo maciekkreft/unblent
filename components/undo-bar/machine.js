@@ -35,23 +35,12 @@ export const hiddenBy = (picture) => {
 
 const named = (v) => (v && typeof v.id === "string" && typeof v.label === "string" ? { id: v.id, label: v.label } : null);
 
-// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
-// no-answerer is asked once more after every script of the page has run (`loaded`, from
-// the browser entry), and only then means a page without `flags`. Until then nothing is
-// known, as with `flags` itself before its first answer (3.1).
-const readFlags = async (ask, loaded) => {
-  const reply = await ask("flags", "read", {});
-  if (reply?.error !== "no-answerer" || !loaded) return reply;
-  await loaded();
-  return ask("flags", "read", {});
-};
-
 export const machine = setup({
   actors: {
     undo: fromPromise(({ input }) => input.ask("undo", "read", {})),
     // On a page without settings the ask replies no-answerer and the Vim keys stay off.
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
-    flags: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
   },
 }).createMachine({
   id: "undo-bar",
@@ -72,7 +61,7 @@ export const machine = setup({
     asks: ["undo: read", "settings: read", "flags: read"],
     attributes: [],
   },
-  context: ({ input }) => ({ ask: input.ask, loaded: input.loaded, undo: null, redo: null, vimKeys: false, hidden: true }),
+  context: ({ input }) => ({ ask: input.ask, undo: null, redo: null, vimKeys: false, hidden: true }),
   invoke: [
     {
       src: "undo",
@@ -88,7 +77,7 @@ export const machine = setup({
     },
     {
       src: "flags",
-      input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
+      input: ({ context }) => ({ ask: context.ask }),
       onDone: { actions: assign({ hidden: ({ event }) => hiddenBy(event.output) }) },
       onError: { actions: [] },
     },

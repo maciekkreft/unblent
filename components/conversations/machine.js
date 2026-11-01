@@ -1300,16 +1300,8 @@ const queue = enqueueActions(({ context, event }) => {
 export const machine = setup({
   actors: {
     // Which features are hidden (3.1); flags.changed is held for us until the reply lands
-    // (flags: read supersededBy). Without the input (Node) nothing is hidden. Page scripts
-    // mount in any order (8), so a no-answerer is asked once more after every script of
-    // the page has run (`loaded`), and only then means a page without `flags`.
-    flags: fromPromise(async ({ input }) => {
-      if (!input.flags) return { hidden: [] };
-      const reply = await input.flags();
-      if (reply?.error !== "no-answerer" || !input.loaded) return reply;
-      await input.loaded();
-      return input.flags();
-    }),
+    // (flags: read supersededBy). Without the input (Node) nothing is hidden.
+    flags: fromPromise(({ input }) => (input.flags ? input.flags() : Promise.resolve({ hidden: [] }))),
     // The one round trip that gates the rest: session, then the chats and the subject.
     // Whether the open chat is kept is asked beside them; settings.changed is held for us
     // until that reply lands (settings: read supersededBy).
@@ -1388,7 +1380,6 @@ export const machine = setup({
     askTool: input.askTool,
     answered: input.answered ?? (() => true),
     flags: input.flags,
-    loaded: input.loaded,
     // The features `flags` reports hidden (3.1); null until it answers.
     hidden: input.flags ? null : [],
     list: input.list,
@@ -1436,7 +1427,7 @@ export const machine = setup({
   // `settings`' news (4.3, fourth rule), in any state.
   invoke: {
     src: "flags",
-    input: ({ context }) => ({ flags: context.flags, loaded: context.loaded }),
+    input: ({ context }) => ({ flags: context.flags }),
     onDone: {
       actions: ({ context, event }) => {
         context.hidden = Array.isArray(event.output?.hidden) ? event.output.hidden : [];

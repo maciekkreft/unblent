@@ -775,17 +775,6 @@ async function keepFor(store, from, userId, api) {
   await store.metaPut("adopt", null);
 }
 
-// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
-// no-answerer is asked once more after every script of the page has run (`loaded`, from
-// the browser entry), and only then means a page without `flags`. Until then nothing is
-// known, as with `flags` itself before its first answer (3.1).
-const readFlags = async (ask, loaded) => {
-  const reply = await ask("flags", "read", {});
-  if (reply?.error !== "no-answerer" || !loaded) return reply;
-  await loaded();
-  return ask("flags", "read", {});
-};
-
 export const machine = setup({
   guards: {
     syncable: ({ context }) => Boolean(context.userId) && context.api != null,
@@ -798,10 +787,10 @@ export const machine = setup({
   },
   actors: {
     load: fromPromise(async ({ input }) => {
-      const { store, ask, api, loaded } = input;
+      const { store, ask, api } = input;
       // Which features are hidden (3.1), asked beside the store so no query is answered
       // before it is known; flags.changed is held for us until the reply lands.
-      const flags = ask ? Promise.resolve().then(() => readFlags(ask, loaded)).then(hiddenOf, () => []) : Promise.resolve([]);
+      const flags = ask ? Promise.resolve().then(() => ask("flags", "read", {})).then(hiddenOf, () => []) : Promise.resolve([]);
       await claim(store, ask, api);
       const [evaluators, outbox, cursor, userId, hidden] = await Promise.all([
         store.all(),
@@ -923,7 +912,6 @@ export const machine = setup({
     store: input.store,
     api: input.api,
     ask: input.ask,
-    loaded: input.loaded,
     now: input.now ?? (() => new Date().toISOString()),
     // How a busy text waits before it is asked again; a test passes its own clock.
     wait: input.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
@@ -991,7 +979,7 @@ export const machine = setup({
     loading: {
       invoke: {
         src: "load",
-        input: ({ context }) => ({ store: context.store, ask: context.ask, api: context.api, loaded: context.loaded }),
+        input: ({ context }) => ({ store: context.store, ask: context.ask, api: context.api }),
         onDone: {
           target: "checkingSession",
           actions: assign({
