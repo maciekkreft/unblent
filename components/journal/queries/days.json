@@ -19,7 +19,7 @@
   },
   "reply": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Every day written in the range, oldest first; a date with nothing written is not listed.",
+    "description": "The days written in the range, oldest first, at most seven; a date with nothing written is not listed, and more counts the written days after the seventh.",
     "type": "object",
     "properties": {
       "days": {
@@ -40,6 +40,11 @@
           "required": ["day", "text"],
           "additionalProperties": false
         }
+      },
+      "more": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "How many more written days the range holds after the last one listed; present only when the range holds more than seven."
       }
     },
     "required": ["days"],
@@ -47,7 +52,7 @@
   },
   "supersededBy": ["journal.changed"],
   "tool": {
-    "description": "Returns the reader's journal days, oldest first, each with its date and everything written on it. Give from alone (YYYY-MM-DD) for one day, from and to for a range (both included), to alone for every day up to it, or nothing for the whole journal. Days with nothing written are left out. The text is markdown: a line starting with # is a title, ## a heading, ### a subheading. Use it to read what the reader wrote on a given day or over a period; to know which day the journal page shows now, read the open journal day instead.",
-    "label": "Reading journal days", "title": "Journal days", "group": "Journal", "order": 320
+    "description": "Returns the full text of the reader's journal days, oldest first, at most seven per ask. Give from alone (YYYY-MM-DD) for one day, or from and to for a range (both included). Days with nothing written are left out; when the range holds more than seven written days, more says how many were left out after the last one returned, so ask again from the day after it, or better, read only the days that matter. Find those days first with the journal index tool, the short list, and read here only the ones it names. The text is markdown: a line starting with # is a title, ## a heading, ### a subheading. To know which day the journal page shows now, read the open journal day instead.",
+    "label": "Reading journal day text", "title": "Journal day text", "group": "Journal", "order": 320
   }
 }

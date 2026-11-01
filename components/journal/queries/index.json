@@ -1,0 +1,87 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which written days to list: from and to are each an end of the range, both included, so from alone is every day since it and to alone every day up to it; contains keeps the days whose text holds those words, ignoring case; limit is how many to list.",
+    "type": "object",
+    "properties": {
+      "from": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "The first date, YYYY-MM-DD."
+      },
+      "to": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "The last date, YYYY-MM-DD."
+      },
+      "contains": {
+        "type": "string",
+        "description": "Words the day's text must contain, matched as one piece of text, ignoring case."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "How many days to list, newest first; 20 when left out."
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The matching written days, newest first, each as a short entry without its text; total is how many match in all and more how many of them are not listed.",
+    "type": "object",
+    "properties": {
+      "days": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "The day's record, which the journal page opens."
+            },
+            "day": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "The day's date, YYYY-MM-DD."
+            },
+            "summary": {
+              "type": "string",
+              "description": "One sentence the journal summary generator wrote about the day, or the day's first line when there is none."
+            },
+            "words": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "How many words are written on the day."
+            }
+          },
+          "required": ["id", "day", "summary", "words"],
+          "additionalProperties": false
+        }
+      },
+      "total": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "How many written days match, listed or not."
+      },
+      "more": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "How many matching days are not listed."
+      }
+    },
+    "required": ["days", "total", "more"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["journal.changed"],
+  "tool": {
+    "description": "Lists the reader's journal days, newest first, as short entries: each day's date, a one-sentence summary (or its first line) and how many words it holds, never the full text. At most 20 days unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with from and to (YYYY-MM-DD, both included; from alone is every day since it) and contains (words the day's text holds, ignoring case). Days with nothing written are left out. Use this first to find which days matter, then read their full text with the journal days tool; to know which day the journal page shows now, read the open journal day instead.",
+    "label": "Reading journal days", "title": "Journal days", "group": "Journal", "order": 310,
+    "items": "/days",
+    "itemName": "/day",
+    "total": "/total",
+    "opens": "journal-day"
+  }
+}

@@ -196,16 +196,75 @@ const opened = (c) => {
   return { shown: { day, text: record?.text ?? "", writable: writable ?? day === todayOf(c.now()) } };
 };
 
-// journal: days. `from` alone names one day; both ends are included.
+// journal: days, oldest first and at most DAYS_MAX of them. `from` alone names one day;
+// both ends are included.
 const between = (c, { from, to } = {}) => {
   const last = to ?? from;
+  const all = visible(c.days)
+    .filter((d) => d.text !== "" && (!from || d.day >= from) && (!last || d.day <= last))
+    .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id));
+  const reply = { days: all.slice(0, DAYS_MAX).map(({ day, text }) => ({ day, text })) };
+  // Only a range longer than DAYS_MAX carries `more`, so the reply of a short one is as before.
+  if (all.length > DAYS_MAX) reply.more = all.length - DAYS_MAX;
+  return reply;
+};
+
+// journal: days answers at most this many days per ask, so a long range cannot fill the
+// chat (7.7); the days left out are counted in `more`.
+export const DAYS_MAX = 7;
+
+// journal: index, the short list (7.7): at most INDEX_MAX entries, INDEX_LIMIT unless
+// the asker names a limit, and a first line cut at FIRST_WORDS words.
+export const INDEX_LIMIT = 20;
+export const INDEX_MAX = 50;
+const FIRST_WORDS = 25;
+
+// A word is a run of characters between whitespace, as 7.7 counts the excerpt's words; a
+// level marker (# ## ###) is not one.
+const words = (text) => text.split(/\s+/).filter(Boolean);
+
+// The day's first line with writing on it, without the level markers (# ## ###) the text
+// keeps, cut to FIRST_WORDS words: what stands in for a summary the generator has not
+// written (a day still open, a day signed out, a page without generators).
+export const firstLine = (text) => {
+  const line = str(text).split("\n").map((l) => l.replace(/^#{1,3}\s+/, "").trim()).find(Boolean) ?? "";
+  const w = words(line);
+  return w.length > FIRST_WORDS ? `${w.slice(0, FIRST_WORDS).join(" ")}…` : line;
+};
+
+// The written days that match, newest first. `from` and `to` are each an end of the range,
+// both included, so `from` alone is every day since it; `contains` is matched in the day's
+// text, ignoring case. A day's summary is the journal-summary generator's, read only while
+// signed in, since signed out the generators hold none of the account's (book-toc's rule).
+export const indexOf = (c, { from, to, contains, limit } = {}) => {
+  const needle = typeof contains === "string" && contains.trim() !== "" ? contains.trim().toLocaleLowerCase() : null;
+  const all = visible(c.days)
+    .filter((d) => d.text.trim() !== "" && (!from || d.day >= from) && (!to || d.day <= to))
+    .filter((d) => !needle || d.text.toLocaleLowerCase().includes(needle))
+    .sort((a, b) => b.day.localeCompare(a.day) || b.id.localeCompare(a.id));
+  const shown = all.slice(0, Math.min(limit ?? INDEX_LIMIT, INDEX_MAX));
+  const summaries = c.userId ? c.summaries : {};
   return {
-    days: visible(c.days)
-      .filter((d) => d.text !== "" && (!from || d.day >= from) && (!last || d.day <= last))
-      .sort((a, b) => a.day.localeCompare(b.day) || a.id.localeCompare(b.id))
-      .map(({ day, text }) => ({ day, text })),
+    days: shown.map((d) => ({
+      id: d.id,
+      day: d.day,
+      summary: summaries[d.day]?.text?.trim() || firstLine(d.text),
+      words: words(d.text.replace(/^#{1,3}\s+/gm, "")).length,
+    })),
+    total: all.length,
+    more: all.length - shown.length,
   };
 };
+
+// What journal: index needs of a generators result: its text and version, so an older
+// announcement never replaces a newer one.
+const isSummary = (r) => r?.generator === "journal-summary" && typeof r.item === "string";
+const summarised = assign({
+  summaries: ({ context, event }) =>
+    !isSummary(event.result) || context.summaries[event.result.item]?.version > event.result.version
+      ? context.summaries
+      : { ...context.summaries, [event.result.item]: { text: str(event.result.text), version: event.result.version } },
+});
 
 const shownOf = (event) => ({ day: event.day, ...(typeof event.writable === "boolean" ? { writable: event.writable } : {}) });
 const remember = assign({ shown: ({ event }) => shownOf(event) });
@@ -562,6 +621,10 @@ export const machine = setup({
         userId: known ? session.userId : userId ?? null,
       };
     }),
+    // The journal-summary generator's results, for journal: index. Asked once the journal
+    // is ready and never awaited by the load, since generators reads the journal at its own
+    // start; generation.changed is held until the reply lands (4.2).
+    summaries: fromPromise(({ input }) => input.ask("generators", "results", { generator: "journal-summary" })),
     // Empties the local copy in one transaction, outbox and cache together (12).
     // With keep (12) the copy stays and is marked, under the account it came from, to be
     // added to the account the browser joins after the reload.
@@ -616,15 +679,19 @@ export const machine = setup({
       "back restores the day's text and the other copy, as a new record of that date, and " +
       "puts both copies to the page again. A second record that is " +
       "empty or holds the same text is deleted without asking. When no day can be edited, the journal opens " +
-      "an empty page for today. The chat may read it through two lookups: the day the journal " +
+      "an empty page for today. The chat may read it through three lookups: the day the journal " +
       "page shows, with its text and whether it can still be written, remembered from what the " +
       "page last announced and kept only while the page is open; and the days in a range of " +
-      "dates, oldest first, leaving out days with nothing written.",
+      "dates, oldest first, at most seven per ask, leaving out days with nothing written; and a short " +
+      "list of the written days, newest first, each with its date, its summary (the journal summary " +
+      "generator's sentence, or the day's first line when there is none or the reader is signed out) " +
+      "and its length in words, narrowed by dates and by words the day contains, at most 20 unless " +
+      "more are asked for (up to 50), with how many more match.",
     kind: "fact",
     shape: "replicated",
     owns: "the journal's days",
     emits: ["journal.changed", "journal.conflicted"],
-    asks: ["session: read"],
+    asks: ["session: read", "generators: results"],
   },
   context: ({ input }) => ({
     days: [],
@@ -632,6 +699,8 @@ export const machine = setup({
     today: null,
     // The day the journal page shows (day.shown), in memory only, for journal: open.
     shown: null,
+    // The journal-summary generator's texts by date, as { text, version }, for journal: index.
+    summaries: {},
     // The conflicts announced and not yet settled, by the id they named: the two copies'
     // texts and, for two records of one date, the other record's id (kept).
     pending: new Map(),
@@ -702,11 +771,31 @@ export const machine = setup({
         "read?": { actions: queue },
         "open?": { actions: queue },
         "days?": { actions: queue },
+        "index?": { actions: queue },
         "day.shown": { actions: remember },
+        "generation.changed": { actions: summarised },
       },
     },
     ready: {
+      invoke: {
+        src: "summaries",
+        input: ({ context }) => ({ ask: context.ask }),
+        onDone: {
+          actions: assign({
+            summaries: ({ context, event }) => {
+              const results = Array.isArray(event.output?.results) ? event.output.results.filter(isSummary) : [];
+              const next = { ...context.summaries };
+              for (const r of results) if (!(next[r.item]?.version > r.version)) next[r.item] = { text: str(r.text), version: r.version };
+              return next;
+            },
+          }),
+        },
+        // No generators on the page, or no ask: every day shows its first line.
+        onError: {},
+      },
       on: {
+        "generation.changed": { actions: summarised },
+        "index?": { actions: ({ context, event }) => event.reply(indexOf(context, event.payload)) },
         "day.saved": { actions: saved },
         "conflict.reopened": { actions: reopened },
         // The outbox drains only while someone is signed in (5); signing out keeps it,
