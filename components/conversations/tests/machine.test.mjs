@@ -933,9 +933,9 @@ test("a chapter, stored as its title over its markdown, is named by its title an
   assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER)), { name: "Chapter One" }, "no payload, nothing to open");
 });
 
-test("a reading place opens its chapter by the reply's book and chapter number", () => {
+test("a reading place opens its book by the reply's book id, as the shelf does", () => {
   const content = JSON.stringify({ id: BOOK, title: "T", author: "A", chapter: 5, chapterTitle: "Defusion", block: 2, text: "Step back.", words: 2 });
-  assert.deepEqual(lookupName({ callId: "c", content }, entryOf(BOOKS_PLACE), {}), { name: "Defusion", excerpt: "Step back.", opens: "chapter", id: BOOK, chapter: 5 });
+  assert.deepEqual(lookupName({ callId: "c", content }, entryOf(BOOKS_PLACE), {}), { name: "Defusion", excerpt: "Step back.", opens: "book", id: BOOK, chapter: 5 });
 });
 
 test("a listing says how many it returned, how many match, and names its first 20 with what they open", () => {

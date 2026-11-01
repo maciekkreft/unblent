@@ -110,6 +110,10 @@ test("following a lookup's link keeps the chat, and only for the change to what 
     // Without a follow the open chat follows the stage, as before.
     subject("2");
     await until(() => open === U("C2"));
+    // Where you are in it opens the book as the shelf does, and the chat stays for it too.
+    actors["chat-thread"].send({ type: "_open", opens: "book", id: BOOK("1") });
+    subject("1");
+    assert.equal(open, U("C2"), "the chat stays for the book the link opened");
   } finally {
     unwire();
   }

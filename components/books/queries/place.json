@@ -45,6 +45,6 @@
     "label": "Finding your place in the book", "title": "Where you are in it", "group": "What's open", "order": 120,
     "name": "/chapterTitle", "openId": "/reply/id", "openChapter": "/reply/chapter",
     "excerpt": "/text",
-    "opens": "chapter"
+    "opens": "book"
   }
 }

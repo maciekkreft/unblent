@@ -745,7 +745,8 @@ test("each kind a lookup names opens through its own event, and one missing what
   assert.equal(openingOf({ opens: "chapter", id: SHELF_BOOK }), null, "a chapter needs its number");
   assert.deepEqual(openingOf({ opens: "note", id: NOTE }), { type: "ask", id: NOTE });
   assert.deepEqual(openingOf({ opens: "highlight", id: LIGHT }), { type: "ask", id: LIGHT });
-  assert.equal(openingOf({ opens: "book", id: SHELF_BOOK }), null);
+  assert.deepEqual(openingOf({ opens: "book", id: SHELF_BOOK }), { type: "book.selected", id: SHELF_BOOK });
+  assert.equal(openingOf({ opens: "shelf", id: SHELF_BOOK }), null);
   assert.equal(openingOf({ name: "Cats" }), null);
 });
 
@@ -761,16 +762,17 @@ test("a link emits its opening event, valid against the thread's own copies of t
   const light = noteRecord(LIGHT, [{ kind: "book", id: SHELF_BOOK, place: PLACE }]);
   const h = start({ notes: { [NOTE]: noteRecord(NOTE), [LIGHT]: light } });
   const seen = [];
-  for (const name of ["note.staged", "day.selected", "chapter.selected", "passage.selected"]) h.actor.on(name, (e) => seen.push(e));
+  for (const name of ["note.staged", "day.selected", "chapter.selected", "book.selected", "passage.selected"]) h.actor.on(name, (e) => seen.push(e));
   h.actor.send({ type: "_open", opens: "journal-day", id: NOTE });
   h.actor.send({ type: "_open", opens: "chapter", id: SHELF_BOOK, chapter: 3 });
+  h.actor.send({ type: "_open", opens: "book", id: SHELF_BOOK });
   h.actor.send({ type: "_open", opens: "note", id: NOTE });
-  await until(() => seen.length === 3, "the note opened");
+  await until(() => seen.length === 4, "the note opened");
   h.actor.send({ type: "_open", opens: "highlight", id: LIGHT });
-  await until(() => seen.length === 4, "the highlight opened");
+  await until(() => seen.length === 5, "the highlight opened");
   h.actor.send({ type: "_open", opens: "note", id: CHAT });
   await flush();
   await flush();
-  assert.deepEqual(seen.map((e) => e.type), ["day.selected", "chapter.selected", "note.staged", "passage.selected"], "a gone note opens nothing");
+  assert.deepEqual(seen.map((e) => e.type), ["day.selected", "chapter.selected", "book.selected", "note.staged", "passage.selected"], "a gone note opens nothing");
   for (const { type, ...payload } of seen) assert.ok(new Validator(own(type), "2020-12").validate(payload).valid, type + " matches its schema");
 });

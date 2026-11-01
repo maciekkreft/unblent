@@ -636,13 +636,15 @@ export const lengthWords = (size) => {
 
 // What a lookup's link opens (7.7), as the event that opens it where the user normally
 // sees it: a journal day in the journal (day.selected), a chapter in its book
-// (chapter.selected). A note or a highlight is asked of `notes` first, since only the
+// (chapter.selected), a book at its saved reading place, as the shelf opens it
+// (book.selected). A note or a highlight is asked of `notes` first, since only the
 // reply says whether it is a highlight and where its passage is: "ask". Anything else,
 // or a link missing what its kind needs, opens nothing: null.
 export const openingOf = ({ opens, id, chapter } = {}) => {
   if (typeof id !== "string" || !id) return null;
   if (opens === "journal-day") return { type: "day.selected", id };
   if (opens === "chapter") return Number.isInteger(chapter) && chapter >= 0 ? { type: "chapter.selected", id, chapter } : null;
+  if (opens === "book") return { type: "book.selected", id };
   if (opens === "note" || opens === "highlight") return { type: "ask", id };
   return null;
 };
@@ -667,7 +669,7 @@ const JOURNAL = "00000000000000000000000JRN";
 // A note opens on the stage beside the subject and is named as a note.
 export const followedOf = (opening) => {
   if (opening.type === "day.selected") return { kind: "book", id: JOURNAL };
-  if (opening.type === "chapter.selected") return { kind: "book", id: opening.id };
+  if (opening.type === "chapter.selected" || opening.type === "book.selected") return { kind: "book", id: opening.id };
   if (opening.type === "passage.selected") return { kind: "book", id: opening.book };
   return { kind: "note", id: opening.id };
 };
@@ -792,7 +794,8 @@ export const machine = setup({
       "opens like the thinking to show what was asked for and what came back, each entry with its " +
       "short text, and a name in it is a link, reached with Tab, that opens what it names where it " +
       "is normally seen while the chat keeps its place: a note on the stage as a tab of its own, a " +
-      "highlight in its book at its passage, a journal day in the journal, a chapter in its book. Just " +
+      "highlight in its book at its passage, a journal day in the journal, a chapter in its book, and " +
+      "the book of Where you are in it at its saved reading place, as the shelf opens it. Just " +
       "before it opens one it says which chat the link was in and what it brings in front, so " +
       "`conversations` keeps that chat open when the subject changes to it. Answers " +
       "are written in markdown and drawn as formatted text by a small renderer of our own, " +
@@ -833,7 +836,7 @@ export const machine = setup({
       "the chat itself is the same as in the Chats panel.",
     kind: "view",
     attributes: ["height", "markdown", "stage"],
-    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "passage.selected", "lookup.followed"],
+    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "book.selected", "passage.selected", "lookup.followed"],
     asks: ["conversations: open", "conversations: read", "settings: read", "subject: read", "notes: read"],
   },
   context: ({ input }) => ({
