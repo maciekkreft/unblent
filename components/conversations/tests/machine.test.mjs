@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, toMarkdown, commentsBlock, forModel, between, positionOf, byPosition, lookupName, pointAt } from "../machine.js";
+import { machine, toMarkdown, commentsBlock, forModel, between, positionOf, byPosition, lookupName, lookupItems, pointAt } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const load = (p) => JSON.parse(readFileSync(resolve(HERE, "..", p), "utf8"));
@@ -896,7 +896,9 @@ test("the recorded tool exchange is what the machine emits (seam for the views)"
 
 // --- what a lookup read (7.2, 7.7) -------------------------------------------------
 
-const entryOf = (q) => ({ label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt });
+const entryOf = (q) => ({ label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt, items: q.tool.items, itemName: q.tool.itemName, total: q.tool.total, opens: q.tool.opens });
+const JOURNAL_INDEX = other("journal", "queries", "index");
+const NOTES_HIGHLIGHTS = other("notes", "queries", "highlights");
 
 test("a JSON pointer is followed as RFC 6901 says", () => {
   const doc = { "a/b": { "m~n": ["x", "y"] }, "": 1 };
@@ -927,6 +929,45 @@ test("an error, a listing, a cut result and an empty body name nothing more than
 
 test("a chapter, stored as its title over its markdown, is named by its title", () => {
   assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER)), { name: "Chapter One" });
+});
+
+test("a listing says how many it returned, how many match, and names its first 20 with what they open", () => {
+  const days = Array.from({ length: 25 }, (_, i) => ({ id: U(String(i).padStart(2, "0")), day: "2026-10-" + String(30 - i).padStart(2, "0"), summary: "s", words: 3 }));
+  const content = JSON.stringify({ days, total: 40, more: 15 });
+  const out = lookupItems({ callId: "c", content }, entryOf(JOURNAL_INDEX));
+  assert.equal(out.count, 25);
+  assert.equal(out.total, 40);
+  assert.equal(out.items.length, 20);
+  assert.deepEqual(out.items[0], { name: "2026-10-30", id: days[0].id, opens: "journal-day" });
+  const hl = JSON.stringify({ highlights: [{ id: BOOK, passage: "Thoughts are words.", comment: "", book: BOOK, chapter: 2, updatedAt: 1 }, { id: CHAT, passage: "  ", comment: "", book: BOOK, chapter: 2, updatedAt: 1 }], total: 2, more: 0 });
+  assert.deepEqual(lookupItems({ callId: "c", content: hl }, entryOf(NOTES_HIGHLIGHTS)), { count: 2, total: 2, items: [{ name: "Thoughts are words.", id: BOOK, opens: "highlight" }] });
+});
+
+test("an empty listing, an error, a cut result and a single thing carry no items", () => {
+  assert.deepEqual(lookupItems({ callId: "c", content: JSON.stringify({ notes: [], total: 0, more: 0 }) }, entryOf(NOTES_FIND)), { count: 0, total: 0 });
+  assert.deepEqual(lookupItems({ callId: "c", content: JSON.stringify({ notes: [], total: 0, more: 0 }), isError: true }, entryOf(NOTES_FIND)), {});
+  assert.deepEqual(lookupItems({ callId: "c", content: JSON.stringify({ notes: [], total: 0, more: 0 }).slice(0, 9) }, entryOf(NOTES_FIND)), {});
+  assert.deepEqual(lookupItems({ callId: "c", content: JSON.stringify({ note: { id: BOOK, title: "Cats", body: "x", version: 1, about: [] } }) }, entryOf(NOTES_READ)), {});
+  assert.deepEqual(lookupItems({ callId: "c", content: "{}" }, undefined), {});
+});
+
+test("a listing's count, total and items ride conversation.changed", async () => {
+  const content = JSON.stringify({ notes: [{ id: BOOK, title: "Cats", line: "", updatedAt: 1, about: [] }], total: 3, more: 2 });
+  const chat = {
+    id: CHAT, title: "t", about: [], start: "s", updatedAt: 5,
+    turns: [
+      { id: USER, role: "user", text: "first" },
+      { id: ANSWER, role: "assistant", text: "", status: "done", calls: [{ id: "c1", target: "notes", name: "find", payload: {}, label: "Listing the notes" }], provider: "echo", model: "echo" },
+      { id: RESULT1, role: "user", text: "", results: [{ callId: "c1", content }] },
+      { id: ANSWER2, role: "assistant", text: "One.", status: "done" },
+    ],
+  };
+  const h = start({ conversations: [{ id: CHAT, title: "t", about: [], updatedAt: 5 }], chatsById: { [CHAT]: chat }, contracts: { queries: [toolQuery("notes", "find", NOTES_FIND)] } });
+  await ready(h);
+  h.actor.send({ type: "conversation.selected", id: CHAT });
+  await until(() => changes(h).length >= 2, "announced again with the items");
+  const result = changes(h).at(-1).turns.find((t) => t.id === RESULT1).results[0];
+  assert.deepEqual(result, { callId: "c1", size: content.length, count: 1, total: 3, items: [{ name: "Cats", id: BOOK, opens: "note" }] });
 });
 
 test("a chat loaded from before carries what its lookups read once the tool entries arrive", async () => {

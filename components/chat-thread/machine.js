@@ -594,6 +594,46 @@ const rehighlight = enqueueActions(({ context, event, enqueue }) => {
 // asks for. Ctrl+d and Ctrl+u are the only ones with a modifier; a letter with Ctrl, Alt
 // or Cmd belongs to the browser and the desk. `afterG` is whether a g was pressed just
 // before, which makes this g the second of gg. "g" alone waits for its second press.
+// What a lookup asked for, in plain words (7.7): each payload field as a readable word and
+// its value, dates as dates, a chapter counted from 1 as people count it (the payloads
+// count from 0), an id as "by its id" since the chat holds no name for it. Pure, so it is
+// tested in Node; an empty payload asks for nothing worth saying and gives "".
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+export const dateWords = (text) => {
+  const m = DATE.exec(text);
+  return m && MONTHS[Number(m[2]) - 1] ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]} ${m[1]}` : text;
+};
+const FIELD_WORDS = { limit: "at most", contains: "containing", id: "one" };
+const fieldWords = (key) => FIELD_WORDS[key] ?? key.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
+const valueWords = (key, value) => {
+  if (typeof value === "string") {
+    if (ULID.test(value)) return "by its id";
+    if (DATE.test(value)) return dateWords(value);
+    return `“${value}”`;
+  }
+  if (key === "chapter" && Number.isInteger(value)) return String(value + 1);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (Array.isArray(value)) return value.map((v) => valueWords("", v)).join(", ");
+  if (value && typeof value === "object") return Object.entries(value).map(([k, v]) => `${fieldWords(k)} ${valueWords(k, v)}`).join(", ");
+  return String(value);
+};
+export const askedFor = (payload) => {
+  const parts = Object.entries(payload ?? {})
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${fieldWords(k)} ${valueWords(k, v)}`);
+  const text = parts.join(", ");
+  return text ? text[0].toUpperCase() + text.slice(1) : "";
+};
+
+// A result's length as people read it: its size is in characters, about six to a word.
+export const lengthWords = (size) => {
+  const n = Math.round((size ?? 0) / 6);
+  return n === 1 ? "About 1 word" : `About ${n} words`;
+};
+
 export const vimAction = ({ key, ctrlKey, metaKey, altKey }, afterG = false) => {
   if (metaKey || altKey) return null;
   if (ctrlKey) return { d: "halfDown", u: "halfUp" }[key] ?? null;

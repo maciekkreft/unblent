@@ -208,6 +208,33 @@ export const lookupName = (result, entry) => {
   return out;
 };
 
+// What a listing returned (7.2, 7.7): how many items it holds (`count`), how many match
+// in all (`total`), and the first 20, each named by the tool entry's `itemName` pointer,
+// with its id and the kind of thing it `opens`. Computed like lookupName, never stored.
+const ITEMS_SHOWN = 20;
+export const lookupItems = (result, entry) => {
+  if (!entry || !entry.items || result.isError || typeof result.content !== "string") return {};
+  const reply = replyOf(result.content, entry.reply);
+  const list = reply ? pointAt(reply, entry.items) : undefined;
+  if (!Array.isArray(list)) return {};
+  const out = { count: list.length };
+  const total = entry.total ? pointAt(reply, entry.total) : undefined;
+  if (Number.isInteger(total) && total >= 0) out.total = total;
+  const items = [];
+  for (const item of list.slice(0, ITEMS_SHOWN)) {
+    const name = entry.itemName ? pointAt(item, entry.itemName) : undefined;
+    if (typeof name !== "string" || words(name).length === 0) continue;
+    const one = { name };
+    if (item && typeof item.id === "string" && item.id && entry.opens) {
+      one.id = item.id;
+      one.opens = entry.opens;
+    }
+    items.push(one);
+  }
+  if (items.length) out.items = items;
+  return out;
+};
+
 // A tool result rides to views as its size, not its content (4.3): the content can
 // be very large and conversation.changed is announced many times a second, so
 // `conversations` keeps the content and sends only its length, with the name of what
@@ -219,7 +246,8 @@ const stripTurn = (turn, targets, entries) => {
     results: turn.results.map((r) => {
       const out = { callId: r.callId, size: r.content != null ? r.content.length : r.size ?? 0 };
       if (r.isError !== undefined) out.isError = r.isError;
-      return { ...out, ...lookupName(r, entries[targets.get(r.callId)]) };
+      const entry = entries[targets.get(r.callId)];
+      return { ...out, ...lookupName(r, entry), ...lookupItems(r, entry) };
     }),
   };
 };
@@ -509,6 +537,7 @@ const buildTools = (context, reply) => {
     if (!q.tool) continue;
     const key = `${q.target}: ${q.name}`;
     meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
+    for (const field of ["items", "itemName", "total", "opens"]) if (q.tool[field] !== undefined) meta[key][field] = q.tool[field];
     if (q.tool.switch !== false && context.tools[key] === false) continue;
     if (!context.answered(q.target, q.name)) continue; // its owner is not on this page (7.7)
     if (FEATURE_TOOLS.includes(key) && featureHidden(context.hidden)) continue;
@@ -1418,7 +1447,7 @@ export const machine = setup({
     keepObserved: false,
     tools: {},
     approval: "auto",
-    toolEntries: {}, // "target: query" -> { label, reply, name, excerpt }, from the catalog (7.7)
+    toolEntries: {}, // "target: query" -> { label, reply, name, excerpt, items, itemName, total, opens }, from the catalog (7.7)
     entriesAsked: false,
     running: null, // { chatId, turnId, phase, tools, meta, rounds } while a question is being answered
     queued: [],

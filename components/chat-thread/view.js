@@ -2,7 +2,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced } from "./machine.js";
+import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
@@ -615,6 +615,77 @@ class ChatThread extends LitElement {
       font-size: var(--text-sm);
       color: var(--color-mute);
     }
+    /* Each lookup line opens, like the thinking record, to say what was asked for and
+       what came back (7.7); closed by default. */
+    .lookup summary {
+      cursor: pointer;
+      list-style: none;
+      display: inline-flex;
+      gap: var(--space-xs);
+      align-items: baseline;
+      border-radius: var(--radius-sm);
+      padding: 0 var(--space-xs);
+      margin-left: calc(-1 * var(--space-xs));
+      color: var(--color-body-mid);
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .lookup summary::-webkit-details-marker {
+      display: none;
+    }
+    .lookup summary::before {
+      content: "›";
+      display: inline-block;
+      transition: transform var(--duration-fast) var(--ease);
+    }
+    .lookup[open] summary::before {
+      transform: rotate(90deg);
+    }
+    .lookup summary:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-body);
+    }
+    .lookup summary:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .got {
+      margin: var(--space-xs) 0 var(--space-sm) var(--space-md);
+      padding-left: var(--space-md);
+      border-left: var(--border-width) solid var(--color-border);
+      display: grid;
+      gap: var(--space-xs);
+      color: var(--color-body);
+      overflow-wrap: anywhere;
+    }
+    .got dt {
+      font-size: var(--text-caption);
+      color: var(--color-body-mid);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .got dd {
+      margin: 0;
+    }
+    .got .items {
+      display: grid;
+      gap: var(--space-2xs);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .got .more {
+      color: var(--color-body-mid);
+      font-size: var(--text-caption);
+    }
+    .got .err {
+      color: var(--color-danger);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .lookup summary::before {
+        transition: none;
+      }
+    }
     /* A finished answer's footer: a status word when the answer was stopped or failed. */
     .foot {
       display: flex;
@@ -645,6 +716,8 @@ class ChatThread extends LitElement {
   #actor = new ActorController(this);
   // Which thinking records are open (ephemeral view state, closed by default).
   #openThinking = new Set();
+  // Which lookup lines are open, by call id (ephemeral view state, closed by default).
+  #openLookups = new Set();
   // Whether the transcript is pinned to the bottom, so it follows a streaming answer
   // but leaves the reader where they scrolled if they scrolled up.
   #stick = true;
@@ -652,6 +725,8 @@ class ChatThread extends LitElement {
   #pointer = null;
   #focused = null;
   #settle;
+  // The results of the chat being drawn, by call id, gathered once per render.
+  #results = new Map();
   // Answers parsed once per text, not per keystroke in the comment box.
   #parsed = new Map();
 
@@ -690,6 +765,12 @@ class ChatThread extends LitElement {
     if (!this.#stick) return;
     const el = this.renderRoot.querySelector(".transcript");
     if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  #toggleLookup(id) {
+    if (this.#openLookups.has(id)) this.#openLookups.delete(id);
+    else this.#openLookups.add(id);
+    this.requestUpdate();
   }
 
   #toggleThinking(id) {
@@ -834,6 +915,9 @@ class ChatThread extends LitElement {
     const chat = context.conversation;
     const turns = chat?.turns ?? [];
     const last = snapshot.matches("showing") ? lastAnswer(chat) : null;
+    // A lookup's result rides the user turn after the call (7.7), by its call id.
+    this.#results = new Map();
+    for (const t of turns) for (const r of t.results ?? []) this.#results.set(r.callId, r);
     return html`
       ${turns.map((turn, k) => {
         if (turn.role === "user") return this.#user(turn);
@@ -946,7 +1030,51 @@ class ChatThread extends LitElement {
   #lookups(turn) {
     const named = (turn.calls ?? []).filter((call) => !call.invalid);
     if (!named.length) return nothing;
-    return html`<div class="lookups">${named.map((call) => html`<span>${call.label}</span>`)}</div>`;
+    return html`<div class="lookups">${named.map((call) => this.#lookup(call))}</div>`;
+  }
+
+  // One lookup line: closed, its label; open, what was asked for and what came back. A
+  // result not yet back shows only what was asked for.
+  #lookup(call) {
+    const open = this.#openLookups.has(call.id);
+    const result = this.#results.get(call.id);
+    const asked = askedFor(call.payload);
+    return html`
+      <details
+        class="lookup"
+        ?open=${open}
+        @toggle=${(e) => {
+          if (e.currentTarget.open !== open) this.#toggleLookup(call.id);
+        }}
+      >
+        <summary>${call.label}</summary>
+        ${open
+          ? html`<dl class="got">
+              ${asked ? html`<dt>Asked for</dt><dd>${asked}</dd>` : nothing}
+              ${result ? this.#got(result) : nothing}
+            </dl>`
+          : nothing}
+      </details>
+    `;
+  }
+
+  #got(result) {
+    if (result.isError) return html`<dt>Got</dt><dd class="err">Nothing: this lookup failed, and the chat was told.</dd>`;
+    const length = html`<dd class="more">${lengthWords(result.size)}</dd>`;
+    if (result.items || result.count !== undefined) {
+      const items = result.items ?? [];
+      const count = result.count ?? items.length;
+      const of = result.total !== undefined ? `${count} of ${result.total}` : String(count);
+      return html`<dt>Got</dt>
+        ${items.length ? html`<dd><ul class="items">${items.map((item) => html`<li>${dateWords(item.name)}</li>`)}</ul></dd>` : nothing}
+        <dd class="more">${of} · ${lengthWords(result.size)}</dd>`;
+    }
+    if (result.name) {
+      return html`<dt>Got</dt><dd>${result.name}</dd>
+        ${result.excerpt ? html`<dd>“${result.excerpt}”</dd>` : nothing}
+        ${length}`;
+    }
+    return html`<dt>Got</dt>${length}`;
   }
 
   // One markdown block (10). Every text run interpolates through Lit as an escaped text

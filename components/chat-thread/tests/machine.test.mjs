@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -705,4 +705,22 @@ test("load is ignored outside the stage", async () => {
   await until(() => state(h) === "showing", "showing");
   h.actor.send({ type: "load", id: CHAT2 });
   assert.equal(h.actor.getSnapshot().context.openId, CHAT);
+});
+
+// --- what a lookup asked for, in plain words (7.7) --------------------------------
+
+test("a lookup's payload reads as plain words: dates as dates, chapters from 1, ids by their id", () => {
+  assert.equal(askedFor({ from: "2026-10-01", to: "2026-10-31", contains: "mother" }), "From 1 Oct 2026, to 31 Oct 2026, containing “mother”");
+  assert.equal(askedFor({ book: "01HQ8ZK7M4N5P6Q7R8S9T0V1W2", chapter: 5, limit: 10 }), "Book by its id, chapter 6, at most 10");
+  assert.equal(askedFor({ id: "01HQ8ZK7M4N5P6Q7R8S9T0V1W2" }), "One by its id");
+  assert.equal(askedFor({ texts: ["a", "b"], keepGoing: true }), "Texts “a”, “b”, keep going yes");
+  assert.equal(askedFor({}), "");
+  assert.equal(askedFor(undefined), "");
+});
+
+test("a result's length is told in words, about six characters to one", () => {
+  assert.equal(lengthWords(2460), "About 410 words");
+  assert.equal(lengthWords(6), "About 1 word");
+  assert.equal(dateWords("2026-10-28"), "28 Oct 2026");
+  assert.equal(dateWords("Cats"), "Cats");
 });
