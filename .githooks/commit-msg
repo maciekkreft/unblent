@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Agent harnesses append attribution trailers; this project's commits carry none (CLAUDE.md).
 # Wired by `git config core.hooksPath .githooks`, which is local config: re-run it in a fresh clone.
+# A cloud session commits as Claude unless told otherwise; every commit here is the owner's.
+if { git var GIT_AUTHOR_IDENT; git var GIT_COMMITTER_IDENT; } 2>/dev/null | grep -qi 'anthropic'; then
+  echo "commit-msg: author or committer is Claude; run: git config user.name maciekkreft && git config user.email 428635+maciekkreft@users.noreply.github.com" >&2
+  exit 1
+fi
 python3 - "$1" <<'PY'
 import re, sys
 path = sys.argv[1]

@@ -4,4 +4,13 @@
 # (check.py --changed) and the full run (bare check.py) test in WebKit only; this is the
 # wider net before code leaves the machine.
 # Wired by `git config core.hooksPath .githooks`, which is local config: re-run it in a fresh clone.
+# A commit made elsewhere, such as in a cloud session, may still carry Claude as its author.
+while read -r _ local_sha _ remote_sha; do
+  [[ $local_sha =~ ^0+$ ]] && continue
+  if [[ $remote_sha =~ ^0+$ ]]; then range=("$local_sha" --not --remotes); else range=("$remote_sha..$local_sha"); fi
+  if git log --format='%h %an <%ae> | %cn <%ce>' "${range[@]}" | grep -i 'anthropic'; then
+    echo "pre-push: the commits above name Claude as author or committer; rewrite them first" >&2
+    exit 1
+  fi
+done
 exec python3 "$(git rev-parse --show-toplevel)/checks/check.py" --push
