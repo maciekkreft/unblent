@@ -202,6 +202,14 @@ class SettingsSheet extends LitElement {
     .field > :not(:first-child) {
       justify-self: start;
     }
+    /* A checkbox row: the name takes the row and the box stands at its right end, so
+       every box in the sheet lines up in one column under the others. */
+    .field.check {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .field.check > input {
+      justify-self: end;
+    }
     /* Who decides has long names: the select shrinks to its column instead of pushing
        the sheet wider than a phone. */
     .field.decider {
@@ -548,8 +556,10 @@ class SettingsSheet extends LitElement {
       border-radius: var(--radius-sm);
     }
     .question > label {
+      display: flex;
+      justify-content: space-between;
       align-items: baseline;
-      gap: var(--space-xs);
+      gap: var(--space-md);
       white-space: normal;
       color: var(--color-ink);
     }
@@ -644,7 +654,7 @@ class SettingsSheet extends LitElement {
 
   // One on/off setting, in the same row format as every other setting.
   #check(name, checked, toggle) {
-    return html`<label class="field"
+    return html`<label class="field check"
       ><span>${name}</span><input type="checkbox" .checked=${checked} @change=${toggle}
     /></label>`;
   }
@@ -798,7 +808,7 @@ class SettingsSheet extends LitElement {
             ${toolGroups(toolList, tools).map(
               (group) => html`
                 <div class="tool-group">
-                  <label class="field tool-head">
+                  <label class="field check tool-head">
                     <span>${group.name}</span>
                     <input
                       type="checkbox"
@@ -810,7 +820,7 @@ class SettingsSheet extends LitElement {
                   </label>
                   ${group.tools.map(
                     (tool) => html`
-                      <label class="field">
+                      <label class="field check">
                         <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
                         <input
                           type="checkbox"
@@ -1154,8 +1164,8 @@ class SettingsSheet extends LitElement {
     return html`
       <div class="question" data-question=${q.id}>
         <label>
-          <input type="checkbox" .checked=${setting.show} @change=${(e) => set({ show: e.target.checked })} />
           <span>${i + 1}. ${q.text || "Untitled question"}</span>
+          <input type="checkbox" .checked=${setting.show} @change=${(e) => set({ show: e.target.checked })} />
         </label>
         ${setting.show && i > 0
           ? html`
