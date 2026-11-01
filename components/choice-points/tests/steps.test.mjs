@@ -59,10 +59,10 @@ function fakeApi() {
   };
 }
 
-async function start({ store = fakeStore(), userId = null, api = null } = {}) {
+async function start({ store = fakeStore(), userId = null, api = null, today = null } = {}) {
   let minted = 0;
   const mint = () => `01ARZ3NDEKTSV4RRFFQ69G${String(++minted).padStart(4, "0")}`;
-  const actor = createActor(machine, { input: { store, api, mint, ask: () => Promise.resolve({ userId }) } });
+  const actor = createActor(machine, { input: { store, api, mint, ask: (target) => Promise.resolve(target === "journal" ? (today ? { today } : { error: "no-answerer" }) : { userId }) } });
   const steps = [];
   const settled = [];
   const deleted = [];
@@ -179,4 +179,18 @@ test("signed in, Undo of a delete is a restore write naming the tombstone's vers
   assert.deepEqual([api.puts.at(-1).baseVersion, Boolean(api.puts.at(-1).deleted)], [tombstone.version, false]);
   assert.deepEqual([api.server.get(ID).deleted, api.server.get(ID).situation], [false, "Meeting"]);
   assert.equal((await s.held()).situation, "Meeting");
+});
+
+test("a choice point of a day that has closed cannot be undone or redone: refused as closed", async () => {
+  const s = await start({ today: DAY });
+  s.save({ situation: "Meeting", ...finished("situation", "Meeting") });
+  s.save({ situation: "Meeting", away: "Skipped dinner", ...finished("away", "Skipped dinner") });
+  const edit = s.steps.at(-1);
+  s.actor.send(undo(edit));
+  assert.equal(s.settled.at(-1).outcome, "applied", "applied while its day is today");
+  // The journal's day ends at 2:00 and it announces the new today.
+  s.actor.send({ type: "journal.changed", days: [], projects: [], detectors: [], answers: [], open: null, today: "2026-10-15", reason: "no-detector" });
+  s.actor.send(redo(edit));
+  assert.deepEqual(s.settled.at(-1), { id: edit.id, owner: "choice-points", outcome: "refused", reason: "closed" });
+  assert.equal((await s.held()).away, "");
 });

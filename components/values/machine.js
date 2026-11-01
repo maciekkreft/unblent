@@ -175,8 +175,8 @@ function applySave(context, event, enqueue) {
       id: step.id,
       owner: "values",
       label: step.label,
-      undo: { kind: "values", values: step.before },
-      redo: { kind: "values", values },
+      undo: { kind: "values", values: step.before, ...priorOf(step.prior) },
+      redo: { kind: "values", values, ...priorOf(step.prior) },
       ...(step.notice ? { notice: true } : {}),
     });
     stretch = step.stretch;
@@ -194,6 +194,7 @@ function applySave(context, event, enqueue) {
 function applyPlace(context, event, enqueue) {
   if (!isDay(event.day) || event.day !== todayOf(context) || typeof event.placed !== "boolean") return;
   if (placedOn(context, event.day) === event.placed) return;
+  const prior = priorOf(context.placements.get(event.day)?.step);
   const id = context.mint();
   commitPlace(context, enqueue, event.day, event.placed, id);
   enqueue.emit({
@@ -201,13 +202,19 @@ function applyPlace(context, event, enqueue) {
     id,
     owner: "values",
     label: event.placed ? "add Your values to the day" : "take Your values off the day",
-    undo: { kind: "placed", day: event.day, placed: !event.placed },
-    redo: { kind: "placed", day: event.day, placed: event.placed },
+    undo: { kind: "placed", day: event.day, placed: !event.placed, ...prior },
+    redo: { kind: "placed", day: event.day, placed: event.placed, ...prior },
   });
   enqueue.assign({ stretch: null });
 }
 
 // --- Steps (12, Undo) -------------------------------------------------------------------
+
+// `prior` is the step that wrote the list, or the placement, before this one, so an Undo
+// leaves it as that step left it and the step before can be undone next; one no step of
+// this browser wrote is left stamped with a mark of the step undone.
+const priorOf = (step) => (typeof step === "string" ? { prior: step } : {});
+const priorStamp = (p, step) => p.prior ?? `^`;
 
 // What changed between two lists: the values gone, the values new, those whose name or
 // example changed, and whether the ones in both stand in another order.
@@ -259,12 +266,13 @@ function stepOf(context, held, after) {
   const rows = [...removed, ...added, ...edited].map((v) => v.id);
   const open = context.stretch;
   if (open && held?.step === open.id && !moved && rows.every((id) => open.rows.includes(id)))
-    return { id: open.id, before: open.before, label: labelOf(open.before, after), stretch: open };
+    return { id: open.id, before: open.before, prior: open.prior, label: labelOf(open.before, after), stretch: open };
   const id = context.mint();
   const label = labelOf(before, after);
-  if (moved && !rows.length) return { id, before, label, stretch: null };
-  if (removed.length && !added.length && !edited.length && !moved) return { id, before, label, stretch: null, notice: true };
-  return { id, before, label, stretch: { id, before, rows } };
+  const prior = held?.step;
+  if (moved && !rows.length) return { id, before, prior, label, stretch: null };
+  if (removed.length && !added.length && !edited.length && !moved) return { id, before, prior, label, stretch: null, notice: true };
+  return { id, before, prior, label, stretch: { id, before, prior, rows } };
 }
 
 // An Undo or Redo of one of this fact's steps. It is applied only while what it would
@@ -280,15 +288,19 @@ function applyStep(context, event, enqueue) {
   const p = event.payload ?? {};
   const today = todayOf(context);
   enqueue.assign({ stretch: null });
+  // An Undo expects the step's own stamp and leaves the one before it; a Redo the reverse.
+  const undoing = event.type === "step.undone";
+  const expected = undoing ? event.id : priorStamp(p, event.id);
+  const leaves = undoing ? priorStamp(p, event.id) : event.id;
   if (p.kind === "values" && Array.isArray(p.values)) {
-    if (inForce(context, today)?.step !== event.id) return settle("refused", "changed");
-    commit(context, enqueue, { day: today, values: valuesOf(p.values), version: 1, step: event.id });
+    if (inForce(context, today)?.step !== expected) return settle("refused", "changed");
+    commit(context, enqueue, { day: today, values: valuesOf(p.values), version: 1, step: leaves });
     return settle("applied");
   }
   if (p.kind === "placed" && isDay(p.day) && typeof p.placed === "boolean") {
     if (p.day !== today) return settle("refused", "closed");
-    if (context.placements.get(p.day)?.step !== event.id) return settle("refused", "changed");
-    commitPlace(context, enqueue, p.day, p.placed, event.id);
+    if (context.placements.get(p.day)?.step !== expected) return settle("refused", "changed");
+    commitPlace(context, enqueue, p.day, p.placed, leaves);
     return settle("applied");
   }
   settle("refused", "changed");

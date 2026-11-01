@@ -104,6 +104,8 @@ const entry = (r, prior = r.step) => ({
   deleted: Boolean(r.deleted),
   ...(prior ? { prior } : {}),
 });
+const todayFrom = (picture) => (isDay(picture?.today) ? picture.today : null);
+
 // What a choice point undone back past every step this browser knows of is stamped with.
 const before = (e, step) => e.prior ?? `^${step}`;
 
@@ -144,7 +146,7 @@ function recordStep(context, enqueue, was, next, event) {
 // An Undo or Redo of one of this fact's steps. It is applied only while the choice point
 // is as the step left it, last written in this browser by that step; anything written
 // since, here, in another tab or on another device, refuses it. A deleted choice point
-// comes back with a restore write (5).
+// comes back with a restore write (5). A choice point of a day that has closed is refused.
 function applyStep(context, event, enqueue) {
   if (event.owner !== "choice-points") return;
   const settle = (outcome, reason) =>
@@ -156,6 +158,8 @@ function applyStep(context, event, enqueue) {
   const current = isId(p.id) ? context.choicePoints.get(p.id) : null;
   if (p.kind !== "choice-point" || !current || TEXTS.some((k) => typeof p[k] !== "string")) return settle("refused", "changed");
   if (current.step !== (undoing ? event.id : before(p, event.id))) return settle("refused", "changed");
+  // Choice points are written only while their journal day is (13, Journal).
+  if (context.today != null && current.day !== context.today) return settle("refused", "closed");
   const { deleted: _, ...live } = current;
   const texts = Object.fromEntries(TEXTS.map((k) => [k, p[k]]));
   commit(context, enqueue, { ...live, ...texts, ...(p.deleted ? { deleted: true } : {}), step: undoing ? before(p, event.id) : event.id });
@@ -278,13 +282,15 @@ export const machine = setup({
     load: fromPromise(async ({ input }) => {
       const { store, ask, api } = input;
       await claim(store, ask, api);
-      const [choicePoints, outbox, cursor, userId] = await Promise.all([
+      const [choicePoints, outbox, cursor, userId, journal] = await Promise.all([
         store.all(),
         store.outboxAll(),
         store.metaGet("cursor"),
         store.metaGet("userId"),
+        // Which day is today, for an Undo (12): a page without the journal answers nothing.
+        ask ? ask("journal", "read", {}).catch(() => null) : null,
       ]);
-      return { choicePoints, outbox, cursor: cursor ?? 0, userId: userId ?? null };
+      return { choicePoints, outbox, cursor: cursor ?? 0, userId: userId ?? null, today: todayFrom(journal) };
     }),
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
@@ -337,7 +343,8 @@ export const machine = setup({
       "from its first save until a save names lines the user finished, and a delete, which " +
       "asks for the short notice. Undo of a new choice point's first stretch deletes it, and a " +
       "deleted one comes back with a restore write the server accepts. A step is refused when " +
-      "the choice point was written since by anything else. It works " +
+      "the choice point was written since by anything else, and when its journal day has " +
+      "closed, which it learns from the journal. It works " +
       "signed out, numbering versions itself, and syncs to the account when signed in " +
       "(section 5); signing in uploads every choice point with its history. The last write " +
       "wins, so two devices never conflict, and a deleted choice point is kept as a tombstone, " +
@@ -348,7 +355,7 @@ export const machine = setup({
     emits: ["choice-point.changed", "choice-point.deleted", "step.recorded", "step.settled"],
     owns: "the choice points kept with each journal day",
     steps: { "choice-point.saved": "step" },
-    asks: ["session: read"],
+    asks: ["session: read", "journal: read"],
   },
   context: ({ input }) => ({
     choicePoints: new Map(),
@@ -357,6 +364,8 @@ export const machine = setup({
     api: input.api,
     ask: input.ask,
     mint: input.mint ?? ulid,
+    // Today's journal day, from the journal (13); null until it says, or on a page without it.
+    today: null,
     // The stretch of typing still open (12, Undo): { step, id, before }, the step's id, the
     // choice point typed in and how it was before the stretch; null when none is.
     stretch: null,
@@ -376,6 +385,7 @@ export const machine = setup({
     "session.changed": {
       actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
     },
+    "journal.changed": { actions: assign({ today: ({ context, event }) => todayFrom(event) ?? context.today }) },
   },
   initial: "loading",
   states: {
@@ -391,6 +401,7 @@ export const machine = setup({
             outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.id, row])),
             cursor: ({ event }) => event.output.cursor,
             userId: ({ event }) => event.output.userId,
+            today: ({ context, event }) => context.today ?? event.output.today,
           }),
         },
         onError: {

@@ -123,6 +123,21 @@ test("undo puts the list back, redo makes it again, and neither is a step", asyn
   assert.equal(steps.length, count, "applying records nothing");
 });
 
+test("several steps on the list are undone in a row, and redone in a row", async () => {
+  const { actor, steps, settled } = await start();
+  actor.send(save([courage], [A]));
+  actor.send(save([courage, health], [B]));
+  actor.send(save([health, courage]));
+  const ids = [...new Set(steps.map((s) => s.id))];
+  assert.equal(ids.length, 3);
+  const byId = (id) => steps.findLast((s) => s.id === id);
+  for (const id of [...ids].reverse()) actor.send(undo(byId(id)));
+  assert.deepEqual((await read(actor)).values, []);
+  for (const id of ids) actor.send(redo(byId(id)));
+  assert.deepEqual((await read(actor)).values, [health, courage]);
+  assert.ok(settled.every((s) => s.outcome === "applied"), JSON.stringify(settled));
+});
+
 test("a step whose list was written since is refused as changed", async () => {
   const { actor, steps, settled } = await start();
   actor.send(save([courage, health], [A, B]));

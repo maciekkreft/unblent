@@ -353,8 +353,8 @@ function applyDiscard(context, event, enqueue) {
     id: step,
     owner: "notes",
     label: `delete ${nameOf(current)}`,
-    undo: { kind: "note", id: current.id, ...textOf(current), deleted: false },
-    redo: { kind: "note", id: current.id, deleted: true },
+    undo: { kind: "note", id: current.id, ...textOf(current), deleted: false, ...priorOf(current.step) },
+    redo: { kind: "note", id: current.id, deleted: true, ...priorOf(current.step) },
     notice: true,
   });
 }
@@ -417,8 +417,8 @@ function applyMove(context, event, enqueue) {
     id: step,
     owner: "notes",
     label: `move ${nameOf(current)}`,
-    undo: { kind: "place", id: current.id, position: positionOf(current) },
-    redo: { kind: "place", id: current.id, position },
+    undo: { kind: "place", id: current.id, position: positionOf(current), ...priorOf(current.placeStep) },
+    redo: { kind: "place", id: current.id, position, ...priorOf(current.placeStep) },
   });
 }
 
@@ -443,6 +443,12 @@ function place(context, enqueue, current, position, step) {
 // --- Steps (12, Undo) -------------------------------------------------------------------
 
 const textOf = (r) => ({ title: r.title, body: r.body, about: r.about ?? [] });
+
+// `prior` is the step that wrote a record before this one, so an Undo leaves the record
+// as that step left it and the step before can be undone next; a record no step of this
+// browser wrote is left stamped with a mark of the step undone.
+const priorOf = (step) => (step ? { prior: step } : {});
+const priorStamp = (entry, step) => entry.prior ?? `^${step}`;
 
 // What a step is about, as people read it after "Undo:".
 const NAME_MAX = 40;
@@ -473,7 +479,9 @@ function textStep(context, current, event) {
   const joins = open != null && open.note === event.id && current?.step === open.id && event.about === undefined;
   const closes = event.left === true || (current != null && event.about !== undefined && !joins);
   if (joins) return { id: open.id, before: open.before, closes };
-  const before = current ? { kind: "note", id: current.id, ...textOf(current), deleted: false } : { kind: "note", id: event.id, deleted: true };
+  const before = current
+    ? { kind: "note", id: current.id, ...textOf(current), deleted: false, ...priorOf(current.step) }
+    : { kind: "note", id: event.id, deleted: true };
   return { id: context.mint(), before, closes };
 }
 
@@ -490,7 +498,7 @@ function stepFor(context, current, event, about) {
     id,
     closes: true,
     merge: others,
-    before: { kind: "notes", notes: [current, ...others].map((r) => ({ id: r.id, ...textOf(r), deleted: false })) },
+    before: { kind: "notes", notes: [current, ...others].map((r) => ({ id: r.id, ...textOf(r), deleted: false, ...priorOf(r.step) })) },
   };
 }
 
@@ -519,14 +527,14 @@ function joined(context, id, about) {
 function recordText(context, enqueue, step, record) {
   if (!step || step.upkeep) return;
   if (step.merge) {
-    const others = step.merge.map((r) => ({ id: r.id, ...textOf(r), deleted: true }));
+    const others = step.merge.map((r) => ({ id: r.id, ...textOf(r), deleted: true, ...priorOf(r.step) }));
     enqueue.emit({
       type: "step.recorded",
       id: step.id,
       owner: "notes",
       label: "join highlights",
       undo: step.before,
-      redo: { kind: "notes", notes: [{ id: record.id, ...textOf(record), deleted: false }, ...others] },
+      redo: { kind: "notes", notes: [{ id: record.id, ...textOf(record), deleted: false, ...priorOf(step.before.notes[0].prior) }, ...others] },
     });
     context.stretch = null;
     context.merge = { id: step.id, ids: step.merge.map((r) => r.id) };
@@ -539,7 +547,7 @@ function recordText(context, enqueue, step, record) {
     owner: "notes",
     label: `${step.before.deleted ? "add" : "edit"} ${nameOf(record)}`,
     undo: step.before,
-    redo: { kind: "note", id: record.id, ...textOf(record), deleted: false },
+    redo: { kind: "note", id: record.id, ...textOf(record), deleted: false, ...priorOf(step.before.prior) },
   });
   context.stretch = step.closes ? null : { id: step.id, note: record.id, before: step.before };
   enqueue.assign({ stretch: context.stretch });
@@ -583,33 +591,48 @@ function applyStep(context, event, enqueue) {
   enqueue.assign({ stretch: null, merge: null });
   const p = event.payload ?? {};
   const current = typeof p.id === "string" ? context.notes.get(p.id) : null;
+  // An Undo expects the step's own stamp and leaves the one before it; a Redo the reverse.
+  const undoing = event.type === "step.undone";
+  const expected = (entry) => (undoing ? event.id : priorStamp(entry, event.id));
+  const leaves = (entry) => (undoing ? priorStamp(entry, event.id) : event.id);
   if (p.kind === "note" && current) {
-    if (current.step !== event.id) return settle("refused", "changed");
+    if (current.step !== expected(p)) return settle("refused", "changed");
     if (p.deleted === true) {
-      if (!current.deleted) tombstone(context, enqueue, current, event.id);
+      if (!current.deleted) tombstone(context, enqueue, current, leaves(p));
+      else stamp(context, enqueue, current, { step: leaves(p) });
       return settle("applied");
     }
     if (typeof p.title !== "string" || typeof p.body !== "string") return settle("refused", "changed");
-    rewrite(context, enqueue, current, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [] }, event.id);
+    rewrite(context, enqueue, current, { title: p.title, body: p.body, about: Array.isArray(p.about) ? p.about : current.about ?? [] }, leaves(p));
     return settle("applied");
   }
   if (p.kind === "notes" && Array.isArray(p.notes)) {
     const records = p.notes.map((n) => context.notes.get(n?.id));
-    if (records.some((r) => !r || r.step !== event.id)) return settle("refused", "changed");
+    if (records.some((r, i) => !r || r.step !== expected(p.notes[i]))) return settle("refused", "changed");
     p.notes.forEach((n, i) => {
       const r = records[i];
       if (n.deleted === true) {
-        if (!r.deleted) tombstone(context, enqueue, r, event.id);
-      } else rewrite(context, enqueue, r, { title: n.title, body: n.body, about: Array.isArray(n.about) ? n.about : r.about ?? [] }, event.id);
+        if (!r.deleted) tombstone(context, enqueue, r, leaves(n));
+        else stamp(context, enqueue, r, { step: leaves(n) });
+      } else rewrite(context, enqueue, r, { title: n.title, body: n.body, about: Array.isArray(n.about) ? n.about : r.about ?? [] }, leaves(n));
     });
     return settle("applied");
   }
   if (p.kind === "place" && visible(current) && isPosition(p.position)) {
-    if (current.placeStep !== event.id) return settle("refused", "changed");
-    if (p.position !== current.position) place(context, enqueue, current, p.position, event.id);
+    if (current.placeStep !== expected(p)) return settle("refused", "changed");
+    if (p.position !== current.position) place(context, enqueue, current, p.position, leaves(p));
+    else stamp(context, enqueue, current, { placeStep: leaves(p) });
     return settle("applied");
   }
   settle("refused", "changed");
+}
+
+// A record whose content a step left as it was still takes that step's stamp, so the next
+// step can be checked against it.
+function stamp(context, enqueue, current, stamps) {
+  const record = { ...current, ...stamps };
+  context.notes.set(record.id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
 }
 
 // A query or gesture that arrived before the store loaded, replayed in order.

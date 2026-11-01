@@ -85,7 +85,21 @@ test("a stretch of typing in one note is one step, closed when the user leaves i
   actor.send(save(A, "Shopping list", 2));
   assert.notEqual(steps.at(-1).id, steps[0].id, "the next stretch is a new step");
   assert.equal(steps.at(-1).label, "edit note Shopping list");
-  assert.deepEqual(steps.at(-1).undo, { kind: "note", id: A, title: "Shopping", body: "Shopping", about: [], deleted: false });
+  assert.deepEqual(steps.at(-1).undo, { kind: "note", id: A, title: "Shopping", body: "Shopping", about: [], deleted: false, prior: steps[0].id });
+});
+
+test("several steps on one note are undone in a row, and redone in a row", async () => {
+  const { actor, steps, settled } = await start();
+  actor.send(save(A, "First", null, { left: true }));
+  actor.send(save(A, "Second", 1, { left: true }));
+  actor.send({ type: "note.moved", id: A, after: null, before: null });
+  const ids = [...new Set(steps.map((s) => s.id))];
+  const byId = (id) => steps.findLast((s) => s.id === id);
+  for (const id of [...ids].reverse()) actor.send(undo(byId(id)));
+  assert.deepEqual(await read(actor, A), { error: "not-found" }, "back to before the note was written");
+  for (const id of ids) actor.send(redo(byId(id)));
+  assert.equal((await read(actor, A)).note.body, "Second");
+  assert.ok(settled.every((s) => s.outcome === "applied"), JSON.stringify(settled));
 });
 
 test("another note opened, or typed in, ends the stretch", async () => {
