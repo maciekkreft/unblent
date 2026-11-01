@@ -610,6 +610,22 @@ test("a followed source link opens its book, the same as a pick on the shelf", a
   assert.equal(opened.length, 1, "a link into the book already open announces nothing");
 });
 
+test("a chapter picked in a book not open opens that book, and a journal day opens the journal", async () => {
+  const store = fakeStore([book(ID), book(ID2)]);
+  const { actor, opened } = start(store, { api: fakeApi(), ask: askUser("u1") });
+  await ready(actor);
+  opened.length = 0;
+  actor.send({ type: "chapter.selected", id: ID2, chapter: 1 });
+  await flush();
+  assert.deepEqual(opened, [{ type: "book.opened", id: ID2 }], "the chapter's book is announced open");
+  actor.send({ type: "chapter.selected", id: ID2, chapter: 2 });
+  await flush();
+  assert.equal(opened.length, 1, "a chapter of the book already open announces nothing");
+  actor.send({ type: "day.selected", id: ID });
+  await flush();
+  assert.equal(opened.length, 1, "with no journal, a day opens nothing");
+});
+
 test("open? is answered before the store has loaded, then from the loaded value", async () => {
   const store = fakeStore([book(ID)]);
   store.meta.set("open", { id: ID, at: 42 });

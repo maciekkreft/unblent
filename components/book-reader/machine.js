@@ -639,6 +639,8 @@ export const machine = setup({
     // A followed source link whose book is still being opened (passage.selected arrives
     // before or after the book.opened it causes, 12): the read opens at its place.
     passage: null,
+    // A chapter picked while its book is still being opened, kept the same way.
+    jump: null,
     // A merge in flight (Decision 6): the involved notes' ids in book order (the survivor
     // first), and the union place and quote the survivor is saved with once their comments
     // are read. Set when a new highlight overlaps others, consumed by the read that follows.
@@ -693,6 +695,7 @@ export const machine = setup({
           id: ({ event }) => event.id,
           book: null, html: "", pending: null, sent: null, quiet: false, at: null, chapter: 0, highlights: [], command: null,
           passage: ({ context, event }) => (context.passage?.book === event.id ? context.passage : null),
+          jump: ({ context, event }) => (context.jump?.id === event.id ? context.jump : null),
         }),
       },
       {
@@ -706,6 +709,10 @@ export const machine = setup({
     // open here: keep the place for the read that `books` opening it brings. The open book
     // itself is handled in reading.
     "passage.selected": { actions: assign({ passage: ({ event }) => ({ book: event.book, id: event.id, place: event.place }) }) },
+    // A chapter picked in a book not open here (a lookup's link in the chat): keep it for
+    // the read that `books` opening it brings, as a passage is kept. The open book's own
+    // chapter is handled in reading.
+    "chapter.selected": { actions: assign({ jump: ({ event }) => ({ id: event.id, chapter: event.chapter }) }) },
     "book.deleted": {
       guard: ({ context, event }) => Boolean(context.book) && event.id === context.book.id,
       target: ".empty",
@@ -749,6 +756,17 @@ export const machine = setup({
               quiet: false,
               glow: ({ context }) => glowFor(context),
               passage: null,
+            }),
+          },
+          {
+            guard: ({ context, event }) => "book" in event.output && context.jump?.id === event.output.book.id,
+            target: "reading",
+            actions: assign({
+              book: ({ event }) => pickBook(event.output.book),
+              chapter: ({ context, event }) => passageChapter({ place: context.jump }, event.output.book),
+              pending: ({ context, event }) => ({ chapter: passageChapter({ place: context.jump }, event.output.book), block: 0 }),
+              quiet: false,
+              jump: null,
             }),
           },
           {

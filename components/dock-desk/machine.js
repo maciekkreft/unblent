@@ -359,7 +359,7 @@ export const machine = setup({
       "is pressed again, a stage tab is chosen, Escape is pressed or a selection gesture " +
       "arrives, and is still pressed after a reload in this browser (the desk owns the glyphs it can draw, so the icon stays a " +
       "literal in the view, 11.2); and `shows-on` naming a selection gesture (`book.selected`, " +
-      "`note.selected`, `conversation.selected`, `evaluator.selected`, `note.staged`, a note opened on the stage, or " +
+      "`note.selected`, `conversation.selected`, `evaluator.selected`, `note.staged`, a note opened on the stage, `chapter.selected`, `passage.selected` or `day.selected`, a place picked in a book, or " +
       "`conversation.staged`, a chat opened on the stage; several names separated by spaces show it on any of them), which " +
       "shows that child's tab when the gesture arrives, the same as a click (on the phone a " +
       "gesture that shows a stage tab also closes the side drawer it came from), while a reload or " +
@@ -575,6 +575,12 @@ export const machine = setup({
         "conversation.staged": show,
         "conversation.selected": show,
         "evaluator.selected": show,
+        // A place picked in a book (a lookup's link in the chat, a source link, the
+        // contents): the stage that shows books comes forward, which on a phone folds the
+        // panel the pick was made in.
+        "chapter.selected": show,
+        "passage.selected": show,
+        "day.selected": show,
       },
     },
     // No dock fact on the page: the desk still works as a plain tab switcher, so
@@ -602,6 +608,9 @@ export const machine = setup({
         "conversation.staged": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "conversation.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
         "evaluator.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "chapter.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "passage.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
+        "day.selected": { actions: assign({ stage: ({ context, event }) => shown(context, event.type).stage, pressed: null }) },
       },
     },
   },

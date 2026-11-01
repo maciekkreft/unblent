@@ -217,7 +217,10 @@
           {
             "callId": "call-1",
             "size": 30,
-            "name": "One"
+            "name": "One",
+            "opens": "chapter",
+            "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+            "chapter": 0
           }
         ],
         "at": 1
@@ -287,7 +290,10 @@
           {
             "callId": "call-1",
             "size": 30,
-            "name": "One"
+            "name": "One",
+            "opens": "chapter",
+            "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+            "chapter": 0
           }
         ],
         "at": 1
@@ -357,7 +363,10 @@
           {
             "callId": "call-1",
             "size": 30,
-            "name": "One"
+            "name": "One",
+            "opens": "chapter",
+            "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+            "chapter": 0
           }
         ],
         "at": 1
@@ -439,7 +448,10 @@
           {
             "callId": "call-1",
             "size": 30,
-            "name": "One"
+            "name": "One",
+            "opens": "chapter",
+            "id": "01HQ8ZK7M4N5P6Q7R8S9T0V1W6",
+            "chapter": 0
           }
         ],
         "at": 1

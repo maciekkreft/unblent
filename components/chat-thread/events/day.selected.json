@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user picked a day in the Days list: the entry shows it. null picks the open day, or a new page for today when none is open.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+        }
+      ]
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+}

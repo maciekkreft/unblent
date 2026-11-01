@@ -200,6 +200,20 @@ test("a source link into another book opens at the passage once that book is rea
   }
 });
 
+test("a chapter picked in another book opens at that chapter once that book is read", async () => {
+  for (const order of ["pick first", "open first"]) {
+    const { actor } = start({ read: bookReply({ position: { chapter: 0, block: 0 } }) });
+    await flush();
+    const pick = { type: "chapter.selected", id: ID, chapter: 2 };
+    const opened = { type: "book.opened", id: ID };
+    for (const e of order === "pick first" ? [pick, opened] : [opened, pick]) actor.send(e);
+    await flush();
+    assert.equal(ctx(actor).chapter, 2, order + ": the picked chapter, not the saved one");
+    assert.deepEqual(ctx(actor).pending, { chapter: 2, block: 0 }, order);
+    assert.equal(ctx(actor).jump, null, order + ": the pick is used once");
+  }
+});
+
 test("another device's move is adopted; the reader's own echo is not", async () => {
   const { actor, clock } = await open();
   // Record where this reader last settled.

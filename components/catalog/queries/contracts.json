@@ -52,7 +52,10 @@
                     "items": { "type": "string", "description": "A JSON pointer (RFC 6901) into the reply to the array of entries a listing returns (7.2)." },
                     "itemName": { "type": "string", "description": "A JSON pointer (RFC 6901), read inside each entry, to the string that names it (7.2)." },
                     "total": { "type": "string", "description": "A JSON pointer (RFC 6901) into the reply to the number of all entries that match (7.2)." },
-                    "opens": { "type": "string", "description": "The kind of thing an entry's id, or the one thing read, names, so the chat can open it (7.2)." }
+                    "opens": { "type": "string", "description": "The kind of thing an entry's id, or the one thing read, names, so the chat can open it (7.2)." },
+                    "itemExcerpt": { "type": "string", "description": "A JSON pointer (RFC 6901), read inside each entry, to text whose first 30 words describe it (7.2)." },
+                    "openId": { "type": "string", "description": "A JSON pointer (RFC 6901) to the id of the one thing read, into { payload, reply }: the payload the model asked with and the reply (7.2)." },
+                    "openChapter": { "type": "string", "description": "A JSON pointer (RFC 6901) to the chapter number, counted from 0, of the one thing read, into { payload, reply } (7.2)." }
                   },
                   "required": ["description", "label"],
                   "additionalProperties": false

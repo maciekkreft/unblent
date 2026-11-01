@@ -192,7 +192,11 @@ const replyOf = (content, replySchema) => {
 // `name` points at, and the first 30 words of the one `excerpt` points at, each only
 // when it holds a word. Computed whenever a result is announced, never stored, so a
 // chat from before this still gets them; an error and a listing get neither.
-export const lookupName = (result, entry) => {
+// A named thing also says what it opens (7.2): the tool entry's `opens` kind, with the
+// id its `openId` points at and the chapter number its `openChapter` points at, both read
+// in { payload, reply }, since a chapter's reply is its text and only the payload it was
+// asked with names the book and the chapter.
+export const lookupName = (result, entry, payload = {}) => {
   if (!entry || !entry.name || result.isError || typeof result.content !== "string") return {};
   const reply = replyOf(result.content, entry.reply);
   if (!reply) return {};
@@ -201,16 +205,30 @@ export const lookupName = (result, entry) => {
   if (typeof name !== "string" || words(name).length === 0) return {};
   out.name = name;
   const text = entry.excerpt ? pointAt(reply, entry.excerpt) : undefined;
-  if (typeof text === "string") {
-    const first = words(text).slice(0, EXCERPT_WORDS);
-    if (first.length) out.excerpt = first.join(" ");
+  const first = excerptOf(text);
+  if (first) out.excerpt = first;
+  const asked = { payload, reply };
+  const id = entry.opens && entry.openId ? pointAt(asked, entry.openId) : undefined;
+  if (typeof id === "string" && id) {
+    out.opens = entry.opens;
+    out.id = id;
+    const chapter = entry.openChapter ? pointAt(asked, entry.openChapter) : undefined;
+    if (Number.isInteger(chapter) && chapter >= 0) out.chapter = chapter;
   }
   return out;
 };
 
+// The first 30 words of a text, joined by one space, or undefined when it holds none.
+const excerptOf = (text) => {
+  if (typeof text !== "string") return undefined;
+  const first = words(text).slice(0, EXCERPT_WORDS);
+  return first.length ? first.join(" ") : undefined;
+};
+
 // What a listing returned (7.2, 7.7): how many items it holds (`count`), how many match
 // in all (`total`), and the first 20, each named by the tool entry's `itemName` pointer,
-// with its id and the kind of thing it `opens`. Computed like lookupName, never stored.
+// with the first 30 words its `itemExcerpt` points at, and its id and the kind of thing it
+// `opens`. Computed like lookupName, never stored.
 const ITEMS_SHOWN = 20;
 export const lookupItems = (result, entry) => {
   if (!entry || !entry.items || result.isError || typeof result.content !== "string") return {};
@@ -225,6 +243,8 @@ export const lookupItems = (result, entry) => {
     const name = entry.itemName ? pointAt(item, entry.itemName) : undefined;
     if (typeof name !== "string" || words(name).length === 0) continue;
     const one = { name };
+    const excerpt = entry.itemExcerpt ? excerptOf(pointAt(item, entry.itemExcerpt)) : undefined;
+    if (excerpt) one.excerpt = excerpt;
     if (item && typeof item.id === "string" && item.id && entry.opens) {
       one.id = item.id;
       one.opens = entry.opens;
@@ -238,7 +258,7 @@ export const lookupItems = (result, entry) => {
 // A tool result rides to views as its size, not its content (4.3): the content can
 // be very large and conversation.changed is announced many times a second, so
 // `conversations` keeps the content and sends only its length, with the name of what
-// it read (lookupName). `targets` maps a call id to its "target: query".
+// it read (lookupName). `targets` maps a call id to its call.
 const stripTurn = (turn, targets, entries) => {
   if (turn.role !== "user" || !turn.results) return turn;
   return {
@@ -246,15 +266,16 @@ const stripTurn = (turn, targets, entries) => {
     results: turn.results.map((r) => {
       const out = { callId: r.callId, size: r.content != null ? r.content.length : r.size ?? 0 };
       if (r.isError !== undefined) out.isError = r.isError;
-      const entry = entries[targets.get(r.callId)];
-      return { ...out, ...lookupName(r, entry), ...lookupItems(r, entry) };
+      const call = targets.get(r.callId);
+      const entry = call ? entries[`${call.target}: ${call.name}`] : undefined;
+      return { ...out, ...lookupName(r, entry, call?.payload), ...lookupItems(r, entry) };
     }),
   };
 };
 
 const callTargets = (turns) => {
   const targets = new Map();
-  for (const t of turns) if (t.calls) for (const c of t.calls) targets.set(c.id, `${c.target}: ${c.name}`);
+  for (const t of turns) if (t.calls) for (const c of t.calls) targets.set(c.id, c);
   return targets;
 };
 
@@ -537,7 +558,7 @@ const buildTools = (context, reply) => {
     if (!q.tool) continue;
     const key = `${q.target}: ${q.name}`;
     meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
-    for (const field of ["items", "itemName", "total", "opens"]) if (q.tool[field] !== undefined) meta[key][field] = q.tool[field];
+    for (const field of ["items", "itemName", "itemExcerpt", "total", "opens", "openId", "openChapter"]) if (q.tool[field] !== undefined) meta[key][field] = q.tool[field];
     if (q.tool.switch !== false && context.tools[key] === false) continue;
     if (!context.answered(q.target, q.name)) continue; // its owner is not on this page (7.7)
     if (FEATURE_TOOLS.includes(key) && featureHidden(context.hidden)) continue;
@@ -1447,7 +1468,7 @@ export const machine = setup({
     keepObserved: false,
     tools: {},
     approval: "auto",
-    toolEntries: {}, // "target: query" -> { label, reply, name, excerpt, items, itemName, total, opens }, from the catalog (7.7)
+    toolEntries: {}, // "target: query" -> { label, reply, name, excerpt, items, itemName, itemExcerpt, total, opens, openId, openChapter }, from the catalog (7.7)
     entriesAsked: false,
     running: null, // { chatId, turnId, phase, tools, meta, rounds } while a question is being answered
     queued: [],

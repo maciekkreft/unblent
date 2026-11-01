@@ -154,6 +154,13 @@ const bringForward = (context, enqueue, id) => {
   else switchTo(enqueue, id);
 };
 
+// The open book's tab to the front, when the id names it and another tab is in front.
+const toBook = (context, enqueue, id) => {
+  if (id == null || id !== context.openId || id === context.front || !context.tabs.includes(id)) return;
+  bringForward(context, enqueue, id);
+  announce({ ...context, front: id }, enqueue);
+};
+
 // Removes a tab whatever took it away (a close, a deletion, a list that lacks it); the
 // tab beside it comes forward if it was in front.
 const drop = (context, enqueue, id) => {
@@ -238,7 +245,8 @@ export const machine = setup({
       "`stage`, which it tells which note to show. A note's tab says the note's title, or " +
       "Untitled; picking it never opens a book, so the open book, and what the panels follow, " +
       "stays. Picking a book's tab, or a book opened anywhere, brings the book back to the " +
-      "front. A note's tab closes like a book's, also by `:q` or `:tabc` in its editor, and the " +
+      "front, and so does picking a chapter, a passage or a journal day of the open book, such as " +
+      "from a lookup in the chat. A note's tab closes like a book's, also by `:q` or `:tabc` in its editor, and the " +
       "note itself is unchanged; a deleted note, or one the account does not have, loses its " +
       "tab. A chat opened on the stage (`conversation.staged`, the chat's Open on stage) gets a " +
       "tab the same way; while it is in front the stage shows a fourth view, the chat with id " +
@@ -532,5 +540,12 @@ export const machine = setup({
       }),
     },
     "book.closed": { actions: enqueueActions(close) },
+    // A place picked in the open book (a lookup's link in the chat, a source link, the
+    // contents): while a note or a chat tab is in front, the book's tab comes forward, so
+    // the picked place is seen. A book not open yet comes forward with the book.opened
+    // that `books` opening it brings.
+    "chapter.selected": { actions: enqueueActions(({ context, event, enqueue }) => toBook(context, enqueue, event.id)) },
+    "passage.selected": { actions: enqueueActions(({ context, event, enqueue }) => toBook(context, enqueue, event.book)) },
+    "day.selected": { actions: enqueueActions(({ context, enqueue }) => toBook(context, enqueue, context.written ? context.openId : null)) },
   },
 });

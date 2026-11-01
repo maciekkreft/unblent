@@ -150,6 +150,19 @@ test("renaming, discarding and turning a page ignore the journal; selecting it o
   }
 });
 
+test("a journal day picked opens the journal", async () => {
+  const { actors, emitted, unwire } = await start();
+  try {
+    await until(() => actors.books.getSnapshot().context.journal !== null);
+    actors.books.send({ type: "day.selected", id: TODAY });
+    await until(() => emitted("book.opened").length > 0);
+    assert.deepEqual(emitted("book.opened").map((e) => e.id), [JOURNAL]);
+    assert.deepEqual(await query("open"), { id: JOURNAL });
+  } finally {
+    unwire();
+  }
+});
+
 test("without journal on the page there is no journal book", async () => {
   const { actors, emitted, unwire } = await start({ names: ["books"] });
   try {

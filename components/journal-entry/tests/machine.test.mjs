@@ -287,8 +287,30 @@ test("with a day open, the last chapter is that day, editable, and opening the j
   actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 1 });
   assert.deepEqual(showing(actor), [TODAY, true]);
   actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  actor.send({ type: "book.opened", id: OTHER });
+  await flush();
   actor.send({ type: "book.opened", id: JOURNAL });
   assert.deepEqual(showing(actor), [TODAY, true]);
+});
+
+test("a day or a chapter picked just before the journal opens for it is kept, and a later opening shows today", async () => {
+  const [d1, d2] = [day(SUNDAY, "2026-10-11", "One."), day(TODAY, "2026-10-12", "Two.")];
+  const { actor } = await start(picture({ days: [d1, d2], open: TODAY }), { books: BOOKS });
+  actor.send({ type: "book.opened", id: OTHER });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  await flush();
+  actor.send({ type: "book.opened", id: OTHER });
+  await flush();
+  actor.send({ type: "chapter.selected", id: JOURNAL, chapter: 0 });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  assert.deepEqual(showing(actor), [SUNDAY, false], "the chapter picked is kept");
+  actor.send({ type: "book.opened", id: OTHER });
+  actor.send({ type: "day.selected", id: SUNDAY });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  assert.deepEqual(showing(actor), [SUNDAY, false], "the day picked is kept");
+  actor.send({ type: "book.opened", id: OTHER });
+  actor.send({ type: "book.opened", id: JOURNAL });
+  assert.deepEqual(showing(actor), [TODAY, true], "opened again later, it shows today");
 });
 
 test("another book's opening and chapters are ignored, and each book is asked about once", async () => {

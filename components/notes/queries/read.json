@@ -101,7 +101,7 @@
   "tool": {
     "description": "Returns one note or one highlight in full, by its id: its whole text and, for a highlight, the whole passage it marks. The id comes from listing the notes or the highlights; find the ones that matter there first, then read them here one at a time.",
     "label": "Reading a note", "title": "Note text", "group": "Notes", "order": 420,
-    "name": "/note/title",
+    "name": "/note/title", "opens": "note", "openId": "/reply/note/id",
     "excerpt": "/note/body"
   }
 }

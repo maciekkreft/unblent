@@ -55,7 +55,7 @@
   "tool": {
     "description": "Lists the passages the reader highlighted in their books, newest first: each one's id, the start of the passage, the start of the reader's comment on it, its book's id and its chapter's number and title. At most 20 unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id, from listing the books or checking what is open) and chapter (the chapter's number, counted from 0). To read one highlight in full, read it by id with the note text lookup. What the reader marked and wrote shows what caught their attention.",
     "label": "Reading highlights", "title": "Highlights", "group": "Books", "order": 240,
-    "items": "/highlights",
+    "items": "/highlights", "itemExcerpt": "/comment",
     "itemName": "/passage",
     "total": "/total",
     "opens": "highlight"

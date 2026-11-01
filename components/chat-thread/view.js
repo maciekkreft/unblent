@@ -2,11 +2,15 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords } from "./machine.js";
+import { machine, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, lastAnswer, savedMarks, marks, highlightable, highlightsOf, notSynced, askedFor, lengthWords, dateWords, openingOf } from "./machine.js";
 import marksEdited from "./events/marks.edited.json" with { type: "json" };
 import highlightsEdited from "./events/highlights.edited.json" with { type: "json" };
 import relinked from "./events/conversation.relinked.json" with { type: "json" };
 import staged from "./events/conversation.staged.json" with { type: "json" };
+import noteStaged from "./events/note.staged.json" with { type: "json" };
+import daySelected from "./events/day.selected.json" with { type: "json" };
+import chapterSelected from "./events/chapter.selected.json" with { type: "json" };
+import passageSelected from "./events/passage.selected.json" with { type: "json" };
 import load from "./commands/load.json" with { type: "json" };
 
 // The gap between a passage's last line and the comment box under it, in px; the box is
@@ -50,7 +54,7 @@ class ActorController {
         // Parsed by the time hostConnected runs, so the actor is born knowing it.
         staged: this.host.hasAttribute("stage"),
       },
-      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged },
+      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged, "note.staged": noteStaged, "day.selected": daySelected, "chapter.selected": chapterSelected, "passage.selected": passageSelected },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -674,6 +678,29 @@ class ChatThread extends LitElement {
       padding: 0;
       list-style: none;
     }
+    /* A name that opens what it names: drawn as a link (7.7), a button so Tab reaches it. */
+    .got .open {
+      font: inherit;
+      color: var(--color-accent);
+      background: none;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      text-align: start;
+      text-decoration: underline;
+      text-underline-offset: var(--space-2xs);
+      border-radius: var(--radius-sm);
+    }
+    .got .open:hover {
+      color: var(--color-ink);
+    }
+    .got .open:focus-visible {
+      outline: none;
+      box-shadow: var(--focus-ring);
+    }
+    .got .excerpt {
+      color: var(--color-body-mid);
+    }
     .got .more {
       color: var(--color-body-mid);
       font-size: var(--text-caption);
@@ -1066,15 +1093,26 @@ class ChatThread extends LitElement {
       const count = result.count ?? items.length;
       const of = result.total !== undefined ? `${count} of ${result.total}` : String(count);
       return html`<dt>Got</dt>
-        ${items.length ? html`<dd><ul class="items">${items.map((item) => html`<li>${dateWords(item.name)}</li>`)}</ul></dd>` : nothing}
+        ${items.length ? html`<dd><ul class="items">${items.map((item) => html`<li>${this.#named(item, dateWords(item.name))}${item.excerpt ? html` <span class="excerpt">${item.excerpt}</span>` : nothing}</li>`)}</ul></dd>` : nothing}
         <dd class="more">${of} · ${lengthWords(result.size)}</dd>`;
     }
     if (result.name) {
-      return html`<dt>Got</dt><dd>${result.name}</dd>
+      return html`<dt>Got</dt><dd>${this.#named(result, result.name)}</dd>
         ${result.excerpt ? html`<dd>“${result.excerpt}”</dd>` : nothing}
         ${length}`;
     }
     return html`<dt>Got</dt>${length}`;
+  }
+
+  // A name in an opened lookup: a link that opens what it names (7.7), or plain text
+  // when there is nothing it can open.
+  #named(thing, text) {
+    if (!openingOf(thing)) return text;
+    return html`<button
+      class="open"
+      type="button"
+      @click=${() => this.#actor.send({ type: "_open", opens: thing.opens, id: thing.id, chapter: thing.chapter })}
+    >${text}</button>`;
   }
 
   // One markdown block (10). Every text run interpolates through Lit as an escaped text

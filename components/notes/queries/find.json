@@ -76,7 +76,7 @@
   "tool": {
     "description": "Lists the reader's notes, newest first, as short entries: each note's id, title, the line after the title and what it is about, never the full text. Highlights are left out; they have their own lookup. At most 20 notes unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id from listing the books; the Journal is a book too), chapter (a chapter's title as the book's contents give it, or a journal day as YYYY-MM-DD), day (YYYY-MM-DD, the notes made or changed on it) and contains (words the note holds, ignoring case). Then read the notes that matter in full, one by id, with the note text lookup.",
     "label": "Listing the notes", "title": "Note titles", "group": "Notes", "order": 410,
-    "items": "/notes",
+    "items": "/notes", "itemExcerpt": "/line",
     "itemName": "/title",
     "total": "/total",
     "opens": "note"

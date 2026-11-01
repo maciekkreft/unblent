@@ -65,7 +65,7 @@ for (const engine of ENGINES) {
         await page.locator("chat-thread .lookup summary", { hasText: "Reading journal days" }).click();
         await until(async () => /28 Oct 2026/.test((await look(page))[0].got ?? ""));
         const days = (await look(page))[0];
-        assert.match(days.got, /^Asked for \| From 1 Oct 2026, containing “mother” \| Got \| 28 Oct 2026 \| 14 Oct 2026 \| 2 of 2 · About \d+ words$/);
+        assert.match(days.got, /^Asked for \| From 1 Oct 2026, containing “mother” \| Got \| 28 Oct 2026 A phone call\. \| 14 Oct 2026 A dinner\. \| 2 of 2 · About \d+ words$/);
 
         const note = page.locator("chat-thread .lookup summary", { hasText: "Reading a note" });
         await note.focus();

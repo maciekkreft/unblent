@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user followed a source link in a note: the book opens at the passage.",
+  "type": "object",
+  "properties": {
+    "book": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "The book the highlight is in."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "The highlight's note id."
+    },
+    "place": {
+      "type": "object",
+      "properties": {
+        "chapter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contentVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start": {
+          "type": "object",
+          "properties": {
+            "block": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "block",
+            "offset"
+          ],
+          "additionalProperties": false
+        },
+        "end": {
+          "type": "object",
+          "properties": {
+            "block": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "block",
+            "offset"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "chapter",
+        "start",
+        "end"
+      ],
+      "additionalProperties": false,
+      "description": "The passage, shaped exactly as the place on a note's about entry."
+    }
+  },
+  "required": [
+    "book",
+    "id",
+    "place"
+  ],
+  "additionalProperties": false
+}

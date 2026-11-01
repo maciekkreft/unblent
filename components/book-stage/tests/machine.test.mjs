@@ -336,6 +336,23 @@ test("staging a note already on the stage brings its tab forward without a secon
   assert.deepEqual(sent.map((c) => c.id), [NOTE_A, NOTE_B, NOTE_A], "the tab in front is not reloaded");
 });
 
+test("a chapter or a passage picked in the open book brings its tab forward; another book's waits for its opening", async () => {
+  const { actor, last, switched } = await staging();
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "chapter.selected", id: NOTE_B, chapter: 1 });
+  assert.equal(last().active, NOTE_A, "a book not open comes forward with book.opened");
+  actor.send({ type: "chapter.selected", id: BOOK, chapter: 1 });
+  assert.equal(last().active, BOOK);
+  assert.equal(shownOf(actor.getSnapshot().context), "reader");
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "passage.selected", book: BOOK, id: NOTE_B, place: { chapter: 0, start: { block: 0, offset: 0 }, end: { block: 0, offset: 1 } } });
+  assert.equal(last().active, BOOK);
+  actor.send({ type: "note.staged", id: NOTE_A });
+  actor.send({ type: "day.selected", id: NOTE_B });
+  assert.equal(last().active, NOTE_A, "a journal day waits while the open book is not the journal");
+  assert.deepEqual(switched, [], "the book is already open");
+});
+
 test("picking a note tab shows it; picking the book's tab, or opening a book, brings the book back", async () => {
   const { actor, last, sent, switched } = await staging();
   actor.send({ type: "note.staged", id: NOTE_A });

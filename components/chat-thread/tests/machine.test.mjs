@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords } from "../machine.js";
+import { machine, relinkOf, chapterLabelOf, canStage, isStaged, vimAction, scrollFor, parseMarkdown, userParagraphs, pieces, trimRange, overlaps, lastAnswer, marks, highlightable, notSynced, NOT_SYNCED_MS, askedFor, lengthWords, dateWords, openingOf, noteOpening } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const loadFixture = (name) => JSON.parse(readFileSync(resolve(HERE, "fixtures", `${name}.json`), "utf8"));
@@ -52,6 +52,11 @@ function start(options = {}) {
       }
       if (key === "settings: read") return Promise.resolve({ vimKeys });
       if (key === "subject: read") return Promise.resolve({ subject });
+      if (key === "notes: read") {
+        see(payload, other("notes", "read").payload);
+        const note = (options.notes ?? {})[payload.id];
+        return Promise.resolve(note ? { note } : { error: "not-found" });
+      }
       throw new Error(`unexpected ask ${key}`);
     },
   };
@@ -723,4 +728,49 @@ test("a result's length is told in words, about six characters to one", () => {
   assert.equal(lengthWords(6), "About 1 word");
   assert.equal(dateWords("2026-10-28"), "28 Oct 2026");
   assert.equal(dateWords("Cats"), "Cats");
+});
+
+// --- a lookup's link opens what it names (7.7) ---------------------------------------
+
+const own = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", name + ".json"), "utf8"));
+const NOTE = "01HQ8ZK7M4N5P6Q7R8S9T0V1N1";
+const LIGHT = "01HQ8ZK7M4N5P6Q7R8S9T0V1N2";
+const SHELF_BOOK = "01HQ8ZK7M4N5P6Q7R8S9T0V1B1";
+const PLACE = { chapter: 2, start: { block: 4, offset: 0 }, end: { block: 4, offset: 9 } };
+const noteRecord = (id, about = []) => ({ id, title: "Cats", body: "x", version: 1, about });
+
+test("each kind a lookup names opens through its own event, and one missing what it needs opens nothing", () => {
+  assert.deepEqual(openingOf({ opens: "journal-day", id: NOTE }), { type: "day.selected", id: NOTE });
+  assert.deepEqual(openingOf({ opens: "chapter", id: SHELF_BOOK, chapter: 0 }), { type: "chapter.selected", id: SHELF_BOOK, chapter: 0 });
+  assert.equal(openingOf({ opens: "chapter", id: SHELF_BOOK }), null, "a chapter needs its number");
+  assert.deepEqual(openingOf({ opens: "note", id: NOTE }), { type: "ask", id: NOTE });
+  assert.deepEqual(openingOf({ opens: "highlight", id: LIGHT }), { type: "ask", id: LIGHT });
+  assert.equal(openingOf({ opens: "book", id: SHELF_BOOK }), null);
+  assert.equal(openingOf({ name: "Cats" }), null);
+});
+
+test("a note read for a link opens on the stage, a highlight at its passage, and a gone note not at all", () => {
+  assert.deepEqual(noteOpening({ note: noteRecord(NOTE) }, NOTE), { type: "note.staged", id: NOTE });
+  const light = noteRecord(LIGHT, [{ kind: "book", id: SHELF_BOOK, place: PLACE }]);
+  assert.deepEqual(noteOpening({ note: light }, LIGHT), { type: "passage.selected", book: SHELF_BOOK, id: LIGHT, place: PLACE });
+  assert.equal(noteOpening({ error: "not-found" }, NOTE), null);
+  assert.equal(noteOpening(null, NOTE), null);
+});
+
+test("a link emits its opening event, valid against the thread's own copies of the schemas", async () => {
+  const light = noteRecord(LIGHT, [{ kind: "book", id: SHELF_BOOK, place: PLACE }]);
+  const h = start({ notes: { [NOTE]: noteRecord(NOTE), [LIGHT]: light } });
+  const seen = [];
+  for (const name of ["note.staged", "day.selected", "chapter.selected", "passage.selected"]) h.actor.on(name, (e) => seen.push(e));
+  h.actor.send({ type: "_open", opens: "journal-day", id: NOTE });
+  h.actor.send({ type: "_open", opens: "chapter", id: SHELF_BOOK, chapter: 3 });
+  h.actor.send({ type: "_open", opens: "note", id: NOTE });
+  await until(() => seen.length === 3, "the note opened");
+  h.actor.send({ type: "_open", opens: "highlight", id: LIGHT });
+  await until(() => seen.length === 4, "the highlight opened");
+  h.actor.send({ type: "_open", opens: "note", id: CHAT });
+  await flush();
+  await flush();
+  assert.deepEqual(seen.map((e) => e.type), ["day.selected", "chapter.selected", "note.staged", "passage.selected"], "a gone note opens nothing");
+  for (const { type, ...payload } of seen) assert.ok(new Validator(own(type), "2020-12").validate(payload).valid, type + " matches its schema");
 });

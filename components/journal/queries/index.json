@@ -79,7 +79,7 @@
   "tool": {
     "description": "Lists the reader's journal days, newest first, as short entries: each day's date, a one-sentence summary (or its first line) and how many words it holds, never the full text. At most 20 days unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with from and to (YYYY-MM-DD, both included; from alone is every day since it) and contains (words the day's text holds, ignoring case). Days with nothing written are left out. Use this first to find which days matter, then read their full text with the journal days tool; to know which day the journal page shows now, read the open journal day instead.",
     "label": "Reading journal days", "title": "Journal days", "group": "Journal", "order": 310,
-    "items": "/days",
+    "items": "/days", "itemExcerpt": "/summary",
     "itemName": "/day",
     "total": "/total",
     "opens": "journal-day"

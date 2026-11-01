@@ -43,7 +43,7 @@
   "tool": {
     "description": "Returns where the reader is in the book they have open: the book's id and title, the chapter's number and title, and the paragraph at their reading place with the next few, up to about 300 words. Returns a null id when no book is open. Call this when the reader asks about what they are reading now, \"this page\" or \"this passage\". To read the whole chapter, read the chapter text by the book's id and the chapter's number. Takes no arguments.",
     "label": "Finding your place in the book", "title": "Where you are in it", "group": "What's open", "order": 120,
-    "name": "/chapterTitle",
+    "name": "/chapterTitle", "openId": "/reply/id", "openChapter": "/reply/chapter",
     "excerpt": "/text",
     "opens": "chapter"
   }

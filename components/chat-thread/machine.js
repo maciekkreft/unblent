@@ -1,4 +1,4 @@
-import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
+import { setup, assign, emit, fromPromise, fromCallback, enqueueActions, spawnChild, stopChild } from "xstate";
 
 // The view that shows the open conversation (architecture.md 3.1): headless of the
 // fact, it owns only its own UI state (the transcript scroll, which thinking records
@@ -634,6 +634,30 @@ export const lengthWords = (size) => {
   return n === 1 ? "About 1 word" : `About ${n} words`;
 };
 
+// What a lookup's link opens (7.7), as the event that opens it where the user normally
+// sees it: a journal day in the journal (day.selected), a chapter in its book
+// (chapter.selected). A note or a highlight is asked of `notes` first, since only the
+// reply says whether it is a highlight and where its passage is: "ask". Anything else,
+// or a link missing what its kind needs, opens nothing: null.
+export const openingOf = ({ opens, id, chapter } = {}) => {
+  if (typeof id !== "string" || !id) return null;
+  if (opens === "journal-day") return { type: "day.selected", id };
+  if (opens === "chapter") return Number.isInteger(chapter) && chapter >= 0 ? { type: "chapter.selected", id, chapter } : null;
+  if (opens === "note" || opens === "highlight") return { type: "ask", id };
+  return null;
+};
+
+// A note read for a link: a highlight (a link to a book with a place) opens in its book at
+// the passage, any other note on the stage as a tab of its own; a note that is gone opens
+// nothing. The same reading of a highlight as note-editor's passageOf, copied because
+// components never import each other (11.2).
+export const noteOpening = (reply, id) => {
+  const note = reply?.note;
+  if (!note || note.id !== id) return null;
+  const link = (Array.isArray(note.about) ? note.about : []).find((l) => l.kind === "book" && l.place);
+  return link ? { type: "passage.selected", book: link.id, id, place: link.place } : { type: "note.staged", id };
+};
+
 export const vimAction = ({ key, ctrlKey, metaKey, altKey }, afterG = false) => {
   if (metaKey || altKey) return null;
   if (ctrlKey) return { d: "halfDown", u: "halfUp" }[key] ?? null;
@@ -725,6 +749,14 @@ export const machine = setup({
     // What is on the stage, for the chapter label (12). subject.changed that races it is
     // held for us until the reply lands (subject: read supersededBy).
     subject: fromPromise(({ input }) => input.ask("subject", "read", {})),
+    // A link to a note or a highlight asks notes for it beside whatever the thread is
+    // doing; the reply comes back as _noteRead.
+    note: fromCallback(({ input, sendBack }) => {
+      input.ask("notes", "read", { id: input.id }).then(
+        (reply) => sendBack({ type: "_noteRead", id: input.id, reply }),
+        () => sendBack({ type: "_noteRead", id: input.id, reply: null }),
+      );
+    }),
   },
   delays: {
     throttle: ({ context }) => context.throttleMs,
@@ -734,7 +766,11 @@ export const machine = setup({
   meta: {
     description:
       "Shows the open chat: the questions, the answers as they arrive, the model's thinking, " +
-      "which can be opened, and the lookups the model made, each named by what it read. Answers " +
+      "which can be opened, and the lookups the model made, each named by what it read; a lookup " +
+      "opens like the thinking to show what was asked for and what came back, each entry with its " +
+      "short text, and a name in it is a link, reached with Tab, that opens what it names where it " +
+      "is normally seen while the chat keeps its place: a note on the stage as a tab of its own, a " +
+      "highlight in its book at its passage, a journal day in the journal, a chapter in its book. Answers " +
       "are written in markdown and drawn as formatted text by a small renderer of our own, " +
       "always as escaped text, so nothing the model writes reaches the page as HTML. It holds " +
       "only the scroll position, which thinking records are open, and the comment being " +
@@ -773,8 +809,8 @@ export const machine = setup({
       "the chat itself is the same as in the Chats panel.",
     kind: "view",
     attributes: ["height", "markdown", "stage"],
-    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged"],
-    asks: ["conversations: open", "conversations: read", "settings: read", "subject: read"],
+    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "passage.selected"],
+    asks: ["conversations: open", "conversations: read", "settings: read", "subject: read", "notes: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -863,6 +899,19 @@ export const machine = setup({
       guard: ({ context }) => canStage(context),
       actions: emit(({ context }) => ({ type: "conversation.staged", id: context.openId })),
     },
+    // A link in an opened lookup (7.7): the thing it names opens where the user normally
+    // sees it, through the event that opens it there (4.3, fifth rule); the chat itself
+    // stays as it is. A second link to a note replaces one still being asked about.
+    _open: [
+      { guard: ({ event }) => openingOf(event)?.type === "ask", actions: [stopChild("note"), spawnChild("note", { id: "note", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) })] },
+      { guard: ({ event }) => openingOf(event) != null, actions: emit(({ event }) => openingOf(event)) },
+    ],
+    _noteRead: { guard: ({ event }) => noteOpening(event.reply, event.id) != null, actions: emit(({ event }) => noteOpening(event.reply, event.id)) },
+    // notes: read is asked only to open a link, once, and the thread keeps nothing of the
+    // reply; a note's later news (4.3, fourth rule) has nothing here to bring up to date,
+    // and the next link asks again.
+    "note.changed": { actions: () => {} },
+    "note.deleted": { actions: () => {} },
     // The fact's news about the open chat (4.3, fourth rule): adopt it whole. A change
     // for another chat is left to the bus to record as ignored. Held until the read
     // reply lands (4.2), so it never overtakes the starting picture.

@@ -33,6 +33,7 @@ const SUBJECT_READ = other("subject", "queries", "read");
 const COMPLETE = other("llm", "queries", "complete");
 const CONTRACTS = other("catalog", "queries", "contracts");
 const BOOKS_CHAPTER = other("books", "queries", "chapter");
+const BOOKS_PLACE = other("books", "queries", "place");
 const NOTES_READ = other("notes", "queries", "read");
 const NOTES_FIND = other("notes", "queries", "find");
 
@@ -896,7 +897,7 @@ test("the recorded tool exchange is what the machine emits (seam for the views)"
 
 // --- what a lookup read (7.2, 7.7) -------------------------------------------------
 
-const entryOf = (q) => ({ label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt, items: q.tool.items, itemName: q.tool.itemName, total: q.tool.total, opens: q.tool.opens });
+const entryOf = (q) => ({ label: q.tool.label, reply: q.reply, ...q.tool });
 const JOURNAL_INDEX = other("journal", "queries", "index");
 const NOTES_HIGHLIGHTS = other("notes", "queries", "highlights");
 
@@ -922,13 +923,19 @@ test("an error, a listing, a cut result and an empty body name nothing more than
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x"), isError: true }, entryOf(NOTES_READ)), {});
   assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ notes: [] }) }, entryOf(NOTES_FIND)), {});
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x").slice(0, 20) + "\n\n[cut]" }, entryOf(NOTES_READ)), {});
-  assert.deepEqual(lookupName({ callId: "c", content: note("Cats", " \n ") }, entryOf(NOTES_READ)), { name: "Cats" });
+  assert.deepEqual(lookupName({ callId: "c", content: note("Cats", " \n ") }, entryOf(NOTES_READ)), { name: "Cats", opens: "note", id: BOOK });
   assert.deepEqual(lookupName({ callId: "c", content: note("  ", "body") }, entryOf(NOTES_READ)), {});
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x") }, undefined), {});
 });
 
-test("a chapter, stored as its title over its markdown, is named by its title", () => {
-  assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER)), { name: "Chapter One" });
+test("a chapter, stored as its title over its markdown, is named by its title and opens by the payload it was asked with", () => {
+  assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER), { id: BOOK, chapter: 3 }), { name: "Chapter One", opens: "chapter", id: BOOK, chapter: 3 });
+  assert.deepEqual(lookupName({ callId: "c", content: "Chapter One\n\nIt was a dark night." }, entryOf(BOOKS_CHAPTER)), { name: "Chapter One" }, "no payload, nothing to open");
+});
+
+test("a reading place opens its chapter by the reply's book and chapter number", () => {
+  const content = JSON.stringify({ id: BOOK, title: "T", author: "A", chapter: 5, chapterTitle: "Defusion", block: 2, text: "Step back.", words: 2 });
+  assert.deepEqual(lookupName({ callId: "c", content }, entryOf(BOOKS_PLACE), {}), { name: "Defusion", excerpt: "Step back.", opens: "chapter", id: BOOK, chapter: 5 });
 });
 
 test("a listing says how many it returned, how many match, and names its first 20 with what they open", () => {
@@ -938,7 +945,11 @@ test("a listing says how many it returned, how many match, and names its first 2
   assert.equal(out.count, 25);
   assert.equal(out.total, 40);
   assert.equal(out.items.length, 20);
-  assert.deepEqual(out.items[0], { name: "2026-10-30", id: days[0].id, opens: "journal-day" });
+  assert.deepEqual(out.items[0], { name: "2026-10-30", excerpt: "s", id: days[0].id, opens: "journal-day" });
+  const long = JSON.stringify({ days: [{ id: U("00"), day: "2026-10-30", summary: Array.from({ length: 40 }, (_, i) => "w" + i).join(" "), words: 40 }, { id: U("01"), day: "2026-10-29", summary: " ", words: 1 }], total: 2, more: 0 });
+  const two = lookupItems({ callId: "c", content: long }, entryOf(JOURNAL_INDEX)).items;
+  assert.equal(two[0].excerpt.split(" ").length, 30, "an entry's text is cut at 30 words");
+  assert.equal("excerpt" in two[1], false, "a blank text gives no excerpt");
   const hl = JSON.stringify({ highlights: [{ id: BOOK, passage: "Thoughts are words.", comment: "", book: BOOK, chapter: 2, updatedAt: 1 }, { id: CHAT, passage: "  ", comment: "", book: BOOK, chapter: 2, updatedAt: 1 }], total: 2, more: 0 });
   assert.deepEqual(lookupItems({ callId: "c", content: hl }, entryOf(NOTES_HIGHLIGHTS)), { count: 2, total: 2, items: [{ name: "Thoughts are words.", id: BOOK, opens: "highlight" }] });
 });
@@ -986,7 +997,7 @@ test("a chat loaded from before carries what its lookups read once the tool entr
   await until(() => changes(h).length >= 2, "announced again with the names");
   const results = (e) => e.turns.find((t) => t.id === RESULT1).results[0];
   assert.deepEqual(results(changes(h)[0]), { callId: "c1", size: chat.turns[2].results[0].content.length });
-  assert.deepEqual(results(changes(h).at(-1)), { callId: "c1", size: chat.turns[2].results[0].content.length, name: "Cats", excerpt: "They purr." });
+  assert.deepEqual(results(changes(h).at(-1)), { callId: "c1", size: chat.turns[2].results[0].content.length, name: "Cats", excerpt: "They purr.", opens: "note", id: BOOK });
   assert.equal(h.calls.contracts, 1, "the tool entries are asked once");
 });
 

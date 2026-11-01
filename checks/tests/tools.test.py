@@ -32,6 +32,10 @@ class Ok(unittest.TestCase):
                  "items": "/days", "itemName": "/date", "total": "/total", "opens": "day"}
         self.assertEqual(problems(entry), [])
 
+    def test_item_excerpt_and_open_pointers_pass(self):
+        entry = {**BASE, "itemExcerpt": "/summary", "openId": "/reply/id", "openChapter": "/payload/chapter"}
+        self.assertEqual(problems(entry), [])
+
 
 class Fails(unittest.TestCase):
     def test_missing_label(self):
@@ -42,6 +46,11 @@ class Fails(unittest.TestCase):
 
     def test_bad_listing_pointer(self):
         self.assertIn("'itemName'", problems({**BASE, "itemName": "date"})[0])
+
+    def test_bad_open_pointers(self):
+        self.assertIn("'itemExcerpt'", problems({**BASE, "itemExcerpt": "summary"})[0])
+        self.assertIn("'openId'", problems({**BASE, "openId": 3})[0])
+        self.assertIn("'openChapter'", problems({**BASE, "openChapter": "chapter"})[0])
 
     def test_order_not_number_fails(self):
         self.assertIn("'order'", problems({**BASE, "order": "10"})[0])

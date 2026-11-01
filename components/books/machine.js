@@ -518,6 +518,8 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
   else if (message.type === "book.selected" || message.type === "book.switched") applySelect(context, message, enqueue);
   else if (message.type === "passage.selected") applySelect(context, { id: message.book }, enqueue);
+  else if (message.type === "chapter.selected") applySelect(context, message, enqueue);
+  else if (message.type === "day.selected") applySelect(context, { id: JOURNAL }, enqueue);
   else if (message.type === "book.progressed") applyProgress(context, message, enqueue);
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
@@ -708,7 +710,8 @@ export const machine = setup({
       "corner notice is deleted when that notice's Undo runs out. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
-      "book's tab to the front on the stage. The chat may ask where the reader is in the open " +
+      "book's tab to the front on the stage, and so does picking a chapter of a book, or a day of the " +
+      "journal, from a lookup in the chat. The chat may ask where the reader is in the open " +
       "book: the chapter, and the paragraph at the reading place with the next ones up to about " +
       "300 words, the paragraphs counted the way the reader counts them. Signing out keeps the library, the reading places " +
       "and the open book in this browser and stops syncing, so the views can hide them and " +
@@ -814,6 +817,8 @@ export const machine = setup({
         "book.selected": { actions: queue },
         "book.switched": { actions: queue },
         "passage.selected": { actions: queue },
+        "chapter.selected": { actions: queue },
+        "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
         "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
       },
@@ -860,6 +865,8 @@ export const machine = setup({
         "book.selected": { actions: queue },
         "book.switched": { actions: queue },
         "passage.selected": { actions: queue },
+        "chapter.selected": { actions: queue },
+        "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
         "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
       },
@@ -884,6 +891,13 @@ export const machine = setup({
         // The user followed a source link in a note (note-editor emits passage.selected):
         // its book opens the same way as from the shelf; the reader goes to the passage.
         "passage.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, { id: event.book }, enqueue)) },
+        // A chapter picked where its book may not be open yet (a lookup's link in the chat):
+        // its book opens the same way, and the reader goes to the chapter. From the
+        // contents the book is already open, so nothing changes here.
+        "chapter.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, event, enqueue)) },
+        // A journal day picked (a lookup's link in the chat): the journal opens, and the
+        // journal's page shows the day.
+        "day.selected": { actions: enqueueActions(({ context, event, enqueue }) => applySelect(context, { id: JOURNAL }, enqueue)) },
         "_uploaded": { actions: enqueueActions(({ context, event, enqueue }) => applyUploaded(context, event, enqueue)) },
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
         "book.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },

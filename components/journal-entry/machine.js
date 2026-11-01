@@ -173,7 +173,7 @@ const follow = (dirty) => [assign(({ context, event }) => settle(context, pictur
 
 // What a pick asks the entry to show: a day from the Days list, or a chapter of the
 // journal book (null is today's page).
-const pickOf = (event) => (event.type === "day.selected" ? { selected: event.id, chapter: null } : { selected: null, chapter: event.chapter });
+const pickOf = (event) => (event.type === "day.selected" ? { selected: event.id, chapter: null, dayPicked: true } : { selected: null, chapter: event.chapter });
 
 // Another day picked: what is being typed is saved first, then the entry follows.
 const select = (dirty) => ({
@@ -193,12 +193,23 @@ const select = (dirty) => ({
 // cached by id and kept current by book.changed and book.deleted (4.3, fourth rule); an
 // unknown book is asked about once, and the answer applies to the latest pick, if that
 // pick is still in this book. book.opened shows today's page, the last chapter.
+//
+// A pick can arrive just before the open it causes (a lookup's link in the chat names a
+// day or a chapter of the journal while another book is open, and `books` opens the
+// journal for it): then that open keeps the pick rather than showing today's page.
 const followBook = enqueueActions(({ context, event, enqueue, self }) => {
-  if (event.id == null) return;
-  const want = { id: event.id, chapter: event.type === "chapter.selected" ? event.chapter : null };
+  const opened = event.type === "book.opened";
+  enqueue.assign({ dayPicked: false });
+  if (event.id == null) {
+    enqueue.assign({ want: null });
+    return;
+  }
+  const keepChapter = opened && context.want?.id === event.id && context.want.chapter != null;
+  const keep = opened && context.dayPicked;
+  const want = keepChapter ? context.want : { id: event.id, chapter: opened ? null : event.chapter, ...(keep ? { keep: true } : {}) };
   enqueue.assign({ want });
   const known = context.written[event.id];
-  if (known === true) enqueue.raise({ type: "_show", chapter: want.chapter });
+  if (known === true && !want.keep) enqueue.raise({ type: "_show", chapter: want.chapter });
   if (known !== undefined || context.asking.includes(event.id)) return;
   const { id } = want;
   enqueue.assign({ asking: [...context.asking, id] });
@@ -358,6 +369,8 @@ export const machine = setup({
     written: {},
     // The latest book pick, {id, chapter}, and the books being asked about.
     want: null,
+    // Whether a day was picked since the last book opened or chapter was picked (followBook).
+    dayPicked: false,
     asking: [],
     // The date, and whether it could be written, last announced as day.shown; null until
     // the page has loaded.
@@ -506,7 +519,7 @@ export const machine = setup({
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     "flags.changed": { actions: assign({ hidden: ({ event }) => event.hidden }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => event.userId != null }) },
-    "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null })) },
+    "day.selected": { actions: assign(({ event }) => ({ selected: event.id, chapter: null, dayPicked: true })) },
     _show: { actions: assign(({ event }) => ({ selected: null, chapter: event.chapter })) },
     _quit: { actions: quit },
     "book.opened": { actions: followBook },
@@ -515,7 +528,7 @@ export const machine = setup({
       actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({ asking: context.asking.filter((x) => x !== event.id) });
         if (event.known) enqueue.assign({ written: { ...context.written, [event.id]: event.written } });
-        if (event.written && context.want?.id === event.id) enqueue.raise({ type: "_show", chapter: context.want.chapter });
+        if (event.written && context.want?.id === event.id && !context.want.keep) enqueue.raise({ type: "_show", chapter: context.want.chapter });
       }),
     },
     // Text or a link copied in the reader: Vim's p reads Vim's own register, not the

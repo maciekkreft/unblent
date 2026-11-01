@@ -378,8 +378,9 @@ def _check_draft(path: str, schema: object, what: str) -> None:
 
 def tool_problems(tool: object) -> list:
     """Section 7.2, 7.7, 11.2: a query's `tool` entry is a { description, label } of
-    non-empty strings, with an optional `name`, `excerpt`, `items`, `itemName` and
-    `total`, each a JSON pointer (RFC 6901) into the reply; an optional `title`, `group`
+    non-empty strings, with an optional `name`, `excerpt`, `items`, `itemName`,
+    `itemExcerpt`, `total`, `openId` and `openChapter`, each a JSON pointer (RFC 6901);
+    an optional `title`, `group`
     and `opens`, each a string; an optional `order`, a number; and an optional `switch`,
     which only `false` may hold, since a tool the user can switch is the default. Pure;
     returns the failure details."""
@@ -389,7 +390,7 @@ def tool_problems(tool: object) -> list:
     if not ok:
         return ["a query's tool entry must be a { description, label } of non-empty strings (7.7)"]
     out = []
-    for f in ("name", "excerpt", "items", "itemName", "total"):
+    for f in ("name", "excerpt", "items", "itemName", "itemExcerpt", "total", "openId", "openChapter"):
         if f in tool and not (isinstance(tool[f], str) and tool[f].startswith("/")):
             out.append(f"a query's tool entry {f!r} must be a JSON pointer, a string starting with \"/\" (7.2)")
     for f in ("title", "group", "opens"):
