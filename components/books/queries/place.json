@@ -1,0 +1,50 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "place takes no arguments.",
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Where the reader is in the open book: the book, the chapter by number and title, and the paragraph at the reading place with the next ones up to about 300 words; id null when no book is open; or an honest error: not-found when the book has no chapters, unavailable when the chapter could not be fetched (5).",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The open book's id." },
+          "title": { "type": "string" },
+          "author": { "type": "string" },
+          "chapter": { "type": "integer", "minimum": 0, "description": "The chapter's number in the book, counted from 0." },
+          "chapterTitle": { "type": "string" },
+          "block": { "type": "integer", "minimum": 0, "description": "The paragraph of the reading place, counted from 0 within the chapter, as the reader counts it." },
+          "text": { "type": "string", "description": "The paragraph at the reading place and the ones after it, apart by a blank line, up to about 300 words." },
+          "words": { "type": "integer", "minimum": 0, "description": "How many words text holds." }
+        },
+        "required": ["id", "title", "author", "chapter", "chapterTitle", "block", "text", "words"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "id": { "type": "null" } },
+        "required": ["id"],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": { "error": { "enum": ["not-found", "unavailable"] } },
+        "required": ["error"],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "supersededBy": ["book.opened", "book.changed"],
+  "tool": {
+    "description": "Returns where the reader is in the book they have open: the book's id and title, the chapter's number and title, and the paragraph at their reading place with the next few, up to about 300 words. Returns a null id when no book is open. Call this when the reader asks about what they are reading now, \"this page\" or \"this passage\". To read the whole chapter, read the chapter text by the book's id and the chapter's number. Takes no arguments.",
+    "label": "Finding your place in the book", "title": "Where you are in it", "group": "What's open", "order": 120,
+    "name": "/chapterTitle",
+    "excerpt": "/text",
+    "opens": "chapter"
+  }
+}

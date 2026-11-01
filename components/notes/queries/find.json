@@ -1,0 +1,84 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which notes to list, highlights left out: book keeps the notes linked to that book; chapter the notes linked to that chapter of it; day the notes made or last changed on that date; contains the notes whose text holds those words, ignoring case; limit is how many to list.",
+    "type": "object",
+    "properties": {
+      "book": {
+        "type": "string",
+        "minLength": 1,
+        "description": "A book's id, from listing the books; the Journal is a book too."
+      },
+      "chapter": {
+        "type": "string",
+        "minLength": 1,
+        "description": "A chapter's title as the book's contents give it, or for the Journal the day, YYYY-MM-DD."
+      },
+      "day": {
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+        "description": "A date, YYYY-MM-DD: the notes made or last changed on it."
+      },
+      "contains": {
+        "type": "string",
+        "description": "Words the note's text must contain, matched as one piece of text, ignoring case."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "How many notes to list, newest first; 20 when left out."
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The matching notes, newest first, each as a short entry without its text; total is how many match in all and more how many of them are not listed.",
+    "type": "object",
+    "properties": {
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The note, which reading a note opens in full." },
+            "title": { "type": "string", "description": "The note's first line." },
+            "line": { "type": "string", "description": "The note's next line with writing on it, cut at 25 words." },
+            "updatedAt": { "type": "integer", "description": "When the note last changed, in milliseconds since 1970." },
+            "about": {
+              "type": "array",
+              "description": "What the note is about: each link's kind and id, and the chapter it was made in when known.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "minLength": 1 },
+                  "id": { "type": "string", "minLength": 1 },
+                  "chapter": { "type": "string", "minLength": 1 },
+                  "chapterTitle": { "type": "string", "minLength": 1 }
+                },
+                "required": ["kind", "id"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["id", "title", "line", "updatedAt", "about"],
+          "additionalProperties": false
+        }
+      },
+      "total": { "type": "integer", "minimum": 0, "description": "How many notes match, listed or not." },
+      "more": { "type": "integer", "minimum": 0, "description": "How many matching notes are not listed." }
+    },
+    "required": ["notes", "total", "more"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["note.changed", "note.deleted"],
+  "tool": {
+    "description": "Lists the reader's notes, newest first, as short entries: each note's id, title, the line after the title and what it is about, never the full text. Highlights are left out; they have their own lookup. At most 20 notes unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id from listing the books; the Journal is a book too), chapter (a chapter's title as the book's contents give it, or a journal day as YYYY-MM-DD), day (YYYY-MM-DD, the notes made or changed on it) and contains (words the note holds, ignoring case). Then read the notes that matter in full, one by id, with the note text lookup.",
+    "label": "Listing the notes", "title": "Note titles", "group": "Notes", "order": 410,
+    "items": "/notes",
+    "itemName": "/title",
+    "total": "/total",
+    "opens": "note"
+  }
+}

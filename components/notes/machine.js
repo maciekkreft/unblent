@@ -144,6 +144,112 @@ function replyOpen(context, reply) {
   reply({ note: visible(stored) ? fullNote(context, stored) : null });
 }
 
+// --- The chat's short lists (7.7) ---------------------------------------------------
+//
+// notes: find and notes: highlights each answer at most LIST_MAX entries, LIST_LIMIT
+// unless the asker names a limit, newest first, with how many match in all; their texts
+// are cut at a few words, since one note is read in full through notes: read.
+export const LIST_LIMIT = 20;
+export const LIST_MAX = 50;
+const LINE_WORDS = 25;
+const PASSAGE_WORDS = 60;
+const COMMENT_WORDS = 60;
+
+// A word is a run of characters between whitespace, as 7.7 counts an excerpt's words.
+const cut = (text, n) => {
+  const w = String(text ?? "").split(/\s+/).filter(Boolean);
+  return w.length > n ? `${w.slice(0, n).join(" ")}…` : w.join(" ");
+};
+
+// A highlight is a note whose link to a book carries a place and a quote (13).
+const highlightLink = (record) => (record.about ?? []).find((l) => l.place && l.quote) ?? null;
+
+const newestFirst = (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+
+const needleOf = (text) => (typeof text === "string" && text.trim() !== "" ? text.trim().toLocaleLowerCase() : null);
+
+// A chapter as a link names it (subject/machine.js shortName, the one rule every link is
+// made by): lowercase a-z and 0-9, accented letters written plainly, every other run of
+// characters one hyphen. A journal day's date names itself.
+const PLAIN = { "ł": "l", "ø": "o", "đ": "d", "ß": "ss", "æ": "ae", "œ": "oe" };
+const shortName = (title) =>
+  String(title ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[łøđßæœ]/g, (c) => PLAIN[c])
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+// When a note was made, read from its id: a ULID begins with its time (5, ids).
+const madeAt = (id) => [...String(id).slice(0, 10)].reduce((n, c) => n * 32 + Math.max(0, CROCKFORD.indexOf(c)), 0);
+const pad = (n) => String(n).padStart(2, "0");
+// The device's local date at `ms`, YYYY-MM-DD.
+const dateOf = (ms) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// A link as a short entry carries what it names, never a highlight's place or quote.
+const shortLink = ({ kind, id, chapter, chapterTitle }) => ({ kind, id, ...(chapter ? { chapter, chapterTitle } : {}) });
+
+// notes: find, the notes without highlights that match, newest first. book keeps the notes
+// linked to that book; chapter the notes linked to that chapter, named by its title or,
+// in the Journal, its date; day the notes made or last changed on that date; contains the
+// notes whose text holds those words, ignoring case.
+export const findNotes = (context, { book, chapter, day, contains, limit } = {}) => {
+  const needle = needleOf(contains);
+  const key = typeof chapter === "string" ? shortName(chapter) : null;
+  const all = [...context.notes.values()]
+    .filter((r) => visible(r) && !highlightLink(r))
+    .filter((r) => {
+      const links = (r.about ?? []).filter((l) => !book || l.id === book);
+      if (book && links.length === 0) return false;
+      return !key || links.some((l) => l.chapter === key);
+    })
+    .filter((r) => !day || dateOf(r.updatedAt ?? 0) === day || dateOf(madeAt(r.id)) === day)
+    .filter((r) => !needle || `${r.title}\n${r.body}`.toLocaleLowerCase().includes(needle))
+    .sort(newestFirst);
+  const shown = all.slice(0, Math.min(limit ?? LIST_LIMIT, LIST_MAX));
+  return {
+    notes: shown.map((r) => ({
+      id: r.id,
+      title: r.title,
+      line: cut(subtitleOf(r.body), LINE_WORDS),
+      updatedAt: r.updatedAt,
+      about: (r.about ?? []).map(shortLink),
+    })),
+    total: all.length,
+    more: all.length - shown.length,
+  };
+};
+
+// notes: highlights, the highlights that match, newest first: each one's passage and the
+// reader's comment on it, cut short. book and chapter keep the highlights in that book and
+// in that chapter, by its number in the book.
+export const highlightsOf = (context, { book, chapter, limit } = {}) => {
+  const all = [...context.notes.values()]
+    .filter(visible)
+    .map((r) => ({ r, link: highlightLink(r) }))
+    .filter(({ link }) => link && (!book || link.id === book) && (chapter === undefined || link.place.chapter === chapter))
+    .sort((a, b) => newestFirst(a.r, b.r));
+  const shown = all.slice(0, Math.min(limit ?? LIST_LIMIT, LIST_MAX));
+  return {
+    highlights: shown.map(({ r, link }) => ({
+      id: r.id,
+      passage: cut(link.quote.exact, PASSAGE_WORDS),
+      comment: cut(r.body, COMMENT_WORDS),
+      book: link.id,
+      chapter: link.place.chapter,
+      ...(link.chapterTitle ? { chapterTitle: link.chapterTitle } : {}),
+      updatedAt: r.updatedAt,
+    })),
+    total: all.length,
+    more: all.length - shown.length,
+  };
+};
+
 // The user's gesture (4.3, fifth rule). Anonymous: local minting, announced with
 // pending false (there is no server to wait for). Signed in: the held version is
 // kept, the change is cached and queued in the outbox (coalesced by id, keeping the
@@ -271,6 +377,8 @@ function flush(context, message, enqueue) {
   if (message.type === "list?") replyList(context, message.reply);
   else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
   else if (message.type === "open?") replyOpen(context, message.reply);
+  else if (message.type === "find?") message.reply(findNotes(context, message.payload));
+  else if (message.type === "highlights?") message.reply(highlightsOf(context, message.payload));
   else if (message.type === "note.saved") applySave(context, message, enqueue);
   else if (message.type === "note.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "note.moved") applyMove(context, message, enqueue);
@@ -422,7 +530,12 @@ export const machine = setup({
       "save with it replaces them, and a link to a book that carries a place and a quote makes " +
       "the note a highlight. The open note is the note in the editor, kept in memory on this " +
       "device; `notes: open` answers with it in full, and is offered to the chat as \"Reading " +
-      "the open note\". A deleted note is kept as a tombstone with its title " +
+      "the open note\". Two short lists, newest first and at most 20 unless more are asked " +
+      "for (up to 50), with how many match in all, are offered to the chat: the notes without " +
+      "highlights, each with its title, its first line after the title and its links, narrowed by " +
+      "a book, a chapter, a day it was made or changed on and words it holds; and the highlights, " +
+      "each with the start of its passage and of the reader's comment, its book and its chapter, " +
+      "narrowed by a book and a chapter. A deleted note is kept as a tombstone with its title " +
       "and body, so it can still be shown or restored. Each note has a place in the list, the " +
       "same on every device: a new note goes first, an edit never moves a note, and a move " +
       "from the list puts it between its new neighbours. A place is last write wins: it " +
@@ -488,6 +601,8 @@ export const machine = setup({
               if (message.type === "list?") message.reply({ notes: [] });
               else if (message.type === "read?") message.reply({ error: "not-found" });
               else if (message.type === "open?") message.reply({ note: null });
+              else if (message.type === "find?") message.reply({ notes: [], total: 0, more: 0 });
+              else if (message.type === "highlights?") message.reply({ highlights: [], total: 0, more: 0 });
             }
             enqueue.assign({ queued: [] });
           }),
@@ -497,6 +612,8 @@ export const machine = setup({
         "list?": { actions: queue },
         "read?": { actions: queue },
         "open?": { actions: queue },
+        "find?": { actions: queue },
+        "highlights?": { actions: queue },
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
@@ -532,6 +649,8 @@ export const machine = setup({
         "list?": { actions: queue },
         "read?": { actions: queue },
         "open?": { actions: queue },
+        "find?": { actions: queue },
+        "highlights?": { actions: queue },
         "note.saved": { actions: queue },
         "note.discarded": { actions: queue },
         "note.moved": { actions: queue },
@@ -544,6 +663,8 @@ export const machine = setup({
         "list?": { actions: ({ context, event }) => replyList(context, event.reply) },
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
         "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
+        "find?": { actions: ({ context, event }) => event.reply(findNotes(context, event.payload)) },
+        "highlights?": { actions: ({ context, event }) => event.reply(highlightsOf(context, event.payload)) },
         "note.saved": { actions: enqueueActions(({ context, event, enqueue }) => applySave(context, event, enqueue)) },
         "note.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
         "note.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
@@ -676,6 +797,8 @@ export const machine = setup({
         "list?": { actions: ({ event }) => event.reply({ notes: [] }) },
         "read?": { actions: ({ event }) => event.reply({ error: "not-found" }) },
         "open?": { actions: ({ event }) => event.reply({ note: null }) },
+        "find?": { actions: ({ event }) => event.reply({ notes: [], total: 0, more: 0 }) },
+        "highlights?": { actions: ({ event }) => event.reply({ highlights: [], total: 0, more: 0 }) },
       },
     },
   },

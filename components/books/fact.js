@@ -10,6 +10,7 @@ import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import chapter from "./queries/chapter.json" with { type: "json" };
 import open from "./queries/open.json" with { type: "json" };
+import place from "./queries/place.json" with { type: "json" };
 
 // The browser entry (3.2): builds the machine's real inputs — the IndexedDB store,
 // the clock, the passkey-gated api, the asks (the session, and the journal it presents
@@ -186,7 +187,7 @@ const actor = mount(machine, {
     revoke: (url) => URL.revokeObjectURL(url),
   },
   events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused, "book.opened": opened, "session.rejected": rejected },
-  queries: { list, read, chapter, open },
+  queries: { list, read, chapter, open, place },
 });
 
 // A tab regaining focus drains then pulls (an import or a position from another

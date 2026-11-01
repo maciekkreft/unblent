@@ -34,7 +34,7 @@ const COMPLETE = other("llm", "queries", "complete");
 const CONTRACTS = other("catalog", "queries", "contracts");
 const BOOKS_CHAPTER = other("books", "queries", "chapter");
 const NOTES_READ = other("notes", "queries", "read");
-const NOTES_LIST = other("notes", "queries", "list");
+const NOTES_FIND = other("notes", "queries", "find");
 
 // A catalog: contracts reply carrying one query as a tool (7.7): what the loop reads to
 // build the tool list and to convert a tool's HTML reply to markdown.
@@ -918,7 +918,7 @@ test("a note read is named by its title, with the first 30 words of its body spl
 test("an error, a listing, a cut result and an empty body name nothing more than they hold", () => {
   const note = (title, body) => JSON.stringify({ note: { id: BOOK, title, body, version: 1, about: [] } });
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x"), isError: true }, entryOf(NOTES_READ)), {});
-  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ notes: [] }) }, entryOf(NOTES_LIST)), {});
+  assert.deepEqual(lookupName({ callId: "c", content: JSON.stringify({ notes: [] }) }, entryOf(NOTES_FIND)), {});
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", "x").slice(0, 20) + "\n\n[cut]" }, entryOf(NOTES_READ)), {});
   assert.deepEqual(lookupName({ callId: "c", content: note("Cats", " \n ") }, entryOf(NOTES_READ)), { name: "Cats" });
   assert.deepEqual(lookupName({ callId: "c", content: note("  ", "body") }, entryOf(NOTES_READ)), {});

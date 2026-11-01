@@ -197,12 +197,30 @@ function replyOpen(context, reply) {
   reply({ id: bookFor(context, id) ? id : null });
 }
 
-// A chapter is a file, so answering is a fetch; only the journal's chapters are
-// answered here, from the day's text, without the network. The reply is a callback, so the fetch
+// A chapter's HTML, or an honest error: the journal's from the day's text without the
+// network, an imported book's by a fetch the browser's HTTP cache answers on repeat
+// (Decision 2). A 401 is not the server being down, it is the session being gone: the
+// machine is told to sign out, so the views hide and the notice says so (14), and the
+// answer is unavailable, so the reader offers to try again once the user has signed in.
+function htmlFor(context, id, record, chapter, self) {
+  if (record.written) return Promise.resolve({ html: htmlOf(record.texts[chapter]) });
+  // A book still on its way to the account (adopt) has no chapters there yet.
+  if (context.api == null || context.outbox.has(`adopt:${id}`)) return Promise.resolve({ error: "unavailable" });
+  return Promise.resolve(context.api.chapter(id, record.contentVersion, chapter))
+    .then((res) => {
+      if (res && res.error === "unauthorized") {
+        self?.send({ type: "_sessionEnded", id });
+        return { error: "unavailable" };
+      }
+      return res && res.error ? { error: res.error } : { html: res.html };
+    })
+    .catch(() => ({ error: "unavailable" }));
+}
+
+// A chapter is a file, so answering is a fetch. The reply is a callback, so the fetch
 // runs fire-and-forget alongside the machine rather than in a state: two chapters in
-// flight never wait on each other, and the machine's own flow is untouched. The
-// browser's HTTP cache answers a repeat fetch (Decision 2). A missing book or an
-// index past the end is not-found without a round trip.
+// flight never wait on each other, and the machine's own flow is untouched. A missing
+// book or an index past the end is not-found without a round trip.
 function answerChapter(context, event, self) {
   const { id, chapter } = event.payload;
   const record = bookFor(context, id);
@@ -210,30 +228,90 @@ function answerChapter(context, event, self) {
     event.reply({ error: "not-found" });
     return;
   }
-  if (record.written) {
-    event.reply({ title: record.chapters[chapter].title, html: htmlOf(record.texts[chapter]) });
+  htmlFor(context, id, record, chapter, self).then((res) =>
+    event.reply(res.error ? { error: res.error } : { title: record.chapters[chapter].title, html: res.html }),
+  );
+}
+
+// Elements that hold nothing, so they close themselves (the HTML parser's void elements).
+const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
+const decode = (text) =>
+  text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, name) =>
+    name[0] === "#"
+      ? String.fromCodePoint(name[1] === "x" || name[1] === "X" ? parseInt(name.slice(2), 16) : Number(name.slice(1)))
+      : ENTITIES[name.toLowerCase()] ?? whole,
+  );
+
+// A chapter's blocks as the reader counts them (12): each element at the top of the
+// chapter's HTML is one block, and its text is the text of everything inside it, joined
+// as it stands, so a block's number here is the number a reading place carries. The
+// server writes each chapter as strict blocks (books/server/importer.py `_blocks_of`) and
+// the reader parses it with the browser (book-reader `#blockTexts`); text between blocks
+// is not a block, as the reader counts only elements.
+export function blockTexts(html) {
+  const texts = [];
+  let depth = 0;
+  for (const m of String(html ?? "").matchAll(/<(\/?)([a-zA-Z][\w:-]*)([^>]*)>|<[^>]*>|([^<]+)/g)) {
+    if (m[4] !== undefined) {
+      if (depth > 0) texts[texts.length - 1] += decode(m[4]);
+    } else if (m[2] === undefined) {
+      continue;
+    } else if (m[1] === "/") {
+      depth = Math.max(0, depth - 1);
+    } else {
+      if (depth === 0) texts.push("");
+      if (!VOID.has(m[2].toLowerCase()) && !m[3].trimEnd().endsWith("/")) depth += 1;
+    }
+  }
+  return texts;
+}
+
+// books: place takes the paragraph at the reading place whole, and then the next ones
+// while the text stays within PLACE_WORDS words; a first paragraph longer than that is
+// cut at it. Blocks with no text (a picture) are passed over.
+export const PLACE_WORDS = 300;
+export function placeFrom(texts, block) {
+  const at = Math.min(Math.max(0, block), Math.max(0, texts.length - 1));
+  const taken = [];
+  let words = 0;
+  for (let b = at; b < texts.length; b += 1) {
+    const w = texts[b].split(/\s+/).filter(Boolean);
+    if (w.length === 0) continue;
+    if (taken.length === 0 && w.length > PLACE_WORDS) {
+      taken.push(`${w.slice(0, PLACE_WORDS).join(" ")}…`);
+      words = PLACE_WORDS;
+      break;
+    }
+    if (taken.length > 0 && words + w.length > PLACE_WORDS) break;
+    taken.push(w.join(" "));
+    words += w.length;
+  }
+  return { block: at, text: taken.join("\n\n"), words };
+}
+
+// books: place, where the reader is in the open book: its chapter, by number and title,
+// and the text at the reading place. Nothing open answers { id: null }.
+function answerPlace(context, event, self) {
+  const id = context.open.id;
+  const record = bookFor(context, id);
+  if (!record) {
+    event.reply({ id: null });
     return;
   }
-  // A book still on its way to the account (adopt) has no chapters there yet.
-  if (context.api == null || context.outbox.has(`adopt:${id}`)) {
-    event.reply({ error: "unavailable" });
+  if (record.chapters.length === 0) {
+    event.reply({ error: "not-found" });
     return;
   }
-  Promise.resolve(context.api.chapter(id, record.contentVersion, chapter))
-    .then((res) => {
-      // A 401 is not the server being down, it is the session being gone: sign out so
-      // the views hide and the notice says so (14), and answer unavailable so the reader
-      // offers to try again once the user has signed in.
-      if (res && res.error === "unauthorized") {
-        self?.send({ type: "_sessionEnded", id });
-        event.reply({ error: "unavailable" });
-        return;
-      }
-      res && res.error
-        ? event.reply({ error: res.error })
-        : event.reply({ title: record.chapters[chapter].title, html: res.html });
-    })
-    .catch(() => event.reply({ error: "unavailable" }));
+  const { chapter = 0, block = 0 } = record.position ?? {};
+  const at = Math.min(Math.max(0, chapter), record.chapters.length - 1);
+  htmlFor(context, id, record, at, self).then((res) =>
+    event.reply(
+      res.error
+        ? { error: res.error }
+        : { id, title: record.title, author: record.author, chapter: at, chapterTitle: record.chapters[at].title, ...placeFrom(blockTexts(res.html), block) },
+    ),
+  );
 }
 
 // A chapter asked for while the cache could not load: the journal still answers, an
@@ -436,6 +514,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
   else if (message.type === "open?") replyOpen(context, message.reply);
   else if (message.type === "chapter?") answerChapter(context, message, self);
+  else if (message.type === "place?") answerPlace(context, message, self);
   else if (message.type === "book.picked") applyPick(context, message, enqueue, self);
   else if (message.type === "book.selected" || message.type === "book.switched") applySelect(context, message, enqueue);
   else if (message.type === "passage.selected") applySelect(context, { id: message.book }, enqueue);
@@ -629,7 +708,9 @@ export const machine = setup({
       "corner notice is deleted when that notice's Undo runs out. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
-      "book's tab to the front on the stage. Signing out keeps the library, the reading places " +
+      "book's tab to the front on the stage. The chat may ask where the reader is in the open " +
+      "book: the chapter, and the paragraph at the reading place with the next ones up to about " +
+      "300 words, the paragraphs counted the way the reader counts them. Signing out keeps the library, the reading places " +
       "and the open book in this browser and stops syncing, so the views can hide them and " +
       "signing in again as the same account, with or without a reload, shows them as they " +
       "were; what was changed but not yet sent is sent then. A refused session is treated the " +
@@ -715,6 +796,7 @@ export const machine = setup({
               else if (message.type === "read?") replyRead(context, message.payload.id, message.reply);
               else if (message.type === "open?") message.reply({ id: null });
               else if (message.type === "chapter?") answerUnloaded(context, message);
+              else if (message.type === "place?") message.reply({ id: null });
             }
             enqueue.assign({ queued: [] });
           }),
@@ -725,6 +807,7 @@ export const machine = setup({
         "read?": { actions: queue },
         "open?": { actions: queue },
         "chapter?": { actions: queue },
+        "place?": { actions: queue },
         "book.picked": { actions: queue },
         "book.progressed": { actions: queue },
         "book.renamed": { actions: queue },
@@ -770,6 +853,7 @@ export const machine = setup({
         "read?": { actions: queue },
         "open?": { actions: queue },
         "chapter?": { actions: queue },
+        "place?": { actions: queue },
         "book.picked": { actions: queue },
         "book.progressed": { actions: queue },
         "book.renamed": { actions: queue },
@@ -787,6 +871,7 @@ export const machine = setup({
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
         "open?": { actions: ({ context, event }) => replyOpen(context, event.reply) },
         "chapter?": { actions: ({ context, event, self }) => answerChapter(context, event, self) },
+        "place?": { actions: ({ context, event, self }) => answerPlace(context, event, self) },
         // A chapter fetch came back 401 (answerChapter, run fire-and-forget, cannot
         // enqueue): the session is gone, so sign out here where actions can run.
         "_sessionEnded": {
@@ -913,6 +998,7 @@ export const machine = setup({
         "read?": { actions: ({ context, event }) => replyRead(context, event.payload.id, event.reply) },
         "open?": { actions: ({ event }) => event.reply({ id: null }) },
         "chapter?": { actions: ({ context, event }) => answerUnloaded(context, event) },
+        "place?": { actions: ({ event }) => event.reply({ id: null }) },
       },
     },
   },

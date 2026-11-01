@@ -174,7 +174,7 @@ for (const engine of ENGINES) {
       name: "a lookup is named on screen, and a tool switched off is not",
       from: idle,
       run: async (v) => {
-        await send(v.page, "/tool subject: read {}\n/tool notes: list {}");
+        await send(v.page, "/tool subject: read {}\n/tool notes: find {}");
         const s = await v.see((s) => want(s.thread.includes("This tool could not be used"), "the refused lookup is not shown"));
         assert.match(s.thread, /Listing the notes/, "the lookup is named on screen");
         assert.doesNotMatch(s.thread, /Checking what's open/, "an off tool is never named as a lookup");

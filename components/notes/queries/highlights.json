@@ -1,0 +1,63 @@
+{
+  "payload": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which highlights to list: book keeps the highlights in that book; chapter those in that chapter of it, by its number in the book; limit is how many to list.",
+    "type": "object",
+    "properties": {
+      "book": {
+        "type": "string",
+        "minLength": 1,
+        "description": "A book's id, from listing the books or from checking what is open."
+      },
+      "chapter": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "A chapter's number in the book, counted from 0, as the book's contents give it."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "How many highlights to list, newest first; 20 when left out."
+      }
+    },
+    "additionalProperties": false
+  },
+  "reply": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "The matching highlights, newest first, each with the start of its passage and of the reader's comment; total is how many match in all and more how many of them are not listed.",
+    "type": "object",
+    "properties": {
+      "highlights": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The highlight's note, which reading a note returns in full." },
+            "passage": { "type": "string", "description": "The passage the reader marked, cut at 60 words." },
+            "comment": { "type": "string", "description": "The reader's comment on it, cut at 60 words; empty when there is none." },
+            "book": { "type": "string", "minLength": 1, "description": "The book's id." },
+            "chapter": { "type": "integer", "minimum": 0, "description": "The chapter's number in the book, counted from 0." },
+            "chapterTitle": { "type": "string", "minLength": 1, "description": "The chapter's title as it read when the highlight was made, when known." },
+            "updatedAt": { "type": "integer", "description": "When the highlight last changed, in milliseconds since 1970." }
+          },
+          "required": ["id", "passage", "comment", "book", "chapter", "updatedAt"],
+          "additionalProperties": false
+        }
+      },
+      "total": { "type": "integer", "minimum": 0, "description": "How many highlights match, listed or not." },
+      "more": { "type": "integer", "minimum": 0, "description": "How many matching highlights are not listed." }
+    },
+    "required": ["highlights", "total", "more"],
+    "additionalProperties": false
+  },
+  "supersededBy": ["note.changed", "note.deleted"],
+  "tool": {
+    "description": "Lists the passages the reader highlighted in their books, newest first: each one's id, the start of the passage, the start of the reader's comment on it, its book's id and its chapter's number and title. At most 20 unless limit asks for more (up to 50); total says how many match and more how many were left out, so narrow the list rather than page through it. Narrow it with book (a book's id, from listing the books or checking what is open) and chapter (the chapter's number, counted from 0). To read one highlight in full, read it by id with the note text lookup. What the reader marked and wrote shows what caught their attention.",
+    "label": "Reading highlights", "title": "Highlights", "group": "Books", "order": 240,
+    "items": "/highlights",
+    "itemName": "/passage",
+    "total": "/total",
+    "opens": "highlight"
+  }
+}
