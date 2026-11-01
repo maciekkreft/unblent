@@ -31,6 +31,11 @@ The architecture is the spec. If a request conflicts with it, name the section a
   per file, a failure's reason under its name, and at the end of the browser phase
   where its time went (launches, page loads, the rest). Add `--verbose` together
   with `--only <component>` to see every test.
+- When one session hands the steps of a plan to several agents, one after another,
+  each agent runs `check.py --only <the components it changed>`, not `--changed`,
+  because a change to the bus or a contract makes `--changed` reach every test.
+  After the last step, the coordinating session starts one separate agent that runs
+  the bare `check.py` once (about 15 minutes) and fixes or reports what fails.
 - Ask before writing a journey (architecture §9), a browser test that keeps one
   page across its steps.
 - Ask before changing `tokens/tokens.css`, `tokens/icons.js`, an event, the document facts list (7.5), or `architecture.md`, and before saving or changing a memory. Propose, then wait.
