@@ -75,7 +75,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
         await until(async () => (await tabs(page)).length === 5);
-        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "People", "Feature flags"]);
+        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "People", "Features"]);
         assert.deepEqual(await slotted(page), ["settings-sheet"], "Settings is shown first");
 
         await page.locator('settings-tabs [role="tab"]', { hasText: "People" }).click();
@@ -158,7 +158,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: rendering and layout.
-    test(`everyone else sees Settings and Generators, and the People tab asks nothing, in ${engine.name}`, async () => {
+    test(`everyone else sees Settings, Generators and Features, and the People tab asks nothing, in ${engine.name}`, async () => {
       const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
       try {
         context.setDefaultTimeout(4000);
@@ -170,8 +170,8 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
         await openGear(page);
         await page.locator("settings-sheet h3").first().waitFor();
-        await until(async () => (await tabs(page)).length === 3);
-        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators"], "no People tab");
+        await until(async () => (await tabs(page)).length === 4);
+        assert.deepEqual(await tabs(page), ["Settings", "Evaluators", "Generators", "Features"], "no People tab");
         assert.deepEqual(await slotted(page), ["settings-sheet"]);
         assert.deepEqual(asked, [], "the People tab never asks for anyone but the admin");
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);

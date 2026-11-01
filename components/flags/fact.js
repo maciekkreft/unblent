@@ -13,12 +13,12 @@ const answer = (res) => (res.ok ? res.json() : Promise.reject(new Error(String(r
 
 const load = () => fetch("/api/flags", { credentials: "same-origin", headers: json }).then(answer);
 
-const save = (feature, on) =>
+const save = (feature, on, column) =>
   fetch("/api/flags", {
     method: "PUT",
     credentials: "same-origin",
     headers: { "content-type": "application/json", ...json },
-    body: JSON.stringify({ feature, on }),
+    body: JSON.stringify({ feature, on, column }),
   }).then(answer);
 
 mount(machine, {

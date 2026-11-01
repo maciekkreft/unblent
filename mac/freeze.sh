@@ -32,11 +32,21 @@ done
 (cd "$repo" && node --import ./checks/register.mjs checks/manifests.mjs components/*/machine.js) \
   > "$stage/components/catalog/server/manifests.json"
 
+# A Mac that is not connected reads Release from the website's switches as they stand
+# now (architecture.md 3.1), shipped beside flags' server module. A build that cannot
+# read them stops, because without the file every feature would count as released.
+# FLAGS_URL points the build elsewhere.
+released="$stage/components/flags/server/released.json"
+curl -fsS "${FLAGS_URL:-https://app.unblent.com/api/flags}" > "$released"
+"$python" -c 'import json, sys; assert isinstance(json.load(open(sys.argv[1])).get("released"), list), "no released list"' "$released"
+choice_points="$("$python" -c 'import json, sys; print("yes" if "choice-points" in json.load(open(sys.argv[1]))["released"] else "no")' "$released")"
+
 mkdir -p "$stage/mac/books"
 cp "$repo/mac/books/meditations.epub" "$stage/mac/books/"
 # The owner's evaluators and box settings that every new Mac starts with, written by
-# mac/export-checks.py and committed; a checkout without them ships none.
-if [ -d "$repo/mac/checks" ]; then
+# mac/export-checks.py and committed; a checkout without them ships none. They check
+# Values and Choice Points, so a version that does not release that feature ships none.
+if [ -d "$repo/mac/checks" ] && [ "$choice_points" = yes ]; then
   mkdir -p "$stage/mac/checks"
   cp "$repo"/mac/checks/*.json "$stage/mac/checks/"
 fi

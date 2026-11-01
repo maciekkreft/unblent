@@ -1,17 +1,38 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "Which features are off (3.1). off is the features turned off for everyone; hidden is what this viewer does not see: off, or [] for the admin, except while the admin views as someone. Announced when either changes, and again unchanged when a switch could not be saved, so the view that asked for it can say so.",
+  "description": "Which features this viewer sees (3.1). off is the features not released; hidden is what this viewer does not see: a feature not released (except for the admin on the website, not while viewing as someone), or one whose Show this account turned off. released and shown are the features whose Release and whose Show are on. Announced when any changes, and again unchanged when a switch could not be saved, so the view that asked for it can say so.",
   "type": "object",
   "properties": {
     "off": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "hidden": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
+    },
+    "released": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The features the admin released for everyone."
+    },
+    "shown": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The features this account keeps shown; every feature while signed out."
     }
   },
-  "required": ["off", "hidden"],
+  "required": [
+    "off",
+    "hidden"
+  ],
   "additionalProperties": false
 }

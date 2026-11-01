@@ -102,7 +102,7 @@
         <note-list subject label="Notes"></note-list>
         <note-editor id="notes-editor" follows subject height="fill" shows-on="note.selected"></note-editor>
       </list-then-item>
-      <list-then-item id="chats" flag="chats" label="Chats" side="right" height="fill" shows-on="conversation.selected">
+      <list-then-item id="chats" label="Chats" side="right" height="fill" shows-on="conversation.selected">
         <conversation-list subject label="Chats"></conversation-list>
         <chat-thread id="chats-thread" shows-on="conversation.selected" height="fill" markdown><chat-input id="chats-input"></chat-input></chat-thread>
       </list-then-item>
@@ -111,11 +111,11 @@
       <undo-bar control></undo-bar>
       <settings-tabs label="Settings" button="gear">
         <settings-sheet label="Settings" account></settings-sheet>
-        <evaluator-settings label="Evaluators" flag="evaluators"></evaluator-settings>
+        <evaluator-settings label="Evaluators"></evaluator-settings>
         <generator-settings label="Generators"></generator-settings>
         <people-list label="People" admin web></people-list>
         <guest-limits label="People" admin web></guest-limits>
-        <feature-flags label="Feature flags" admin web></feature-flags>
+        <feature-flags label="Features"></feature-flags>
         <mac-account label="Account" mac></mac-account>
       </settings-tabs>
       <session-switch control web></session-switch>

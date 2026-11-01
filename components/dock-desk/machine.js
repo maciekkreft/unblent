@@ -368,7 +368,7 @@ export const machine = setup({
       "`flags` answers, while the stored layout keeps its place for when the feature comes " +
       "back on (a page without `flags` hides nothing); and `admin`, which draws that child only for " +
       "the admin, and not while the admin views as someone, as the gear's sheet does with its " +
-      "People and Feature flags tabs; and `web` or `mac`, which draws that child, a header control " +
+      "People tab; and `web` or `mac`, which draws that child, a header control " +
       "included, only on the website or only in the Mac app, told apart by whether `session` " +
       "reports `connect`, and neither until it answers. These are read from each child and are not attributes of `dock-desk` itself. While " +
       "the desk is being arranged, a dock with more than one tab offers two buttons that move " +

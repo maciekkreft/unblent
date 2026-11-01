@@ -7,24 +7,26 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The server module (3.4) against a throwaway data directory of its own, in one python
-// process, because data/flags.db is shared by every account: switching a feature on the
+// process, because data/flags.db is shared by every account: releasing a feature on the
 // check's server would change what every other test sees.
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 const SCRIPT = `
-import json
+import json, os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from server.user import SESSION_COOKIE, session_token
-from components.flags.server.router import router
+import components.flags.server.router as flags
 
 app = FastAPI()
-app.include_router(router, prefix="/api/flags")
+app.include_router(flags.router, prefix="/api/flags")
 client = TestClient(app)
 cookie = lambda token: {SESSION_COOKIE: token}
 admin = cookie(session_token("a1", admin=True))
 viewing = cookie(session_token("g1", guest=True, viewer="a1"))
 someone = cookie(session_token("u1"))
+guest = cookie(session_token("g2", guest=True))
 
 def call(method, cookies=None, body=None):
     client.cookies.clear()
@@ -35,12 +37,11 @@ def call(method, cookies=None, body=None):
 
 out = {}
 out["fresh"] = call("GET")
-out["notAdmin"] = call("PUT", someone, {"feature": "chats", "on": False})
-out["viewing"] = call("PUT", viewing, {"feature": "chats", "on": False})
-out["bad"] = [call("PUT", admin, b)[0] for b in ({"feature": "news", "on": False}, {"feature": "highlights", "on": False}, {"feature": "chats"}, {"feature": "chats", "on": "no"}, {"feature": "chats", "on": False, "x": 1}, [])]
-out["off"] = call("PUT", admin, {"feature": "choice-points", "on": False})
-call("PUT", admin, {"feature": "chats", "on": False})
-out["twice"] = call("PUT", admin, {"feature": "chats", "on": False})
+out["notAdmin"] = call("PUT", someone, {"feature": "choice-points", "on": False})
+out["viewing"] = call("PUT", viewing, {"feature": "choice-points", "on": False})
+out["bad"] = [call("PUT", admin, b)[0] for b in ({"feature": "chats", "on": False}, {"feature": "evaluators", "on": False}, {"feature": "undo"}, {"feature": "undo", "on": "no"}, {"feature": "undo", "on": False, "x": 1}, {"feature": "undo", "on": False, "column": "all"}, [])]
+out["held"] = call("PUT", admin, {"feature": "choice-points", "on": False})
+out["twice"] = call("PUT", admin, {"feature": "choice-points", "on": False, "column": "release"})
 out["signedOut"] = call("GET")
 out["someone"] = call("GET", someone)
 out["admin"] = call("GET", admin)
@@ -48,11 +49,26 @@ out["adminViewing"] = call("GET", viewing)
 out["back"] = call("PUT", admin, {"feature": "choice-points", "on": True})
 out["undoOn"] = call("PUT", admin, {"feature": "undo", "on": True})
 out["undoOnTwice"] = call("PUT", admin, {"feature": "undo", "on": True})
+out["showSignedOut"] = call("PUT", None, {"feature": "undo", "on": False, "column": "show"})
+out["guestHides"] = call("PUT", guest, {"feature": "undo", "on": False, "column": "show"})
+out["someoneElse"] = call("GET", someone)
+out["guestAgain"] = call("GET", guest)
+out["guestShows"] = call("PUT", guest, {"feature": "undo", "on": True, "column": "show"})
+out["adminHides"] = call("PUT", admin, {"feature": "undo", "on": False, "column": "show"})
 out["undoOff"] = call("PUT", admin, {"feature": "undo", "on": False})
+
+# The local edition (3.4): Release is the frozen list, or everything without it.
+os.environ["UNBLENT_LOCAL_USER"] = "l1"
+flags.FROZEN = Path(os.environ["UNBLENT_DATA"]) / "released.json"
+out["localNone"] = call("GET")
+flags.FROZEN.write_text(json.dumps({"released": ["undo"]}))
+out["localFrozen"] = call("GET")
+out["localRelease"] = call("PUT", None, {"feature": "choice-points", "on": True})
+out["localShow"] = call("PUT", None, {"feature": "undo", "on": False, "column": "show"})
 print(json.dumps(out))
 `;
 
-test("anyone reads which features are off; only the admin switches one, and every account, the admin included, sees the same", () => {
+test("anyone reads Release and Show; only the admin on the website releases, every signed-in account shows for itself", () => {
   const data = mkdtempSync(join(tmpdir(), "flags-server-"));
   try {
     const out = JSON.parse(
@@ -61,20 +77,31 @@ test("anyone reads which features are off; only the admin switches one, and ever
         env: { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "flags-test-secret", UNBLENT_LOCAL_USER: "" },
       }),
     );
-    assert.deepEqual(out.fresh, [200, { off: ["undo"], hidden: ["undo"] }], "every feature is on at first, except Undo, which starts off");
+    const p = (released, hidden, shown = ["choice-points", "undo"]) => [200, { off: ["choice-points", "undo"].filter((f) => !released.includes(f)), hidden, released, shown }];
+    assert.deepEqual(out.fresh, p(["choice-points"], ["undo"]), "every feature is released at first, except Undo");
     assert.deepEqual(out.notAdmin, [403, { error: "not-admin" }]);
     assert.deepEqual(out.viewing, [403, { error: "not-admin" }], "not while the admin views as someone");
-    assert.deepEqual(out.bad, [400, 400, 400, 400, 400, 400], "an unknown feature, a removed one included, is refused");
-    assert.deepEqual(out.off, [200, { off: ["choice-points", "undo"], hidden: ["choice-points", "undo"] }], "the admin sees what everyone sees");
-    assert.deepEqual(out.twice, [200, { off: ["chats", "choice-points", "undo"], hidden: ["chats", "choice-points", "undo"] }], "turning off twice is once, in the tab's order");
-    assert.deepEqual(out.signedOut, [200, { off: ["chats", "choice-points", "undo"], hidden: ["chats", "choice-points", "undo"] }]);
+    assert.deepEqual(out.bad, [400, 400, 400, 400, 400, 400, 400], "an unknown feature, a removed one included, is refused");
+    assert.deepEqual(out.held, p([], []), "the admin on the website still sees what is not released");
+    assert.deepEqual(out.twice, out.held, "holding back twice is once");
+    assert.deepEqual(out.signedOut, p([], ["choice-points", "undo"]));
     assert.deepEqual(out.someone, out.signedOut);
-    assert.deepEqual(out.admin, out.signedOut);
-    assert.deepEqual(out.adminViewing, out.signedOut);
-    assert.deepEqual(out.back, [200, { off: ["chats", "undo"], hidden: ["chats", "undo"] }]);
-    assert.deepEqual(out.undoOn, [200, { off: ["chats"], hidden: ["chats"] }], "the admin turns Undo on");
-    assert.deepEqual(out.undoOnTwice, out.undoOn, "turning on twice is once");
-    assert.deepEqual(out.undoOff, [200, { off: ["chats", "undo"], hidden: ["chats", "undo"] }], "and off again");
+    assert.deepEqual(out.admin, out.held);
+    assert.deepEqual(out.adminViewing, out.signedOut, "the admin viewing as someone sees what they see");
+    assert.deepEqual(out.back, p(["choice-points"], []));
+    assert.deepEqual(out.undoOn, p(["choice-points", "undo"], []), "the admin releases Undo");
+    assert.deepEqual(out.undoOnTwice, out.undoOn, "releasing twice is once");
+    assert.deepEqual(out.showSignedOut, [401, { error: "signed-out" }]);
+    assert.deepEqual(out.guestHides, p(["choice-points", "undo"], ["undo"], ["choice-points"]), "a guest hides a feature from itself");
+    assert.deepEqual(out.someoneElse, p(["choice-points", "undo"], []), "and from no one else");
+    assert.deepEqual(out.guestAgain, out.guestHides, "kept for the account");
+    assert.deepEqual(out.guestShows, p(["choice-points", "undo"], []));
+    assert.deepEqual(out.adminHides, p(["choice-points", "undo"], ["undo"], ["choice-points"]), "Show hides from the admin too");
+    assert.deepEqual(out.undoOff, p(["choice-points"], ["undo"], ["choice-points"]));
+    assert.deepEqual(out.localNone, p(["choice-points", "undo"], []), "a Mac without the frozen list releases everything");
+    assert.deepEqual(out.localFrozen, p(["undo"], ["choice-points"]), "a Mac hides what the frozen list does not release, from its admin too");
+    assert.deepEqual(out.localRelease, [403, { error: "not-admin" }], "Release is set only on the website");
+    assert.deepEqual(out.localShow, p(["undo"], ["choice-points", "undo"], ["choice-points"]), "Show works on a Mac");
   } finally {
     rmSync(data, { recursive: true, force: true });
   }

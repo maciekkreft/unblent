@@ -1,21 +1,54 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// The Feature flags tab of the gear's sheet on the product page (12), for the admin.
-// Who is the admin is answered by request routing, and /api/flags is answered by the
-// routes too, because data/flags.db is shared: switching a feature on the check's server
-// would change what every other test sees. That everyone else sees no such tab is
-// settings-tabs' own test; what the server answers is flags' own test.
+// The Features tab of the gear's sheet on the product page (12). Who the account is is
+// answered by request routing, and /api/flags is answered by the routes too, because
+// data/flags.db is shared: releasing a feature on the check's server would change what
+// every other test sees. What the server answers is flags' own test.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { ENGINES, until, watch, forgeCookie, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
 
+const FEATURES = ["choice-points", "undo"];
+
 const text = (page) => page.evaluate(() => document.querySelector("feature-flags").shadowRoot.textContent.replace(/\s+/g, " ").trim());
 
+// One account on the product page with the Features tab open; `me` is added to what the
+// server says about the account, and every Release and Show is kept by the route.
+async function open(browser, me) {
+  const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+  context.setDefaultTimeout(4000);
+  await signedIn(context, forgeCookie(me.admin ? "admin" : "guest"));
+  await context.route(/\/api\/session\/me$/, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), ...me } });
+  });
+  const state = { released: ["choice-points"], shown: [...FEATURES], offline: false, puts: [] };
+  await context.route(/\/api\/flags$/, async (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      state.puts.push(body);
+      if (state.offline) return route.abort();
+      const list = body.column === "show" ? "shown" : "released";
+      state[list] = body.on ? [...state[list], body.feature] : state[list].filter((f) => f !== body.feature);
+    }
+    const off = FEATURES.filter((f) => !state.released.includes(f));
+    const hidden = FEATURES.filter((f) => (!me.admin && off.includes(f)) || !state.shown.includes(f));
+    return route.fulfill({ json: { off, hidden, released: state.released, shown: state.shown } });
+  });
+  const page = await context.newPage();
+  const problems = watch(page, [], { ignore: [/api\/flags/] });
+  await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
+  await page.locator("dock-desk .controls button.pill").click();
+  await page.locator('settings-tabs [role="tab"]', { hasText: "Features" }).click();
+  await page.locator("feature-flags").getByRole("switch").first().waitFor();
+  return { context, page, problems, state, tab: page.locator("feature-flags") };
+}
+
 for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
-  describe(`the Feature flags tab in ${engine.name}`, { timeout: 30000 }, () => {
+  describe(`the Features tab in ${engine.name}`, { timeout: 30000 }, () => {
     let browser;
     before(async () => {
       browser = await engine.launch();
@@ -25,51 +58,45 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 15000 });
 
     // Browser: rendering and layout.
-    test(`the admin switches a feature off and back, and a refused switch goes back, in ${engine.name}`, async () => {
-      const context = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+    test(`the admin releases a feature and shows it, and a refused switch goes back, in ${engine.name}`, async () => {
+      const { context, page, problems, state, tab } = await open(browser, { admin: true, name: "Admin" });
       try {
-        context.setDefaultTimeout(4000);
-        await signedIn(context, forgeCookie("admin"));
-        await context.route(/\/api\/session\/me$/, async (route) => {
-          const response = await route.fetch();
-          await route.fulfill({ response, json: { ...(await response.json()), admin: true, name: "Admin" } });
-        });
-        let off = [];
-        let offline = false;
-        const puts = [];
-        await context.route(/\/api\/flags$/, async (route) => {
-          if (route.request().method() === "PUT") {
-            const body = route.request().postDataJSON();
-            puts.push(body);
-            if (offline) return route.abort();
-            off = body.on ? off.filter((f) => f !== body.feature) : [...off, body.feature];
-          }
-          return route.fulfill({ json: { off, hidden: off } });
-        });
-        const page = await context.newPage();
-        const problems = watch(page, [], { ignore: [/api\/flags/] });
-        await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
-        await page.locator("dock-desk .controls button.pill").click();
-        await page.locator('settings-tabs [role="tab"]', { hasText: "Feature flags" }).click();
-        const chats = page.locator("feature-flags").getByRole("switch", { name: "Chats" });
-        await until(async () => (await page.locator("feature-flags").getByRole("switch").count()) === 4);
+        await until(async () => (await tab.getByRole("switch").count()) === 4);
         const said = await text(page);
-        for (const line of ["Feature flags", "hidden from everyone, you included", "Chats", "Evaluators", "Choice points", "Undo", "The Undo and Redo buttons"]) {
+        for (const line of ["Features", "Release", "Show", "Values and Choice Points", "Undo", "hidden from everyone but you"]) {
           assert.ok(said.includes(line), `the tab says "${line}": ${said}`);
         }
-        assert.equal(await chats.isChecked(), true, "every feature is on");
-
-        await chats.click();
-        await until(async () => puts.length === 1 && !(await chats.isChecked()));
-        assert.deepEqual(puts, [{ feature: "chats", on: false }]);
+        const release = tab.getByRole("switch", { name: "Release Undo" });
+        assert.equal(await release.isChecked(), false, "Undo is not released at first");
+        await release.click();
+        await until(async () => state.puts.length === 1 && (await release.isChecked()));
+        assert.deepEqual(state.puts, [{ feature: "undo", on: true, column: "release" }]);
         // Switching back is the undo.
-        await chats.click();
-        await until(async () => puts.length === 2 && (await chats.isChecked()));
+        await release.click();
+        await until(async () => state.puts.length === 2 && !(await release.isChecked()));
 
-        offline = true;
-        await chats.click();
-        await page.getByText("Chats could not be changed").waitFor();
-        await until(async () => await chats.isChecked());
+        state.offline = true;
+        const show = tab.getByRole("switch", { name: "Show Values and Choice Points" });
+        await show.click();
+        await page.getByText("Values and Choice Points could not be changed").waitFor();
+        await until(async () => await show.isChecked());
+        assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
+      } finally {
+        await context.close();
+      }
+    });
+
+    // Browser: rendering and layout.
+    test(`a guest sees only Show, and only for what is released, in ${engine.name}`, async () => {
+      const { context, page, problems, state, tab } = await open(browser, { guest: true, admin: false, name: "Guest 1" });
+      try {
+        await until(async () => (await tab.getByRole("switch").count()) === 1);
+        const said = await text(page);
+        assert.ok(!said.includes("Release") && !said.includes("Undo"), `no Release and no row for Undo: ${said}`);
+        const show = tab.getByRole("switch", { name: "Show Values and Choice Points" });
+        await show.click();
+        await until(async () => state.puts.length === 1 && !(await show.isChecked()));
+        assert.deepEqual(state.puts, [{ feature: "choice-points", on: false, column: "show" }]);
         assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       } finally {
         await context.close();
