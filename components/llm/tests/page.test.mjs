@@ -196,9 +196,10 @@ for (const engine of ENGINES) {
       await until(async () => (await jev())?.includes("Key saved"));
       assert.ok((await key()).text.startsWith("Key saved"), "the API key is untouched");
 
-      // The model's description is a hover hint in the workshop, never printed.
+      // The model's description is a hover hint in the workshop, never printed; a group's
+      // heading has none.
       const tools = await page.evaluate(() =>
-        [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".tools .field")].map((f) => ({
+        [...document.querySelector("settings-sheet").shadowRoot.querySelectorAll(".tools .field:not(.tool-head)")].map((f) => ({
           text: f.textContent.trim(),
           title: f.querySelector("span").title,
         })),

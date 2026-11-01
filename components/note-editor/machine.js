@@ -444,7 +444,7 @@ export const machine = setup({
       "open chapter's title otherwise, which also moves it from another chapter; the label " +
       "turns at once, and pressing again reverses it. A keystroke made " +
       "before the subject is known waits for it. While the device preference \"Keep the open " +
-      "note and chat when the stage changes\" (`settings`) is on, the editor stays on its note " +
+      "note and chat\" (`settings`) is on, the editor stays on its note " +
       "when the subject changes and picking another note opens it; while it is off, as it is at " +
       "first, the editor follows the subject. The open note and the titles of subjects seen are " +
       "kept in this browser, so with the preference on the note comes back after a reload. It " +

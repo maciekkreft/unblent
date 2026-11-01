@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask, answers } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, toolsShown, valueCheckers, ollamaView, deciderView } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, toolsShown, toolGroups, valueCheckers, ollamaView, deciderView } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
@@ -157,6 +157,28 @@ class SettingsSheet extends LitElement {
       display: flex;
       flex-direction: column;
       gap: var(--space-sm);
+    }
+    /* The tool groups: a gap between groups, and each group's heading set off by a line
+       under it, with its own switch in the switch column. */
+    .tool-groups {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-lg);
+    }
+    .tool-group {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-sm);
+    }
+    .tool-head {
+      padding-bottom: var(--space-xs);
+      border-bottom: var(--border-width) solid var(--color-border);
+    }
+    .tool-head > span {
+      color: var(--color-body-mid);
+      font-size: var(--text-caption);
+      font-weight: var(--weight-semibold);
+      text-transform: uppercase;
     }
     /* The two headings of Your account: Generating, for the chat, and Evaluating. */
     .group {
@@ -709,7 +731,7 @@ class SettingsSheet extends LitElement {
               ${this.#vimSheet(snapshot.context.chat)}
             </details>`
           : nothing}
-        ${this.#check("Keep the open note and chat when the stage changes", settings.keepOpen, () =>
+        ${this.#check("Keep the open note and chat", settings.keepOpen, () =>
           this.#actor.send({ type: "_toggleKeep" }),
         )}
         ${this.#check("Layout switch shown", !settings.layoutSwitchHidden, () =>
@@ -747,30 +769,61 @@ class SettingsSheet extends LitElement {
   }
 
   // The tool switches (7.7): one row per thing the chat may read from the reader's own
-  // library, on unless switched off. Each names what is read in plain words; flipping one is reversible by flipping it back (Don Norman: forgiveness,
+  // library, on unless switched off, in groups, each under a heading whose switch turns
+  // the whole group on or off and is on while any of it is on. Each names what is read in
+  // plain words; flipping one is reversible by flipping it back (Don Norman: forgiveness,
   // honest signifiers). Shown only signed in and only when the catalog named some tools.
-  #tools(toolList, tools, profile) {
+  #tools(toolList, tools, profile, vimKeys) {
     if (!toolList.length) return nothing;
-    // Only the label is printed. The description is written for the model, so the
+    // Only the name is printed. The description is written for the model, so the
     // product never shows it; the workshop keeps it on hover to check what the model is
     // told.
     const hint = profile !== "product";
+    // The list's keyboard path (12): the arrows, and j and k with Vim keys, step from
+    // switch to switch, group headings included, and stop at both ends.
+    const move = (e) => {
+      const step = { ArrowDown: 1, ArrowUp: -1, ...(vimKeys ? { j: 1, k: -1 } : {}) }[e.key];
+      if (!step || e.ctrlKey || e.metaKey || e.altKey) return;
+      const boxes = [...e.currentTarget.querySelectorAll("input[type=checkbox]")];
+      const i = boxes.indexOf(e.target);
+      if (i < 0) return;
+      e.preventDefault();
+      boxes[Math.max(0, Math.min(boxes.length - 1, i + step))].focus();
+    };
     return html`
       <div class="tools">
         <details class="keys-fold">
           <summary>What the chat may read</summary>
-          ${toolList.map(
-            (tool) => html`
-              <label class="field">
-                <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
-                <input
-                  type="checkbox"
-                  .checked=${tools[tool.key] !== false}
-                  @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
-                />
-              </label>
-            `,
-          )}
+          <div class="tool-groups" @keydown=${move}>
+            ${toolGroups(toolList, tools).map(
+              (group) => html`
+                <div class="tool-group">
+                  <label class="field tool-head">
+                    <span>${group.name}</span>
+                    <input
+                      type="checkbox"
+                      aria-label=${group.name}
+                      .checked=${group.on}
+                      @change=${(e) =>
+                        this.#actor.send({ type: "_toggleGroup", keys: group.tools.map((t) => t.key), on: e.target.checked })}
+                    />
+                  </label>
+                  ${group.tools.map(
+                    (tool) => html`
+                      <label class="field">
+                        <span class=${hint ? "hinted" : ""} title=${hint ? tool.description : nothing}>${tool.label}</span>
+                        <input
+                          type="checkbox"
+                          .checked=${tools[tool.key] !== false}
+                          @change=${(e) => this.#actor.send({ type: "_toggleTool", key: tool.key, on: e.target.checked })}
+                        />
+                      </label>
+                    `,
+                  )}
+                </div>
+              `,
+            )}
+          </div>
         </details>
       </div>
     `;
@@ -851,7 +904,7 @@ class SettingsSheet extends LitElement {
                 </select>
               </label>
             `}
-        ${this.#tools(toolsShown(toolList, this.#actor.snapshot.context.hidden), tools, profile)}
+        ${this.#tools(toolsShown(toolList, this.#actor.snapshot.context.hidden), tools, profile, this.#actor.snapshot.context.settings.vimKeys)}
         ${llm.jev ? this.#judging(llm, evaluators, checks) : this.#checks(checks, evaluators)}
       </div>
     `;

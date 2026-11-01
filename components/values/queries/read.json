@@ -1,7 +1,7 @@
 {
   "tool": {
     "description": "Returns the reader's own values: what matters to them, each a short name and an optional example of living it, as they wrote them for acceptance and commitment therapy. Give day (YYYY-MM-DD) for the values as they stood on that journal day, or nothing for the current ones. changedSince says whether the values changed after that day.",
-    "label": "Reading your values"
+    "label": "Reading your values", "title": "Values", "group": "Journal", "order": 340
   },
   "payload": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

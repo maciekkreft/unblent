@@ -378,18 +378,26 @@ def _check_draft(path: str, schema: object, what: str) -> None:
 
 def tool_problems(tool: object) -> list:
     """Section 7.2, 7.7, 11.2: a query's `tool` entry is a { description, label } of
-    non-empty strings, with an optional `name` and `excerpt`, each a JSON pointer
-    (RFC 6901) into the reply, and an optional `switch`, which only `false` may hold,
-    since a tool the user can switch is the default. Pure; returns the failure details."""
+    non-empty strings, with an optional `name`, `excerpt`, `items`, `itemName` and
+    `total`, each a JSON pointer (RFC 6901) into the reply; an optional `title`, `group`
+    and `opens`, each a string; an optional `order`, a number; and an optional `switch`,
+    which only `false` may hold, since a tool the user can switch is the default. Pure;
+    returns the failure details."""
     ok = isinstance(tool, dict) and all(
         isinstance(tool.get(f), str) and tool.get(f).strip() for f in ("description", "label")
     )
     if not ok:
         return ["a query's tool entry must be a { description, label } of non-empty strings (7.7)"]
     out = []
-    for f in ("name", "excerpt"):
+    for f in ("name", "excerpt", "items", "itemName", "total"):
         if f in tool and not (isinstance(tool[f], str) and tool[f].startswith("/")):
             out.append(f"a query's tool entry {f!r} must be a JSON pointer, a string starting with \"/\" (7.2)")
+    for f in ("title", "group", "opens"):
+        if f in tool and not (isinstance(tool[f], str) and tool[f].strip()):
+            out.append(f"a query's tool entry {f!r} must be a non-empty string (7.2)")
+    # bool is an int in Python, so it is refused by name.
+    if "order" in tool and (isinstance(tool["order"], bool) or not isinstance(tool["order"], (int, float))):
+        out.append("a query's tool entry 'order' must be a number (7.2)")
     if "switch" in tool and tool["switch"] is not False:
         out.append("a query's tool entry 'switch' may only be false, which keeps the tool always on "
                    "and out of Settings; leave it out for a tool the user can switch (7.7)")

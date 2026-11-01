@@ -170,6 +170,51 @@ for (const engine of ENGINES) {
       }
     });
 
+    // Browser: focus and keys.
+    test("What the chat may read: j and k step through the group and tool switches and back, and a group's switch turns its tools off and on", async () => {
+      const context = await browser.newContext();
+      context.setDefaultTimeout(4000);
+      try {
+        await signedIn(context, forgeCookie("tool-groups"));
+        await context.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ vimKeys: true })));
+        const page = await context.newPage();
+        const problems = watch(page);
+        await page.goto(`${BASE_URL}/workshop/design/llm`, { waitUntil: "domcontentloaded" });
+        const sheet = page.locator("settings-sheet");
+        await sheet.locator(".tools summary").click();
+        const boxes = sheet.locator(".tool-groups input[type=checkbox]");
+        await sheet.locator(".tool-head").first().waitFor();
+        const at = () => boxes.evaluateAll((els) => els.findIndex((e) => e.getRootNode().activeElement === e));
+        const last = (await boxes.count()) - 1;
+
+        await boxes.first().focus();
+        await page.keyboard.press("k");
+        assert.equal(await at(), 0, "k at the top stays on the first switch");
+        await page.keyboard.press("j");
+        await page.keyboard.press("ArrowDown");
+        assert.equal(await at(), 2, "j and the down arrow each step one switch down");
+        await page.keyboard.press("k");
+        await page.keyboard.press("ArrowUp");
+        assert.equal(await at(), 0, "k and the up arrow step back");
+        await boxes.nth(last).focus();
+        await page.keyboard.press("j");
+        assert.equal(await at(), last, "j at the bottom stays on the last switch");
+
+        // The second group's heading: Space turns all of its tools off, and again on.
+        const group = sheet.locator(".tool-group").nth(1);
+        const states = () => group.locator(".field:not(.tool-head) input").evaluateAll((els) => els.map((e) => e.checked));
+        await group.locator(".tool-head input").focus();
+        await page.keyboard.press("Space");
+        await until(async () => (await states()).every((on) => !on));
+        assert.equal(await group.locator(".tool-head input").isChecked(), false, "the heading is off with every tool off");
+        await page.keyboard.press("Space");
+        await until(async () => (await states()).every((on) => on));
+        assert.deepEqual(problems, []);
+      } finally {
+        await context.close();
+      }
+    });
+
     // Browser: rendering and layout.
     test("Show the keys is there only while Vim keys is on, and starts folded", async () => {
       const context = await browser.newContext();

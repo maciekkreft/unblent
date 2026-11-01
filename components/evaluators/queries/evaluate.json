@@ -129,6 +129,6 @@
   "supersededBy": [],
   "tool": {
     "description": "Checks texts with one of the reader's evaluators (ids from evaluators: active): Jev answers each of its questions about each text, and a text passes when it gets the expected answers. Use it to test your own suggestions, such as candidate names or wordings, before offering them, and offer only those that pass. Each use costs a little.",
-    "label": "Checking with an evaluator"
+    "label": "Checking with an evaluator", "title": "Check a text (costs a little)", "group": "Evaluators", "order": 520
   }
 }

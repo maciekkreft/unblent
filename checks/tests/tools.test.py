@@ -27,6 +27,11 @@ class Ok(unittest.TestCase):
     def test_switch_false_passes(self):
         self.assertEqual(problems({**BASE, "switch": False}), [])
 
+    def test_settings_and_listing_fields_pass(self):
+        entry = {**BASE, "title": "Journal days", "group": "Journal", "order": 10,
+                 "items": "/days", "itemName": "/date", "total": "/total", "opens": "day"}
+        self.assertEqual(problems(entry), [])
+
 
 class Fails(unittest.TestCase):
     def test_missing_label(self):
@@ -34,6 +39,16 @@ class Fails(unittest.TestCase):
 
     def test_bad_pointer(self):
         self.assertIn("'name'", problems({**BASE, "name": "note/title"})[0])
+
+    def test_bad_listing_pointer(self):
+        self.assertIn("'itemName'", problems({**BASE, "itemName": "date"})[0])
+
+    def test_order_not_number_fails(self):
+        self.assertIn("'order'", problems({**BASE, "order": "10"})[0])
+        self.assertEqual(len(problems({**BASE, "order": True})), 1)
+
+    def test_empty_group_fails(self):
+        self.assertIn("'group'", problems({**BASE, "group": " "})[0])
 
     def test_switch_true_fails(self):
         out = problems({**BASE, "switch": True})

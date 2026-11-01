@@ -1086,7 +1086,7 @@ const onSubjectChanged = (context, event, enqueue, self) => {
   if (sameSubject(sub, context.lastSubject)) return;
   const settling = context.lastSubject == null;
   context.lastSubject = sub;
-  // With "Keep the open note and chat when the stage changes" on (12), the open chat stays
+  // With "Keep the open note and chat" on (12), the open chat stays
   // whatever comes on the stage; the chat learns of it only from what is added later,
   // never from a change to its start (14). A chat with no message yet is not kept: it
   // follows the stage, except while the subject first settles after a reload, so the new
@@ -1342,7 +1342,7 @@ export const machine = setup({
       "at 120,000 characters. A chat's start is written once, by the view where the chat was " +
       "created, and never changes. When the subject changes the open chat becomes the most " +
       "recently updated chat about it, or none, so the panel shows an empty new chat; while " +
-      "the device preference \"Keep the open note and chat when the stage changes\" is on " +
+      "the device preference \"Keep the open note and chat\" is on " +
       "(`settings`, off at first), the open chat stays whatever the subject, once it has its " +
       "first message; a new chat with none follows the subject. " +
       "The user's comments on the last finished answer are kept with the chat until the next " +

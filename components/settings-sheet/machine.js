@@ -55,20 +55,40 @@ const startRemoval = (field) =>
 const llmEdited = (patch) => ({ type: "llm.edited", ...patch });
 // A tool switch gesture (7.7): the flipped switch only, which `conversations` merges
 // into the account's tool preferences and announces tools.changed.
-const toolsEdited = (key, on) => ({ type: "tools.edited", tools: { [key]: on } });
+const toolsEdited = (keys, on) => ({ type: "tools.edited", tools: Object.fromEntries(keys.map((key) => [key, on])) });
 
 // The tools the chat may offer the model (7.7): the queries whose owners marked them as
 // tools, from `catalog: contracts`. Each is one switch: its key `"target: name"`, the
-// person's label and the description. Sorted by key so the list is stable, matching the
-// order `conversations` offers them in. A tool whose owner set `switch: false` is always
-// on (7.7), so it gets no switch here. A tool whose owner is not on this page, such as
-// Values on the Mac page, is left out, since the chat never offers it there.
+// name Settings shows (the owner's `title`, else its `label`), the description, and the
+// `group` and `order` it is listed by (7.2). Sorted by order, then key, so the list is
+// stable. A tool whose owner set `switch: false` is always on (7.7), so it gets no switch
+// here. A tool whose owner is not on this page, such as Values on the Mac page, is left
+// out, since the chat never offers it there.
 const toolsFrom = (contracts, answered) => {
   const queries = (contracts && contracts.queries) || [];
   return queries
     .filter((q) => q.tool && q.tool.switch !== false && answered(q.target, q.name))
-    .map((q) => ({ key: `${q.target}: ${q.name}`, label: q.tool.label, description: q.tool.description }))
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    .map((q) => ({
+      key: `${q.target}: ${q.name}`,
+      label: q.tool.title ?? q.tool.label,
+      description: q.tool.description,
+      group: q.tool.group ?? "Other",
+      order: typeof q.tool.order === "number" ? q.tool.order : Infinity,
+    }))
+    .sort((a, b) => a.order - b.order || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+};
+
+// The tool switches as Settings lists them (7.7): one group per `group`, in the order of
+// its first tool, each holding its tools in order. A group's switch is on while any of
+// its tools is on (a tool missing from the preferences is on).
+export const toolGroups = (toolList, tools) => {
+  const groups = [];
+  for (const tool of toolList) {
+    let group = groups.find((g) => g.name === tool.group);
+    if (!group) groups.push((group = { name: tool.group, tools: [] }));
+    group.tools.push(tool);
+  }
+  return groups.map((g) => ({ ...g, on: g.tools.some((t) => tools[t.key] !== false) }));
 };
 const setHidden = (context, path, hidden) => {
   const rows = rowsOf(context).map((r) => (r.path === path ? { ...r, hidden } : r));
@@ -268,12 +288,15 @@ export const machine = setup({
   meta: {
     description:
       "The Settings sheet, in two sections. This device holds the preferences `settings` keeps: " +
-      "page order and visibility, the switches, Vim keys, and \"Keep the open note and chat " +
-      "when the stage changes\", off at first, so the Notes and Chats panels follow what is on " +
+      "page order and visibility, the switches, Vim keys, and \"Keep the open note and chat\", " +
+      "off at first, so the Notes and Chats panels follow what is on " +
       "the stage until the user turns it on. Your account holds the chat " +
       "settings `llm` keeps (provider, model, thinking effort, cache lifetime, the API key) and " +
       "which lookups the chat may use, which `conversations` keeps, in the fold What the chat " +
-      "may read right after the cache lifetime and before the Jev part. Every change is saved at " +
+      "may read right after the cache lifetime and before the Jev part. There the lookups stand " +
+      "in groups (What's open, Books, Journal, Notes, Evaluators), each under a heading with a " +
+      "switch that turns all of the group on or off and is on while any of it is on; the arrow " +
+      "keys, and j and k with Vim keys, move between the switches. Every change is saved at " +
       "once by the fact that owns it. Your account also holds the Jev key, which `llm` keeps. " +
       "Echo is offered as a provider only in the workshop profile. In the Mac app the provider " +
       "Ollama (on this Mac) has no key box: a row says Running at its address, or that Ollama isn't " +
@@ -620,7 +643,9 @@ export const machine = setup({
         },
         // Flip one tool switch (7.7): emit the flipped switch only; `conversations` saves
         // it and announces tools.changed, adopted below (4.3). Reversible by flipping back.
-        _toggleTool: { actions: emit(({ event }) => toolsEdited(event.key, event.on)) },
+        _toggleTool: { actions: emit(({ event }) => toolsEdited([event.key], event.on)) },
+        // A group's switch (7.7): every tool of the group shown, set to one state at once.
+        _toggleGroup: { actions: emit(({ event }) => toolsEdited(event.keys, event.on)) },
         // The choice point checks: each gesture emits the whole box, and only when it
         // differs, since every checks.edited is saved and may cost Jev requests; the sheet
         // adopts it back through checks.changed (4.3).

@@ -117,6 +117,6 @@
   ],
   "tool": {
     "description": "Lists the reader's evaluators: for each, its id, name, a description of what it checks, and its questions, each with what Yes and No mean or its options, and the answer a text should get. Use it to choose an evaluator, then check text with it through evaluators: evaluate.",
-    "label": "Listing your evaluators"
+    "label": "Listing your evaluators", "title": "Your evaluators", "group": "Evaluators", "order": 510
   }
 }

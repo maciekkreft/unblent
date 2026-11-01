@@ -112,8 +112,8 @@ const openPage = async (browser, cookie, { keepOpen = false } = {}) => {
   const context = await browser.newContext();
   context.setDefaultTimeout(4000);
   await context.addCookies([{ name: "unblent_session", value: cookie, url: BASE_URL }]);
-  // "Keep the open note and chat when the stage changes", as Settings stores it on this
-  // design page (its workshop copy).
+  // "Keep the open note and chat", as Settings stores it on this design page (its
+  // workshop copy).
   if (keepOpen) await context.addInitScript(() => localStorage.setItem("settings", JSON.stringify({ keepOpen: true })));
   const page = await context.newPage();
   const problems = [];

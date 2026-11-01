@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, merge, checksShown, toolsShown, ollamaView, addressOf, deciderView, deciderReady } from "../machine.js";
+import { machine, merge, checksShown, toolsShown, toolGroups, ollamaView, addressOf, deciderView, deciderReady } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMAS = {
@@ -60,8 +60,8 @@ const CONTRACTS = {
   events: [],
   commands: [],
   queries: [
-    { target: "notes", name: "list", payload: {}, reply: {}, askers: [], tool: { description: "List the reader's notes.", label: "Reading the notes" } },
-    { target: "books", name: "read", payload: {}, reply: {}, askers: [], tool: { description: "Open a book's details.", label: "Opening a book" } },
+    { target: "notes", name: "list", payload: {}, reply: {}, askers: [], tool: { description: "List the reader's notes.", label: "Reading the notes", title: "Note titles", group: "Notes", order: 410 } },
+    { target: "books", name: "read", payload: {}, reply: {}, askers: [], tool: { description: "Open a book's details.", label: "Opening a book", title: "A book's chapters", group: "Books", order: 220 } },
     { target: "subject", name: "read", payload: {}, reply: {}, askers: [] },
     { target: "evaluators", name: "active", payload: {}, reply: {}, askers: [], tool: { description: "List the evaluators.", label: "Listing your evaluators", switch: false } },
   ],
@@ -374,9 +374,9 @@ test("with the account attribute the tools are listed and the off ones known (7.
   assert.deepEqual(
     snapshot.context.toolList.map((t) => t.key),
     ["books: read", "notes: list"],
-    "the tool queries, sorted by key; a query with no tool entry, or one that is always on, is left out",
+    "the tool queries, sorted by order; a query with no tool entry, or one that is always on, is left out",
   );
-  assert.deepEqual(snapshot.context.toolList[0], { key: "books: read", label: "Opening a book", description: "Open a book's details." });
+  assert.deepEqual(snapshot.context.toolList[0], { key: "books: read", label: "A book's chapters", description: "Open a book's details.", group: "Books", order: 220 });
   assert.deepEqual(snapshot.context.tools, { "notes: list": false }, "the preference map says notes is off, the rest on");
 });
 
@@ -386,6 +386,28 @@ test("toggling a tool emits tools.edited with only that switch (7.7)", async () 
   assert.deepEqual(emittedTools[0], { type: "tools.edited", tools: { "books: read": false } });
   actor.send({ type: "_toggleTool", key: "notes: list", on: true });
   assert.deepEqual(emittedTools[1], { type: "tools.edited", tools: { "notes: list": true } });
+});
+
+test("a group's switch emits tools.edited with every tool of the group (7.7)", async () => {
+  const { actor, emittedTools } = await start(undefined, "/a", { account: true });
+  actor.send({ type: "_toggleGroup", keys: ["books: read", "notes: list"], on: false });
+  assert.deepEqual(emittedTools[0], { type: "tools.edited", tools: { "books: read": false, "notes: list": false } });
+});
+
+test("tools are grouped in order, and a group is on while any of its tools is on (7.7)", () => {
+  const list = [
+    { key: "a: one", group: "What's open", order: 110 },
+    { key: "b: two", group: "Books", order: 210 },
+    { key: "b: three", group: "Books", order: 230 },
+    { key: "z: other", group: "Other", order: Infinity },
+  ];
+  const groups = toolGroups(list, { "b: two": false });
+  assert.deepEqual(groups.map((g) => [g.name, g.tools.map((t) => t.key), g.on]), [
+    ["What's open", ["a: one"], true],
+    ["Books", ["b: two", "b: three"], true],
+    ["Other", ["z: other"], true],
+  ]);
+  assert.equal(toolGroups(list, { "b: two": false, "b: three": false })[1].on, false, "every tool off: the group is off");
 });
 
 test("tools.changed is adopted after the starting ask (4.3)", async () => {

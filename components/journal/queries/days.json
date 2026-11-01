@@ -48,6 +48,6 @@
   "supersededBy": ["journal.changed"],
   "tool": {
     "description": "Returns the reader's journal days, oldest first, each with its date and everything written on it. Give from alone (YYYY-MM-DD) for one day, from and to for a range (both included), to alone for every day up to it, or nothing for the whole journal. Days with nothing written are left out. The text is markdown: a line starting with # is a title, ## a heading, ### a subheading. Use it to read what the reader wrote on a given day or over a period; to know which day the journal page shows now, read the open journal day instead.",
-    "label": "Reading journal days"
+    "label": "Reading journal days", "title": "Journal days", "group": "Journal", "order": 320
   }
 }
