@@ -34,6 +34,10 @@
   --color-warning: light-dark(#e8590c, #ffa94d);
   --color-warning-subtle: light-dark(rgba(232, 89, 12, 0.08), rgba(255, 169, 77, 0.14));
 
+  /* Admin: the tint behind what only the admin sees (7.4). Blue, so it is never read as
+     the accent, a warning or a danger. */
+  --color-admin-subtle: light-dark(rgba(59, 130, 246, 0.09), rgba(96, 165, 250, 0.14));
+
   /* Highlight: the marker tone behind a highlighted passage in a book. Yellow, so it
      is never mistaken for the orange text selection that can lie over it. */
   --color-highlight: light-dark(rgba(250, 204, 21, 0.38), rgba(250, 204, 21, 0.26));

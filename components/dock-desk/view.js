@@ -199,6 +199,13 @@ class DockDesk extends LitElement {
       display: flex;
       flex-direction: column;
     }
+    /* A child marked admin sits on the admin tint, its tab and its area (7.4); it is
+       drawn only for the admin, so nothing else is ever tinted. */
+    .body[data-admin],
+    [role="tab"].admin,
+    .strip .own.admin {
+      background: var(--color-admin-subtle);
+    }
     /* The group the keyboard is in wears a frame in the accent of the focus ring, drawn
        inside its edge so nothing beside it moves (Norman: visible signifiers). For every
        user: a mouse click into a panel moves the keyboard too. --focus-ring itself is a
@@ -1015,6 +1022,7 @@ class DockDesk extends LitElement {
     const ready = snapshot.matches("ready");
     const { views, stage, docks, arranging, pressed } = snapshot.context;
     const labelOf = (name) => views.find((v) => v.name === name)?.label ?? name;
+    const isAdmin = (name) => Boolean(views.find((v) => v.name === name)?.admin);
     // The children that sit at the trailing end of the stage header (6.4), in page
     // order: a `control` is slotted as it is; a `button` names the child the desk
     // shows from a header button it draws itself. Read from this element's own light
@@ -1024,7 +1032,7 @@ class DockDesk extends LitElement {
     );
     const buttons = extras.filter((c) => c.hasAttribute("button"));
     const tabs = tabsOf(snapshot.context, "stage");
-    const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging) : nothing);
+    const dock = (side) => (docks[side] ? this.#dock(side, docks[side], labelOf, arranging, isAdmin) : nothing);
     // On the phone a side dock overlays the stage as a drawer (@container below);
     // the scrim dims the stage still peeking beside it, and tapping it folds the
     // drawer back to its header button — the forgiving close, one step, no new
@@ -1042,7 +1050,7 @@ class DockDesk extends LitElement {
               ${ready && !pressed && stage && arranging ? this.#actions("stage", stage, labelOf) : nothing}
               <span class="controls">${this.#extras(extras, pressed)}</span>
             </div>
-            <div class="body" data-side="stage">
+            <div class="body" data-side="stage" ?data-admin=${!pressed && isAdmin(stage)}>
               ${tabs.map((name) => html`<slot name=${name} ?hidden=${pressed || name !== stage}></slot>`)}
               ${buttons.map((c) => html`<slot name=${addressOf(c)} ?hidden=${pressed !== addressOf(c)}></slot>`)}
               ${!pressed && !stage
@@ -1121,9 +1129,12 @@ class DockDesk extends LitElement {
 
   #tablist(group, entries, active, labelOf, activate, follow) {
     const selected = entries.findIndex((e) => sameEntry(e, active));
+    const context = this.#actor.snapshot.context;
+    const admin = (view) => Boolean(context.views.find((v) => v.name === view)?.admin);
     const tab = (entry, i) => html`
       <button
         role="tab"
+        class=${entry.id === undefined && admin(entry.view) ? "admin" : ""}
         aria-selected=${i === selected}
         tabindex=${i === selected || (selected < 0 && i === 0) ? 0 : -1}
         @click=${() => {
@@ -1134,8 +1145,7 @@ class DockDesk extends LitElement {
         ${entry.id !== undefined ? entry.label : labelOf(entry.view)}
       </button>
     `;
-    const context = this.#actor.snapshot.context;
-    const own = (entry, i) => html`<span class="own ${i === selected ? "front" : ""} ${entry.closable ? "" : "lone"}" role="presentation">
+    const own = (entry, i) => html`<span class="own ${i === selected ? "front" : ""} ${entry.closable ? "" : "lone"} ${admin(entry.view) ? "admin" : ""}" role="presentation">
       ${tab(entry, i)}
       ${entry.closable
         ? html`<button class="close" aria-label="Close ${entry.label}" title="Close ${entry.label}" @click=${(e) => this.#close(e, entry)}>
@@ -1268,7 +1278,7 @@ class DockDesk extends LitElement {
 
   // A desk that is not being arranged shows no arrange control; folding stays, so
   // the fold and unfold buttons are always rendered (one glyph, oriented by CSS).
-  #dock(side, dock, labelOf, arranging) {
+  #dock(side, dock, labelOf, arranging, isAdmin) {
     const active = dock.views.includes(dock.active) ? dock.active : dock.views[0];
     const context = this.#actor.snapshot.context;
     const entries = stripOf(context, side);
@@ -1291,7 +1301,7 @@ class DockDesk extends LitElement {
             ${arranging ? this.#actions(side, active, labelOf, dock.views) : nothing}
             ${this.#fold("Fold", "true", () => this.#send("_fold", undefined, side))}
           </div>
-          <div class="body" data-side=${side}>
+          <div class="body" data-side=${side} ?data-admin=${isAdmin(active)}>
             ${dock.views.map((name) => html`<slot name=${name} ?hidden=${name !== active}></slot>`)}
           </div>
         </div>

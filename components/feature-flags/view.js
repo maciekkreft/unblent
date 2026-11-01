@@ -59,7 +59,27 @@ class FeatureFlags extends LitElement {
       grid-template-columns: 1fr auto auto;
       align-items: center;
       column-gap: var(--space-md);
-      row-gap: var(--space-sm);
+    }
+    /* Rows are spaced by their cells' padding, not a row gap, so the Release column's
+       tint (7.4) runs unbroken from its heading to its last switch. */
+    .grid > * {
+      padding-block: var(--space-xs);
+    }
+    .cell {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      align-self: stretch;
+    }
+    .cell.release {
+      padding-inline: var(--space-sm);
+      background: var(--color-admin-subtle);
+    }
+    .cell.release.first {
+      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    }
+    .cell.release.last {
+      border-radius: 0 0 var(--radius-sm) var(--radius-sm);
     }
     .grid.one {
       grid-template-columns: 1fr auto;
@@ -142,12 +162,14 @@ class FeatureFlags extends LitElement {
           ? html`<p class="hint">There is nothing to choose here yet.</p>`
           : html`<div class="grid ${release ? "" : "one"}">
               <span></span>
-              ${release ? html`<span class="head release">Release</span>` : nothing}
+              ${release ? html`<span class="cell release first"><span class="head">Release</span></span>` : nothing}
               <span class="head">Show</span>
               ${rows.map(
-                (f) => html`
+                (f, i) => html`
                   <div class="name"><span>${f.name}</span><span class="help">${f.says}</span></div>
-                  ${release ? this.#switch(context, "release", f) : nothing}
+                  ${release
+                    ? html`<span class="cell release ${i === rows.length - 1 ? "last" : ""}">${this.#switch(context, "release", f)}</span>`
+                    : nothing}
                   ${this.#switch(context, "show", f)}
                 `,
               )}

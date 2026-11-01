@@ -83,8 +83,14 @@ class SettingsTabs extends LitElement {
   static shadowRootOptions = { ...LitElement.shadowRootOptions, slotAssignment: "manual" };
 
   static styles = css`
+    /* The sheet fills the panel it sits in, so an admin tab's tint covers the whole area. */
     :host {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      flex: 1 0 auto;
+    }
+    .area {
+      flex: 1 0 auto;
     }
     /* The tab bar: the names of the sheet's parts, the shown one underlined in the
        accent, the way a section is marked elsewhere on the desk. */
@@ -114,6 +120,16 @@ class SettingsTabs extends LitElement {
       font-weight: var(--weight-semibold);
       border-bottom-color: var(--color-accent);
     }
+    /* A tab whose parts are all marked admin, and its area, sit on the admin tint (7.4);
+       they are offered only to the admin, so nothing else is ever tinted. */
+    [role="tab"].admin {
+      background: var(--color-admin-subtle);
+      padding-inline: var(--space-xs);
+      border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    }
+    .area.admin {
+      background: var(--color-admin-subtle);
+    }
     [role="tab"]:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
@@ -126,8 +142,13 @@ class SettingsTabs extends LitElement {
     const snapshot = this.#actor.snapshot;
     if (!snapshot) return null;
     const { children, admin, picked, hidden, edition } = snapshot.context;
+    const tabs = tabsOf(children, admin, hidden, edition);
+    // A tab is the admin's when every part offered under it is marked admin.
+    const slotted = (label) => slottedOf(children, admin, label, hidden, edition);
+    const admins = tabs.filter((label) => slotted(label).every((i) => children[i].admin));
     return {
-      tabs: tabsOf(children, admin, hidden, edition),
+      tabs,
+      admins,
       shown: shownOf(children, admin, picked, hidden, edition),
       slotted: slottedOf(children, admin, picked, hidden, edition),
     };
@@ -155,7 +176,7 @@ class SettingsTabs extends LitElement {
   render() {
     const state = this.#state();
     if (!state) return nothing;
-    const { tabs, shown } = state;
+    const { tabs, admins, shown } = state;
     return html`
       ${tabs.length > 1
         ? html`
@@ -164,6 +185,7 @@ class SettingsTabs extends LitElement {
                 (label) => html`
                   <button
                     role="tab"
+                    class=${admins.includes(label) ? "admin" : ""}
                     aria-selected=${label === shown ? "true" : "false"}
                     tabindex=${label === shown ? "0" : "-1"}
                     @click=${() => this.#actor.send({ type: "_pick", label })}
@@ -175,7 +197,7 @@ class SettingsTabs extends LitElement {
             </div>
           `
         : nothing}
-      <slot></slot>
+      <div class="area ${admins.includes(shown) ? "admin" : ""}"><slot></slot></div>
     `;
   }
 
