@@ -1136,6 +1136,13 @@ const onSubjectChanged = (context, event, enqueue, self) => {
   if (sameSubject(sub, context.lastSubject)) return;
   const settling = context.lastSubject == null;
   context.lastSubject = sub;
+  // A link followed from the open chat (lookup.followed) keeps it when this change is to
+  // what the link opened (12). The mark lasts for this one change only: a follow to the
+  // thing already in front changes nothing, so the next change is away from it and drops
+  // the mark without keeping the chat.
+  const followed = context.followed;
+  context.followed = null;
+  if (followed && followed.conversation === context.openId && sameSubject(sub, followed)) return;
   // With "Keep the open note and chat" on (12), the open chat stays
   // whatever comes on the stage; the chat learns of it only from what is added later,
   // never from a change to its start (14). A chat with no message yet is not kept: it
@@ -1394,7 +1401,9 @@ export const machine = setup({
       "recently updated chat about it, or none, so the panel shows an empty new chat; while " +
       "the device preference \"Keep the open note and chat\" is on " +
       "(`settings`, off at first), the open chat stays whatever the subject, once it has its " +
-      "first message; a new chat with none follows the subject. " +
+      "first message; a new chat with none follows the subject. Following a link in the open " +
+      "chat's lookup keeps that chat when the subject changes to what the link opened; the " +
+      "next change after that follows the rule above again. " +
       "The user's comments on the last finished answer are kept with the chat until the next " +
       "message, which carries them; the model gets them as quotes before the message, and the " +
       "answer itself is never changed, so the provider's cache holds. The user's highlights " +
@@ -1462,6 +1471,8 @@ export const machine = setup({
     openId: null,
     booted: false,
     lastSubject: null,
+    // The link last followed from a chat, { conversation, kind, id }, until the next subject change.
+    followed: null,
     // Whether the open chat stays when the stage changes (`settings`' keepOpen), and
     // whether settings.changed came before the boot reply, which is then the older picture.
     keep: false,
@@ -1558,6 +1569,9 @@ export const machine = setup({
         "marks.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onMarksEdited(context, event, enqueue, self)) },
         "highlights.edited": { actions: enqueueActions(({ context, event, enqueue, self }) => onHighlightsEdited(context, event, enqueue, self)) },
         "subject.changed": { actions: enqueueActions(({ context, event, enqueue, self }) => onSubjectChanged(context, event, enqueue, self)) },
+        // A link in a chat's lookup is about to open what it names (12): remember it for
+        // the subject change that follows.
+        "lookup.followed": { actions: ({ context, event }) => (context.followed = { conversation: event.conversation, kind: event.kind, id: event.id }) },
         // A chat's title (12): written by the chat-title generator, or by the user in the list.
         "generation.changed": {
           guard: ({ event }) => event.result.generator === "chat-title",

@@ -59,3 +59,58 @@ test("picking an older chat in the list switches the thread to it", async () => 
     unwire();
   }
 });
+
+// A link followed in the open chat's lookup keeps that chat when the subject changes to
+// what it opened (12); a follow to what is already in front leaves nothing behind, so a
+// later change follows the stage again.
+test("following a lookup's link keeps the chat, and only for the change to what it opened", async () => {
+  const BOOK = (k) => U("B" + k);
+  const about = (k) => [{ kind: "book", id: BOOK(k) }];
+  const server = new Map(
+    [
+      { ...chat("1", "about book one"), about: about("1") },
+      { ...chat("2", "about book two"), about: about("2") },
+      { ...chat("3", "about book three"), about: about("3") },
+    ].map((c) => [c.id, c]),
+  );
+  let open = U("C1");
+  const { actors, unwire } = await wire(["conversations", "chat-thread"], {
+    conversations: {
+      session: () => Promise.resolve({ userId: "u1", registrationOpen: false }),
+      subject: () => Promise.resolve({ subject: { kind: "book", id: BOOK("1"), title: "One" } }),
+      settings: () => Promise.resolve({ keepOpen: false }),
+      complete: (request) => Promise.resolve({ id: request.id }),
+      contracts: () => Promise.resolve({ queries: [] }),
+      askTool: () => Promise.resolve({}),
+      list: () =>
+        Promise.resolve({
+          conversations: [...server.values()].map(({ id, title, about, updatedAt, turns }) => ({ id, title, about, updatedAt, pending: false, answer: turns.at(-1).text })),
+          tools: { tools: {}, approval: "auto" },
+        }),
+      read: (id) => (server.has(id) ? Promise.resolve(structuredClone(server.get(id))) : Promise.reject(new Error("404"))),
+      saveChat: () => Promise.resolve({ updatedAt: 900 }),
+      deleteChat: () => Promise.resolve(),
+      saveTools: () => Promise.resolve(),
+      store: { read: () => open, write: (id) => (open = id) },
+      ulid: () => U("ZZ"),
+      now: () => 1000,
+    },
+  });
+  const subject = (k) => actors.conversations.send({ type: "subject.changed", subject: { kind: "book", id: BOOK(k), title: k } });
+  const shown = () => actors["chat-thread"].getSnapshot().context.conversation?.id;
+  try {
+    await until(() => shown() === U("C1"));
+    actors["chat-thread"].send({ type: "_open", opens: "chapter", id: BOOK("2"), chapter: 1 });
+    subject("2");
+    assert.equal(open, U("C1"), "the chat the link was in stays open");
+    // A follow to the book already in front: no subject change follows it.
+    actors["chat-thread"].send({ type: "_open", opens: "chapter", id: BOOK("2"), chapter: 0 });
+    subject("3");
+    await until(() => open === U("C3"));
+    // Without a follow the open chat follows the stage, as before.
+    subject("2");
+    await until(() => open === U("C2"));
+  } finally {
+    unwire();
+  }
+});

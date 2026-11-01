@@ -658,6 +658,28 @@ export const noteOpening = (reply, id) => {
   return link ? { type: "passage.selected", book: link.id, id, place: link.place } : { type: "note.staged", id };
 };
 
+// The Journal's book id, fixed by `books` (5), copied because components never import
+// each other (11.2): a journal day opens in the Journal, so that is the subject that follows.
+const JOURNAL = "00000000000000000000000JRN";
+
+// What a followed link brings in front, as `subject` names a thing (kind and id), so
+// `conversations` can keep this chat when the subject that follows is that thing (12).
+// A note opens on the stage beside the subject and is named as a note.
+export const followedOf = (opening) => {
+  if (opening.type === "day.selected") return { kind: "book", id: JOURNAL };
+  if (opening.type === "chapter.selected") return { kind: "book", id: opening.id };
+  if (opening.type === "passage.selected") return { kind: "book", id: opening.book };
+  return { kind: "note", id: opening.id };
+};
+
+// The follow, announced just before the event that opens it (4.3, fifth rule).
+const follow = (opening) =>
+  enqueueActions(({ context, event, enqueue }) => {
+    const opens = opening(event);
+    if (context.openId) enqueue.emit({ type: "lookup.followed", conversation: context.openId, ...followedOf(opens) });
+    enqueue.emit(opens);
+  });
+
 export const vimAction = ({ key, ctrlKey, metaKey, altKey }, afterG = false) => {
   if (metaKey || altKey) return null;
   if (ctrlKey) return { d: "halfDown", u: "halfUp" }[key] ?? null;
@@ -770,7 +792,9 @@ export const machine = setup({
       "opens like the thinking to show what was asked for and what came back, each entry with its " +
       "short text, and a name in it is a link, reached with Tab, that opens what it names where it " +
       "is normally seen while the chat keeps its place: a note on the stage as a tab of its own, a " +
-      "highlight in its book at its passage, a journal day in the journal, a chapter in its book. Answers " +
+      "highlight in its book at its passage, a journal day in the journal, a chapter in its book. Just " +
+      "before it opens one it says which chat the link was in and what it brings in front, so " +
+      "`conversations` keeps that chat open when the subject changes to it. Answers " +
       "are written in markdown and drawn as formatted text by a small renderer of our own, " +
       "always as escaped text, so nothing the model writes reaches the page as HTML. It holds " +
       "only the scroll position, which thinking records are open, and the comment being " +
@@ -809,7 +833,7 @@ export const machine = setup({
       "the chat itself is the same as in the Chats panel.",
     kind: "view",
     attributes: ["height", "markdown", "stage"],
-    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "passage.selected"],
+    emits: ["marks.edited", "highlights.edited", "conversation.relinked", "conversation.staged", "note.staged", "day.selected", "chapter.selected", "passage.selected", "lookup.followed"],
     asks: ["conversations: open", "conversations: read", "settings: read", "subject: read", "notes: read"],
   },
   context: ({ input }) => ({
@@ -904,9 +928,9 @@ export const machine = setup({
     // stays as it is. A second link to a note replaces one still being asked about.
     _open: [
       { guard: ({ event }) => openingOf(event)?.type === "ask", actions: [stopChild("note"), spawnChild("note", { id: "note", input: ({ context, event }) => ({ ask: context.ask, id: event.id }) })] },
-      { guard: ({ event }) => openingOf(event) != null, actions: emit(({ event }) => openingOf(event)) },
+      { guard: ({ event }) => openingOf(event) != null, actions: follow((event) => openingOf(event)) },
     ],
-    _noteRead: { guard: ({ event }) => noteOpening(event.reply, event.id) != null, actions: emit(({ event }) => noteOpening(event.reply, event.id)) },
+    _noteRead: { guard: ({ event }) => noteOpening(event.reply, event.id) != null, actions: follow((event) => noteOpening(event.reply, event.id)) },
     // notes: read is asked only to open a link, once, and the thread keeps nothing of the
     // reply; a note's later news (4.3, fourth rule) has nothing here to bring up to date,
     // and the next link asks again.

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The user followed a link in a chat's lookup (7.7), announced just before the event that opens what it names: which chat the link was in, and what it brings in front, named as `subject` names a thing, so the chat can stay open when the subject changes to exactly that thing (12).",
+  "type": "object",
+  "properties": {
+    "conversation": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The chat the link was in." },
+    "kind": { "type": "string", "minLength": 1, "description": "The kind of thing brought in front, as subject.changed names it." },
+    "id": { "type": "string", "minLength": 1, "description": "Its id, as subject.changed names it." }
+  },
+  "required": ["conversation", "kind", "id"],
+  "additionalProperties": false
+}

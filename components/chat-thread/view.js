@@ -11,6 +11,7 @@ import noteStaged from "./events/note.staged.json" with { type: "json" };
 import daySelected from "./events/day.selected.json" with { type: "json" };
 import chapterSelected from "./events/chapter.selected.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
+import lookupFollowed from "./events/lookup.followed.json" with { type: "json" };
 import load from "./commands/load.json" with { type: "json" };
 
 // The gap between a passage's last line and the comment box under it, in px; the box is
@@ -54,7 +55,7 @@ class ActorController {
         // Parsed by the time hostConnected runs, so the actor is born knowing it.
         staged: this.host.hasAttribute("stage"),
       },
-      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged, "note.staged": noteStaged, "day.selected": daySelected, "chapter.selected": chapterSelected, "passage.selected": passageSelected },
+      events: { "marks.edited": marksEdited, "highlights.edited": highlightsEdited, "conversation.relinked": relinked, "conversation.staged": staged, "note.staged": noteStaged, "day.selected": daySelected, "chapter.selected": chapterSelected, "passage.selected": passageSelected, "lookup.followed": lookupFollowed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
