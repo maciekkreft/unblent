@@ -495,6 +495,12 @@ const convertReply = (reply, replySchema) => {
 // schema and label (kept for converting results and naming the lookup). A tool the user
 // keeps off (7.7) is kept in the metadata but left out of what is offered; a tool whose
 // owner set `switch: false` has no switch in Settings, so the map cannot turn it off.
+// The lookups of Values and Choice Points (3.1), offered only while `flags` reports the
+// feature shown; until it answers (`hidden` is null) they are not offered, the same as a
+// flagged view (8). Their switches stay as the user left them.
+const FEATURE_TOOLS = ["choice-points: list", "values: read"];
+const featureHidden = (hidden) => hidden === null || hidden.includes("choice-points");
+
 const buildTools = (context, reply) => {
   const queries = (reply && reply.queries) || [];
   const meta = {};
@@ -505,6 +511,7 @@ const buildTools = (context, reply) => {
     meta[key] = { label: q.tool.label, reply: q.reply, name: q.tool.name, excerpt: q.tool.excerpt };
     if (q.tool.switch !== false && context.tools[key] === false) continue;
     if (!context.answered(q.target, q.name)) continue; // its owner is not on this page (7.7)
+    if (FEATURE_TOOLS.includes(key) && featureHidden(context.hidden)) continue;
     offered.push({ key, target: q.target, name: q.name, description: q.tool.description, payload: q.payload });
   }
   offered.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
@@ -1292,6 +1299,9 @@ const queue = enqueueActions(({ context, event }) => {
 
 export const machine = setup({
   actors: {
+    // Which features are hidden (3.1); flags.changed is held for us until the reply lands
+    // (flags: read supersededBy). Without the input (Node) nothing is hidden.
+    flags: fromPromise(({ input }) => (input.flags ? input.flags() : Promise.resolve({ hidden: [] }))),
     // The one round trip that gates the rest: session, then the chats and the subject.
     // Whether the open chat is kept is asked beside them; settings.changed is held for us
     // until that reply lands (settings: read supersededBy).
@@ -1351,13 +1361,15 @@ export const machine = setup({
       "count as news, so it never makes a chat the latest about its subject. A new chat's link " +
       "names the chapter it was made in (the Journal's day), as written by the view where it " +
       "was created; the user links a chat to another chapter or to the whole book from the " +
-      "open chat, and like a rename that keeps its time and its place.",
+      "open chat, and like a rename that keeps its time and its place. While Values and " +
+      "Choice Points is hidden (`flags`), or before `flags` answers, the lookups Choice points " +
+      "and Values are not offered, and their switches keep their state.",
     kind: "fact",
     shape: "remote-only",
     owns: "the chats",
     emits: ["conversation.changed", "conversation.deleted", "conversation.opened", "tools.changed"],
     // `*: tool` lets the loop ask any query its owner marked as a tool (7.7).
-    asks: ["session: read", "subject: read", "settings: read", "llm: complete", "catalog: contracts", "*: tool"],
+    asks: ["session: read", "subject: read", "settings: read", "llm: complete", "catalog: contracts", "flags: read", "*: tool"],
   },
   context: ({ input }) => ({
     session: input.session,
@@ -1367,6 +1379,9 @@ export const machine = setup({
     contracts: input.contracts,
     askTool: input.askTool,
     answered: input.answered ?? (() => true),
+    flags: input.flags,
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: input.flags ? null : [],
     list: input.list,
     read: input.read,
     saveChat: input.saveChat,
@@ -1410,7 +1425,26 @@ export const machine = setup({
   }),
   initial: "loading",
   // `settings`' news (4.3, fourth rule), in any state.
+  invoke: {
+    src: "flags",
+    input: ({ context }) => ({ flags: context.flags }),
+    onDone: {
+      actions: ({ context, event }) => {
+        context.hidden = Array.isArray(event.output?.hidden) ? event.output.hidden : [];
+      },
+    },
+    onError: {
+      actions: ({ context }) => {
+        context.hidden = [];
+      },
+    },
+  },
   on: {
+    "flags.changed": {
+      actions: ({ context, event }) => {
+        context.hidden = event.hidden;
+      },
+    },
     "settings.changed": {
       actions: ({ context, event }) => {
         context.keep = event.keepOpen === true;

@@ -27,9 +27,19 @@ export const RUN = {
 // in, so a page that cannot tell never hides the generators.
 export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null && reply.guest !== true : true);
 
+// Could be belongs to Values and Choice Points (3.1): shown only while `flags` reports
+// that feature shown, and not until it answers (`hidden` is null), the same as a flagged
+// view (8). Hiding it changes nothing of what is saved.
+const featureShown = (hidden) => hidden !== null && !hidden.includes("choice-points");
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is an
+// error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
 // A generator as the tab shows it: the fact's copy with what is typed and not yet saved
 // over it, so a change from the fact never overwrites what is on screen.
 export const shown = (context, id) => {
+  if (id === "value-suggestion" && !featureShown(context.hidden)) return null;
   const record = context.generators?.find((g) => g.id === id);
   return record ? { ...record, ...(context.pending[id] ?? {}) } : null;
 };
@@ -116,6 +126,8 @@ const typing = (target) => ({
 export const machine = setup({
   actors: {
     list: fromPromise(({ input }) => input.ask("generators", "list", {})),
+    // Which features are hidden (3.1); flags.changed is held until the reply lands.
+    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
     llm: fromPromise(({ input }) => input.ask("llm", "read", {})),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
     // On a page without a settings fact the ask replies no-answerer and the boxes stay plain.
@@ -143,11 +155,13 @@ export const machine = setup({
       "seconds. The sheet takes the stage, so the chat list and the journal's contents stay in " +
       "sight and the new text is seen landing. Signed out or as a guest nothing runs, and the tab " +
       "shows only \"Sign in to use generators.\" It asks `generators: list`, `llm: read` for the models, `session: read` for who " +
-      "the account is and `settings: read` for Vim keys, and follows each after.",
+      "the account is and `settings: read` for Vim keys, and follows each after. Could be is " +
+      "shown only while `flags` reports Values and Choice Points shown, not before it answers; " +
+      "hiding it keeps its settings.",
     kind: "view",
     attributes: [],
     emits: ["generator.edited", "generation.requested"],
-    asks: ["generators: list", "llm: read", "session: read", "settings: read"],
+    asks: ["generators: list", "llm: read", "session: read", "settings: read", "flags: read"],
   },
   context: ({ input }) => ({
     ask: input.ask,
@@ -166,10 +180,18 @@ export const machine = setup({
     // The generator whose Run was just pressed, and a count so an older timer ends nothing.
     asked: null,
     askedCount: 0,
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
   }),
   // Beside the states, so every picture arrives whatever the tab is doing; a change that
   // races its ask is held until the reply lands (4.2).
   invoke: [
+    {
+      src: "flags",
+      input: ({ context }) => ({ ask: context.ask }),
+      onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
+      onError: { actions: assign({ hidden: [] }) },
+    },
     {
       src: "list",
       input: ({ context }) => ({ ask: context.ask }),
@@ -216,6 +238,7 @@ export const machine = setup({
         },
       }),
     },
+    "flags.changed": { actions: assign({ hidden: ({ event }) => hiddenOf(event) }) },
     "session.changed": { actions: assign({ signedIn: ({ event }) => signedIn(event) }) },
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     _switch: choice("on", (v) => typeof v === "boolean"),

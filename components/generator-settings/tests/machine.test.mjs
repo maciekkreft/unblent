@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, changed, modelsFor, modelOf, keySet, note, signedIn, IDS, RUN } from "../machine.js";
+import { machine, shown, changed, modelsFor, modelOf, keySet, note, signedIn, IDS, RUN } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -27,7 +27,7 @@ const LLM = {
 // The tab with its four facts faked: who is signed in decides what it shows.
 async function start(session = { userId: "u1", registrationOpen: false }) {
   const asked = [];
-  const answers = { "generators list": { generators: GENERATORS }, "llm read": LLM, "session read": session, "settings read": { vimKeys: true } };
+  const answers = { "flags read": { off: [], hidden: [] }, "generators list": { generators: GENERATORS }, "llm read": LLM, "session read": session, "settings read": { vimKeys: true } };
   const actor = createActor(machine, {
     input: { ask: async (t, n, p) => (asked.push(`${t}: ${n}`), structuredClone(answers[`${t} ${n}`])), throttleMs: 20, askedMs: 30 },
   });
@@ -38,9 +38,9 @@ async function start(session = { userId: "u1", registrationOpen: false }) {
   return { actor, emitted, asked };
 }
 
-test("it asks its four facts once and takes their pictures", async () => {
+test("it asks its five facts once and takes their pictures", async () => {
   const { actor, asked } = await start();
-  assert.deepEqual(asked.sort(), ["generators: list", "llm: read", "session: read", "settings: read"]);
+  assert.deepEqual(asked.sort(), ["flags: read", "generators: list", "llm: read", "session: read", "settings: read"]);
   const { context } = actor.getSnapshot();
   assert.equal(context.signedIn, true);
   assert.equal(context.vimKeys, true);
@@ -51,6 +51,15 @@ test("each of the three generators has a row with its own Run", () => {
   assert.deepEqual(IDS, ["chat-title", "journal-summary", "value-suggestion"]);
   for (const id of IDS) assert.ok(RUN[id]?.label && RUN[id]?.asked, id);
   assert.deepEqual(RUN["value-suggestion"], { label: "Run on your values", asked: "Asked for new suggestions for your values." });
+});
+
+test("Could be shows only while flags shows Values and Choice Points, and not before it answers", () => {
+  const generators = [...GENERATORS, { id: "value-suggestion", name: "Could be", on: false, model: "claude-haiku-5-5", prompt: "Suggest.", version: 2 }];
+  const context = (hidden) => ({ generators, pending: {}, hidden });
+  assert.equal(shown(context(null), "value-suggestion"), null);
+  assert.equal(shown(context(["choice-points"]), "value-suggestion"), null);
+  assert.equal(shown(context(["choice-points"]), "chat-title").name, "Chat title", "the others stay");
+  assert.equal(shown(context([]), "value-suggestion").on, false, "shown again as it was saved");
 });
 
 test("signed out or as a guest the tab is the sign-in line", async () => {

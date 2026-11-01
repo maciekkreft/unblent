@@ -182,11 +182,22 @@ const membersByRole = (components) => {
   return roles;
 };
 
+// Whether Values and Choice Points is shown (3.1): not until `flags` answers.
+const featureShown = (hidden) => hidden !== null && !hidden.includes("choice-points");
+
 // Whether the choice point checks part is shown: a page whose `choice-point-checks`
-// answered, while `flags` reports neither choice points nor evaluators hidden. Until
-// `flags` answers (`hidden` is null) it is hidden, the same as `flags` itself (3.1).
-export const checksShown = ({ checks, hidden }) =>
-  checks !== null && hidden !== null && !hidden.includes("choice-points") && !hidden.includes("evaluators");
+// answered, while `flags` reports Values and Choice Points shown. Until `flags` answers
+// (`hidden` is null) it is hidden, the same as `flags` itself (3.1).
+export const checksShown = ({ checks, hidden }) => checks !== null && featureShown(hidden);
+
+// The lookups that read the choice points and the values (7.7): Settings lists them only
+// while Values and Choice Points is shown, as `conversations` offers them only then.
+const FEATURE_TOOLS = ["choice-points: list", "values: read"];
+
+// The tool switches Settings shows: the switch of a hidden tool keeps its saved state, so
+// it comes back as it was when the feature is shown again.
+export const toolsShown = (toolList, hidden) =>
+  featureShown(hidden) ? toolList : toolList.filter((t) => !FEATURE_TOOLS.includes(t.key));
 
 // The two lines of a value the values checks name, as value-checks.edited carries them.
 export const VALUE_LINES = ["values", "examples"];
@@ -212,9 +223,8 @@ export const deciderView = (llm) => {
 
 // Whether the values checks part is shown: a page whose `value-checks` answered, for an
 // account whose decider can answer (nothing is checked otherwise), while `flags` reports
-// evaluators shown.
-export const valueChecksShown = ({ valueChecks, hidden, llm }) =>
-  valueChecks !== null && deciderReady(llm) && hidden !== null && !hidden.includes("evaluators");
+// Values and Choice Points shown.
+export const valueChecksShown = ({ valueChecks, hidden, llm }) => valueChecks !== null && deciderReady(llm) && featureShown(hidden);
 
 // The evaluators a values check can use: not a derived one (Your values), since a value
 // cannot be checked against the values themselves.
@@ -298,9 +308,11 @@ export const machine = setup({
       "evaluators the user wrote (not Your values, since a value cannot be checked against the " +
       "values themselves); choosing the " +
       "previous one again undoes a change. It is hidden on a page without `value-checks` and " +
-      "while `flags` reports evaluators hidden or has not answered. The choice point checks part is " +
-      "hidden on a page without `choice-point-checks`, and while `flags` reports choice " +
-      "points or evaluators hidden, or has not answered (a page without `flags` hides nothing). The Vim keys list names the chat box " +
+      "while `flags` reports Values and Choice Points hidden or has not answered. The choice point checks part is " +
+      "hidden on a page without `choice-point-checks`, and while `flags` reports Values and " +
+      "Choice Points hidden, or has not answered (a page without `flags` hides nothing); so are " +
+      "the lookups Choice points and Values in What the chat may read, whose switches keep " +
+      "their state until they show again. The Vim keys list names the chat box " +
       "only on a page where `conversations` answers. Remove on the API key or the Jev key " +
       "waits out the undo window: the row reads Key removed with an Undo and a draining " +
       "bar, and the key is removed only when the window ends; leaving the page before then " +

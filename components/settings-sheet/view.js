@@ -1,7 +1,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask, answers } from "bus";
 import { icon } from "icons";
-import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, valueCheckers, ollamaView, deciderView } from "./machine.js";
+import { machine, merge, BOXES, answersOf, boxView, checksShown, valueChecksShown, toolsShown, valueCheckers, ollamaView, deciderView } from "./machine.js";
 import edited from "./events/settings.edited.json" with { type: "json" };
 import llmEdited from "./events/llm.edited.json" with { type: "json" };
 import toolsEdited from "./events/tools.edited.json" with { type: "json" };
@@ -851,7 +851,7 @@ class SettingsSheet extends LitElement {
                 </select>
               </label>
             `}
-        ${this.#tools(toolList, tools, profile)}
+        ${this.#tools(toolsShown(toolList, this.#actor.snapshot.context.hidden), tools, profile)}
         ${llm.jev ? this.#judging(llm, evaluators, checks) : this.#checks(checks, evaluators)}
       </div>
     `;

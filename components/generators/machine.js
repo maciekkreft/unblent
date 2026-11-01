@@ -298,10 +298,21 @@ const FOLLOWING = Object.fromEntries(
   ),
 );
 
+// Could be belongs to Values and Choice Points (3.1): it runs only while `flags` reports
+// that feature shown, and not until `flags` answers (`hidden` is null). Its results stay.
+const FEATURE_GENERATORS = ["value-suggestion"];
+const runs = (context, generator) =>
+  !FEATURE_GENERATORS.includes(generator) || (context.hidden !== null && !context.hidden.includes("choice-points"));
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is an
+// error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
 // Run (generation.requested): the item in front goes first and is made even when a text
 // from the same content exists.
 function request(context, event, enqueue) {
   const strategy = strategyOf(event.generator);
+  if (!runs(context, event.generator)) return;
   const target = strategy?.target(context.seen[strategy.generator]);
   if (!target) return;
   const job = { generator: strategy.generator, ...target, force: true };
@@ -316,10 +327,10 @@ function jobs(context) {
     ? []
     : STRATEGIES.flatMap((strategy) => {
         const g = generatorOf(context, strategy.generator);
-        if (!g.on || g.prompt === "") return [];
+        if (!g.on || g.prompt === "" || !runs(context, strategy.generator)) return [];
         return strategy.items(context.seen[strategy.generator]).map((c) => ({ generator: strategy.generator, ...c, force: false }));
       }).sort((a, b) => b.at - a.at);
-  return [...context.forced, ...background].map((job) => {
+  return [...context.forced.filter((f) => runs(context, f.generator)), ...background].map((job) => {
     const g = generatorOf(context, job.generator);
     return { ...job, model: g.model, prompt: g.prompt };
   });
@@ -392,14 +403,18 @@ export const machine = setup({
     ),
     load: fromPromise(async ({ input }) => {
       const { store, ask, api } = input;
+      // Which features are hidden (3.1), asked beside the store; flags.changed is held
+      // for us until the reply lands.
+      const flags = ask ? Promise.resolve().then(() => ask("flags", "read", {})).then(hiddenOf, () => []) : Promise.resolve([]);
       await claim(store, ask, api);
-      const [records, outbox, cursor, userId] = await Promise.all([
+      const [records, outbox, cursor, userId, hidden] = await Promise.all([
         store.all(),
         store.outboxAll(),
         store.metaGet("cursor"),
         store.metaGet("userId"),
+        flags,
       ]);
-      return { records, outbox, cursor: cursor ?? 0, userId: userId ?? null };
+      return { records, outbox, cursor: cursor ?? 0, userId: userId ?? null, hidden };
     }),
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
@@ -448,7 +463,9 @@ export const machine = setup({
       "of today's values whose value line Jev has answered with a red mark (values.checked from " +
       "`value-checks: read` and after, with `values: read` and values.changed for its example), " +
       "from the value, its example and what the check found it reads as; a value line no longer " +
-      "red makes no item, and its old result is kept but not shown. Each " +
+      "red makes no item, and its old result is kept but not shown. Could be runs only while " +
+      "Values and Choice Points is shown (`flags`), not before `flags` answers, and its texts " +
+      "are kept while it is hidden. Each " +
       "has a name, on or off, a model and a prompt; `generators: list` answers all three, with the " +
       "approved defaults (Haiku 5.5, on) for one the account never changed; on the Mac, `llm` runs a generator whose model " +
       "the chat's provider does not offer on the chat model, so Haiku 5.5 there means Gemma in Ollama. A change made in the " +
@@ -483,7 +500,7 @@ export const machine = setup({
     shape: "replicated",
     owns: "the generators and the texts they wrote",
     emits: ["generator.changed", "generation.changed"],
-    asks: ["session: read", "journal: read", "choice-points: list", "value-checks: read", "values: read", "llm: generate"],
+    asks: ["session: read", "journal: read", "choice-points: list", "value-checks: read", "values: read", "llm: generate", "flags: read"],
   },
   context: ({ input }) => ({
     generators: new Map(),
@@ -512,6 +529,8 @@ export const machine = setup({
     sha256: input.sha256 ?? sha256,
     tryPage: input.tryPage === true,
     guest: false,
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
   }),
   // While loading, only whether the browser is leaving is kept (12); the rest of the
   // news is read from session once the store is loaded.
@@ -520,6 +539,8 @@ export const machine = setup({
       actions: assign({ leaving: ({ event }) => event.leaving === true, keep: ({ event }) => event.leaving === true && event.keep === true }),
     },
     "generation.requested": { actions: enqueueActions(({ context, event, enqueue }) => request(context, event, enqueue)) },
+    // Values and Choice Points shown again may leave Could be work to do (3.1).
+    "flags.changed": { actions: assign({ hidden: ({ event }) => hiddenOf(event), dirty: true }) },
     ...FOLLOWING,
   },
   initial: "loading",
@@ -530,9 +551,10 @@ export const machine = setup({
         input: ({ context }) => ({ store: context.store, ask: context.ask, api: context.api }),
         onDone: {
           target: "checkingSession",
-          actions: assign(({ event }) => {
+          actions: assign(({ context, event }) => {
             const records = event.output.records.filter(valid).map(record);
             return {
+              hidden: context.hidden ?? event.output.hidden,
               generators: new Map(records.filter((r) => !isResultId(r.id)).map((r) => [r.id, r])),
               results: new Map(records.filter((r) => isResultId(r.id)).map((r) => [r.id, r])),
               outbox: new Map(event.output.outbox.map((row) => [row.id, row])),

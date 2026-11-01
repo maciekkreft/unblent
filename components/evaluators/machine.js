@@ -230,9 +230,18 @@ const announce = (context, r, values = context.values ?? []) =>
     ? { ...plain(context, r), book: JOURNAL, name: YOURS_NAME, description: YOURS_DESCRIPTION, questions: values.map(valueQuestion), derivedFrom: "values", combined: true }
     : plain(context, r);
 
-// Your values is news only where the values fact is known to be.
+// Your values is built only while Values and Choice Points is shown (3.1). Until `flags`
+// answers (`hidden` is null) it counts as hidden, the same as a flagged view (8). Hiding
+// it changes nothing that is stored: its switch and its place come back with it.
+const yoursHidden = (context) => context.hidden === null || context.hidden.includes("choice-points");
+
+// The hidden features from a `flags: read` reply; a page without `flags` (the reply is an
+// error) hides nothing.
+const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
+
+// Your values is news only where the values fact is known to be, and while it is shown.
 function say(context, enqueue, r) {
-  if (r.id === YOURS && context.values === null) return;
+  if (r.id === YOURS && (context.values === null || yoursHidden(context))) return;
   const evaluator = announce(context, r);
   enqueue.emit({ type: "evaluator.changed", evaluator });
 }
@@ -249,7 +258,7 @@ function replyList(context, payload, reply) {
       .map((r) => announce(context, r, values ?? undefined));
     reply({ evaluators });
   };
-  if (!(book === undefined || book === JOURNAL) || typeof context.ask !== "function") return answer(null);
+  if (!(book === undefined || book === JOURNAL) || typeof context.ask !== "function" || yoursHidden(context)) return answer(null);
   Promise.resolve()
     .then(() => context.ask("values", "read", day ? { day } : {}))
     .then(valuesOf, () => null)
@@ -260,7 +269,7 @@ function replyList(context, payload, reply) {
 
 // The current values for Your values, or null where the values fact does not answer.
 function withValues(context, then) {
-  if (typeof context.ask !== "function") return then(null);
+  if (typeof context.ask !== "function" || yoursHidden(context)) return then(null);
   Promise.resolve()
     .then(() => context.ask("values", "read", {}))
     .then(valuesOf, () => null)
@@ -779,14 +788,18 @@ export const machine = setup({
   actors: {
     load: fromPromise(async ({ input }) => {
       const { store, ask, api } = input;
+      // Which features are hidden (3.1), asked beside the store so no query is answered
+      // before it is known; flags.changed is held for us until the reply lands.
+      const flags = ask ? Promise.resolve().then(() => ask("flags", "read", {})).then(hiddenOf, () => []) : Promise.resolve([]);
       await claim(store, ask, api);
-      const [evaluators, outbox, cursor, userId] = await Promise.all([
+      const [evaluators, outbox, cursor, userId, hidden] = await Promise.all([
         store.all(),
         store.outboxAll(),
         store.metaGet("cursor"),
         store.metaGet("userId"),
+        flags,
       ]);
-      return { evaluators, outbox, cursor: cursor ?? 0, userId: userId ?? null };
+      return { evaluators, outbox, cursor: cursor ?? 0, userId: userId ?? null, hidden };
     }),
     // Missing (a Node test) is treated as signed out, so the fact still works headless.
     session: fromPromise(({ input }) => (input.ask ? input.ask("session", "read", {}) : Promise.resolve({ userId: null }))),
@@ -866,7 +879,9 @@ export const machine = setup({
       "on it is stored, its switch and its place, as an ordinary row whose questions stay empty; " +
       "until then it is on and at the end of the list. It cannot be deleted, a save over it " +
       "changes nothing, and it is never a starter. On a page without the values fact, such as a " +
-      "try page, it is not listed. The admin ticks evaluators as starters for a try " +
+      "try page, it is not listed, nor while Values and Choice Points is hidden (`flags`) or " +
+      "before `flags` answers; what is stored of it stays and comes back when the feature is " +
+      "shown again. The admin ticks evaluators as starters for a try " +
       "page (`starterFor`, by the page's name); the server keeps a copy of the ticked ones for " +
       "visitors. On a try page, a visitor whose browser holds no evaluators yet gets a copy of " +
       "each of that page's starters before anything is listed, with new ids, switched on and " +
@@ -889,7 +904,7 @@ export const machine = setup({
     shape: "replicated",
     emits: ["evaluator.changed", "evaluator.deleted"],
     owns: "the account's evaluators",
-    asks: ["session: read", "books: list", "values: read", "llm: decide"],
+    asks: ["session: read", "books: list", "values: read", "llm: decide", "flags: read"],
   },
   context: ({ input }) => ({
     evaluators: new Map(),
@@ -907,6 +922,8 @@ export const machine = setup({
     journal: null,
     // The current values (Your values' questions), null until the values fact is heard from.
     values: null,
+    // The features `flags` reports hidden (3.1); null until it answers.
+    hidden: null,
     userId: null,
     cursor: 0,
     queued: [],
@@ -930,6 +947,33 @@ export const machine = setup({
     // Your values follows values.changed (4.3, fourth rule); before the store is loaded the
     // values are only kept, and announced once something asks.
     "values.changed": { actions: assign({ values: ({ event }) => valuesOf(event) ?? [] }) },
+    // Values and Choice Points shown or hidden (3.1): Your values joins the lists again with
+    // today's values, or leaves them; nothing of it is stored or deleted.
+    "flags.changed": {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        const was = yoursHidden(context);
+        context.hidden = hiddenOf(event);
+        enqueue.assign({ hidden: context.hidden });
+        const now = yoursHidden(context);
+        if (was === now || typeof context.ask !== "function") return;
+        if (now) enqueue.emit({ type: "evaluator.deleted", id: YOURS, book: JOURNAL });
+        else
+          enqueue(({ self }) =>
+            Promise.resolve()
+              .then(() => context.ask("values", "read", {}))
+              .then(valuesOf, () => null)
+              .then((values) => values && self.send({ type: "_shown", values })),
+          );
+      }),
+    },
+    _shown: {
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        if (yoursHidden(context)) return;
+        context.values = event.values;
+        enqueue.assign({ values: event.values });
+        say(context, enqueue, yours(context));
+      }),
+    },
   },
   states: {
     loading: {
@@ -943,6 +987,7 @@ export const machine = setup({
             outbox: ({ event }) => new Map(event.output.outbox.map((row) => [row.id, row])),
             cursor: ({ event }) => event.output.cursor,
             userId: ({ event }) => event.output.userId,
+            hidden: ({ context, event }) => context.hidden ?? event.output.hidden,
           }),
         },
         onError: {

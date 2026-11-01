@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createActor, SimulatedClock } from "xstate";
 import { Validator } from "@cfworker/json-schema";
-import { machine, merge, checksShown, ollamaView, addressOf, deciderView, deciderReady } from "../machine.js";
+import { machine, merge, checksShown, toolsShown, ollamaView, addressOf, deciderView, deciderReady } from "../machine.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCHEMAS = {
@@ -619,12 +619,18 @@ test("Remove on a key waits out the undo window; Undo keeps the key", async () =
   assert.deepEqual(actor.getSnapshot().context.removed, [], "the new picture shows the key gone");
 });
 
-test("the choice point checks part is hidden while flags hides choice points or evaluators, or before it answers", () => {
+test("the choice point checks part is hidden while flags hides Values and Choice Points, or before it answers", () => {
   const checks = {};
   assert.equal(checksShown({ checks, hidden: [] }), true);
   assert.equal(checksShown({ checks: null, hidden: [] }), false, "no choice-point-checks on the page");
   assert.equal(checksShown({ checks, hidden: null }), false, "flags has not answered");
   assert.equal(checksShown({ checks, hidden: ["choice-points"] }), false);
-  assert.equal(checksShown({ checks, hidden: ["evaluators"] }), false);
-  assert.equal(checksShown({ checks, hidden: ["chats", "highlights"] }), true);
+  assert.equal(checksShown({ checks, hidden: ["undo"] }), true);
+});
+
+test("the Choice points and Values lookups are listed only while Values and Choice Points is shown", () => {
+  const list = [{ key: "choice-points: list" }, { key: "notes: read" }, { key: "values: read" }];
+  assert.deepEqual(toolsShown(list, []), list);
+  assert.deepEqual(toolsShown(list, null).map((t) => t.key), ["notes: read"], "flags has not answered");
+  assert.deepEqual(toolsShown(list, ["choice-points"]).map((t) => t.key), ["notes: read"]);
 });

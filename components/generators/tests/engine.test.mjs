@@ -133,9 +133,10 @@ const day = (n, text, over = {}) => ({ id: ID(n), day: `2026-10-${String(n).padS
 const journal = (days, open = null) => ({ days, projects: [], detectors: [], answers: [], open, reason: null });
 
 // Every generate is held until the test answers it, so "one at a time" can be seen.
-function fakeAsk({ userId = "u1", guest = false, days = [], open = null, points = [], values = [], checks = [] } = {}) {
+function fakeAsk({ userId = "u1", guest = false, days = [], open = null, points = [], values = [], checks = [], flags = { off: [], hidden: [] } } = {}) {
   const asked = [];
   const ask = (target, name, payload) => {
+    if (target === "flags") return flags instanceof Promise ? flags : Promise.resolve(flags);
     if (target === "session") return Promise.resolve({ userId, registrationOpen: false, guest });
     if (target === "values") return Promise.resolve({ day: TODAY, values, changedSince: false });
     if (target === "value-checks") {
@@ -370,6 +371,24 @@ test("Could be: what the events said while the starting reads were open is kept"
   valueSuggestion.follow(seen, { type: "values.checked", day: TODAY, values: [] });
   valueSuggestion.loaded(seen, { day: TODAY, checks: { values: CHECKS }, values: { values: VALUES } });
   assert.deepEqual(valueSuggestion.items(seen), [], "the newer announcement wins over the read");
+});
+
+test("Could be runs only while flags shows Values and Choice Points, and not before it answers (3.1)", async () => {
+  let answer;
+  const f = fakeAsk({ values: VALUES, checks: CHECKS, flags: new Promise((r) => (answer = r)) });
+  const s = start({ ask: f.ask });
+  await settle();
+  assert.equal(f.asked.length, 0, "nothing runs before flags answers");
+  answer({ off: [], hidden: ["choice-points"] });
+  await settle();
+  s.actor.send({ type: "generation.requested", generator: "value-suggestion" });
+  await settle();
+  assert.equal(f.asked.length, 0, "neither in the background nor on Run while hidden");
+  s.actor.send({ type: "flags.changed", off: [], hidden: [] });
+  await settle();
+  assert.equal(f.asked.length, 1, "shown again, it runs");
+  assert.match(f.asked[0].payload.text, /^Value: Being loved/);
+  s.actor.stop();
 });
 
 test("Could be: a red value line is suggested for once per content, and kept with its hash", async () => {

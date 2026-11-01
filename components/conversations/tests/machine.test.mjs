@@ -100,6 +100,7 @@ function start(options = {}) {
 
   const input = {
     answered: options.answered,
+    flags: options.flags,
     session: () => {
       see({}, SESSION_READ.payload);
       const who = typeof userId === "function" ? userId() : userId;
@@ -581,6 +582,30 @@ test("only the tools whose owner is on this page are offered (7.7)", async () =>
   submit(h);
   await flush();
   assert.deepEqual(h.calls.completes[0].tools.map((t) => `${t.target}: ${t.name}`), ["books: chapter"]);
+});
+
+test("the Choice points and Values lookups are offered only while flags shows Values and Choice Points (3.1)", async () => {
+  const contracts = {
+    queries: [CHAPTER_TOOL, toolQuery("choice-points", "list", other("choice-points", "queries", "list")), toolQuery("values", "read", other("values", "queries", "read"))],
+  };
+  let answer;
+  const h = start({ contracts, flags: () => new Promise((r) => (answer = r)) });
+  await ready(h);
+  submit(h);
+  await flush();
+  const offered = (i) => h.calls.completes[i].tools.map((t) => `${t.target}: ${t.name}`);
+  assert.deepEqual(offered(0), ["books: chapter"], "not offered before flags answers");
+  answer({ off: [], hidden: [] });
+  await flush();
+  await feed(h, [plainAnswer(ANSWER, "One.")]);
+  submit(h, { turn: { id: U("Y1"), text: "again" } });
+  await until(() => h.calls.completes.length === 2, "the second question");
+  assert.deepEqual(offered(1), ["books: chapter", "choice-points: list", "values: read"]);
+  h.actor.send({ type: "flags.changed", off: [], hidden: ["choice-points"] });
+  await feed(h, [plainAnswer(h.calls.completes[1].id, "Two.")]);
+  submit(h, { turn: { id: U("Y2"), text: "and again" } });
+  await until(() => h.calls.completes.length === 3, "the third question");
+  assert.deepEqual(offered(2), ["books: chapter"], "hidden again");
 });
 
 test("a tool round asks the lookup and feeds its result back to the model (7.7)", async () => {

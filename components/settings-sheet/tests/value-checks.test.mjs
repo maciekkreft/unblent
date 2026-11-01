@@ -77,7 +77,7 @@ test("each select emits both lines with its own changed, only when it differs, a
   assert.ok(actor.getSnapshot().matches("ready"), "values.checked changes nothing");
 });
 
-test("the part shows only once a decider can answer, on a page with value-checks, while flags shows evaluators", () => {
+test("the part shows only once a decider can answer, on a page with value-checks, while flags shows Values and Choice Points", () => {
   const valueChecks = { values: null, examples: null };
   const llm = { jev: { keySet: true } };
   assert.equal(valueChecksShown({ valueChecks, hidden: [], llm }), true);
@@ -85,7 +85,8 @@ test("the part shows only once a decider can answer, on a page with value-checks
   assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: null }), false, "signed out");
   assert.equal(valueChecksShown({ valueChecks: null, hidden: [], llm }), false, "no value-checks on the page");
   assert.equal(valueChecksShown({ valueChecks, hidden: null, llm }), false, "flags has not answered");
-  assert.equal(valueChecksShown({ valueChecks, hidden: ["evaluators"], llm }), false);
+  assert.equal(valueChecksShown({ valueChecks, hidden: ["choice-points"], llm }), false);
+  assert.equal(valueChecksShown({ valueChecks, hidden: ["undo"], llm }), true);
   const kev = (ready) => ({ jev: { keySet: false }, decider: { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready } });
   assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: kev(true) }), true, "Kev needs no Jev key");
   assert.equal(valueChecksShown({ valueChecks, hidden: [], llm: kev(false) }), false, "Kev not downloaded");

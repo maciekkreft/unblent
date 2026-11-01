@@ -68,6 +68,7 @@ const askAs = (userId, books = [{ id: JOURNAL, title: "Journal", written: true }
     if (target === "session") return Promise.resolve({ userId, registrationOpen: false });
     // A try page holds no values fact, so the bus replies at once that nobody answers.
     if (target === "values") return Promise.resolve({ error: "no-answerer" });
+    if (target === "flags") return Promise.resolve({ off: [], hidden: [] });
     return books === null ? new Promise(() => {}) : Promise.resolve({ books });
   };
   ask.asked = asked;
