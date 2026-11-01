@@ -270,9 +270,20 @@ export const addressOf = (text) => {
 
 export const valueCheckers = (evaluators) => evaluators.filter((e) => !e.removing && !e.derivedFrom);
 
+// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
+// no-answerer is asked once more after every script of the page has run (`loaded`, from
+// the browser entry), and only then means a page without `flags`. Until then nothing is
+// known, as with `flags` itself before its first answer (3.1).
+const readFlags = async (ask, loaded) => {
+  const reply = await ask("flags", "read", {});
+  if (reply?.error !== "no-answerer" || !loaded) return reply;
+  await loaded();
+  return ask("flags", "read", {});
+};
+
 export const machine = setup({
   actors: {
-    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    flags: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
     pages: fromPromise(({ input }) => input.ask("pages", "list", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
     catalog: fromPromise(({ input }) => input.ask("catalog", "list", {})),
@@ -366,6 +377,7 @@ export const machine = setup({
   // picture (7.7), asked only when the account section is shown, null otherwise.
   context: ({ input }) => ({
     ask: input.ask,
+    loaded: input.loaded,
     answered: input.answered ?? (() => true),
     current: input.current,
     account: Boolean(input.account),
@@ -404,7 +416,7 @@ export const machine = setup({
   }),
   invoke: {
     src: "flags",
-    input: ({ context }) => ({ ask: context.ask }),
+    input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
     onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
     onError: { actions: assign({ hidden: [] }) },
   },

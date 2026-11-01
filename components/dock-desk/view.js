@@ -7,6 +7,14 @@ import tabPicked from "./events/tab.picked.json" with { type: "json" };
 import tabClosed from "./events/tab.closed.json" with { type: "json" };
 import tabMoved from "./events/tab.moved.json" with { type: "json" };
 
+// Every script of the page has run once DOMContentLoaded has fired, so by then every
+// fact the page holds is mounted (8); a script that runs later finds it fired already.
+const loaded = () => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
+};
+
 const SIDES = ["left", "right", "bottom"];
 // The four groups in one fixed order, so the action for "send to X" sits in the
 // same place on every strip: a group's actions are the three other groups.
@@ -104,6 +112,7 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        loaded,
         views,
         pressed: buttons.includes(recalled) ? recalled : null,
         // The seed folds a side too wide for a narrow desk (6.4); the host's own

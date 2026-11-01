@@ -46,10 +46,21 @@ export const slottedOf = (children, admin, picked, hidden = [], edition = null) 
   return children.flatMap((child, i) => (child.label === shown && offered(child, admin, hidden, edition) ? [i] : []));
 };
 
+// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
+// no-answerer is asked once more after every script of the page has run (`loaded`, from
+// the browser entry), and only then means a page without `flags`. Until then nothing is
+// known, as with `flags` itself before its first answer (3.1).
+const readFlags = async (ask, loaded) => {
+  const reply = await ask("flags", "read", {});
+  if (reply?.error !== "no-answerer" || !loaded) return reply;
+  await loaded();
+  return ask("flags", "read", {});
+};
+
 export const machine = setup({
   actors: {
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
-    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    flags: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
   },
 }).createMachine({
   id: "settings-tabs",
@@ -72,7 +83,7 @@ export const machine = setup({
   },
   // The pick is handed back by the view after a reload (3.1); shownOf falls back to the
   // first tab while it is not offered, and keeps it for when it is again.
-  context: ({ input }) => ({ ask: input.ask, children: input.children ?? [], admin: false, edition: null, hidden: null, picked: input.picked ?? null }),
+  context: ({ input }) => ({ ask: input.ask, loaded: input.loaded, children: input.children ?? [], admin: false, edition: null, hidden: null, picked: input.picked ?? null }),
   invoke: [
     {
       src: "session",
@@ -82,7 +93,7 @@ export const machine = setup({
     },
     {
       src: "flags",
-      input: ({ context }) => ({ ask: context.ask }),
+      input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
       onDone: { actions: assign({ hidden: ({ event }) => (Array.isArray(event.output?.hidden) ? event.output.hidden : []) }) },
       onError: { actions: assign({ hidden: [] }) },
     },

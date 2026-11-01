@@ -339,11 +339,22 @@ const isStageTab = ({ context, event }) =>
   names(context.views).includes(event.name) && !dockedNames(context.docks).includes(event.name);
 const isDocked = ({ context, event }) => dockedNames(context.docks).includes(event.name);
 
+// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
+// no-answerer is asked once more after every script of the page has run (`loaded`, from
+// the browser entry), and only then means a page without `flags`. Until then nothing is
+// known, as with `flags` itself before its first answer (3.1).
+const readFlags = async (ask, loaded) => {
+  const reply = await ask("flags", "read", {});
+  if (reply?.error !== "no-answerer" || !loaded) return reply;
+  await loaded();
+  return ask("flags", "read", {});
+};
+
 export const machine = setup({
   actors: {
     read: fromPromise(({ input }) => input.ask("dock", "read", {})),
     settings: fromPromise(({ input }) => input.ask("settings", "read", {})),
-    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    flags: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
 }).createMachine({
@@ -412,6 +423,7 @@ export const machine = setup({
   // chosen (the viewport fact has framed the body by then), not at connect.
   context: ({ input }) => ({
     ask: input.ask,
+    loaded: input.loaded,
     views: input.views,
     narrow: input.narrow ?? (() => false),
     stage: null,
@@ -441,7 +453,7 @@ export const machine = setup({
   invoke: [
     {
       src: "flags",
-      input: ({ context }) => ({ ask: context.ask }),
+      input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
       onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
       onError: { actions: assign({ hidden: [] }) },
     },

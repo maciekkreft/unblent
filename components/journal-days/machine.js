@@ -71,10 +71,21 @@ export const choicesShown = (hidden) => hidden !== null && !hidden.includes("cho
 // an error) hides nothing.
 const hiddenOf = (reply) => (Array.isArray(reply?.hidden) ? reply.hidden : []);
 
+// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
+// no-answerer is asked once more after every script of the page has run (`loaded`, from
+// the browser entry), and only then means a page without `flags`. Until then nothing is
+// known, as with `flags` itself before its first answer (3.1).
+const readFlags = async (ask, loaded) => {
+  const reply = await ask("flags", "read", {});
+  if (reply?.error !== "no-answerer" || !loaded) return reply;
+  await loaded();
+  return ask("flags", "read", {});
+};
+
 export const machine = setup({
   actors: {
     // Which features are hidden (3.1); flags.changed is held until the reply lands.
-    flags: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    flags: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
     load: fromPromise(({ input }) => input.ask("journal", "read", {})),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
     choicePoints: fromPromise(({ input }) => input.ask("choice-points", "list", {})),
@@ -105,6 +116,7 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    loaded: input.loaded,
     days: [],
     open: null,
     // Today's journal day, as the journal says it (13, Journal).
@@ -128,7 +140,7 @@ export const machine = setup({
   invoke: [
     {
       src: "flags",
-      input: ({ context }) => ({ ask: context.ask }),
+      input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
       onDone: { actions: assign({ hidden: ({ event }) => hiddenOf(event.output) }) },
       onError: { actions: assign({ hidden: [] }) },
     },

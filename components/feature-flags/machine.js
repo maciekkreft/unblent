@@ -65,9 +65,20 @@ const signedInOf = (session) => Boolean(session && !session.error && session.use
 export const rowsOf = (context) =>
   FEATURES.filter((f) => context.mayRelease || (context.released ?? []).includes(f.id));
 
+// Page scripts mount in any order (8), so this can ask before `flags` is mounted: a
+// no-answerer is asked once more after every script of the page has run (`loaded`, from
+// the browser entry), and only then means a page without `flags`. Until then nothing is
+// known, as with `flags` itself before its first answer (3.1).
+const readFlags = async (ask, loaded) => {
+  const reply = await ask("flags", "read", {});
+  if (reply?.error !== "no-answerer" || !loaded) return reply;
+  await loaded();
+  return ask("flags", "read", {});
+};
+
 export const machine = setup({
   actors: {
-    read: fromPromise(({ input }) => input.ask("flags", "read", {})),
+    read: fromPromise(({ input }) => readFlags(input.ask, input.loaded)),
     session: fromPromise(({ input }) => input.ask("session", "read", {})),
   },
 }).createMachine({
@@ -90,6 +101,7 @@ export const machine = setup({
   },
   context: ({ input }) => ({
     ask: input.ask,
+    loaded: input.loaded,
     released: null,
     shown: null,
     mayRelease: false,
@@ -100,7 +112,7 @@ export const machine = setup({
   invoke: [
     {
       src: "read",
-      input: ({ context }) => ({ ask: context.ask }),
+      input: ({ context }) => ({ ask: context.ask, loaded: context.loaded }),
       onDone: { actions: assign(({ context, event }) => pictureOf(event.output) ?? { released: context.released, shown: context.shown }) },
       onError: { actions: [] },
     },

@@ -11,6 +11,14 @@ import read from "./queries/read.json" with { type: "json" };
 import open from "./queries/open.json" with { type: "json" };
 import tools from "./queries/tools.json" with { type: "json" };
 
+// Every script of the page has run once DOMContentLoaded has fired, so by then every
+// fact the page holds is mounted (8); a script that runs later finds it fired already.
+const loaded = () => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
+};
+
 // The browser entry (3.2): the one place this component touches the network, and only
 // to reach its own server module (section 3) or, over the bus, the facts it asks. All
 // fetch, the id source, the store and the browser signals live here, so machine.js
@@ -57,6 +65,7 @@ mount(machine, {
     subject: () => ask(machine, "subject", "read", {}),
     settings: () => ask(machine, "settings", "read", {}),
     flags: () => ask(machine, "flags", "read", {}),
+    loaded,
     complete: (request) => ask(machine, "llm", "complete", request),
     // The tool list (catalog: contracts) and each tool call (the `*: tool` wildcard, 7.7).
     contracts: () => ask(machine, "catalog", "contracts", {}),

@@ -2,6 +2,14 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { machine, tabsOf, shownOf, slottedOf } from "./machine.js";
 
+// Every script of the page has run once DOMContentLoaded has fired, so by then every
+// fact the page holds is mounted (8); a script that runs later finds it fired already.
+const loaded = () => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
+};
+
 // The children as the machine reads them: each one's tab label, whether it is the admin's
 // alone, the edition it is marked for (`web` or `mac`), and the feature flag that hides it (8). Read from this element's own light DOM,
 // never written to.
@@ -46,6 +54,7 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        loaded,
         children: childrenOf(this.host),
         picked: memory.recall(),
       },

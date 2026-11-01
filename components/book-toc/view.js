@@ -3,6 +3,14 @@ import { mount, unmount, ask } from "bus";
 import { machine, markedChapter, chapterCounts, choiceLabel, chapterSummaries, showing, choicesShown } from "./machine.js";
 import selected from "./events/chapter.selected.json" with { type: "json" };
 
+// Every script of the page has run once DOMContentLoaded has fired, so by then every
+// fact the page holds is mounted (8); a script that runs later finds it fired already.
+const loaded = () => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
+};
+
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
   constructor(host) {
@@ -14,6 +22,7 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        loaded,
         // A try page (8) shows the contents signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },

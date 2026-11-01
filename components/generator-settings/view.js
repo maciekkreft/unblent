@@ -8,6 +8,14 @@ import { machine, IDS, RUN, shown, modelsFor, modelOf, note } from "./machine.js
 import edited from "./events/generator.edited.json" with { type: "json" };
 import requested from "./events/generation.requested.json" with { type: "json" };
 
+// Every script of the page has run once DOMContentLoaded has fired, so by then every
+// fact the page holds is mounted (8); a script that runs later finds it fired already.
+const loaded = () => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
+};
+
 // "Ask the model" is a CodeMirror box, so it takes Vim's keys when the "Vim keys"
 // preference (12) is on and writes in paragraphs like every editor; the setup, the Vim
 // switch and the paragraph rule are the editor kit's (10).
@@ -31,7 +39,7 @@ class ActorController {
 
   hostConnected() {
     this.actor = mount(machine, {
-      input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
+      input: { ask: (target, name, payload) => ask(machine, target, name, payload), loaded },
       events: { "generator.edited": edited, "generation.requested": requested },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());

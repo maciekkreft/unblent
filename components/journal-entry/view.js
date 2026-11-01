@@ -13,6 +13,14 @@ import closed from "./events/book.closed.json" with { type: "json" };
 import passageSelected from "./events/passage.selected.json" with { type: "json" };
 import reopened from "./events/conflict.reopened.json" with { type: "json" };
 
+// Every script of the page has run once DOMContentLoaded has fired, so by then every
+// fact the page holds is mounted (8); a script that runs later finds it fired already.
+const loaded = () => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (navigation ? navigation.domContentLoadedEventStart > 0 : document.readyState !== "loading") return Promise.resolve();
+  return new Promise((resolve) => document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }));
+};
+
 // The entry's view: one CodeMirror 6 document holds the day's text, so it is shown once.
 // The theme, Vim and the paragraphs come from the editor kit (architecture.md 10). The
 // four line levels are copied from note-editor, because components never import each
@@ -193,6 +201,7 @@ class ActorController {
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
+        loaded,
         mint: ulid,
         now: () => Date.now(),
         // A try page (8) shows the journal signed out.
