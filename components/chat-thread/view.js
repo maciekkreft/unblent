@@ -585,43 +585,17 @@ class ChatThread extends LitElement {
         animation: none;
       }
     }
-    /* The thinking record: a dim disclosure, closed by default, that opens to read what
-       the model thought (12: a live line while the model works, then a dim record). */
-    .thinking {
-      font-size: var(--text-sm);
-      color: var(--color-body-mid);
-    }
-    .thinking summary {
-      cursor: pointer;
-      color: var(--color-mute);
-      list-style: none;
-      /* A click toggles the record; it must not select the word as a side effect. */
-      user-select: none;
-      -webkit-user-select: none;
-    }
-    .thinking summary::-webkit-details-marker {
-      display: none;
-    }
-    .thinking .text {
-      margin-top: var(--space-2xs);
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      color: var(--color-body-mid);
-    }
-    /* What the model is reading, or read, during a round of lookups (7.7): a dim line per
-       recognised tool call, naming the lookup by its owner's label. It reads as a live
-       line while the round runs (the pending answer follows it) and stays as a quiet
-       record after. A call the system did not recognise is not shown as a lookup. */
-    .lookups {
+    /* What the model did, as records (12, 7.7): its thinking and each lookup, one quiet
+       column of closed lines that each open on their own. One rule set for every kind,
+       so a turn with thinking and three lookups reads as one list of four. */
+    .records {
       display: flex;
       flex-direction: column;
       gap: var(--space-2xs);
       font-size: var(--text-sm);
-      color: var(--color-mute);
+      color: var(--color-body-mid);
     }
-    /* Each lookup line opens, like the thinking record, to say what was asked for and
-       what came back (7.7); closed by default. */
-    .lookup summary {
+    .record summary {
       cursor: pointer;
       list-style: none;
       display: inline-flex;
@@ -631,36 +605,44 @@ class ChatThread extends LitElement {
       padding: 0 var(--space-xs);
       margin-left: calc(-1 * var(--space-xs));
       color: var(--color-body-mid);
+      /* A click toggles the record; it must not select the label as a side effect. */
       user-select: none;
       -webkit-user-select: none;
     }
-    .lookup summary::-webkit-details-marker {
+    .record summary::-webkit-details-marker {
       display: none;
     }
-    .lookup summary::before {
+    .record summary::before {
       content: "›";
       display: inline-block;
       transition: transform var(--duration-fast) var(--ease);
     }
-    .lookup[open] summary::before {
+    .record[open] summary::before {
       transform: rotate(90deg);
     }
-    .lookup summary:hover {
+    .record summary:hover {
       background: var(--color-surface-hover);
       color: var(--color-body);
     }
-    .lookup summary:focus-visible {
+    .record summary:focus-visible {
       outline: none;
       box-shadow: var(--focus-ring);
     }
-    .got {
+    .record .opened {
       margin: var(--space-xs) 0 var(--space-sm) var(--space-md);
       padding-left: var(--space-md);
       border-left: var(--border-width) solid var(--color-border);
-      display: grid;
-      gap: var(--space-xs);
       color: var(--color-body);
       overflow-wrap: anywhere;
+    }
+    .thinking .opened {
+      white-space: pre-wrap;
+      color: var(--color-body-mid);
+    }
+    /* A lookup opens to say what was asked for and what came back (7.7). */
+    .got {
+      display: grid;
+      gap: var(--space-xs);
     }
     .got dt {
       font-size: var(--text-caption);
@@ -709,7 +691,7 @@ class ChatThread extends LitElement {
       color: var(--color-danger);
     }
     @media (prefers-reduced-motion: reduce) {
-      .lookup summary::before {
+      .record summary::before {
         transition: none;
       }
     }
@@ -1027,10 +1009,9 @@ class ChatThread extends LitElement {
       : nothing;
     const out = html`
       <div class="turn assistant${markable ? " last" : ""}">
-        ${turn.thinking && !(pending && !hasText) ? this.#thinking(turn) : nothing}
+        ${this.#records(turn, pending && !hasText)}
         ${waiting}
         ${answer}
-        ${this.#lookups(turn)}
         ${this.#foot(turn)}
         ${marking ? this.#comments(marking) : nothing}
         ${marking?.draft ? this.#popover(marking.draft, marking) : nothing}
@@ -1051,13 +1032,17 @@ class ChatThread extends LitElement {
     return blocks;
   }
 
-  // The lookups this answer asked for (7.7): a dim line per recognised tool call. A call
-  // the system did not recognise (`invalid`) is not named as a lookup — it was rejected,
-  // not run.
-  #lookups(turn) {
+  // What this answer did, as one column of records: its thinking, once the live
+  // "Thinking…" line has given way, then each lookup it asked for (7.7). A call the
+  // system did not recognise (`invalid`) is not named as a lookup — it was rejected, not
+  // run.
+  #records(turn, live) {
+    const thinking = turn.thinking && !live;
     const named = (turn.calls ?? []).filter((call) => !call.invalid);
-    if (!named.length) return nothing;
-    return html`<div class="lookups">${named.map((call) => this.#lookup(call))}</div>`;
+    if (!thinking && !named.length) return nothing;
+    return html`<div class="records">
+      ${thinking ? this.#thinking(turn) : nothing}${named.map((call) => this.#lookup(call))}
+    </div>`;
   }
 
   // One lookup line: closed, its label; open, what was asked for and what came back. A
@@ -1068,7 +1053,7 @@ class ChatThread extends LitElement {
     const asked = askedFor(call.payload);
     return html`
       <details
-        class="lookup"
+        class="record lookup"
         ?open=${open}
         @toggle=${(e) => {
           if (e.currentTarget.open !== open) this.#toggleLookup(call.id);
@@ -1076,7 +1061,7 @@ class ChatThread extends LitElement {
       >
         <summary>${call.label}</summary>
         ${open
-          ? html`<dl class="got">
+          ? html`<dl class="opened got">
               ${asked ? html`<dt>Asked for</dt><dd>${asked}</dd>` : nothing}
               ${result ? this.#got(result) : nothing}
             </dl>`
@@ -1443,14 +1428,14 @@ class ChatThread extends LitElement {
     const open = this.#openThinking.has(turn.id);
     return html`
       <details
-        class="thinking"
+        class="record thinking"
         ?open=${open}
         @toggle=${(e) => {
           if (e.currentTarget.open !== open) this.#toggleThinking(turn.id);
         }}
       >
         <summary>Thinking</summary>
-        <div class="text">${turn.thinking}</div>
+        <div class="opened text">${turn.thinking}</div>
       </details>
     `;
   }
