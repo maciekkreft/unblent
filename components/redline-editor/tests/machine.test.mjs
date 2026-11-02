@@ -183,7 +183,9 @@ test("a selection opens a comment; typing saves it at a throttle, one save per w
   assert.equal(emitted[0].comments[0].text, "say");
   assert.equal(emitted[0].comments[0].quote, "book");
   actor.send({ type: "_closed" });
-  assert.equal(emitted.length, 1, "closing what was saved saves nothing more");
+  assert.equal(emitted.length, 2, "closing what was saved only says the user left it");
+  assert.deepEqual({ ...emitted[1], left: undefined }, { ...emitted[0], left: undefined });
+  assert.equal(emitted[1].left, true);
   assert.ok(state().matches({ marking: "idle" }));
 });
 

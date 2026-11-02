@@ -361,12 +361,12 @@ const occupied = ({ redline, draft }) => [
 const saved = (redline) => ({ type: "redline.saved", text: redline.text, comments: redline.comments });
 
 // Close the open comment (saving what it holds) and, for a selection, open a new one.
+// Leaving it says so (`left`), which ends its stretch of typing as one step (12, Undo),
+// also when the close changes nothing.
 const closeDraft = enqueueActions(({ context, enqueue }) => {
   const next = closing(context);
-  if (next) {
-    enqueue.assign({ redline: next });
-    enqueue.emit(saved(next));
-  }
+  if (next) enqueue.assign({ redline: next });
+  if (next || context.redline?.comments.some((c) => c.id === context.draft?.id)) enqueue.emit({ ...saved(next ?? context.redline), left: true });
   enqueue.assign({ draft: null });
 });
 const openSelection = assign({
@@ -420,7 +420,8 @@ export const machine = setup({
       "The Review app's editor: the user pastes a markdown text, reads it formatted, selects a " +
       "passage and writes a comment on it. A selection on the formatted page maps back to the " +
       "exact characters of the pasted text, because a comment belongs to the text and not to " +
-      "the page. Removing a comment waits out the undo window.",
+      "the page. Removing a comment waits out the undo window. Closing a comment says the user " +
+      "left it, so what was typed in it is one step for Undo (section 12).",
     kind: "view", emits: ["redline.saved"], attributes: [], asks: ["redline: read"],
   },
   context: ({ input }) => ({

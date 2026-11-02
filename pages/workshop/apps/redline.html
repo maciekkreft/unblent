@@ -39,19 +39,24 @@
     <script type="module" src="/static/components/trace/fact.js"></script>
     <script type="module" src="/static/components/pages/fact.js"></script>
     <script type="module" src="/static/components/viewport/fact.js"></script>
+    <script type="module" src="/static/components/session/fact.js"></script>
     <script type="module" src="/static/components/settings/fact.js"></script>
+    <script type="module" src="/static/components/flags/fact.js"></script>
+    <script type="module" src="/static/components/undo/fact.js"></script>
     <script type="module" src="/static/components/dock/fact.js"></script>
     <script type="module" src="/static/components/redline/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/dock-desk/view.js"></script>
     <script type="module" src="/static/components/redline-editor/view.js"></script>
+    <script type="module" src="/static/components/undo-bar/view.js"></script>
     <script type="module" src="/static/components/profile-switch/view.js"></script>
   </head>
   <body>
     <page-nav></page-nav>
     <dock-desk>
       <redline-editor label="Redline" height="fill"></redline-editor>
+      <undo-bar control></undo-bar>
       <profile-switch control></profile-switch>
     </dock-desk>
     <viewport-switch></viewport-switch>

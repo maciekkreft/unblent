@@ -1,6 +1,8 @@
 import { mount, ask } from "bus";
 import { machine } from "./machine.js";
 import changed from "./events/llm.changed.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import progressed from "./events/completion.progressed.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import complete from "./queries/complete.json" with { type: "json" };
@@ -210,6 +212,6 @@ mount(machine, {
     spending: readSpending,
     edit: editSpending,
   },
-  events: { "llm.changed": changed, "completion.progressed": progressed, "spending.changed": spendingChanged },
+  events: { "llm.changed": changed, "completion.progressed": progressed, "spending.changed": spendingChanged, "step.recorded": recorded, "step.settled": settled },
   queries: { read, complete, decide, generate, spending },
 });

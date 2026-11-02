@@ -1,4 +1,5 @@
-import { setup, assign, emit } from "xstate";
+import { setup, assign, emit, enqueueActions } from "xstate";
+import { ulid } from "ulid";
 
 // A local-only fact component (3.1): headless owner of the user's page
 // preferences — the order and visibility of pages in the navigation, whether the
@@ -101,6 +102,84 @@ const same = (a, b) =>
 const active = (context) => context.copies[context.profile];
 const changed = emit(({ context }) => ({ type: "settings.changed", ...active(context), profile: context.profile }));
 
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+const FIELDS = ["nav", "viewportSwitchHidden", "layoutSwitchHidden", "arranging", "vimKeys", "keepOpen", "editors"];
+const sameField = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// What a step is about, as people read it after "Undo:".
+const LABELS = {
+  vimKeys: (v) => `switch Vim keys ${v ? "on" : "off"}`,
+  keepOpen: (v) => `${v ? "keep" : "stop keeping"} the open note and chat`,
+  viewportSwitchHidden: (v) => `${v ? "hide" : "show"} the viewport switch`,
+  layoutSwitchHidden: (v) => `${v ? "hide" : "show"} the layout switch`,
+  arranging: (v) => `${v ? "start" : "stop"} arranging the desk`,
+  nav: () => "change the page list",
+  editors: () => "choose an editor",
+};
+const labelOf = (fields, after) => (fields.length === 1 ? LABELS[fields[0]](after[fields[0]]) : "change the settings");
+
+// `prior` is the step that wrote the copy before this one, so an Undo leaves the copy as
+// that step left it and the step before can be undone next; a copy no step of this
+// browser wrote is left stamped with a mark of the step undone.
+const priorOf = (step) => (typeof step === "string" ? { prior: step } : {});
+const priorStamp = (p, step) => p.prior ?? `^${step}`;
+
+// The copy and the step that last wrote it, as this browser holds them now: read again
+// from storage when it can be, so a step another tab took is seen (12, Undo).
+function held(context, profile) {
+  const stored = context.load?.[profile]?.();
+  if (typeof stored !== "string") return { copy: context.copies[profile], stamp: context.stamps[profile] };
+  return { copy: parse(stored, context.copies[profile]), stamp: context.stampLoad?.[profile]?.() ?? undefined };
+}
+
+function write(context, enqueue, profile, copy, stamp) {
+  context.copies = { ...context.copies, [profile]: copy };
+  context.stamps = { ...context.stamps, [profile]: stamp };
+  enqueue.assign({ copies: context.copies, stamps: context.stamps });
+  enqueue(() => context.save[profile](JSON.stringify(copy)));
+  enqueue(() => context.stampSave?.[profile]?.(stamp));
+  if (profile === context.profile) enqueue.emit({ type: "settings.changed", ...copy, profile });
+}
+
+// One change in Settings is one step, on the copy of the profile it was made in (12).
+function applyEdit(context, event, enqueue) {
+  const before = active(context);
+  const after = clean(event);
+  if (same(after, before)) return;
+  const fields = FIELDS.filter((f) => !sameField(before[f], after[f]));
+  const profile = context.profile;
+  const prior = held(context, profile).stamp;
+  const id = context.mint();
+  write(context, enqueue, profile, after, id);
+  const pick = (copy) => Object.fromEntries(fields.map((f) => [f, copy[f]]));
+  enqueue.emit({
+    type: "step.recorded",
+    id,
+    owner: "settings",
+    label: labelOf(fields, after),
+    undo: { kind: "settings", profile, fields: pick(before), ...priorOf(prior) },
+    redo: { kind: "settings", profile, fields: pick(after), ...priorOf(prior) },
+  });
+}
+
+// An Undo or Redo of one of this fact's steps, applied only while the copy is as the step
+// left it: last written in this browser by that step. Arranging on or off from the layout
+// switch keeps the stamp, since it is no step; anything else written since refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "settings") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "settings", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  if (p.kind !== "settings" || !(p.profile in context.copies) || !p.fields || typeof p.fields !== "object") return settle("refused", "changed");
+  const undoing = event.type === "step.undone";
+  const { copy, stamp } = held(context, p.profile);
+  if (stamp !== (undoing ? event.id : priorStamp(p, event.id))) return settle("refused", "changed");
+  const fields = Object.fromEntries(Object.entries(p.fields).filter(([f]) => FIELDS.includes(f)));
+  write(context, enqueue, p.profile, clean({ ...copy, ...fields }), undoing ? priorStamp(p, event.id) : event.id);
+  settle("applied");
+}
+
 export const machine = setup({}).createMachine({
   id: "settings",
   meta: {
@@ -111,13 +190,16 @@ export const machine = setup({}).createMachine({
       "changes (off at first, so they follow the stage), and which profile is active. It keeps one copy per " +
       "profile, `product` and `workshop`; the product hides the switches and does not arrange. " +
       "Hiding the layout switch also turns arranging off. These follow the device, not the " +
-      "account.",
+      "account. Each change made in Settings is a step Undo and Redo reverse (section 12), on " +
+      "the copy of the profile it was made in; arranging on or off from the layout switch and " +
+      "the profile switch are not. A step is refused when that copy was written since by " +
+      "anything else, here or in another tab.",
     kind: "fact",
     shape: "local-only",
-    emits: ["settings.changed"],
+    emits: ["settings.changed", "step.recorded", "step.settled"],
     owns: "the user's page preferences, one copy per profile (product and workshop): the order and visibility of pages in the navigation, whether the viewport switch and the layout switch are shown, whether the desk layout is being arranged, whether editors take Vim keys, and whether the open note and chat are kept when the stage changes; it reports the active profile's copy",
     steps: {
-      "settings.edited": "pending",
+      "settings.edited": "step",
       "layout.switched": "navigation",
       "profile.switched": "identity",
     },
@@ -130,6 +212,12 @@ export const machine = setup({}).createMachine({
       product: parse(input.stored.product, PRODUCT_DEFAULT),
     },
     save: input.save,
+    // The step that last wrote each copy in this browser (12, Undo), kept beside it.
+    stamps: { workshop: input.stamps?.workshop ?? undefined, product: input.stamps?.product ?? undefined },
+    stampLoad: input.stampLoad,
+    stampSave: input.stampSave,
+    load: input.load,
+    mint: input.mint ?? ulid,
   }),
   on: {
     // The gesture from settings-sheet, consumed as an event (4.3): the sheet emits
@@ -137,13 +225,10 @@ export const machine = setup({}).createMachine({
     // so a choice in one profile never leaks into the other (§12). Guarded so a
     // repeat writes, saves and announces nothing.
     "settings.edited": {
-      guard: ({ context, event }) => !same(clean(event), active(context)),
-      actions: [
-        assign({ copies: ({ context, event }) => ({ ...context.copies, [context.profile]: clean(event) }) }),
-        ({ context }) => context.save[context.profile](JSON.stringify(active(context))),
-        changed,
-      ],
+      actions: enqueueActions(({ context, event, enqueue }) => applyEdit(context, event, enqueue)),
     },
+    "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+    "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
     // The gesture from layout-switch, on the active copy. Guarded out when the
     // switch is hidden (the desk is not arrangeable, so arranging cannot be turned
     // on) and on a no-op.

@@ -1,6 +1,8 @@
 import { mount, ask } from "bus";
 import { machine } from "./machine.js";
 import { openGenerators } from "./store.js";
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import generatorChanged from "./events/generator.changed.json" with { type: "json" };
 import generationChanged from "./events/generation.changed.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
@@ -49,7 +51,7 @@ const tryPage = location.pathname.startsWith("/try/");
 
 const actor = mount(machine, {
   input: { store, api, tryPage, ask: (target, name, payload) => ask(machine, target, name, payload) },
-  events: { "generator.changed": generatorChanged, "generation.changed": generationChanged },
+  events: { "generator.changed": generatorChanged, "generation.changed": generationChanged, "step.recorded": recorded, "step.settled": settled },
   queries: { list, results },
 });
 

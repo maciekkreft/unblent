@@ -1013,8 +1013,8 @@ class EvaluatorSettings extends LitElement {
           aria-label="Expected answer for question ${n}"
           @change=${(e) => this.#send({ type: "_expect", evaluator: d.id, question: q.id, expect: e.target.value || null })}
         >
-          <option value="" ?selected=${current === ""}>None</option>
-          ${answers.map(([id, name]) => html`<option value=${id} ?selected=${current === id}>${name}</option>`)}
+          <option value="" .selected=${current === ""}>None</option>
+          ${answers.map(([id, name]) => html`<option value=${id} .selected=${current === id}>${name}</option>`)}
         </select>
       </label>
     `;

@@ -7,15 +7,18 @@
 // it here once, so a rename loses nothing. Temporary, removed once every browser has moved.
 const FORMER = "review";
 
-export function openStore(name) {
+// A scope keeps a second key beside the text under the same name, `<name>:<scope>`, such as
+// the step that last wrote it (12, Undo); only the text itself moves from the former name.
+export function openStore(name, scope = "") {
+  const key = scope ? name + ":" + scope : name;
   return {
     read() {
       try {
-        const value = localStorage.getItem(name);
-        if (value !== null) return value;
+        const value = localStorage.getItem(key);
+        if (value !== null || scope) return value;
         const former = localStorage.getItem(FORMER);
         if (former === null) return null;
-        localStorage.setItem(name, former);
+        localStorage.setItem(key, former);
         localStorage.removeItem(FORMER);
         return former;
       } catch {
@@ -24,7 +27,7 @@ export function openStore(name) {
     },
     write(value) {
       try {
-        localStorage.setItem(name, value);
+        localStorage.setItem(key, value);
       } catch {
         // No persistence available; the redline lives only for this page.
       }

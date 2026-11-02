@@ -46,6 +46,10 @@
         "additionalProperties": false
       },
       "description": "The comments, in reading order; fragments never overlap."
+    },
+    "left": {
+      "type": "boolean",
+      "description": "True when the user left the comment being written, which ends the stretch of typing in it as one step (12, Undo). False when absent."
     }
   },
   "required": [

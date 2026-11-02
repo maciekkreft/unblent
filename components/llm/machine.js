@@ -1,4 +1,5 @@
 import { setup, assign, emit, enqueueActions, fromPromise, fromCallback } from "xstate";
+import { ulid } from "ulid";
 
 // `llm` owns access to the models, the language models and Jev (architecture.md 3.1): remote-only,
 // because a completion can only come from the server, which also holds the
@@ -111,6 +112,54 @@ const EDITS = {
   "removal.settled": (event) => ({ what: "forget", fields: { user: event.id } }),
 };
 
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// The chat settings a step holds, as the picture shows them: never a key (7.7), so no key
+// ever rides a step.
+const SETTINGS = {
+  provider: (p) => p.provider,
+  model: (p) => p.model,
+  effort: (p) => p.effort,
+  ttl: (p) => p.ttl,
+  address: (p) => p.ollama?.address,
+  decider: (p) => p.decider?.provider,
+  deciderModel: (p) => p.decider?.model,
+};
+const settingsOf = (picture) =>
+  Object.fromEntries(Object.entries(SETTINGS).map(([k, read]) => [k, read(picture)]).filter(([, v]) => typeof v === "string"));
+
+// The fields a gesture changed, as one step's undo and redo, or null when it changed no
+// setting (a key alone is no step).
+function stepOf(before, after) {
+  const changed = Object.keys(after).filter((k) => before[k] !== after[k] && typeof before[k] === "string");
+  if (!changed.length) return null;
+  const pick = (from) => Object.fromEntries(changed.map((k) => [k, from[k]]));
+  return { before: pick(before), after: pick(after) };
+}
+
+const LABELS = {
+  provider: (v) => `choose the provider ${v}`,
+  model: (v) => `choose the model ${v}`,
+  effort: (v) => `set thinking to ${v}`,
+  ttl: (v) => `keep the cache for ${v}`,
+  address: () => "change the address of Ollama",
+  decider: (v) => `choose ${v} to decide`,
+  deciderModel: (v) => `choose the model ${v} to decide`,
+};
+const ORDER = Object.keys(LABELS);
+const labelOf = (after) => {
+  const first = ORDER.find((k) => k in after);
+  return LABELS[first](after[first]);
+};
+
+// What a step writes back. A changed decider brings its own model back with it, so the
+// model of the other decider is not stored over the user's choice.
+const restoreOf = (fields) => {
+  const patch = { ...fields };
+  if ("decider" in patch) delete patch.deciderModel;
+  return patch;
+};
+
 // Only a guest's removal is llm's; every other removal passes by.
 const guestRemoved = ({ event }) => event.kind === "guest";
 
@@ -146,6 +195,27 @@ export const machine = setup({
     editSpending: fromPromise(({ input }) => input.edit(input.what, input.fields)),
   },
   actions: {
+    // A gesture that changed any chat setting is one step (12, Undo); its undo and redo
+    // hold only those settings, and each names what it expects to find.
+    recordStep: enqueueActions(({ context, enqueue }) => {
+      const step = context.editing && stepOf(context.editing, settingsOf(context.picture));
+      enqueue.assign({ editing: null });
+      if (!step) return;
+      enqueue.emit({
+        type: "step.recorded",
+        id: context.mint(),
+        owner: "llm",
+        label: labelOf(step.after),
+        undo: { kind: "settings", fields: step.before, expect: step.after },
+        redo: { kind: "settings", fields: step.after, expect: step.before },
+      });
+    }),
+    startApplying: assign({ applying: ({ event }) => ({ id: event.id }) }),
+    settleApplied: enqueueActions(({ context, enqueue }) => {
+      if (context.applying) enqueue.emit({ type: "step.settled", id: context.applying.id, owner: "llm", outcome: "applied" });
+      enqueue.assign({ applying: null });
+    }),
+    refuseStep: emit(({ event }) => ({ type: "step.settled", id: event.id, owner: "llm", outcome: "refused", reason: "changed" })),
     // Held read? replies are answered with the picture once a load lands (4.2), the
     // way `pages` holds its list.
     hold: assign({ pending: ({ context, event }) => [...context.pending, event.reply] }),
@@ -206,6 +276,14 @@ export const machine = setup({
   },
   guards: {
     signedIn: ({ event }) => event.userId != null,
+    ownStep: ({ event }) => event.owner === "llm",
+    stepApplies: ({ context, event }) => {
+      const p = event.payload ?? {};
+      if (event.owner !== "llm" || p.kind !== "settings" || !p.fields || !p.expect || !context.picture.signedIn) return false;
+      const now = settingsOf(context.picture);
+      const keys = Object.keys(p.expect);
+      return keys.length > 0 && keys.every((k) => now[k] === p.expect[k]);
+    },
     isEnd: ({ event }) => event.piece.type === "end",
     stopping: ({ context, event }) => event.action === "stop" && event.turnId === context.run.id,
   },
@@ -233,7 +311,10 @@ export const machine = setup({
       "an amount, and is read again after each of its requests. Only the admin reads what guests spent and changes the " +
       "limits and guest keys; a change made while what guests spent is being read is still " +
       "saved. When the admin deletes a guest, what it spent stops counting toward every limit. The settings belong to the account, so they are the " +
-      "same on every device. Every lookup the model proposes is checked against the query's own schema on the " +
+      "same on every device. Each change of a chat setting (provider, model, thinking effort, cache " +
+      "lifetime, the address of Ollama, who decides and its model) is a step Undo and Redo " +
+      "reverse (section 12); a key is never part of a step, and a change of a key alone is no " +
+      "step. A step is refused when the settings it would reverse were changed since, on any device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call. In the Mac app that is not connected, Ollama, a model server on the user's own Mac, is the first " +
       "provider: it needs no key, costs nothing and is not counted, its address is kept with the account (empty brings " +
@@ -248,7 +329,7 @@ export const machine = setup({
     shape: "remote-only",
     owns: "access to the models: the language models that write, and Jev, which decides",
     steps: {
-      "llm.edited": "pending",
+      "llm.edited": "step",
       "turn.steered": "spends",
       "limits.edited": "pending",
       "guestkeys.edited": "keys",
@@ -256,7 +337,7 @@ export const machine = setup({
       "use.reset": "pending",
       "removal.settled": "pending",
     },
-    emits: ["llm.changed", "completion.progressed", "spending.changed"],
+    emits: ["llm.changed", "completion.progressed", "spending.changed", "step.recorded", "step.settled"],
     asks: ["session: read", "session: guest"],
   },
   context: ({ input }) => ({
@@ -278,6 +359,11 @@ export const machine = setup({
     spending: input.spending,
     edit: input.edit,
     spendingPending: [], // spending? replies held while a read or an edit is in flight
+    mint: input.mint ?? ulid,
+    // The chat settings as the gesture being saved found them, to record its step (12, Undo).
+    editing: null,
+    // The Undo or Redo being saved: { id }, settled once the server answers.
+    applying: null,
   }),
   type: "parallel",
   states: {
@@ -326,8 +412,21 @@ export const machine = setup({
         ready: {
           on: {
             "read?": { actions: ({ context, event }) => event.reply(context.picture) },
-            "llm.edited": { target: "saving" },
+            "llm.edited": { target: "saving", actions: assign({ editing: ({ context }) => settingsOf(context.picture) }) },
             _reread: { target: "readingPicture", actions: assign({ announce: true }) },
+            // An Undo or Redo is applied only while the settings are as the step left them,
+            // as the server last reported them; a change since, on any device, refuses it.
+            // The settings live on the server, not in this browser, so what is compared is
+            // the settings themselves, and several steps undo in a row as each leaves them
+            // as the step before it found them.
+            "step.undone": [
+              { guard: "stepApplies", target: "restoring", actions: "startApplying" },
+              { guard: "ownStep", actions: "refuseStep" },
+            ],
+            "step.redone": [
+              { guard: "stepApplies", target: "restoring", actions: "startApplying" },
+              { guard: "ownStep", actions: "refuseStep" },
+            ],
           },
         },
         saving: {
@@ -335,8 +434,18 @@ export const machine = setup({
           invoke: {
             src: "save",
             input: ({ context, event }) => ({ save: context.save, patch: patchOf(event) }),
-            onDone: { target: "ready", actions: ["adopt", "replyPending", "clearPending", "emitChanged"] },
-            onError: { target: "ready", actions: ["replyPending", "clearPending"] },
+            onDone: { target: "ready", actions: ["adopt", "replyPending", "clearPending", "emitChanged", "recordStep"] },
+            onError: { target: "ready", actions: ["replyPending", "clearPending", assign({ editing: null })] },
+          },
+        },
+        restoring: {
+          on: { "read?": { actions: "hold" } },
+          invoke: {
+            src: "save",
+            input: ({ context, event }) => ({ save: context.save, patch: restoreOf(event.payload.fields) }),
+            onDone: { target: "ready", actions: ["adopt", "replyPending", "clearPending", "emitChanged", "settleApplied"] },
+            // No answer from the server leaves the step where it was: `undo` says so itself.
+            onError: { target: "ready", actions: ["replyPending", "clearPending", assign({ applying: null })] },
           },
         },
       },

@@ -264,7 +264,7 @@ class GeneratorSettings extends LitElement {
         <label class="field">
           <span>Model</span>
           <select @change=${(e) => this.#send({ type: "_model", id: g.id, model: e.target.value })}>
-            ${modelsFor(context.llm, g.model).map((m) => html`<option value=${m.id} ?selected=${m.id === modelOf(context.llm, g.model)}>${m.label}</option>`)}
+            ${modelsFor(context.llm, g.model).map((m) => html`<option value=${m.id} .selected=${m.id === modelOf(context.llm, g.model)}>${m.label}</option>`)}
           </select>
         </label>
         <div class="ask">

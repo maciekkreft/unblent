@@ -1,6 +1,8 @@
 import { mount, ask } from "bus";
 import { machine } from "./machine.js";
 import { openValueChecks } from "./store.js";
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import changed from "./events/value-checks.changed.json" with { type: "json" };
 import checked from "./events/values.checked.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
@@ -51,7 +53,7 @@ const api = {
 
 const actor = mount(machine, {
   input: { store, api, ask: (target, name, payload) => ask(machine, target, name, payload) },
-  events: { "value-checks.changed": changed, "values.checked": checked },
+  events: { "value-checks.changed": changed, "values.checked": checked, "step.recorded": recorded, "step.settled": settled },
   queries: { read },
 });
 

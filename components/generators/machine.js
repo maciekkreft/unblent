@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 import { chatTitle, firstRound } from "./strategies/chat-title.js";
 import { journalSummary, daySource } from "./strategies/journal-summary.js";
 import { valueSuggestion } from "./strategies/value-suggestion.js";
@@ -99,6 +100,11 @@ const content = (r) => {
 };
 const same = (a, b) => JSON.stringify(content(a)) === JSON.stringify(content(b));
 
+// The step that last wrote a generator in this browser (12, Undo): kept in the cache beside
+// the record, never sent or announced, so a generator the server brings has none and
+// refuses the step it overwrote.
+const stampOf = (r) => (typeof r?.step === "string" ? { step: r.step } : {});
+
 const generatorOf = (context, id) => context.generators.get(id) ?? DEFAULTS[id];
 
 const announce = (r) =>
@@ -125,11 +131,18 @@ const table = (context, id) => (isResultId(id) ? context.results : context.gener
 // it holds, is queued in the outbox (coalesced by id, keeping the first unsynced base)
 // and a drain is asked for. A generator never stored stands at its default, so its first
 // write has no base.
-function commit(context, enqueue, next) {
+function commit(context, enqueue, next, step) {
   const current = table(context, next.id).get(next.id);
   const shown = current ?? (isResultId(next.id) ? undefined : DEFAULTS[next.id]);
-  if (shown && same(shown, next)) return;
-  let r = record(next);
+  const stamped = step === undefined ? stampOf(current) : { step };
+  if (shown && same(shown, next)) {
+    if (step === undefined || current?.step === step) return;
+    const r = { ...record(shown), ...stamped };
+    table(context, r.id).set(r.id, r);
+    enqueue(() => context.store.put(r).catch(() => {}));
+    return;
+  }
+  let r = { ...record(next), ...stamped };
   if (context.userId == null) r = { ...r, version: current ? current.version + 1 : 1 };
   else if (current) r = { ...r, version: current.version };
   table(context, r.id).set(r.id, r);
@@ -147,14 +160,73 @@ function commit(context, enqueue, next) {
 
 const outboxRow = (r, baseVersion) => ({ ...content(r), baseVersion });
 
-// generator.edited carries only the fields the user changed.
+// generator.edited carries only the fields the user changed. Each edit is a step (12,
+// Undo); typing on in the one field (the name or the prompt) the open stretch last wrote
+// joins it. generator.edited says nothing of leaving a field, so a stretch ends at any
+// other change or any other step.
 function applyEdit(context, event, enqueue) {
   if (!isGenerator(event.id)) return;
-  const next = { ...generatorOf(context, event.id) };
+  const was = generatorOf(context, event.id);
+  const next = { ...was };
   for (const key of ["name", "prompt"]) if (typeof event[key] === "string") next[key] = event[key];
   if (typeof event.on === "boolean") next.on = event.on;
   if (typeof event.model === "string" && event.model !== "") next.model = event.model;
-  commit(context, enqueue, next);
+  if (same(was, next)) return;
+  const fields = EDITED.filter((k) => was[k] !== next[k]);
+  const typed = fields.length === 1 && TYPED_FIELDS.includes(fields[0]) ? fields[0] : null;
+  const open = context.stretch;
+  const joins = open && typed && open.generator === event.id && open.field === typed && context.generators.get(event.id)?.step === open.id;
+  const step = joins ? open : { id: context.mint(), generator: event.id, field: typed, before: pick(was, fields), prior: context.generators.get(event.id)?.step };
+  commit(context, enqueue, next, step.id);
+  const after = pick(next, Object.keys(step.before));
+  enqueue.emit({
+    type: "step.recorded",
+    id: step.id,
+    owner: "generators",
+    label: labelOf(next, fields),
+    undo: { kind: "generator", id: event.id, fields: step.before, ...priorOf(step.prior) },
+    redo: { kind: "generator", id: event.id, fields: after, ...priorOf(step.prior) },
+  });
+  context.stretch = typed ? step : null;
+  enqueue.assign({ stretch: context.stretch });
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+const EDITED = ["name", "on", "model", "prompt"];
+const TYPED_FIELDS = ["name", "prompt"];
+const pick = (r, fields) => Object.fromEntries(fields.map((k) => [k, r[k]]));
+
+// `prior` is the step that wrote a generator before this one, so an Undo leaves it as that
+// step left it and the step before can be undone next; a generator no step of this
+// browser wrote is left stamped with a mark of the step undone.
+const priorOf = (step) => (typeof step === "string" ? { prior: step } : {});
+const priorStamp = (p, step) => p.prior ?? `^${step}`;
+
+// What a step is about, as people read it after "Undo:".
+function labelOf(r, fields) {
+  const name = r.name.trim() || "a generator";
+  if (fields.length === 1 && fields[0] === "on") return `switch ${r.on ? "on" : "off"} ${name}`;
+  if (fields.length === 1 && fields[0] === "model") return `choose the model of ${name}`;
+  if (fields.length === 1 && fields[0] === "name") return `rename ${name}`;
+  return `edit ${name}`;
+}
+
+// An Undo or Redo, applied only while the generator was last written in this browser by
+// that step; a change since, here, in another tab or on another device, refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "generators") return;
+  context.stretch = null;
+  enqueue.assign({ stretch: null });
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "generators", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  if (p.kind !== "generator" || !isGenerator(p.id) || !p.fields) return settle("refused", "changed");
+  const undoing = event.type === "step.undone";
+  if (context.generators.get(p.id)?.step !== (undoing ? event.id : priorStamp(p, event.id))) return settle("refused", "changed");
+  const fields = pick(p.fields, EDITED.filter((k) => k in p.fields));
+  commit(context, enqueue, { ...generatorOf(context, p.id), ...fields }, undoing ? priorStamp(p, event.id) : event.id);
+  settle("applied");
 }
 
 // A text a generator wrote for an item, sent as `_result` by the part that asks the
@@ -188,10 +260,11 @@ function flush(context, message, enqueue) {
   else if (message.type === "generator.edited") applyEdit(context, message, enqueue);
   else if (message.type === "_result") applyResult(context, message, enqueue);
   else if (message.type === "conversation.renamed") applyRename(context, message, enqueue);
+  else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
-const QUEUED = Object.fromEntries(["list?", "results?", "generator.edited", "_result", "conversation.renamed"].map((t) => [t, { actions: queue }]));
+const QUEUED = Object.fromEntries(["list?", "results?", "generator.edited", "_result", "conversation.renamed", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]));
 
 // The pause the network waits for after a change (5), so a run of edits drains once.
 const SYNC_IDLE_MS = 2000;
@@ -470,7 +543,10 @@ export const machine = setup({
       "approved defaults (Haiku 5.5, on) for one the account never changed; on the Mac, `llm` runs a generator whose model " +
       "the chat's provider does not offer on the chat model, so Haiku 5.5 there means Gemma in Ollama. A change made in the " +
       "Generators tab (generator.edited) carries only the fields changed; it is kept and announced " +
-      "as generator.changed. While an account signed in with a passkey has a page open (never a " +
+      "as generator.changed, and is a step Undo and Redo reverse (section 12): typing on in the " +
+      "name or the prompt stays one step until anything else changes, and a step is refused when " +
+      "the generator was changed since by anything else, here, in another tab or on another " +
+      "device. Run and the texts generated are no steps. While an account signed in with a passkey has a page open (never a " +
       "guest, never on a try page), it finds the items that are ready and have no text from their " +
       "current content: a chat whose first answer has just finished and that has no title from " +
       "here yet, heard through conversation.changed; and every day `journal: read` lists that can " +
@@ -502,13 +578,16 @@ export const machine = setup({
     steps: {
       "generation.requested": "spends",
       "day.shown": "navigation",
-      "generator.edited": "pending",
+      "generator.edited": "step",
       "conversation.renamed": "follows",
     },
-    emits: ["generator.changed", "generation.changed"],
+    emits: ["generator.changed", "generation.changed", "step.recorded", "step.settled"],
     asks: ["session: read", "journal: read", "choice-points: list", "value-checks: read", "values: read", "llm: generate", "flags: read"],
   },
   context: ({ input }) => ({
+    mint: input.mint ?? ulid,
+    // The stretch of typing still open (12, Undo): { id, generator, field, before, prior }.
+    stretch: null,
     generators: new Map(),
     results: new Map(),
     outbox: new Map(),
@@ -558,7 +637,7 @@ export const machine = setup({
         onDone: {
           target: "checkingSession",
           actions: assign(({ context, event }) => {
-            const records = event.output.records.filter(valid).map(record);
+            const records = event.output.records.filter(valid).map((r) => ({ ...record(r), ...stampOf(r) }));
             return {
               hidden: context.hidden ?? event.output.hidden,
               generators: new Map(records.filter((r) => !isResultId(r.id)).map((r) => [r.id, r])),
@@ -611,6 +690,8 @@ export const machine = setup({
         "generator.edited": { actions: enqueueActions(({ context, event, enqueue }) => applyEdit(context, event, enqueue)) },
         _result: { actions: enqueueActions(({ context, event, enqueue }) => applyResult(context, event, enqueue)) },
         "conversation.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         // Signing in enqueues the whole cache, so what was made signed out becomes the
         // account's (5); a different user resets the cursor.
         "session.changed": {

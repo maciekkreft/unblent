@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the choice point checks (3.1): which evaluator checks each
 // box of a choice point, how its answers are shown, and what Jev answered about each line.
@@ -146,10 +147,13 @@ const box = (b) => {
   const evaluator = isId(b?.evaluator) ? b.evaluator : null;
   return { evaluator, questions: settingsOfQuestions(b?.questions), also: alsoOf(b, evaluator) };
 };
+// `step` is the step that last wrote the box in this browser (12, Undo): kept in the cache,
+// never sent, so a box the server brings has none and refuses the step it overwrote.
 const boxRecord = (field, b) => ({
   field,
   ...box(b),
   version: Number.isInteger(b?.version) && b.version >= 1 ? b.version : 1,
+  ...(typeof b?.step === "string" ? { step: b.step } : {}),
 });
 const sameBox = (a, b) => JSON.stringify(box(a)) === JSON.stringify(box(b));
 
@@ -414,10 +418,16 @@ const usesEvaluator = (context, id) => FIELDS.some((f) => idsOf(context.boxes.ge
 
 // The one place a box's settings change: kept, stored, queued for the server when signed
 // in (signed out the version is minted here), and announced with the other three boxes.
-function commitBox(context, enqueue, field, next) {
+function commitBox(context, enqueue, field, next, step) {
   const current = context.boxes.get(field);
-  if (current && sameBox(current, next)) return;
-  let r = boxRecord(field, next);
+  if (current && sameBox(current, next)) {
+    if (step === undefined || current.step === step) return;
+    const r = { ...current, step };
+    context.boxes.set(field, r);
+    enqueue(() => context.store.boxPut(r).catch(() => {}));
+    return;
+  }
+  let r = { ...boxRecord(field, next), ...(step === undefined ? {} : { step }) };
   if (context.userId == null) r = { ...r, version: current ? current.version + 1 : 1 };
   else if (current) r = { ...r, version: current.version };
   context.boxes.set(field, r);
@@ -429,6 +439,49 @@ function commitBox(context, enqueue, field, next) {
   }
   enqueue.emit({ type: "checks.changed", settings: settingsOf(context) });
   restartPause(enqueue, "day", { type: "_dueDay" });
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+const BOXES = { away: "Away", towards: "Towards", situation: "Situation", thoughts: "Thoughts and feelings" };
+
+// `prior` is the step that wrote the box before this one, so an Undo leaves it as that
+// step left it and the step before can be undone next; a box no step of this browser
+// wrote is left stamped with a mark of the step undone.
+const priorOf = (step) => (typeof step === "string" ? { prior: step } : {});
+const priorStamp = (p, step) => p.prior ?? `^${step}`;
+
+// One change of a box in Settings is one step.
+function applyEdit(context, enqueue, field, event) {
+  const current = context.boxes.get(field);
+  if (current && sameBox(current, event)) return;
+  const before = box(current);
+  const after = box(event);
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  const id = context.mint();
+  commitBox(context, enqueue, field, event, id);
+  enqueue.emit({
+    type: "step.recorded",
+    id,
+    owner: "choice-point-checks",
+    label: `change how the ${BOXES[field]} box is checked`,
+    undo: { kind: "box", field, box: before, ...priorOf(current?.step) },
+    redo: { kind: "box", field, box: after, ...priorOf(current?.step) },
+  });
+}
+
+// An Undo or Redo, applied only while the box was last written in this browser by that
+// step; a change since, here, in another tab or on another device, refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "choice-point-checks") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "choice-point-checks", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  if (p.kind !== "box" || !FIELDS.includes(p.field) || !p.box) return settle("refused", "changed");
+  const undoing = event.type === "step.undone";
+  if (context.boxes.get(p.field)?.step !== (undoing ? event.id : priorStamp(p, event.id))) return settle("refused", "changed");
+  commitBox(context, enqueue, p.field, p.box, undoing ? priorStamp(p, event.id) : event.id);
+  settle("applied");
 }
 
 const boxRow = (r, baseVersion) => ({ id: `box:${r.field}`, kind: "box", field: r.field, ...box(r), baseVersion });
@@ -478,8 +531,11 @@ function handle(context, message, enqueue) {
     case "read?":
       return replyRead(context, enqueue, message.payload?.day, message.reply);
     case "checks.edited":
-      if (FIELDS.includes(message.field)) commitBox(context, enqueue, message.field, message);
+      if (FIELDS.includes(message.field)) applyEdit(context, enqueue, message.field, message);
       return;
+    case "step.undone":
+    case "step.redone":
+      return applyStep(context, message, enqueue);
     case "choice-point.changed": {
       const c = message.choicePoint;
       if (!isId(c?.id) || !isDay(c?.day)) return;
@@ -554,6 +610,8 @@ const QUEUED_TYPES = [
   "evaluator.deleted",
   "day.shown",
   "session.changed",
+  "step.undone",
+  "step.redone",
 ];
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(QUEUED_TYPES.map((t) => [t, { actions: queue }]));
@@ -730,19 +788,23 @@ export const machine = setup({
       "rate limited, ends the queue and is announced with the lines so the choice point can " +
       "say why; the lines are asked again when a line of that choice point is next finished or " +
       "its day is next shown. When Jev is busy with another request the line waits and is asked " +
-      "again. It works signed out and syncs to the account when signed in (section 5).",
+      "again. It works signed out and syncs to the account when signed in (section 5). Each " +
+      "change of a box's settings in Settings is a step Undo and Redo reverse (section 12), " +
+      "refused when the box was changed since by anything else, here, in another tab or on " +
+      "another device.",
     kind: "fact",
     shape: "replicated",
     owns: "which evaluator checks each choice point box, and Jev's answers about each line",
     steps: {
-      "checks.edited": "pending",
+      "checks.edited": "step",
       "choice-point.saved": "follows",
       "day.shown": "navigation",
     },
-    emits: ["checks.changed", "lines.checked"],
+    emits: ["checks.changed", "lines.checked", "step.recorded", "step.settled"],
     asks: ["llm: decide", "evaluators: list", "choice-points: list", "session: read"],
   },
   context: ({ input }) => ({
+    mint: input.mint ?? ulid,
     store: input.store,
     api: input.api,
     ask: input.ask,

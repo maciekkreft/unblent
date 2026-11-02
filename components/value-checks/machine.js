@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the values checks (3.1): which evaluator checks the value
 // lines of the Your values sheet, which checks the examples, and what Jev answered about
@@ -123,9 +124,13 @@ export function answersOf(questions, answers) {
 // --- Records ---------------------------------------------------------------------------
 
 const settingsShape = (s) => ({ values: isId(s?.values) ? s.values : null, examples: isId(s?.examples) ? s.examples : null });
+// `step` is the step that last wrote the settings in this browser (12, Undo): kept in the
+// cache, never sent, so settings the server brings have none and refuse the step they
+// overwrote.
 const settingsRecord = (s) => ({
   ...settingsShape(s),
   version: Number.isInteger(s?.version) && s.version >= 1 ? s.version : 1,
+  ...(typeof s?.step === "string" ? { step: s.step } : {}),
 });
 const sameSettings = (a, b) => JSON.stringify(settingsShape(a)) === JSON.stringify(settingsShape(b));
 const settingsOf = (context) => settingsShape(context.settings);
@@ -343,11 +348,17 @@ function dayFetched(context, enqueue, { day, reply }) {
 
 // The one place the settings change: kept, stored, queued for the server when signed in
 // (signed out the version is minted here), and announced.
-function commitSettings(context, enqueue, next) {
+function commitSettings(context, enqueue, next, step) {
   const current = context.settings;
-  if (current && sameSettings(current, next)) return;
-  if (!current && sameSettings({}, next)) return;
-  let r = settingsRecord(next);
+  const stamped = step === undefined ? {} : { step };
+  if ((current && sameSettings(current, next)) || (!current && sameSettings({}, next))) {
+    if (step === undefined || current?.step === step) return;
+    const r = { ...settingsRecord(current ?? next), ...stamped };
+    context.settings = r;
+    enqueue(() => context.store.settingsPut(r).catch(() => {}));
+    return;
+  }
+  let r = { ...settingsRecord(next), ...stamped };
   if (context.userId == null) r = { ...r, version: current ? current.version + 1 : 1 };
   else if (current) r = { ...r, version: current.version };
   context.settings = r;
@@ -359,6 +370,47 @@ function commitSettings(context, enqueue, next) {
   }
   enqueue.emit({ type: "value-checks.changed", settings: settingsOf(context) });
   restartPause(enqueue, "day", { type: "_dueDay" });
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// `prior` is the step that wrote the settings before this one, so an Undo leaves them as
+// that step left them and the step before can be undone next; settings no step of this
+// browser wrote are left stamped with a mark of the step undone.
+const priorOf = (step) => (typeof step === "string" ? { prior: step } : {});
+const priorStamp = (p, step) => p.prior ?? `^${step}`;
+
+// One choice in Settings is one step.
+function applyEdit(context, enqueue, event) {
+  const before = settingsShape(context.settings);
+  const after = settingsShape(event);
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  const prior = context.settings?.step;
+  const id = context.mint();
+  commitSettings(context, enqueue, event, id);
+  const label = before.values !== after.values ? "choose who checks your values" : "choose who checks the examples";
+  enqueue.emit({
+    type: "step.recorded",
+    id,
+    owner: "value-checks",
+    label,
+    undo: { kind: "settings", settings: before, ...priorOf(prior) },
+    redo: { kind: "settings", settings: after, ...priorOf(prior) },
+  });
+}
+
+// An Undo or Redo, applied only while the settings were last written in this browser by
+// that step; a change since, here, in another tab or on another device, refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "value-checks") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "value-checks", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  if (p.kind !== "settings" || !p.settings) return settle("refused", "changed");
+  const undoing = event.type === "step.undone";
+  if (context.settings?.step !== (undoing ? event.id : priorStamp(p, event.id))) return settle("refused", "changed");
+  commitSettings(context, enqueue, p.settings, undoing ? priorStamp(p, event.id) : event.id);
+  settle("applied");
 }
 
 const settingsRow = (r, baseVersion) => ({ id: "settings", kind: "settings", ...settingsShape(r), baseVersion });
@@ -420,7 +472,10 @@ function handle(context, message, enqueue) {
     case "read?":
       return replyRead(context, enqueue, message.payload?.day, message.reply);
     case "value-checks.edited":
-      return commitSettings(context, enqueue, message);
+      return applyEdit(context, enqueue, message);
+    case "step.undone":
+    case "step.redone":
+      return applyStep(context, message, enqueue);
     case "llm.changed":
       return keyChanged(context, enqueue, message);
     case "values.changed":
@@ -487,6 +542,8 @@ const QUEUED_TYPES = [
   "evaluator.deleted",
   "day.shown",
   "session.changed",
+  "step.undone",
+  "step.redone",
 ];
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(QUEUED_TYPES.map((t) => [t, { actions: queue }]));
@@ -640,19 +697,23 @@ export const machine = setup({
       "to. A failure, such as no Jev key or rate limited, ends the queue and is announced " +
       "with the lines; they are asked again when a row is next finished or the day is next " +
       "shown. When Jev is busy with another request the line waits and is asked again. It " +
-      "works signed out and syncs to the account when signed in (section 5).",
+      "works signed out and syncs to the account when signed in (section 5). Each choice in " +
+      "Settings of who checks the values or the examples is a step Undo and Redo reverse " +
+      "(section 12), refused when the settings were changed since by anything else, here, in " +
+      "another tab or on another device.",
     kind: "fact",
     shape: "replicated",
     owns: "which evaluators check the values and their examples, and Jev's answers about each line",
     steps: {
-      "value-checks.edited": "pending",
+      "value-checks.edited": "step",
       "values.saved": "follows",
       "day.shown": "navigation",
     },
-    emits: ["values.checked", "value-checks.changed"],
+    emits: ["values.checked", "value-checks.changed", "step.recorded", "step.settled"],
     asks: ["llm: read", "llm: decide", "evaluators: list", "values: read", "session: read"],
   },
   context: ({ input }) => ({
+    mint: input.mint ?? ulid,
     store: input.store,
     api: input.api,
     ask: input.ask,

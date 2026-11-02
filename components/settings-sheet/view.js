@@ -604,7 +604,7 @@ class SettingsSheet extends LitElement {
         ${this.#label(role)}
         <select @change=${(e) => this.#actor.send({ type: "_setEditor", role, component: e.target.value })}>
           ${options.map(
-            (name) => html`<option value=${name} ?selected=${name === chosen}>${this.#label(name)}</option>`,
+            (name) => html`<option value=${name} .selected=${name === chosen}>${this.#label(name)}</option>`,
           )}
         </select>
       </label>
@@ -861,7 +861,7 @@ class SettingsSheet extends LitElement {
           <span>Provider</span>
           <select @change=${(e) => this.#actor.send({ type: "_setProvider", provider: e.target.value })}>
             ${providers.map(
-              (p) => html`<option value=${p.id} ?selected=${p.id === llm.provider}>${providerLabel(p)}</option>`,
+              (p) => html`<option value=${p.id} .selected=${p.id === llm.provider}>${providerLabel(p)}</option>`,
             )}
           </select>
         </label>
@@ -885,7 +885,7 @@ class SettingsSheet extends LitElement {
                 <span>Model</span>
                 <select @change=${(e) => this.#actor.send({ type: "_setModel", model: e.target.value })}>
                   ${llm.models.map(
-                    (m) => html`<option value=${m.id} ?selected=${m.id === llm.model}>${m.label}</option>`,
+                    (m) => html`<option value=${m.id} .selected=${m.id === llm.model}>${m.label}</option>`,
                   )}
                 </select>
               </label>
@@ -900,7 +900,7 @@ class SettingsSheet extends LitElement {
           <span>${ollama ? "Thinking" : "Thinking effort"}</span>
           <select @change=${(e) => this.#actor.send({ type: "_setEffort", effort: e.target.value })}>
             ${llm.efforts.map(
-              (e) => html`<option value=${e} ?selected=${e === llm.effort}>${EFFORT_LABELS[e] ?? this.#label(e)}</option>`,
+              (e) => html`<option value=${e} .selected=${e === llm.effort}>${EFFORT_LABELS[e] ?? this.#label(e)}</option>`,
             )}
           </select>
         </label>
@@ -910,7 +910,7 @@ class SettingsSheet extends LitElement {
               <label class="field">
                 <span>Cache lifetime</span>
                 <select @change=${(e) => this.#actor.send({ type: "_setTtl", ttl: e.target.value })}>
-                  ${TTLS.map((t) => html`<option value=${t} ?selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
+                  ${TTLS.map((t) => html`<option value=${t} .selected=${t === llm.ttl}>${TTL_LABELS[t]}</option>`)}
                 </select>
               </label>
             `}
@@ -1031,7 +1031,7 @@ class SettingsSheet extends LitElement {
       <label class="field decider">
         <span>Provider</span>
         <select @change=${(e) => this.#actor.send({ type: "_setDecider", decider: e.target.value })}>
-          ${offered.map((d) => html`<option value=${d} ?selected=${d === provider}>${DECIDER_LABELS[d] ?? d}</option>`)}
+          ${offered.map((d) => html`<option value=${d} .selected=${d === provider}>${DECIDER_LABELS[d] ?? d}</option>`)}
         </select>
       </label>
       ${ollama ? this.#ollama(ollama, "checks") : nothing}
@@ -1042,7 +1042,7 @@ class SettingsSheet extends LitElement {
             <label class="field decider-model">
               <span>Model</span>
               <select @change=${(e) => this.#actor.send({ type: "_setDeciderModel", model: e.target.value })}>
-                ${models.map((m) => html`<option value=${m.id} ?selected=${m.id === model}>${m.label}</option>`)}
+                ${models.map((m) => html`<option value=${m.id} .selected=${m.id === model}>${m.label}</option>`)}
               </select>
             </label>
           `
@@ -1089,8 +1089,8 @@ class SettingsSheet extends LitElement {
           <label class="field">
             <span>${label}</span>
             <select @change=${(e) => this.#actor.send({ type: "_setValueChecker", line, evaluator: e.target.value || null })}>
-              <option value="" ?selected=${!current}>Not checked</option>
-              ${choosable.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
+              <option value="" .selected=${!current}>Not checked</option>
+              ${choosable.map((e) => html`<option value=${e.id} .selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
             </select>
           </label>
         </div>
@@ -1117,8 +1117,8 @@ class SettingsSheet extends LitElement {
             aria-label="Evaluator for ${label}"
             @change=${(e) => this.#actor.send({ type: "_setChecker", field, evaluator: e.target.value || null })}
           >
-            <option value="" ?selected=${!evaluator}>Not checked</option>
-            ${evaluators.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
+            <option value="" .selected=${!evaluator}>Not checked</option>
+            ${evaluators.map((e) => html`<option value=${e.id} .selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
           </select>
         </label>
         ${evaluator && !evaluator.combined ? questions.map((q, i) => this.#checkQuestion(field, q, i, shown.questions[i], questions)) : nothing}
@@ -1139,8 +1139,8 @@ class SettingsSheet extends LitElement {
           aria-label="Also check ${label} with"
           @change=${(e) => this.#actor.send({ type: "_setAlso", field, evaluator: e.target.value || null })}
         >
-          <option value="" ?selected=${!current}>None</option>
-          ${evaluators.map((e) => html`<option value=${e.id} ?selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
+          <option value="" .selected=${!current}>None</option>
+          ${evaluators.map((e) => html`<option value=${e.id} .selected=${e.id === current}>${e.name || "Untitled"}</option>`)}
         </select>
       </label>
     `;
@@ -1178,10 +1178,10 @@ class SettingsSheet extends LitElement {
                     set({ when: question ? { question, option } : null });
                   }}
                 >
-                  <option value="" ?selected=${!when}>Always</option>
+                  <option value="" .selected=${!when}>Always</option>
                   ${earlier.flatMap((p) =>
                     answersOf(p).map(
-                      (a) => html`<option value="${p.id} ${a.id}" ?selected=${when === `${p.id} ${a.id}`}>
+                      (a) => html`<option value="${p.id} ${a.id}" .selected=${when === `${p.id} ${a.id}`}>
                         Only when question ${questions.indexOf(p) + 1} is ${a.name}
                       </option>`,
                     ),
