@@ -23,6 +23,13 @@ carries freeUse, and its requests are refused with used-up, paused or blocked.
 The admin alone reads what guests spent (GET "/spending"), changes the limits
 (PUT "/limits") and the guest keys (PUT "/guestkeys"), blocks or unblocks a guest
 (PUT "/blocked") and resets a guest's use, or undoes that (PUT "/reset").
+
+A key change, the account's own or a guest key, is a step (12, Undo): the key from before
+stays on the server, still encrypted, under the step's id (keysteps.py). PUT "/keys/step"
+and PUT "/guestkeys/step" bring a kept key back for Undo or Redo, answering the error
+changed when the key changed since (not a 4xx, which a browser logs as a failure); PUT
+"/keys/forget" and PUT "/guestkeys/forget" erase what a step kept once it leaves the
+undo list.
 """
 
 import json
@@ -40,7 +47,7 @@ from starlette.concurrency import run_in_threadpool
 
 from server.user import local_user, require_user, session_of, user_dir
 
-from . import anthropic_adapter, crypto, echo_adapter, jev_adapter, openai_adapter, spending
+from . import anthropic_adapter, crypto, echo_adapter, jev_adapter, keysteps, openai_adapter, spending
 from .adapters import complete
 
 _log = logging.getLogger("uvicorn.error")
@@ -323,11 +330,15 @@ def _valid(payload) -> dict | None:
         return None
     if key is not None and not isinstance(key, str):
         return None
+    step = payload.get("step")
+    if step is not None and not keysteps.valid_step(step):
+        return None
     return {
         "provider": provider, "effort": effort, "ttl": ttl, "model": model, "key": key, "jevKey": jev_key,
         "address": None if address is None else _address(address),
         "decider": decider,
         "deciderModel": decider_model,
+        "step": step,
     }
 
 
@@ -367,29 +378,62 @@ def _apply(user_id: str, fields: dict, guest: bool = False) -> dict:
                 (fields["deciderModel"] or None) if fields["deciderModel"] is not None else current["deciderModel"],
             ),
         )
-        key = fields["key"]
-        if key is not None:
-            if key == "":  # an empty key removes it (7.7)
-                connection.execute("DELETE FROM keys WHERE provider = ?", (provider,))
-            else:
-                connection.execute(
-                    "INSERT INTO keys (provider, cipher, at) VALUES (?, ?, ?)"
-                    " ON CONFLICT(provider) DO UPDATE SET cipher = excluded.cipher, at = excluded.at",
-                    (provider, crypto.encrypt(key), int(time.time() * 1000)),
-                )
-        # The Jev key sits in the same table under its own name, independent of the
-        # chosen provider, so `keys` needs no new column.
-        jev_key = fields["jevKey"]
-        if jev_key == "":
-            connection.execute("DELETE FROM keys WHERE provider = 'jev'")
-        elif jev_key is not None:
-            connection.execute(
-                "INSERT INTO keys (provider, cipher, at) VALUES ('jev', ?, ?)"
-                " ON CONFLICT(provider) DO UPDATE SET cipher = excluded.cipher, at = excluded.at",
-                (crypto.encrypt(jev_key), int(time.time() * 1000)),
-            )
+        # A key change is a step (12, Undo): with the step's id, the key from before is
+        # kept aside, still encrypted, so Undo can bring it back (keysteps.py). An empty
+        # key removes it (7.7). The Jev key sits in the same table under its own name,
+        # independent of the chosen provider, so `keys` needs no new column.
+        now = int(time.time() * 1000)
+        for name, value in ((provider, fields["key"]), ("jev", fields["jevKey"])):
+            if value is not None:
+                cipher = crypto.encrypt(value) if value else None
+                keysteps.put(connection, "keys", "key_steps", name, cipher, now, fields["step"])
         _models_cache.pop(user_id, None)
         return _picture(user_id, connection, guest)
+
+
+def _move_key(user_id: str, body: dict) -> dict | None:
+    with _connect(user_id) as connection:
+        if not keysteps.move(connection, "keys", "key_steps", body["step"], body["restore"], body["expect"]):
+            return None
+        _models_cache.pop(user_id, None)
+        return _picture(user_id, connection)
+
+
+def _forget_key(user_id: str, step: str) -> None:
+    with _connect(user_id) as connection:
+        keysteps.forget(connection, "key_steps", step)
+
+
+async def _body(request: Request):
+    try:
+        return await request.json()
+    except ValueError:
+        return None
+
+
+@router.put("/keys/step")
+async def step_key(request: Request, user_id: str = Depends(require_user)):
+    # Undo or Redo of a key step (12): the key comes back from the server's own copy and
+    # never travels; a key changed since refuses it.
+    body = keysteps.valid_move(await _body(request))
+    if body is None:
+        return JSONResponse({"error": "bad-request"}, status_code=400)
+    if _guest(request):
+        return JSONResponse({"error": "guest"}, status_code=403)
+    picture = await run_in_threadpool(_move_key, user_id, body)
+    if picture is None:
+        return {"error": "changed"}
+    return picture
+
+
+@router.put("/keys/forget")
+async def forget_key(request: Request, user_id: str = Depends(require_user)):
+    # The step left the undo list (step.dropped): the keys it kept go for good.
+    body = await _body(request)
+    if not isinstance(body, dict) or set(body) != {"step"} or not keysteps.valid_step(body["step"]):
+        return JSONResponse({"error": "bad-request"}, status_code=400)
+    await run_in_threadpool(_forget_key, user_id, body["step"])
+    return {"ok": True}
 
 
 def _for_completion(user_id: str, guest: bool = False) -> tuple[dict, str | None]:
@@ -631,6 +675,24 @@ async def edit_limits(request: Request, user_id: str = Depends(require_user)):
 @router.put("/guestkeys")
 async def edit_guest_keys(request: Request, user_id: str = Depends(require_user)):
     return await _admin_edit(request, spending.valid_keys, spending.set_keys)
+
+
+@router.put("/guestkeys/step")
+async def step_guest_keys(request: Request, user_id: str = Depends(require_user)):
+    # Undo or Redo of a guest key step (12), refused when a key changed since.
+    if not _admin(request):
+        return JSONResponse({"error": "not-admin"}, status_code=403)
+    body = keysteps.valid_move(await _body(request))
+    if body is None:
+        return JSONResponse({"error": "bad-request"}, status_code=400)
+    if not await run_in_threadpool(spending.move_keys, body):
+        return {"error": "changed"}
+    return await run_in_threadpool(spending.summary)
+
+
+@router.put("/guestkeys/forget")
+async def forget_guest_keys(request: Request, user_id: str = Depends(require_user)):
+    return await _admin_edit(request, spending.valid_forget_keys, spending.forget_keys)
 
 
 @router.put("/blocked")

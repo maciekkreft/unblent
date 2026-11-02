@@ -1,4 +1,4 @@
-import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
+import { setup, assign, emit, fromPromise } from "xstate";
 
 // A view component (3.1): the Limits and Guest keys parts of the People tab (12). It owns
 // no fact: the limits and the guest keys belong to `llm`, reached by one query for the
@@ -56,19 +56,17 @@ export const machine = setup({
       "the prices used. Guest keys are one per provider, entered like the keys on the " +
       "Settings tab, with Key saved, Replace and Remove; guests spend only on these, " +
       "and a provider without a guest key is not offered to guests. Every change " +
-      "applies at once, except Remove on a key: the row reads Key removed with an Undo " +
-      "and a bar draining the undo window, and the key is removed only when the window " +
-      "ends; leaving the page before then keeps it. A gesture made while the part is " +
+      "applies at once; `llm` makes saving, replacing or removing a guest key a step with " +
+      "the short notice whose Undo brings the key before back (12). A gesture made while the part is " +
       "reading its data again is still applied.",
     kind: "view",
     emits: ["limits.edited", "guestkeys.edited"],
     attributes: [],
     asks: ["llm: spending"],
   },
-  // `removing` names the providers whose key waits out the undo window (12, forgiveness);
-  // `removed` those whose removal went out and whose new picture has not come yet, so
-  // the row does not read Key saved in between.
-  context: ({ input }) => ({ ask: input.ask, undoMs: input.undoMs ?? 3000, spending: null, failed: false, removing: [], removed: [] }),
+  // `removed` names the providers whose key removal went out and whose new picture has
+  // not come yet, so the row does not read Key saved in between.
+  context: ({ input }) => ({ ask: input.ask, spending: null, failed: false, removed: [] }),
   initial: "hidden",
   states: {
     hidden: { on: { _shown: "reading" } },
@@ -107,28 +105,11 @@ export const machine = setup({
       guard: ({ event }) => typeof event.key === "string" && event.key.trim() !== "",
       actions: emit(({ event }) => ({ type: "guestkeys.edited", [event.provider]: event.key.trim() })),
     },
-    // Remove waits out the undo window; nothing is emitted until it ends.
+    // Remove goes at once; `llm` records it as a step whose Undo brings the key back (12).
     _removeKey: {
-      guard: ({ context, event }) => typeof event.provider === "string" && !context.removing.includes(event.provider),
-      actions: enqueueActions(({ context, event, enqueue }) => {
-        enqueue.assign({ removing: [...context.removing, event.provider] });
-        enqueue.raise({ type: "_removeElapsed", provider: event.provider }, { delay: context.undoMs, id: `remove:${event.provider}` });
-      }),
-    },
-    _undoRemove: {
-      guard: ({ context, event }) => context.removing.includes(event.provider),
-      actions: enqueueActions(({ context, event, enqueue }) => {
-        enqueue.cancel(`remove:${event.provider}`);
-        enqueue.assign({ removing: context.removing.filter((p) => p !== event.provider) });
-      }),
-    },
-    _removeElapsed: {
-      guard: ({ context, event }) => context.removing.includes(event.provider),
+      guard: ({ event }) => typeof event.provider === "string",
       actions: [
-        assign({
-          removing: ({ context, event }) => context.removing.filter((p) => p !== event.provider),
-          removed: ({ context, event }) => [...context.removed, event.provider],
-        }),
+        assign({ removed: ({ context, event }) => [...context.removed, event.provider] }),
         emit(({ event }) => ({ type: "guestkeys.edited", [event.provider]: "" })),
       ],
     },

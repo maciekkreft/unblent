@@ -39,6 +39,24 @@ const savePatch = async (patch) => {
   return res.json();
 };
 
+// Undo or Redo of a key step (7.7, 12): the server brings back the key it kept and
+// answers with the picture, or with the error changed; no key travels either way.
+const moveKey = (body) => savePath("/api/llm/keys/step", body);
+
+// The key step left the undo list: the server erases the keys it kept.
+const forgetKey = (step) => savePath("/api/llm/keys/forget", { step });
+
+async function savePath(path, body) {
+  const res = await fetch(path, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json", ...json },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(String(res.status));
+  return res.json();
+}
+
 // The stream in flight, and whether the page is going away. An answer still arriving
 // when the page is discarded is not kept (5: it ends with the question, and Continue asks
 // again): as the page leaves we abort the
@@ -206,6 +224,8 @@ mount(machine, {
     guest: () => ask(machine, "session", "guest", {}),
     read: readPicture,
     save: savePatch,
+    moveKey,
+    forgetKey,
     stream,
     decide: decideOnce,
     generate: generateOnce,

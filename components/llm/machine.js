@@ -108,14 +108,17 @@ const EDITS = {
   "guestkeys.edited": (event) => ({ what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) }),
   "guest.blocked": (event) => ({ what: "blocked", fields: { user: event.user, blocked: event.blocked } }),
   "use.reset": (event) => ({ what: "reset", fields: { user: event.user } }),
-  "step.dropped": (event) => ({ what: "forget", fields: { user: event.payload.user } }),
+  "step.dropped": (event) =>
+    event.payload?.kind === "guestkeys"
+      ? { what: "guestkeys/forget", fields: { step: event.id } }
+      : { what: "forget", fields: { user: event.payload.user } },
 };
 
 // --- Steps of the admin's gestures about guests (12, Undo) ------------------------------
 
 // What guests spent lives in one shared file on the server, so a step holds what it
 // expects to find there and is applied only while a fresh read still shows it. A guest
-// key is never part of a step (7.7).
+// key step is checked by the server itself, which alone holds the keys (7.7).
 const SPENDING_STEPS = ["limits", "blocked", "reset"];
 
 // The limits a shape names (limits.edited's), as a ledger (the spending picture) holds them.
@@ -138,9 +141,59 @@ const sameMoney = (a, b) => Math.abs(a - b) < 1e-9;
 // The guest as People names it, for the step's label (12, Undo).
 const guestName = (event) => (typeof event.name === "string" && event.name.trim() ? event.name.trim() : "a guest");
 
+// --- Key steps (7.7, 12, Undo) --------------------------------------------------------
+
+// A key never enters a step: the server keeps the key from before and the key after it,
+// still encrypted, under the step's id, so the step says only which of the two to bring
+// back and which it expects to find. Its id is minted before the gesture is sent, so the
+// server files the kept keys under it.
+const KEY_UNDO = { restore: "before", expect: "after" };
+const KEY_REDO = { restore: "after", expect: "before" };
+
+// One provider's key change in a gesture: add, replace or remove, or null when it changes
+// nothing (removing a key that is not there).
+function keyChange(provider, value, set) {
+  if (typeof value !== "string" || (value === "" && !set)) return null;
+  return { provider, kind: value === "" ? "remove" : set ? "replace" : "add" };
+}
+
+// The account's own key changes a settings gesture carries, from the picture it was
+// made on: the provider's key (`key`, for the provider the gesture names or the chosen
+// one) and the Jev key.
+function keyEditOf(context, event) {
+  const picture = context.picture;
+  const provider = event.provider ?? picture.provider;
+  const changes = [
+    keyChange(provider, event.key, Boolean(picture.providers?.find((p) => p.id === provider)?.keySet)),
+    keyChange("jev", event.jevKey, picture.jev?.keySet === true),
+  ].filter(Boolean);
+  return changes.length ? { id: context.mint(), changes } : null;
+}
+
+const KEY_NAMES = { jev: "the Jev key" };
+const keyLabel = ({ provider, kind }) => `${kind} ${KEY_NAMES[provider] ?? "the API key"}`;
+const GUEST_KEY_NAMES = { jev: "Jev", anthropic: "Anthropic" };
+const guestKeyLabel = ({ provider, kind }) => `${kind} the guest ${GUEST_KEY_NAMES[provider] ?? provider} key`;
+
+// The guest key changes of guestkeys.edited, from the ledger it was made on. Without a
+// ledger yet, a removal is taken to remove a key, as People offers Remove only on a
+// saved key, and the server keeps nothing when nothing changed.
+function guestKeysDraft(context, event) {
+  const ledger = context.ledger;
+  const changes = Object.keys(GUEST_KEY_NAMES)
+    .map((id) => {
+      const set = ledger ? Boolean(ledger.providers.find((p) => p.id === id)?.guestKeySet) : event[id] === "";
+      return keyChange(id, event[id], set);
+    })
+    .filter(Boolean);
+  return changes.length ? { kind: "guestkeys", id: context.mint(), changes } : null;
+}
+
 // What a gesture changes, as the ledger held it before the gesture was sent; null when
-// the ledger was never read, or the gesture is no step (a guest key).
-function draftOf(ledger, event) {
+// the ledger was never read.
+function draftOf(context, event) {
+  if (event.type === "guestkeys.edited") return guestKeysDraft(context, event);
+  const ledger = context.ledger;
   if (!ledger) return null;
   if (event.type === "limits.edited") return { kind: "limits", before: limitsIn(ledger, EDITS[event.type](event).fields) };
   if (event.type === "guest.blocked") return { kind: "blocked", user: event.user, name: guestName(event), before: blockedOf(ledger, event.user) };
@@ -153,6 +206,14 @@ const LIMIT_LABELS = { guest: () => "the limit for each guest", allGuests: () =>
 // The step a gesture made, from the draft and the server's answer, or null when nothing
 // changed. Block and Reset use show the short notice with Undo, as they always offered one.
 function stepOfDraft(draft, after) {
+  if (draft.kind === "guestkeys")
+    return {
+      id: draft.id,
+      label: guestKeyLabel(draft.changes[0]),
+      notice: true,
+      undo: { kind: "guestkeys", ...KEY_UNDO },
+      redo: { kind: "guestkeys", ...KEY_REDO },
+    };
   if (draft.kind === "limits") {
     const now = limitsIn(after, draft.before);
     const before = {};
@@ -211,7 +272,8 @@ function stillAsLeft(ledger, p) {
 }
 
 // What a step writes back, as the route and fields of an admin's gesture.
-function writeOf(p) {
+function writeOf({ id, payload: p }) {
+  if (p.kind === "guestkeys") return { what: "guestkeys/step", fields: { step: id, restore: p.restore, expect: p.expect } };
   if (p.kind === "limits") return { what: "limits", fields: p.fields };
   if (p.kind === "blocked") return { what: "blocked", fields: { user: p.user, blocked: p.blocked } };
   return { what: "reset", fields: { user: p.user, ...(p.undone ? { undone: true } : {}) } };
@@ -265,8 +327,11 @@ const restoreOf = (fields) => {
   return patch;
 };
 
-// Only the step of a guest's Delete leaving the undo list is llm's (3.4, 12).
-const guestPurged = ({ event }) => event.owner === "session" && event.payload?.kind === "guest" && event.payload.deleted === true;
+// The steps leaving the undo list that the spending part finishes: a guest's Delete,
+// whose spending stops counting (3.4, 12), and a guest key step, whose kept keys go.
+const guestPurged = ({ event }) =>
+  (event.owner === "session" && event.payload?.kind === "guest" && event.payload.deleted === true) ||
+  (event.owner === "llm" && event.payload?.kind === "guestkeys");
 
 // The admin's gestures about guests, each sent to the server from any state of `spending`
 // that is not already applying a step.
@@ -277,9 +342,17 @@ const GESTURES = {
   "use.reset": { target: "editing", actions: "draft" },
   "step.dropped": { guard: guestPurged, target: "editing", actions: "draft" },
 };
+// A guest key step goes straight to the server, which alone can tell whether the keys
+// are still as the step left them.
 const STEPS = {
-  "step.undone": { guard: "spendingStep", target: "verifying", actions: "startStepping" },
-  "step.redone": { guard: "spendingStep", target: "verifying", actions: "startStepping" },
+  "step.undone": [
+    { guard: "guestKeyStep", target: "applying", actions: "startStepping" },
+    { guard: "spendingStep", target: "verifying", actions: "startStepping" },
+  ],
+  "step.redone": [
+    { guard: "guestKeyStep", target: "applying", actions: "startStepping" },
+    { guard: "spendingStep", target: "verifying", actions: "startStepping" },
+  ],
 };
 
 export const machine = setup({
@@ -292,6 +365,9 @@ export const machine = setup({
     // A settings gesture reaching the server: the patch arrives through input, so
     // the key never enters context (7.7).
     save: fromPromise(({ input }) => input.save(input.patch)),
+    // An Undo or Redo of a key step: the server brings back the key it kept and answers
+    // with the picture, or with the error changed (7.7, 12).
+    moveKey: fromPromise(({ input }) => input.moveKey(input.body)),
     // The streamed answer (section 10, fromCallback): each neutral piece the server
     // sends becomes an internal _piece; the returned cleanup cancels the fetch, so
     // leaving `running` stops the provider and the spending (12).
@@ -329,6 +405,32 @@ export const machine = setup({
         redo: { kind: "settings", fields: step.after, expect: step.before },
       });
     }),
+    // A gesture that changed a key is one step of its own, under the id the server kept
+    // the keys by; the step holds no key (7.7).
+    recordKeyStep: enqueueActions(({ context, enqueue }) => {
+      const edit = context.keyEdit;
+      enqueue.assign({ keyEdit: null });
+      if (!edit) return;
+      enqueue.emit({
+        type: "step.recorded",
+        id: edit.id,
+        owner: "llm",
+        label: keyLabel(edit.changes[0]),
+        notice: true,
+        undo: { kind: "key", ...KEY_UNDO },
+        redo: { kind: "key", ...KEY_REDO },
+      });
+    }),
+    refuseApplying: enqueueActions(({ context, enqueue }) => {
+      if (context.applying)
+        enqueue.emit({ type: "step.settled", id: context.applying.id, owner: "llm", outcome: "refused", reason: "changed" });
+      enqueue.assign({ applying: null });
+    }),
+    // The key step left the undo list: the server erases the keys it kept (7.7).
+    forgetKey: ({ context, event }) =>
+      Promise.resolve()
+        .then(() => context.forgetKey(event.id))
+        .catch(() => {}),
     startApplying: assign({ applying: ({ event }) => ({ id: event.id }) }),
     settleApplied: enqueueActions(({ context, enqueue }) => {
       if (context.applying) enqueue.emit({ type: "step.settled", id: context.applying.id, owner: "llm", outcome: "applied" });
@@ -394,14 +496,14 @@ export const machine = setup({
       if (Array.isArray(reply.providers)) enqueue.assign({ ledger: reply });
     }),
     // The gesture being sent, with what it changes as the ledger held it (12, Undo).
-    draft: assign({ draft: ({ context, event }) => draftOf(context.ledger, event) }),
+    draft: assign({ draft: ({ context, event }) => draftOf(context, event) }),
     recordSpendingStep: enqueueActions(({ context, event, enqueue }) => {
       const step = context.draft && Array.isArray(event.output?.providers) && stepOfDraft(context.draft, event.output);
       enqueue.assign({ draft: null });
       if (!step) return;
       enqueue.emit({
         type: "step.recorded",
-        id: context.mint(),
+        id: step.id ?? context.mint(),
         owner: "llm",
         label: step.label,
         undo: step.undo,
@@ -424,6 +526,8 @@ export const machine = setup({
     signedIn: ({ event }) => event.userId != null,
     ownStep: ({ event }) => event.owner === "llm" && event.payload?.kind === "settings",
     spendingStep: ({ event }) => event.owner === "llm" && SPENDING_STEPS.includes(event.payload?.kind),
+    guestKeyStep: ({ event }) => event.owner === "llm" && event.payload?.kind === "guestkeys",
+    keyStep: ({ event }) => event.owner === "llm" && event.payload?.kind === "key",
     stillAsLeft: ({ context, event }) => stillAsLeft(event.output, context.stepping.payload),
     stepApplies: ({ context, event }) => {
       const p = event.payload ?? {};
@@ -466,8 +570,10 @@ export const machine = setup({
       "that delete can no longer be undone. The settings belong to the account, so they are the " +
       "same on every device. Each change of a chat setting (provider, model, thinking effort, cache " +
       "lifetime, the address of Ollama, who decides and its model) is a step Undo and Redo " +
-      "reverse (section 12); a key is never part of a step, and a change of a key alone is no " +
-      "step. A step is refused when the settings it would reverse were changed since, on any device. Every lookup the model proposes is checked against the query's own schema on the " +
+      "reverse (section 12). Adding, replacing or removing a key, the account's own or a guest key, is a step " +
+      "too, at once and with the short notice with Undo, such as Remove the API key; no key is ever part of a step: the server keeps the key from " +
+      "before and the key after, still encrypted, under the step's id, Undo and Redo bring one back from there, " +
+      "and both are erased once the step leaves the undo list. A step is refused when the settings or the key it would reverse were changed since, on any device. Every lookup the model proposes is checked against the query's own schema on the " +
       "server before it reaches the browser. Echo, a test provider, answers without a key or a " +
       "network call. In the Mac app that is not connected, Ollama, a model server on the user's own Mac, is the first " +
       "provider: it needs no key, costs nothing and is not counted, its address is kept with the account (empty brings " +
@@ -485,7 +591,7 @@ export const machine = setup({
       "llm.edited": "step",
       "turn.steered": "spends",
       "limits.edited": "step",
-      "guestkeys.edited": "keys",
+      "guestkeys.edited": "step",
       "guest.blocked": "step",
       "use.reset": "step",
     },
@@ -520,6 +626,10 @@ export const machine = setup({
     mint: input.mint ?? ulid,
     // The chat settings as the gesture being saved found them, to record its step (12, Undo).
     editing: null,
+    // The key changes of the gesture being saved and the id of their step: { id, changes }.
+    keyEdit: null,
+    moveKey: input.moveKey,
+    forgetKey: input.forgetKey,
     // The Undo or Redo being saved: { id }, settled once the server answers.
     applying: null,
   }),
@@ -534,6 +644,7 @@ export const machine = setup({
           { guard: "signedIn", target: ".readingPicture", actions: assign({ announce: true }) },
           { target: ".ready", actions: [assign({ picture: SIGNED_OUT }), "emitChanged"] },
         ],
+        "step.dropped": { guard: ({ context, event }) => context.picture.signedIn && event.owner === "llm" && event.payload?.kind === "key", actions: "forgetKey" },
       },
       initial: "readingSession",
       states: {
@@ -570,18 +681,24 @@ export const machine = setup({
         ready: {
           on: {
             "read?": { actions: ({ context, event }) => event.reply(context.picture) },
-            "llm.edited": { target: "saving", actions: assign({ editing: ({ context }) => settingsOf(context.picture) }) },
+            "llm.edited": {
+              target: "saving",
+              actions: assign({ editing: ({ context }) => settingsOf(context.picture), keyEdit: ({ context, event }) => keyEditOf(context, event) }),
+            },
             _reread: { target: "readingPicture", actions: assign({ announce: true }) },
             // An Undo or Redo is applied only while the settings are as the step left them,
             // as the server last reported them; a change since, on any device, refuses it.
             // The settings live on the server, not in this browser, so what is compared is
             // the settings themselves, and several steps undo in a row as each leaves them
             // as the step before it found them.
+            // A key step is checked by the server, which alone holds the keys.
             "step.undone": [
+              { guard: "keyStep", target: "rekeying", actions: "startApplying" },
               { guard: "stepApplies", target: "restoring", actions: "startApplying" },
               { guard: "ownStep", actions: "refuseStep" },
             ],
             "step.redone": [
+              { guard: "keyStep", target: "rekeying", actions: "startApplying" },
               { guard: "stepApplies", target: "restoring", actions: "startApplying" },
               { guard: "ownStep", actions: "refuseStep" },
             ],
@@ -591,9 +708,33 @@ export const machine = setup({
           on: { "read?": { actions: "hold" } },
           invoke: {
             src: "save",
-            input: ({ context, event }) => ({ save: context.save, patch: patchOf(event) }),
-            onDone: { target: "ready", actions: ["adopt", "replyPending", "clearPending", "emitChanged", "recordStep"] },
-            onError: { target: "ready", actions: ["replyPending", "clearPending", assign({ editing: null })] },
+            input: ({ context, event }) => ({
+              save: context.save,
+              patch: { ...patchOf(event), ...(context.keyEdit ? { step: context.keyEdit.id } : {}) },
+            }),
+            onDone: { target: "ready", actions: ["adopt", "replyPending", "clearPending", "emitChanged", "recordStep", "recordKeyStep"] },
+            onError: { target: "ready", actions: ["replyPending", "clearPending", assign({ editing: null, keyEdit: null })] },
+          },
+        },
+        rekeying: {
+          on: { "read?": { actions: "hold" } },
+          invoke: {
+            src: "moveKey",
+            input: ({ context, event }) => ({
+              moveKey: context.moveKey,
+              body: { step: event.id, restore: event.payload.restore, expect: event.payload.expect },
+            }),
+            onDone: [
+              {
+                guard: ({ event }) => Array.isArray(event.output?.providers),
+                target: "ready",
+                actions: ["adopt", "replyPending", "clearPending", "emitChanged", "settleApplied"],
+              },
+              { guard: ({ event }) => event.output?.error === "changed", target: "ready", actions: ["replyPending", "clearPending", "refuseApplying"] },
+              // No answer from the server leaves the step where it was: `undo` says so itself.
+              { target: "ready", actions: ["replyPending", "clearPending", assign({ applying: null })] },
+            ],
+            onError: { target: "ready", actions: ["replyPending", "clearPending", assign({ applying: null })] },
           },
         },
         restoring: {
@@ -793,10 +934,15 @@ export const machine = setup({
             "spending?": { actions: "holdSpending" },
             ...Object.fromEntries(Object.entries(GESTURES).map(([k, v]) => [k, { ...v, reenter: true }])),
           },
-          // The gesture arrives through input, so a guest key never enters context.
+          // The gesture arrives through input, so a guest key never enters context; a guest
+          // key change carries the id of its step, under which the server keeps the keys.
           invoke: {
             src: "editSpending",
-            input: ({ context, event }) => ({ edit: context.edit, ...EDITS[event.type](event) }),
+            input: ({ context, event }) => {
+              const { what, fields } = EDITS[event.type](event);
+              const step = context.draft?.kind === "guestkeys" ? { step: context.draft.id } : {};
+              return { edit: context.edit, what, fields: { ...fields, ...step } };
+            },
             onDone: [
               {
                 guard: ({ event }) => Array.isArray(event.output?.providers),
@@ -831,13 +977,16 @@ export const machine = setup({
           on: { "spending?": { actions: "holdSpending" } },
           invoke: {
             src: "editSpending",
-            input: ({ context }) => ({ edit: context.edit, ...writeOf(context.stepping.payload) }),
+            input: ({ context }) => ({ edit: context.edit, ...writeOf(context.stepping) }),
             onDone: [
               {
                 guard: ({ event }) => Array.isArray(event.output?.providers),
                 target: "idle",
                 actions: ["replySpending", emit(({ event }) => ({ type: "spending.changed", ...event.output })), "settleStepping"],
               },
+              // A guest key changed since: the server wrote nothing, and a fresh read answers
+              // whoever asked meanwhile.
+              { guard: ({ event }) => event.output?.error === "changed", target: "reading", actions: "refuseStepping" },
               // No answer from the server leaves the step where it was: `undo` says so itself.
               { target: "idle", actions: ["replySpending", assign({ stepping: null })] },
             ],

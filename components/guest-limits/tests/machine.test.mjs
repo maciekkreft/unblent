@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createActor, SimulatedClock } from "xstate";
+import { createActor } from "xstate";
 import { machine, parseLimit, limitEdit, limitText, shortOf } from "../machine.js";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -70,29 +70,17 @@ test("an answer that is not the picture leaves the part saying so", async () => 
   assert.equal(actor.getSnapshot().context.failed, true);
 });
 
-test("Remove waits out the undo window: Undo keeps the key, the end of the window removes it", async () => {
-  const clock = new SimulatedClock();
+test("Remove goes at once, and the row reads the key gone until the new picture comes", async () => {
   const emitted = [];
-  const actor = createActor(machine, { input: { ask: async () => SPENDING, undoMs: 3000 }, clock });
+  const actor = createActor(machine, { input: { ask: async () => SPENDING } });
   actor.on("*", (e) => emitted.push(e));
   actor.start();
   actor.send({ type: "_shown" });
   await flush();
 
+  // llm makes the removal a step whose Undo brings the key back (12, Undo).
   actor.send({ type: "_removeKey", provider: "jev" });
-  assert.deepEqual(actor.getSnapshot().context.removing, ["jev"]);
-  clock.increment(2999);
-  assert.deepEqual(emitted, [], "nothing is removed inside the window");
-  actor.send({ type: "_undoRemove", provider: "jev" });
-  clock.increment(5000);
-  assert.deepEqual(emitted, [], "Undo keeps the key");
-  assert.deepEqual(actor.getSnapshot().context.removing, []);
-
-  actor.send({ type: "_removeKey", provider: "jev" });
-  actor.send({ type: "_removeKey", provider: "jev" });
-  clock.increment(3000);
-  assert.deepEqual(emitted, [{ type: "guestkeys.edited", jev: "" }], "removed once, when the window ends");
-  assert.deepEqual(actor.getSnapshot().context.removing, []);
+  assert.deepEqual(emitted, [{ type: "guestkeys.edited", jev: "" }]);
   assert.deepEqual(actor.getSnapshot().context.removed, ["jev"], "shown as gone until the new picture comes");
   actor.send({ type: "spending.changed", ...SPENDING });
   assert.deepEqual(actor.getSnapshot().context.removed, []);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { createActor, SimulatedClock } from "xstate";
+import { createActor } from "xstate";
 import { Validator } from "@cfworker/json-schema";
 import { machine, merge, checksShown, toolsShown, toolGroups, ollamaView, addressOf, deciderView, deciderReady } from "../machine.js";
 
@@ -77,7 +77,7 @@ const TOOLS = { tools: { "notes: list": false }, approval: "auto" };
 const start = (
   settings,
   current = "/a",
-  { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS, checks = { error: "no-answerer" }, evaluators = { evaluators: [] }, clock } = {},
+  { account = false, llm = LLM_PICTURE, contracts = CONTRACTS, tools = TOOLS, components = COMPONENTS, checks = { error: "no-answerer" }, evaluators = { evaluators: [] } } = {},
 ) => {
   const ask = (target, name) =>
     Promise.resolve(
@@ -97,7 +97,7 @@ const start = (
               ? llm
               : { nav: [], viewportSwitchHidden: false, layoutSwitchHidden: false, arranging: true, editors: {}, ...settings },
     );
-  const actor = createActor(machine, { input: { ask, current, account, undoMs: 3000 }, ...(clock ? { clock } : {}) });
+  const actor = createActor(machine, { input: { ask, current, account } });
   const emitted = [];
   const emittedLlm = [];
   const emittedTools = [];
@@ -623,22 +623,15 @@ test("every payload matches its schema", () => {
   }
 });
 
-test("Remove on a key waits out the undo window; Undo keeps the key", async () => {
-  const clock = new SimulatedClock();
-  const { actor, emittedLlm } = await start(undefined, "/a", { account: true, clock });
+test("Remove on a key removes it at once, and the row reads it gone until the new picture comes", async () => {
+  const { actor, emittedLlm } = await start(undefined, "/a", { account: true });
   actor.send({ type: "_removeKey" });
   actor.send({ type: "_removeJevKey" });
-  assert.deepEqual(actor.getSnapshot().context.removing, ["key", "jevKey"]);
-  clock.increment(2999);
-  assert.deepEqual(emittedLlm, [], "nothing is removed inside the window");
-  actor.send({ type: "_undoRemove", field: "key" });
-  clock.increment(1);
-  assert.deepEqual(emittedLlm, [{ type: "llm.edited", jevKey: "" }], "an empty key removes it when the window ends");
-  clock.increment(5000);
-  assert.equal(emittedLlm.length, 1, "Undo kept the API key");
-  assert.deepEqual(actor.getSnapshot().context.removed, ["jevKey"]);
+  // llm makes each removal a step whose Undo brings the key back (12, Undo).
+  assert.deepEqual(emittedLlm, [{ type: "llm.edited", key: "" }, { type: "llm.edited", jevKey: "" }]);
+  assert.deepEqual(actor.getSnapshot().context.removed, ["key", "jevKey"]);
   actor.send({ type: "llm.changed", ...LLM_PICTURE, jev: { keySet: false } });
-  assert.deepEqual(actor.getSnapshot().context.removed, [], "the new picture shows the key gone");
+  assert.deepEqual(actor.getSnapshot().context.removed, [], "the new picture shows the keys gone");
 });
 
 test("the choice point checks part is hidden while flags hides Values and Choice Points, or before it answers", () => {

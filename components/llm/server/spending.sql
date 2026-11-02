@@ -11,6 +11,16 @@ CREATE TABLE IF NOT EXISTS guest_keys (
     cipher   TEXT NOT NULL,
     at       INTEGER NOT NULL
 );
+-- A guest key change is a step (12, Undo), kept as key_steps is in each account's file.
+CREATE TABLE IF NOT EXISTS guest_key_steps (
+    step          TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    before_cipher TEXT,
+    before_at     INTEGER,
+    after_cipher  TEXT,
+    after_at      INTEGER,
+    PRIMARY KEY (step, provider)
+);
 CREATE TABLE IF NOT EXISTS limits (
     name    TEXT PRIMARY KEY,
     dollars REAL NOT NULL

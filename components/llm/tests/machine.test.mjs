@@ -203,7 +203,10 @@ test("llm.edited saves the patch, adopts the fresh picture and announces; the ke
   await ready(h.actor);
   h.actor.send({ type: "llm.edited", provider: "anthropic", key: "sk-secret-value" });
   await until(() => h.emitted.some((e) => e.type === "llm.changed"));
-  assert.deepEqual(h.calls.save[0], { provider: "anthropic", key: "sk-secret-value" });
+  // A key change is a step (12, Undo): the patch names the step the server keeps the keys by.
+  const { step, ...patch } = h.calls.save[0];
+  assert.match(step, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+  assert.deepEqual(patch, { provider: "anthropic", key: "sk-secret-value" });
   const changed = h.emitted.filter((e) => e.type === "llm.changed").at(-1);
   assert.equal(changed.provider, "anthropic");
   assert.equal(changed.model, "claude-opus-5");
@@ -431,7 +434,9 @@ test("llm.edited carries the Jev key through to the server and never into contex
   await ready(h.actor);
   h.actor.send({ type: "llm.edited", jevKey: "jev-secret-value" });
   await until(() => h.emitted.some((e) => e.type === "llm.changed"));
-  assert.deepEqual(h.calls.save[0], { jevKey: "jev-secret-value" });
+  const { step, ...patch } = h.calls.save[0];
+  assert.match(step, /^[0-9A-HJKMNP-TV-Z]{26}$/);
+  assert.deepEqual(patch, { jevKey: "jev-secret-value" });
   assert.deepEqual(h.emitted.filter((e) => e.type === "llm.changed").at(-1).jev, { keySet: true });
   assert.ok(!JSON.stringify(h.actor.getSnapshot().context).includes("jev-secret-value"));
 });
@@ -602,7 +607,10 @@ test("spending? answers what the server says; an admin's edit replies and announ
   h.actor.send({ type: "limits.edited", guest: 2 });
   h.actor.send({ type: "guestkeys.edited", jev: "secret" });
   await until(() => h.emitted.some((e) => e.type === "spending.changed"));
-  assert.deepEqual(h.calls.edit, [["limits", { guest: 2 }], ["guestkeys", { jev: "secret" }]]);
+  assert.deepEqual(h.calls.edit[0], ["limits", { guest: 2 }]);
+  assert.equal(h.calls.edit[1][0], "guestkeys");
+  assert.equal(h.calls.edit[1][1].jev, "secret");
+  assert.match(h.calls.edit[1][1].step, /^[0-9A-HJKMNP-TV-Z]{26}$/, "a guest key change names its step");
   assert.deepEqual(h.emitted.filter((e) => e.type === "spending.changed").at(-1), { type: "spending.changed", ...SPENT }, "the answer to the last gesture is announced");
   assert.ok(!JSON.stringify(h.actor.getSnapshot().context).includes("secret"), "a guest key never enters context");
 
@@ -646,7 +654,8 @@ test("an admin's edit made while what guests spent is being read still reaches t
   assert.equal(h.actor.getSnapshot().value.spending, "reading");
   h.actor.send({ type: "guestkeys.edited", jev: "secret" });
   await until(() => h.calls.edit.length === 1);
-  assert.deepEqual(h.calls.edit, [["guestkeys", { jev: "secret" }]]);
+  assert.equal(h.calls.edit.length, 1);
+  assert.equal(h.calls.edit[0][1].jev, "secret");
   assert.deepEqual(await held, SPENT, "the held asker gets the picture after the edit");
   answer?.({ error: "unavailable" });
 });

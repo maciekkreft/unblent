@@ -69,7 +69,9 @@ for (const engine of ENGINES) {
         await page.locator('settings-sheet .key input[aria-label="Jev key"]').fill("jev-not-a-real-key");
         await page.locator("settings-sheet .judging button", { hasText: "Save" }).click();
         await until(async () => (await judging(page))?.text.includes("Key saved"));
-        assert.deepEqual(saved, [{ jevKey: "jev-not-a-real-key" }]);
+        // Saving a key is a step (12, Undo): the patch names the step the server keeps the keys by.
+        assert.deepEqual(saved.map(({ step, ...patch }) => patch), [{ jevKey: "jev-not-a-real-key" }]);
+        assert.match(saved[0].step, /^[0-9A-HJKMNP-TV-Z]{26}$/);
         assert.deepEqual((await judging(page)).buttons, ["Replace", "Remove"]);
         assert.deepEqual(problems, []);
       } finally {

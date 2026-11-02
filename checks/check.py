@@ -531,7 +531,7 @@ def check_supersession(manifests: dict) -> None:
 # --- Steps check (architecture.md 7.3, 11.2, 12) ----------------------------------
 
 # Section 7.3: the classes a user action may have.
-_STEP_CLASSES = ("step", "follows", "navigation", "spends", "identity", "keys", "undo")
+_STEP_CLASSES = ("step", "follows", "navigation", "spends", "identity", "undo")
 _STEP_WIRING = {"emits": ("step.recorded", "step.settled"), "consumes": ("step.undone", "step.redone")}
 
 

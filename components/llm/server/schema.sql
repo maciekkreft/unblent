@@ -20,5 +20,17 @@ CREATE TABLE IF NOT EXISTS keys (
     cipher   TEXT NOT NULL,
     at       INTEGER NOT NULL
 );
+-- A key change is a step (12, Undo): the key from before and the key after it, both
+-- still ciphertext and NULL for none, kept under the step's id until the step leaves the
+-- undo list, so Undo and Redo bring a key back without it entering the browser (7.7).
+CREATE TABLE IF NOT EXISTS key_steps (
+    step          TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    before_cipher TEXT,
+    before_at     INTEGER,
+    after_cipher  TEXT,
+    after_at      INTEGER,
+    PRIMARY KEY (step, provider)
+);
 -- An account uses only its own keys (7.7); older files may still hold a starter table.
 DROP TABLE IF EXISTS starter;

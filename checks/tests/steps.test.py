@@ -94,6 +94,12 @@ class Breaks(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("classed 'pending'", out[0][1])
 
+    def test_keys_is_no_class_any_more(self):
+        # A key change is a step (12, Undo).
+        out = breaks(wired_pair("keys"))
+        self.assertEqual(len(out), 1)
+        self.assertIn("classed 'keys'", out[0][1])
+
     def test_follows_with_no_step_owner(self):
         recs = {"sheet": view(emits=["thing.saved"]),
                 "things": fact(consumes=["thing.saved"], steps={"thing.saved": "navigation"}),

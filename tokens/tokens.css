@@ -27,7 +27,6 @@
 
   /* Semantic */
   --color-danger: light-dark(#e03131, #ff6b6b);
-  --color-danger-hover: light-dark(#c92a2a, #ff5252);
   --color-danger-subtle: light-dark(rgba(224, 49, 49, 0.08), rgba(255, 107, 107, 0.14));
   --color-success: light-dark(#2f9e44, #51cf66);
   --color-success-subtle: light-dark(rgba(47, 158, 68, 0.08), rgba(81, 207, 102, 0.14));

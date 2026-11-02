@@ -94,6 +94,121 @@ test("an empty key removes it", async () => {
   assert.equal(picture.providers.find((p) => p.id === "anthropic").keySet, false);
 });
 
+// The stored ciphertexts, read straight from a throwaway llm.db, so a test can tell which
+// key is saved without the server ever answering with one (7.7).
+async function stored(file, sql) {
+  // node:sqlite is experimental; hush the one-time warning so the run stays clean.
+  const saved = process.emitWarning;
+  process.emitWarning = () => {};
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      return db.prepare(sql).all();
+    } finally {
+      db.close();
+    }
+  } finally {
+    process.emitWarning = saved;
+  }
+}
+const { join } = await import("node:path");
+const accountDb = (user) => join(process.env.UNBLENT_DATA, user, "llm.db");
+const sharedDb = () => join(process.env.UNBLENT_DATA, "llm.db");
+const cipherOf = async (user, provider) =>
+  (await stored(accountDb(user), `SELECT cipher FROM keys WHERE provider = '${provider}'`))[0]?.cipher ?? null;
+const putPath = (path, body, cookie) =>
+  fetch(`${BASE_URL}/api/llm/${path}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", Cookie: cookie },
+    body: JSON.stringify(body),
+  });
+const stepId = (n) => `01KEYSTEP${String(n).padStart(17, "0")}`;
+const UNDO = { restore: "before", expect: "after" };
+const REDO = { restore: "after", expect: "before" };
+
+test("a key change is a step: Undo restores the kept key, Redo removes it again, a change since refuses it, and forget erases it", async () => {
+  const user = freshUser();
+  const cookie = cookieFor(user);
+  const replies = [];
+  const keep = async (res) => {
+    const text = await res.text();
+    replies.push(text);
+    return JSON.parse(text);
+  };
+  const [added, replaced, removed] = [stepId(1), stepId(2), stepId(3)];
+  await keep(await edit({ provider: "anthropic", key: "sk-ant-first-secret", step: added }, cookie));
+  const first = await cipherOf(user, "anthropic");
+  await keep(await edit({ key: "sk-ant-second-secret", step: replaced }, cookie));
+  const second = await cipherOf(user, "anthropic");
+  assert.notEqual(first, second);
+  await keep(await edit({ key: "", step: removed }, cookie));
+  assert.equal(await cipherOf(user, "anthropic"), null);
+
+  // Undo of the remove brings back the very key it removed, Redo removes it again.
+  let picture = await keep(await putPath("keys/step", { step: removed, ...UNDO }, cookie));
+  assert.equal(picture.providers.find((p) => p.id === "anthropic").keySet, true);
+  assert.equal(await cipherOf(user, "anthropic"), second);
+  picture = await keep(await putPath("keys/step", { step: removed, ...REDO }, cookie));
+  assert.equal(picture.providers.find((p) => p.id === "anthropic").keySet, false);
+  await keep(await putPath("keys/step", { step: removed, ...UNDO }, cookie));
+
+  // Undo of the replace brings back the key before it.
+  await keep(await putPath("keys/step", { step: replaced, ...UNDO }, cookie));
+  assert.equal(await cipherOf(user, "anthropic"), first);
+
+  // The key changed since (another device): the step is refused and writes nothing.
+  await keep(await edit({ key: "sk-ant-other-device" }, cookie));
+  const other = await cipherOf(user, "anthropic");
+  assert.deepEqual(await keep(await putPath("keys/step", { step: replaced, ...REDO }, cookie)), { error: "changed" });
+  assert.equal(await cipherOf(user, "anthropic"), other);
+
+  // The step left the undo list: the keys it kept are gone, so it can never come back.
+  assert.equal((await stored(accountDb(user), `SELECT * FROM key_steps WHERE step = '${replaced}'`)).length, 1);
+  assert.deepEqual(await keep(await putPath("keys/forget", { step: replaced }, cookie)), { ok: true });
+  assert.equal((await stored(accountDb(user), `SELECT * FROM key_steps WHERE step = '${replaced}'`)).length, 0);
+  assert.deepEqual(await keep(await putPath("keys/step", { step: replaced, ...UNDO }, cookie)), { error: "changed" });
+
+  // The kept keys are ciphertext, and no reply ever carries a key.
+  const kept = JSON.stringify(await stored(accountDb(user), "SELECT * FROM key_steps"));
+  for (const secret of ["sk-ant-first-secret", "sk-ant-second-secret", "sk-ant-other-device"]) {
+    assert.ok(!kept.includes(secret), "a kept key is encrypted");
+    assert.ok(!replies.some((r) => r.includes(secret)), "no reply carries a key");
+  }
+
+  // A bad body, a bad step id, and a guest are refused.
+  assert.equal((await putPath("keys/step", { step: removed, restore: "before", expect: "before" }, cookie)).status, 400);
+  assert.equal((await edit({ key: "sk-x", step: "not-a-step" }, cookie)).status, 400);
+  assert.equal((await putPath("keys/step", { step: removed, ...UNDO }, cookieFor(`${freshUser()}|guest`))).status, 403);
+});
+
+test("a guest key change is a step only the admin moves: Undo, Redo, refused when changed, and forget", async () => {
+  const admin = cookieFor(`${freshUser()}|admin`);
+  const guestKey = async () =>
+    (await stored(sharedDb(), "SELECT cipher FROM guest_keys WHERE provider = 'anthropic'"))[0]?.cipher ?? null;
+  // Whatever the shared file held before, the test leaves it so.
+  const before = await (await putPath("guestkeys", {}, admin)).json();
+  const was = await guestKey();
+  const step = stepId(10);
+  const added = await (await putPath("guestkeys", { anthropic: "sk-guest-test-secret", step }, admin)).text();
+  assert.ok(!added.includes("sk-guest-test-secret"));
+  const now = await guestKey();
+  assert.notEqual(now, was);
+  assert.equal((await putPath("guestkeys/step", { step, ...UNDO }, cookieFor(freshUser()))).status, 403, "only the admin");
+  const undone = await (await putPath("guestkeys/step", { step, ...UNDO }, admin)).json();
+  assert.deepEqual(undone.providers.find((p) => p.id === "anthropic").guestKeySet, before.providers.find((p) => p.id === "anthropic").guestKeySet);
+  assert.equal(await guestKey(), was);
+  await putPath("guestkeys/step", { step, ...REDO }, admin);
+  assert.equal(await guestKey(), now);
+  // Undo twice: the second finds the key it left, not the one it expects.
+  await putPath("guestkeys/step", { step, ...UNDO }, admin);
+  assert.deepEqual(await (await putPath("guestkeys/step", { step, ...UNDO }, admin)).json(), { error: "changed" });
+  assert.equal(await guestKey(), was);
+  assert.equal((await putPath("guestkeys/forget", { step }, admin)).status, 200);
+  assert.equal((await stored(sharedDb(), `SELECT * FROM guest_key_steps WHERE step = '${step}'`)).length, 0);
+  assert.deepEqual(await (await putPath("guestkeys/step", { step, ...REDO }, admin)).json(), { error: "changed" });
+});
+
 test("a bad PUT is refused with 400 and does not echo the key", async () => {
   const cookie = cookieFor(freshUser());
   const res = await edit({ ttl: "bad", key: "sk-ant-would-leak" }, cookie);

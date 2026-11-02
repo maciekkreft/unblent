@@ -32,7 +32,7 @@ function start({ valueChecks = { keySet: true, settings: { values: null, example
     };
     return Promise.resolve(replies[target] ?? { error: "no-answerer" });
   };
-  const actor = createActor(machine, { input: { ask, current: "/", account: true, undoMs: 3000 } });
+  const actor = createActor(machine, { input: { ask, current: "/", account: true } });
   const emitted = [];
   actor.on("value-checks.edited", (e) => {
     const { type, ...payload } = e;

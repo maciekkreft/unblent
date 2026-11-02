@@ -17,7 +17,7 @@ from pathlib import Path
 
 from server.user import DATA
 
-from . import crypto
+from . import crypto, keysteps
 
 _SCHEMA = (Path(__file__).parent / "spending.sql").read_text()
 
@@ -267,25 +267,42 @@ def set_limits(body: dict) -> None:
 
 def valid_keys(body) -> dict | None:
     """guestkeys.edited as the server accepts it: only the keys that changed, each a
-    string, where an empty one removes that key."""
-    if not isinstance(body, dict) or set(body) - _IDS:
+    string, where an empty one removes that key, and the id of the step it makes (12)."""
+    if not isinstance(body, dict) or set(body) - _IDS - {"step"}:
         return None
-    if not all(isinstance(v, str) for v in body.values()):
+    if "step" in body and not keysteps.valid_step(body["step"]):
+        return None
+    if not all(isinstance(v, str) for k, v in body.items() if k != "step"):
         return None
     return body
 
 
 def set_keys(body: dict) -> None:
+    step = body.get("step")
     with _connect() as connection:
         for pid, key in body.items():
-            if key == "":
-                connection.execute("DELETE FROM guest_keys WHERE provider = ?", (pid,))
-            else:
-                connection.execute(
-                    "INSERT INTO guest_keys (provider, cipher, at) VALUES (?, ?, ?)"
-                    " ON CONFLICT(provider) DO UPDATE SET cipher = excluded.cipher, at = excluded.at",
-                    (pid, crypto.encrypt(key), int(time.time() * 1000)),
-                )
+            if pid == "step":
+                continue
+            cipher = crypto.encrypt(key) if key else None
+            keysteps.put(connection, "guest_keys", "guest_key_steps", pid, cipher, int(time.time() * 1000), step)
+
+
+def move_keys(body: dict) -> bool:
+    """Undo or Redo of a guest key step (12): False when a key changed since."""
+    with _connect() as connection:
+        return keysteps.move(connection, "guest_keys", "guest_key_steps", body["step"], body["restore"], body["expect"])
+
+
+def valid_forget_keys(body) -> dict | None:
+    """A guest key step that left the undo list, as the server accepts it: its id alone."""
+    if not isinstance(body, dict) or set(body) != {"step"} or not keysteps.valid_step(body["step"]):
+        return None
+    return body
+
+
+def forget_keys(body: dict) -> None:
+    with _connect() as connection:
+        keysteps.forget(connection, "guest_key_steps", body["step"])
 
 
 def valid_block(body) -> dict | None:

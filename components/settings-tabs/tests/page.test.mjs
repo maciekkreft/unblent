@@ -102,15 +102,19 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await each.inputValue()) === "$2.00");
         assert.deepEqual(edits, [{ guest: 2 }]);
 
-        // Remove on a guest key waits out the undo window; Undo keeps the key (12).
+        // Remove on a guest key goes at once, as a step whose Undo brings it back (12).
         const keys = [];
-        context.on("request", (req) => /\/api\/llm\/guestkeys$/.test(req.url()) && keys.push(req.postData()));
+        await context.route(/\/api\/llm\/guestkeys$/, (route) => {
+          keys.push(route.request().postDataJSON());
+          picture = { ...picture, providers: picture.providers.map((p) => (p.id === "jev" ? { ...p, guestKeySet: false } : p)) };
+          return route.fulfill({ json: picture });
+        });
         const jev = page.locator('guest-limits .key[data-key="jev"]');
         await jev.getByRole("button", { name: "Remove" }).click();
-        await until(async () => (await jev.innerText()).replace(/\s+/g, " ").trim() === "Key removed Undo");
-        await jev.getByRole("button", { name: "Undo remove Jev key" }).click();
-        await until(async () => (await jev.innerText()).replace(/\s+/g, " ").trim() === "Key saved Replace Remove");
-        assert.deepEqual(keys, [], "nothing is removed inside the window");
+        await until(async () => (await jev.locator("input").count()) === 1);
+        assert.equal(keys.length, 1);
+        assert.equal(keys[0].jev, "");
+        assert.match(keys[0].step, /^[0-9A-HJKMNP-TV-Z]{26}$/, "the removal names the step the server keeps the key by");
 
         // The Who column stays in view while People scrolls sideways.
         const who = await page.evaluate(() => {
