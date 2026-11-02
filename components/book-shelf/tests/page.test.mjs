@@ -356,6 +356,10 @@ for (const engine of ENGINES) {
       await importBook(cookie, SAMPLE_ID, SAMPLE);
       await importBook(cookie, "01K00000000000000000000GPS", GAPS);
       const { page, problems, debug } = await open({ cookie, vimKeys: true });
+      // Playwright turns on catching the file picker when the first listener is added,
+      // without waiting for Chromium to confirm; added just before `o`, a loaded host lets
+      // the key win and Chromium opens a real picker the test never sees.
+      page.on("filechooser", () => {});
       await until(async () => (await tiles(page)).length === 2);
       await focusShelf(page);
       const first = await focusedTile(page);
