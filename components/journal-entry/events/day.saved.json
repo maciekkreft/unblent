@@ -13,6 +13,13 @@
     "left": {
       "type": "boolean",
       "description": "True when the writing box was left, so every paragraph of the day is finished, the last one too. A later save without it, while typing, makes the last paragraph unfinished again."
+    },
+    "finished": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "The texts of the lines the user finished with this save (moved off the line, Enter, the box losing focus, a paste), so a hashtag check asks only finished lines. Absent when none."
     }
   },
   "required": [

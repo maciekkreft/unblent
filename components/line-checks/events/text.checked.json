@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What Jev answered about the lines the hashtag lines of one note or journal day name, now (4, third rule): sent when a line is queued, answered, or fails, and when an evaluator a tag names changes.",
+  "type": "object",
+  "properties": {
+    "source": {
+      "type": "object",
+      "description": "The note or the journal day the text is.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "note",
+            "day"
+          ],
+          "description": "note: a note's body. day: a journal day's text."
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "The note's or the journal day's id."
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "tags": {
+      "type": "array",
+      "description": "Every hashtag of the text's hashtag lines, in the text's order, each once.",
+      "items": {
+        "type": "object",
+        "description": "One #name of a hashtag line.",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The name as written after #."
+          },
+          "evaluator": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+            "description": "The account's evaluator whose short name is the tag; null when none matches, so the tag checks nothing."
+          }
+        },
+        "required": [
+          "tag",
+          "evaluator"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "lines": {
+      "type": "array",
+      "description": "Every line a hashtag line names that has a letter or digit and that Jev has answered, is checking, or could not check, in the text's order; a line still being written is left out until the user finishes it.",
+      "items": {
+        "type": "object",
+        "description": "One checked line.",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The line as written."
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "done",
+              "failed"
+            ],
+            "description": "pending: waiting for Jev. done: answered. failed: Jev could not be asked; error says why."
+          },
+          "marks": {
+            "type": "array",
+            "description": "What is shown at the line's end, one per question of the evaluators named for it, in the order of the tags and then of each evaluator's questions; empty until done. A yes / no question answered no has no mark.",
+            "items": {
+              "type": "object",
+              "description": "Jev's answer to one question about the line, as it is shown.",
+              "properties": {
+                "evaluator": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "description": "The evaluator asked."
+                },
+                "question": {
+                  "type": "string",
+                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "description": "The evaluator's question answered."
+                },
+                "option": {
+                  "type": "string",
+                  "pattern": "^([0-9A-HJKMNP-TV-Z]{26}|yes|no)$",
+                  "description": "The answer: the id of a pick-one question's option, or yes for a yes / no question."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "What the mark says: the option's name, or the question's short name for a yes."
+                },
+                "icon": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "The icon of the chosen option, by its name in the icon set; left out when the option has none."
+                },
+                "p": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "How likely Jev holds the answer to be."
+                }
+              },
+              "required": [
+                "evaluator",
+                "question",
+                "name",
+                "p"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "text",
+          "status",
+          "marks"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "error": {
+      "enum": [
+        "signed-out",
+        "no-key",
+        "bad-key",
+        "rate-limited",
+        "overloaded",
+        "invalid",
+        "busy",
+        "unavailable",
+        "local-off",
+        "no-model"
+      ],
+      "description": "Why the last check failed, as llm: decide said it; left out when nothing failed."
+    }
+  },
+  "required": [
+    "source",
+    "tags",
+    "lines"
+  ],
+  "additionalProperties": false
+}
