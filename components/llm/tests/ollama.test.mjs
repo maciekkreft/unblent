@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { describe, test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -127,174 +127,179 @@ const ulid = (n) => `01TEST${String(n).padStart(20, "0")}`;
 const TOOL = { target: "books", name: "chapter", description: "Read a chapter.", payload: { type: "object", properties: { book: { type: "string" } }, required: ["book"] } };
 const question = { id: ulid(1), start: "you are a test", turns: [{ id: ulid(2), role: "user", text: "What is it about?" }], tools: [TOOL] };
 
-before(async () => {
-  fake = fakeOllama();
-  await new Promise((resolve) => fake.listen(0, "127.0.0.1", resolve));
-  ollama = `http://127.0.0.1:${fake.address().port}`;
-  dead = `http://127.0.0.1:${await freePort()}`;
-  const port = await freePort();
-  base = `http://127.0.0.1:${port}`;
-  const env = { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "ollama-test-secret", UNBLENT_LOCAL_USER: LOCAL, UNBLENT_JEV_URL: `${ollama}/jev` };
-  delete env.UNBLENT_REMOTE;
-  server = spawn(join(ROOT, ".venv/bin/uvicorn"), ["server.main:app", "--host", "127.0.0.1", "--port", String(port), "--log-level", "warning"], { cwd: ROOT, env, stdio: ["ignore", "ignore", "inherit"] });
-  for (let i = 0; i < 200; i++) {
-    try {
-      if ((await fetch(`${base}/static/bus/bus.js`)).ok) break;
-    } catch {
-      await new Promise((r) => setTimeout(r, 50));
+// One group per file: the check runs every Node test file in one process, where a
+// top-level before() would start this file's server ahead of the whole run and its
+// time would be charged to whichever test runs first (11).
+describe("Ollama in the local edition", () => {
+  before(async () => {
+    fake = fakeOllama();
+    await new Promise((resolve) => fake.listen(0, "127.0.0.1", resolve));
+    ollama = `http://127.0.0.1:${fake.address().port}`;
+    dead = `http://127.0.0.1:${await freePort()}`;
+    const port = await freePort();
+    base = `http://127.0.0.1:${port}`;
+    const env = { ...process.env, UNBLENT_DATA: data, SESSION_SECRET: "ollama-test-secret", UNBLENT_LOCAL_USER: LOCAL, UNBLENT_JEV_URL: `${ollama}/jev` };
+    delete env.UNBLENT_REMOTE;
+    server = spawn(join(ROOT, ".venv/bin/uvicorn"), ["server.main:app", "--host", "127.0.0.1", "--port", String(port), "--log-level", "warning"], { cwd: ROOT, env, stdio: ["ignore", "ignore", "inherit"] });
+    for (let i = 0; i < 200; i++) {
+      try {
+        if ((await fetch(`${base}/static/bus/bus.js`)).ok) break;
+      } catch {
+        await new Promise((r) => setTimeout(r, 50));
+      }
     }
-  }
-  // The server's first request warms it up; done here, outside a test's budget.
-  await read();
-}, { timeout: 30000 });
+    // The server's first request warms it up; done here, outside a test's budget.
+    await read();
+  }, { timeout: 30000 });
 
-after(async () => {
-  server.kill();
-  await new Promise((r) => (server.exitCode === null ? server.once("exit", r) : r()));
-  await new Promise((r) => fake.close(r));
-  rmSync(data, { recursive: true, force: true });
-});
+  after(async () => {
+    server.kill();
+    await new Promise((r) => (server.exitCode === null ? server.once("exit", r) : r()));
+    await new Promise((r) => fake.close(r));
+    rmSync(data, { recursive: true, force: true });
+  });
 
-test("the Mac app offers Ollama first, at its default address; gemma4:e4b-mlx is the default model once Ollama answers", async () => {
-  const fresh = await read();
-  assert.equal(fresh.provider, "ollama");
-  assert.equal(fresh.providers[0].id, "ollama");
-  assert.deepEqual(fresh.efforts, ["on", "off"]);
-  assert.equal(fresh.effort, "on");
-  assert.equal(fresh.ollama.address, "http://localhost:11434");
-  assert.deepEqual(fresh.jev, { keySet: false }, "Jev can be chosen to decide");
-  assert.deepEqual(fresh.deciders, ["ollama", "jev"]);
-  assert.equal(fresh.decider.provider, "ollama", "Ollama decides by default");
-  const picture = await (await edit({ address: `${ollama}/` })).json();
-  assert.deepEqual(picture.ollama, { address: ollama, running: true }, "kept without the trailing slash");
-  assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e4b-mlx", label: "gemma4:e4b-mlx" }]);
-  assert.equal(picture.model, "gemma4:e4b-mlx");
-  assert.equal((await edit({ address: "ftp://nowhere" })).status, 400, "only an http or https address");
-  assert.equal((await read()).ollama.address, ollama);
-});
+  test("the Mac app offers Ollama first, at its default address; gemma4:e4b-mlx is the default model once Ollama answers", async () => {
+    const fresh = await read();
+    assert.equal(fresh.provider, "ollama");
+    assert.equal(fresh.providers[0].id, "ollama");
+    assert.deepEqual(fresh.efforts, ["on", "off"]);
+    assert.equal(fresh.effort, "on");
+    assert.equal(fresh.ollama.address, "http://localhost:11434");
+    assert.deepEqual(fresh.jev, { keySet: false }, "Jev can be chosen to decide");
+    assert.deepEqual(fresh.deciders, ["ollama", "jev"]);
+    assert.equal(fresh.decider.provider, "ollama", "Ollama decides by default");
+    const picture = await (await edit({ address: `${ollama}/` })).json();
+    assert.deepEqual(picture.ollama, { address: ollama, running: true }, "kept without the trailing slash");
+    assert.deepEqual(picture.models, [{ id: "gemma3:latest", label: "gemma3" }, { id: "gemma4:e4b-mlx", label: "gemma4:e4b-mlx" }]);
+    assert.equal(picture.model, "gemma4:e4b-mlx");
+    assert.equal((await edit({ address: "ftp://nowhere" })).status, 400, "only an http or https address");
+    assert.equal((await read()).ollama.address, ollama);
+  });
 
-test("with nothing listening at the address, Ollama is not running and an answer ends local-off", async () => {
-  try {
-    const picture = await (await edit({ address: dead })).json();
-    assert.deepEqual(picture.ollama, { address: dead, running: false });
-    assert.deepEqual(picture.models, []);
-    const end = (await complete(question)).at(-1);
-    assert.deepEqual([end.type, end.status, end.error], ["end", "failed", "local-off"]);
-  } finally {
-    await edit({ address: ollama });
-  }
-});
+  test("with nothing listening at the address, Ollama is not running and an answer ends local-off", async () => {
+    try {
+      const picture = await (await edit({ address: dead })).json();
+      assert.deepEqual(picture.ollama, { address: dead, running: false });
+      assert.deepEqual(picture.models, []);
+      const end = (await complete(question)).at(-1);
+      assert.deepEqual([end.type, end.status, end.error], ["end", "failed", "local-off"]);
+    } finally {
+      await edit({ address: ollama });
+    }
+  });
 
-test("an answer streams thinking, text and one joined call, and the result goes back as a tool message", async () => {
-  await edit({ address: ollama, effort: "on" });
-  received.length = 0;
-  const first = await complete(question);
-  assert.deepEqual(first.filter((p) => p.type !== "end"), [
-    { type: "thinking", text: "Let me look." },
-    { type: "text", text: "Checking." },
-    { type: "call", id: "call_1", target: "books", name: "chapter", payload: { book: "b1" } },
-  ]);
-  const end = first.at(-1);
-  assert.deepEqual([end.status, end.provider, end.model], ["done", "ollama", "gemma4:e4b-mlx"]);
-  assert.deepEqual(end.usage, { input_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 9 });
-  assert.equal(received[0].reasoning_effort, "medium", "thinking on");
-  assert.deepEqual(received[0].tools, [{ type: "function", function: { name: "books__chapter", description: "Read a chapter.", parameters: TOOL.payload } }]);
-  assert.deepEqual(received[0].messages[0], { role: "system", content: "you are a test" });
-
-  await edit({ effort: "off" });
-  const turns = [
-    ...question.turns,
-    { id: ulid(3), role: "assistant", text: "Checking.", status: "done", calls: [{ id: "call_1", target: "books", name: "chapter", payload: { book: "b1" }, label: "Reading a chapter" }] },
-    { id: ulid(4), role: "user", text: "", results: [{ callId: "call_1", content: "Stoics." }] },
-  ];
-  const second = await complete({ ...question, turns });
-  assert.equal(second.filter((p) => p.type === "text").map((p) => p.text).join(""), "It is about Stoics.");
-  assert.equal(received[1].reasoning_effort, "none", "thinking off");
-  assert.deepEqual(received[1].messages.slice(2), [
-    { role: "assistant", content: "Checking.", tool_calls: [{ id: "call_1", type: "function", function: { name: "books__chapter", arguments: '{"book": "b1"}' } }] },
-    { role: "tool", tool_call_id: "call_1", content: "Stoics." },
-  ]);
-});
-
-test("Ollama decides by default: kev:0.8b-mlx-bf16 answers yes/no and pick-one at /v1/systemone, with no key and no confidence", async () => {
-  fakeState.kev = true;
-  try {
-    const picture = await (await edit({ address: ollama })).json();
-    assert.deepEqual(picture.decider, {
-      provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true,
-      models: ["kev:0.8b-mlx-bf16", "gemma3:latest", "gemma4:e4b-mlx"].map((id) => ({ id, label: id })),
-    }, "every downloaded model may make the checks, Kev first");
-    decided.length = 0;
-    const reply = await decide(DECISION);
-    assert.deepEqual(reply.answers, [
-      { id: "q", p: 0.75 },
-      { id: "k", p: 0.9, choice: "v", probabilities: [{ id: "g", p: 0.1 }, { id: "v", p: 0.9 }] },
+  test("an answer streams thinking, text and one joined call, and the result goes back as a tool message", async () => {
+    await edit({ address: ollama, effort: "on" });
+    received.length = 0;
+    const first = await complete(question);
+    assert.deepEqual(first.filter((p) => p.type !== "end"), [
+      { type: "thinking", text: "Let me look." },
+      { type: "text", text: "Checking." },
+      { type: "call", id: "call_1", target: "books", name: "chapter", payload: { book: "b1" } },
     ]);
-    assert.equal(reply.inputTokens, 0, "Ollama reports no usage");
-    assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/v1/systemone", null, "kev:0.8b-mlx-bf16"]);
-    assert.deepEqual(decided[0].body.questions.k.criteria, { Goal: null, Value: "never finished" });
-  } finally {
-    fakeState.kev = false;
-  }
-});
+    const end = first.at(-1);
+    assert.deepEqual([end.status, end.provider, end.model], ["done", "ollama", "gemma4:e4b-mlx"]);
+    assert.deepEqual(end.usage, { input_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 9 });
+    assert.equal(received[0].reasoning_effort, "medium", "thinking on");
+    assert.deepEqual(received[0].tools, [{ type: "function", function: { name: "books__chapter", description: "Read a chapter.", parameters: TOOL.payload } }]);
+    assert.deepEqual(received[0].messages[0], { role: "system", content: "you are a test" });
 
-test("a decision Ollama cannot give is local-off when nothing listens and no-model when kev:0.8b-mlx-bf16 is missing", async () => {
-  try {
-    const off = await (await edit({ address: dead })).json();
-    assert.deepEqual(off.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: false, models: [] });
-    assert.deepEqual(await decide(DECISION), { error: "local-off" });
+    await edit({ effort: "off" });
+    const turns = [
+      ...question.turns,
+      { id: ulid(3), role: "assistant", text: "Checking.", status: "done", calls: [{ id: "call_1", target: "books", name: "chapter", payload: { book: "b1" }, label: "Reading a chapter" }] },
+      { id: ulid(4), role: "user", text: "", results: [{ callId: "call_1", content: "Stoics." }] },
+    ];
+    const second = await complete({ ...question, turns });
+    assert.equal(second.filter((p) => p.type === "text").map((p) => p.text).join(""), "It is about Stoics.");
+    assert.equal(received[1].reasoning_effort, "none", "thinking off");
+    assert.deepEqual(received[1].messages.slice(2), [
+      { role: "assistant", content: "Checking.", tool_calls: [{ id: "call_1", type: "function", function: { name: "books__chapter", arguments: '{"book": "b1"}' } }] },
+      { role: "tool", tool_call_id: "call_1", content: "Stoics." },
+    ]);
+  });
 
-    const missing = await (await edit({ address: ollama })).json();
-    assert.equal(missing.decider.ready, false, "Ollama answers but has no kev:0.8b-mlx-bf16");
-    assert.deepEqual(await decide(DECISION), { error: "no-model" });
-
-    // Listed, yet Ollama's systemone says the model is not found.
+  test("Ollama decides by default: kev:0.8b-mlx-bf16 answers yes/no and pick-one at /v1/systemone, with no key and no confidence", async () => {
     fakeState.kev = true;
-    fakeState.systemone = 404;
-    assert.deepEqual(await decide(DECISION), { error: "no-model" });
-  } finally {
-    Object.assign(fakeState, { kev: false, systemone: 200 });
+    try {
+      const picture = await (await edit({ address: ollama })).json();
+      assert.deepEqual(picture.decider, {
+        provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: true,
+        models: ["kev:0.8b-mlx-bf16", "gemma3:latest", "gemma4:e4b-mlx"].map((id) => ({ id, label: id })),
+      }, "every downloaded model may make the checks, Kev first");
+      decided.length = 0;
+      const reply = await decide(DECISION);
+      assert.deepEqual(reply.answers, [
+        { id: "q", p: 0.75 },
+        { id: "k", p: 0.9, choice: "v", probabilities: [{ id: "g", p: 0.1 }, { id: "v", p: 0.9 }] },
+      ]);
+      assert.equal(reply.inputTokens, 0, "Ollama reports no usage");
+      assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/v1/systemone", null, "kev:0.8b-mlx-bf16"]);
+      assert.deepEqual(decided[0].body.questions.k.criteria, { Goal: null, Value: "never finished" });
+    } finally {
+      fakeState.kev = false;
+    }
+  });
+
+  test("a decision Ollama cannot give is local-off when nothing listens and no-model when kev:0.8b-mlx-bf16 is missing", async () => {
+    try {
+      const off = await (await edit({ address: dead })).json();
+      assert.deepEqual(off.decider, { provider: "ollama", model: "kev:0.8b-mlx-bf16", ready: false, models: [] });
+      assert.deepEqual(await decide(DECISION), { error: "local-off" });
+
+      const missing = await (await edit({ address: ollama })).json();
+      assert.equal(missing.decider.ready, false, "Ollama answers but has no kev:0.8b-mlx-bf16");
+      assert.deepEqual(await decide(DECISION), { error: "no-model" });
+
+      // Listed, yet Ollama's systemone says the model is not found.
+      fakeState.kev = true;
+      fakeState.systemone = 404;
+      assert.deepEqual(await decide(DECISION), { error: "no-model" });
+    } finally {
+      Object.assign(fakeState, { kev: false, systemone: 200 });
+      await edit({ address: ollama });
+    }
+  });
+
+  test("with Jev chosen, a decision needs the Jev key and is sent to Jev with it", async () => {
+    try {
+      const chosen = await (await edit({ decider: "jev" })).json();
+      assert.deepEqual(chosen.decider, { provider: "jev", model: "jev-latest", ready: false, models: [{ id: "jev-latest", label: "Jev" }] });
+      assert.deepEqual(await decide(DECISION), { error: "no-key" });
+      assert.equal((await edit({ decider: "anthropic" })).status, 400);
+      const keyed = await (await edit({ jevKey: "jev-local-key" })).json();
+      assert.equal(keyed.decider.ready, true);
+      decided.length = 0;
+      const reply = await decide(DECISION);
+      assert.equal(reply.answers[1].confidence, 0.8);
+      assert.equal(reply.inputTokens, 12);
+      assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/jev", "Bearer jev-local-key", "jev-latest"]);
+      assert.equal((await read()).decider.provider, "jev", "the choice is kept");
+    } finally {
+      await edit({ decider: "ollama", jevKey: "" });
+    }
+  });
+
+  test("a generator runs on the chat model in Ollama, in one go and with no key, when Ollama lacks its own model", async () => {
     await edit({ address: ollama });
-  }
-});
+    received.length = 0;
+    assert.deepEqual(await generate(WANTED), { text: "Stoic evenings" }, "the website's default runs on Gemma");
+    assert.deepEqual([received[0].model, received[0].stream ?? false, received[0].reasoning_effort], ["gemma4:e4b-mlx", false, "none"]);
+    assert.deepEqual(received[0].messages, [{ role: "system", content: WANTED.prompt }, { role: "user", content: WANTED.text }]);
+    assert.deepEqual(await generate({ ...WANTED, model: "gemma3:latest" }), { text: "Stoic evenings" });
+    assert.equal(received[1].model, "gemma3:latest", "a model Ollama has runs as chosen");
+    assert.deepEqual(await generate({ ...WANTED, model: "echo" }), { text: "Echo: What did the Stoics do at night?" });
+  });
 
-test("with Jev chosen, a decision needs the Jev key and is sent to Jev with it", async () => {
-  try {
-    const chosen = await (await edit({ decider: "jev" })).json();
-    assert.deepEqual(chosen.decider, { provider: "jev", model: "jev-latest", ready: false, models: [{ id: "jev-latest", label: "Jev" }] });
-    assert.deepEqual(await decide(DECISION), { error: "no-key" });
-    assert.equal((await edit({ decider: "anthropic" })).status, 400);
-    const keyed = await (await edit({ jevKey: "jev-local-key" })).json();
-    assert.equal(keyed.decider.ready, true);
-    decided.length = 0;
-    const reply = await decide(DECISION);
-    assert.equal(reply.answers[1].confidence, 0.8);
-    assert.equal(reply.inputTokens, 12);
-    assert.deepEqual([decided[0].url, decided[0].authorization, decided[0].body.model], ["/jev", "Bearer jev-local-key", "jev-latest"]);
-    assert.equal((await read()).decider.provider, "jev", "the choice is kept");
-  } finally {
-    await edit({ decider: "ollama", jevKey: "" });
-  }
-});
-
-test("a generator runs on the chat model in Ollama, in one go and with no key, when Ollama lacks its own model", async () => {
-  await edit({ address: ollama });
-  received.length = 0;
-  assert.deepEqual(await generate(WANTED), { text: "Stoic evenings" }, "the website's default runs on Gemma");
-  assert.deepEqual([received[0].model, received[0].stream ?? false, received[0].reasoning_effort], ["gemma4:e4b-mlx", false, "none"]);
-  assert.deepEqual(received[0].messages, [{ role: "system", content: WANTED.prompt }, { role: "user", content: WANTED.text }]);
-  assert.deepEqual(await generate({ ...WANTED, model: "gemma3:latest" }), { text: "Stoic evenings" });
-  assert.equal(received[1].model, "gemma3:latest", "a model Ollama has runs as chosen");
-  assert.deepEqual(await generate({ ...WANTED, model: "echo" }), { text: "Echo: What did the Stoics do at night?" });
-});
-
-test("a generator on the Mac is unavailable while Ollama does not answer, and needs the key when the chat uses Anthropic", async () => {
-  try {
-    await edit({ address: dead });
-    assert.deepEqual(await generate(WANTED), { error: "unavailable" });
-    await edit({ address: ollama, provider: "anthropic" });
-    assert.deepEqual(await generate(WANTED), { error: "no-key" });
-  } finally {
-    await edit({ address: ollama, provider: "ollama" });
-  }
+  test("a generator on the Mac is unavailable while Ollama does not answer, and needs the key when the chat uses Anthropic", async () => {
+    try {
+      await edit({ address: dead });
+      assert.deepEqual(await generate(WANTED), { error: "unavailable" });
+      await edit({ address: ollama, provider: "anthropic" });
+      assert.deepEqual(await generate(WANTED), { error: "no-key" });
+    } finally {
+      await edit({ address: ollama, provider: "ollama" });
+    }
+  });
 });
