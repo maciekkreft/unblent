@@ -1,15 +1,15 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the evaluators (3.1), replicated (5) the way `notes` is:
 // local-first, cached in the browser, numbering versions itself while signed out and
 // syncing to the per-user server when signed in. Unlike a note an evaluator never
 // conflicts: the last write wins, as the journal's detectors did, and a delete is a
-// tombstone that always wins (5). The view where the user acted emits evaluator.saved,
-// evaluator.switched, evaluator.moved and removal.started; notice-stack emits removal.undone or
-// removal.settled when the undo window ends (4.3, fifth rule), and evaluator-list emits
-// evaluator.discarded when the undo window on its row ends. Everything with a side
-// effect (the store, the network, the ask) arrives through input, so this stays a pure
-// definition importable in Node.
+// tombstone that always wins (5), which only a restore write (5) takes back. The view
+// where the user acted emits evaluator.saved, evaluator.switched, evaluator.moved,
+// evaluator.discarded and starter.ticked (4.3, fifth rule), and each is a step Undo and
+// Redo reverse (12, Undo). Everything with a side effect (the store, the network, the
+// ask) arrives through input, so this stays a pure definition importable in Node.
 
 const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const isId = (v) => typeof v === "string" && ULID.test(v);
@@ -68,6 +68,13 @@ const questionsOf = (list) => (Array.isArray(list) ? list : []).map(question).fi
 // order, so two copies of the same ticks compare equal.
 const pagesOf = (list) => [...new Set((Array.isArray(list) ? list : []).filter((p) => typeof p === "string" && p))].sort();
 
+// The steps that last wrote an evaluator in this browser (12, Undo): `step` its content and
+// whether it is there, `onStep` its switch, `placeStep` its place, `tickStep` its ticks as
+// a starter. Kept in the cache, never sent; a record the server brings has none, so a
+// change from elsewhere refuses the step it overwrote.
+const STAMPS = ["step", "onStep", "placeStep", "tickStep"];
+const stampsOf = (r) => Object.fromEntries(STAMPS.filter((k) => typeof r[k] === "string").map((k) => [k, r[k]]));
+
 const record = (r) => ({
   id: r.id,
   book: r.book,
@@ -78,6 +85,7 @@ const record = (r) => ({
   version: Number.isInteger(r.version) && r.version >= 1 ? r.version : 1,
   removing: r.removing === true,
   starterFor: pagesOf(r.starterFor),
+  ...stampsOf(r),
   ...(typeof r.updatedAt === "string" ? { updatedAt: r.updatedAt } : {}),
   ...(isPosition(r.position) ? { position: r.position } : {}),
   ...(r.deleted === true ? { deleted: true } : {}),
@@ -222,7 +230,7 @@ const yours = (context) => {
 // evaluators are announced as before. Your values carries its questions from the values
 // given, the current ones when none are.
 const plain = (context, r) => {
-  const { deleted, starterFor, ...rest } = r;
+  const { deleted, starterFor, step, onStep, placeStep, tickStep, ...rest } = r;
   return { ...rest, position: positionOf(r), ...(starterFor?.length ? { starterFor } : {}), pending: context.outbox.has(r.id) };
 };
 const announce = (context, r, values = context.values ?? []) =>
@@ -457,7 +465,11 @@ function commit(context, enqueue, given) {
   enqueue(() => context.store.put(r).catch(() => {}));
   if (changed && context.userId != null) {
     const existing = context.outbox.get(r.id);
-    const row = outboxRow(r, hasContent(existing) ? existing.baseVersion : current ? current.version : null);
+    let row = outboxRow(r, hasContent(existing) ? existing.baseVersion : current ? current.version : null);
+    // A tombstone brought back by an Undo rides a restore write (5), naming the version of
+    // the tombstone it takes back; onto a live row (the delete never sent) it is a plain write.
+    // It carries the place too, which a tombstone on the server may never have been given.
+    if (current?.deleted && !r.deleted) row = { ...outboxRow(r, current.version), restore: true, ...(isPosition(r.position) ? { position: r.position } : {}) };
     // The place rides the write only when this device set it (5: last write wins), so an
     // edit never carries a stale place over a move made on another device.
     if (isPosition(r.position) && (existing?.position !== undefined || !isPosition(current?.position))) row.position = r.position;
@@ -492,6 +504,8 @@ const live = (context, id) => {
 // of it is still in its undo window. A deleted id stays deleted (5).
 // A `journal` field in a save or a stored row is no longer read: the schemas keep it
 // because contracts only grow (7.1), and a write leaving it out keeps the server's.
+// Every save is a step (12, Undo); typing on in the one field the step last wrote joins
+// it (textStep).
 function applySave(context, event, enqueue) {
   // Your values' name and questions come from the values; a save changes nothing of it.
   if (event.id === YOURS) return;
@@ -500,7 +514,14 @@ function applySave(context, event, enqueue) {
   if (!was) {
     if (!isId(event.book)) return;
     const position = firstPosition(context);
-    return commit(context, enqueue, record({ id: event.id, book: event.book, name: event.name, description: event.description, on: true, questions: event.questions, position }));
+    const next = record({ id: event.id, book: event.book, name: event.name, description: event.description, on: true, questions: event.questions, position });
+    const step = textStep(context, null, next);
+    commit(context, enqueue, { ...next, step: step.id });
+    recordText(context, enqueue, step, context.evaluators.get(next.id));
+    // The list places a new evaluator started with o or O once it exists; that move is
+    // part of this one gesture (applyMove).
+    context.added = { id: next.id, step: step.id, before: step.before };
+    return enqueue.assign({ added: context.added });
   }
   const questions = keepMarked(
     was.questions,
@@ -513,11 +534,14 @@ function applySave(context, event, enqueue) {
   const description = typeof event.description === "string" ? event.description : was.description;
   const next = { ...was, name: str(event.name), description, questions };
   if (same(was, next)) return;
-  commit(context, enqueue, next);
+  const step = textStep(context, was, next);
+  commit(context, enqueue, { ...next, step: step.id });
+  recordText(context, enqueue, step, context.evaluators.get(next.id));
 }
 
 // The admin ticked or unticked an evaluator as a starter for a try page (8). Only the
 // admin's sheet shows the ticks; the server keeps starterFor only from the admin (5).
+// Each tick is a step (12, Undo).
 function applyTick(context, { evaluator, page, on }, enqueue) {
   // Your values is built from each user's own values, so it is never a starter.
   if (evaluator === YOURS) return;
@@ -525,7 +549,14 @@ function applyTick(context, { evaluator, page, on }, enqueue) {
   if (!was) return;
   const starterFor = pagesOf(on ? [...was.starterFor, page] : was.starterFor.filter((p) => p !== page));
   if (JSON.stringify(starterFor) === JSON.stringify(was.starterFor)) return;
-  commit(context, enqueue, { ...was, starterFor });
+  const step = context.mint();
+  commit(context, enqueue, { ...was, starterFor, tickStep: step });
+  recordStep(context, enqueue, {
+    id: step,
+    label: `${on ? "tick" : "untick"} ${nameOf(was)} as a starter`,
+    undo: { kind: "tick", id: was.id, starterFor: was.starterFor, ...priorOf(was.tickStep) },
+    redo: { kind: "tick", id: was.id, starterFor, ...priorOf(was.tickStep) },
+  });
 }
 
 // --- Starters on a try page (8) --------------------------------------------------------
@@ -554,10 +585,22 @@ const copyOf = (starter, journal, newId) =>
 
 // The copies are made only once the Journal's id is known and the starters have come;
 // without either nothing is copied, and the page works as it would with no starters.
+// After Start over the copies are stamped with its step, which is recorded now, whole.
 function seed(context, enqueue) {
   const starters = context.seeds ?? [];
-  if (!context.journal || starters.length === 0) return;
-  for (const starter of starters) commit(context, enqueue, copyOf(starter, context.journal, context.newId));
+  const over = context.restarting;
+  const copies = context.journal ? starters.map((starter) => copyOf(starter, context.journal, context.newId)) : [];
+  for (const copy of copies) commit(context, enqueue, over ? { ...copy, step: over.id } : copy);
+  if (!over) return;
+  context.restarting = null;
+  enqueue.assign({ restarting: null });
+  const fresh = copies.map((r) => ({ id: r.id, ...textOf(r) }));
+  recordStep(context, enqueue, {
+    id: over.id,
+    label: "start over",
+    undo: { kind: "evaluators", items: [...over.gone, ...fresh.map((r) => ({ id: r.id, deleted: true }))] },
+    redo: { kind: "evaluators", items: [...over.gone.map(({ id, prior }) => ({ id, deleted: true, ...priorOf(prior) })), ...fresh.map((r) => ({ ...r, deleted: false }))] },
+  });
 }
 
 // How long the try page waits for the starters and the Journal before it shows the
@@ -565,9 +608,8 @@ function seed(context, enqueue) {
 const SEED_WAIT_MS = 4000;
 
 // The user moved an evaluator in the list (evaluator-list emits evaluator.moved, 4.3
-// fifth rule): it takes a key between its new neighbours'. A place is last write wins
-// (5): it bumps no version, so the list's remembered answers, kept by what an evaluator
-// asks, stay; signed in it rides the outbox alone, or on the row of an edit not yet sent.
+// fifth rule): it takes a key between its new neighbours'. Every move is a step (12, Undo)
+// whose Undo puts back the place it showed in.
 function applyMove(context, event, enqueue) {
   const current = live(context, event.id);
   if (!current) return;
@@ -577,9 +619,37 @@ function applyMove(context, event, enqueue) {
   };
   const position = between(neighbour(event.after), neighbour(event.before));
   if (position === current.position) return;
+  const added = context.added;
+  if (added?.id === current.id && current.step === added.step) {
+    place(context, enqueue, current, position, added.step);
+    const r = context.evaluators.get(current.id);
+    enqueue.emit({
+      type: "step.recorded",
+      id: added.step,
+      owner: "evaluators",
+      label: `add ${nameOf(r)}`,
+      undo: added.before,
+      redo: { kind: "evaluator", id: r.id, ...textOf(r), deleted: false },
+    });
+    return;
+  }
+  const step = context.mint();
+  place(context, enqueue, current, position, step);
+  recordStep(context, enqueue, {
+    id: step,
+    label: `move ${nameOf(current)}`,
+    undo: { kind: "place", id: current.id, position: positionOf(current), ...priorOf(current.placeStep) },
+    redo: { kind: "place", id: current.id, position, ...priorOf(current.placeStep) },
+  });
+}
+
+// A place is last write wins (5): it bumps no version, so the list's remembered answers,
+// kept by what an evaluator asks, stay; signed in it rides the outbox alone, or on the row
+// of an edit not yet sent.
+function place(context, enqueue, current, position, placeStep) {
   // Your values not yet stored is written whole, so the server has a row to place.
-  if (event.id === YOURS && !visible(context.evaluators.get(YOURS))) return commit(context, enqueue, { ...current, position });
-  const r = { ...current, position };
+  if (current.id === YOURS && !visible(context.evaluators.get(YOURS))) return commit(context, enqueue, { ...current, position, placeStep });
+  const r = { ...current, position, placeStep };
   context.evaluators.set(r.id, r);
   enqueue(() => context.store.put(r).catch(() => {}));
   if (context.userId != null) {
@@ -592,10 +662,18 @@ function applyMove(context, event, enqueue) {
   if (context.userId != null) enqueue.raise({ type: "_drain" });
 }
 
+// The evaluator's own switch, from the list; each one is a step (12, Undo).
 function applySwitch(context, { id, on }, enqueue) {
   const was = live(context, id);
   if (!was || was.on === on) return;
-  commit(context, enqueue, { ...was, on });
+  const step = context.mint();
+  commit(context, enqueue, { ...was, on, onStep: step });
+  recordStep(context, enqueue, {
+    id: step,
+    label: `switch ${on ? "on" : "off"} ${nameOf(was)}`,
+    undo: { kind: "on", id, on: was.on, ...priorOf(was.onStep) },
+    redo: { kind: "on", id, on, ...priorOf(was.onStep) },
+  });
 }
 
 // Sets `removing` on the one item of `kind` named by `id`, wherever it sits. An id that
@@ -628,19 +706,191 @@ function applySettle(context, { kind, id }, enqueue) {
 
 // Start over on a try page (8), once its Undo window ended: every evaluator here becomes
 // a tombstone, uploaded like any delete, and _restart fetches the starters again and
-// copies them in as on a first visit. Off a try page it means nothing.
+// copies them in as on a first visit. The whole of it is one step (12, Undo), recorded
+// once the copies are made (seed), whose Undo brings back what was there and deletes the
+// copies. Off a try page it means nothing.
 function startOver(context, enqueue) {
   if (!context.tryPage) return;
-  for (const r of [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS)) commit(context, enqueue, { ...r, removing: false, deleted: true });
+  const step = context.mint();
+  const gone = [...context.evaluators.values()].filter((x) => visible(x) && x.id !== YOURS);
+  for (const r of gone) commit(context, enqueue, { ...r, removing: false, deleted: true, step });
+  context.restarting = { id: step, gone: gone.map((r) => ({ id: r.id, ...textOf(r), deleted: false, ...priorOf(r.step) })) };
+  enqueue.assign({ restarting: context.restarting });
   enqueue.raise({ type: "_restart" });
 }
 
-// The undo window on a list row ran out (evaluator-list, 4.3 fifth rule): the evaluator
-// becomes a tombstone at once; it was never marked, since the list kept the window itself.
+// The user deleted an evaluator: in the list, the editor or the Evaluators tab
+// (evaluator.discarded). It goes at once and is one step, shown with the short notice
+// (12, Undo).
 function applyDiscard(context, { id }, enqueue) {
   if (id === YOURS) return;
   const r = live(context, id);
-  if (r) commit(context, enqueue, { ...r, removing: false, deleted: true });
+  if (!r) return;
+  const step = context.mint();
+  commit(context, enqueue, { ...r, removing: false, deleted: true, step });
+  recordStep(context, enqueue, {
+    id: step,
+    label: `delete ${nameOf(r)}`,
+    undo: { kind: "evaluator", id, ...textOf(r), deleted: false, ...priorOf(r.step) },
+    redo: { kind: "evaluator", id, deleted: true, ...priorOf(r.step) },
+    notice: true,
+  });
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// What a save writes back: the content a step restores.
+const textOf = (r) => ({ name: r.name, description: r.description, questions: bare(r.questions) });
+
+// `prior` is the step that wrote a record before this one, so an Undo leaves the record
+// as that step left it and the step before can be undone next; a record no step of this
+// browser wrote is left stamped with a mark of the step undone.
+const priorOf = (step) => (step ? { prior: step } : {});
+const priorStamp = (entry, step) => entry.prior ?? `^${step}`;
+
+// What a step is about, as people read it after "Undo:".
+const NAME_MAX = 40;
+function nameOf(r) {
+  const name = String(r?.name ?? "").trim();
+  if (!name) return "an untitled evaluator";
+  return `evaluator ${name.length > NAME_MAX ? `${name.slice(0, NAME_MAX).trimEnd()}…` : name}`;
+}
+
+// A new step ends any stretch of typing still open.
+function recordStep(context, enqueue, step) {
+  context.stretch = null;
+  context.added = null;
+  enqueue.assign({ stretch: null, added: null });
+  enqueue.emit({ type: "step.recorded", owner: "evaluators", ...step });
+}
+
+// The text fields a save changed, by where they sit, or null when it changed more than
+// text: a question or an option added, removed or moved, a kind, a switch, an icon or an
+// expected answer. Only typing in one field may join a stretch.
+function typedFields(was, next) {
+  const fields = [];
+  const text = (key, a, b) => a !== b && fields.push(key);
+  text("name", was.name, next.name);
+  text("description", was.description, next.description);
+  const qa = bare(was.questions);
+  const qb = bare(next.questions);
+  if (qa.map((q) => q.id).join() !== qb.map((q) => q.id).join()) return null;
+  for (const [i, a] of qa.entries()) {
+    const b = qb[i];
+    if (a.kind !== b.kind || a.on !== b.on || a.expect !== b.expect) return null;
+    if (a.options.map((o) => `${o.id}:${o.icon ?? ""}`).join() !== b.options.map((o) => `${o.id}:${o.icon ?? ""}`).join()) return null;
+    text(`${a.id}:text`, a.text, b.text);
+    text(`${a.id}:yes`, a.yes, b.yes);
+    text(`${a.id}:no`, a.no, b.no);
+    for (const [j, o] of a.options.entries()) {
+      text(`${o.id}:name`, o.name, b.options[j].name);
+      text(`${o.id}:description`, o.description, b.options[j].description);
+    }
+  }
+  return fields;
+}
+
+// The step a save makes. A save that only types on in the field the open stretch last
+// wrote, while that stretch last wrote the evaluator, joins it: the same id, its undo kept
+// by `undo`. evaluator.saved says nothing of leaving a field, so a stretch ends at any
+// other change or any other step. A new evaluator's undo deletes it again.
+function textStep(context, was, next) {
+  const blank = { name: "", description: "", questions: next.questions.map((q) => ({ ...q, text: "", yes: "", no: "", options: q.options.map((o) => ({ ...o, name: "", description: "" })) })) };
+  const fields = typedFields(was ?? blank, next);
+  const field = fields?.length === 1 ? fields[0] : null;
+  const open = context.stretch;
+  if (was && open && field && open.evaluator === was.id && open.field === field && was.step === open.id) return { ...open, joins: true };
+  const before = was ? { kind: "evaluator", id: was.id, ...textOf(was), deleted: false, ...priorOf(was.step) } : { kind: "evaluator", id: next.id, deleted: true };
+  const verb = !was ? "add" : next.questions.length < was.questions.length ? "remove a question from" : optionsOf(next) < optionsOf(was) ? "remove an option from" : "edit";
+  return { id: context.mint(), evaluator: next.id, field, verb, before };
+}
+const optionsOf = (r) => r.questions.reduce((n, q) => n + q.options.length, 0);
+
+function recordText(context, enqueue, step, r) {
+  enqueue.emit({
+    type: "step.recorded",
+    id: step.id,
+    owner: "evaluators",
+    label: `${step.verb} ${nameOf(r)}`,
+    undo: step.before,
+    redo: { kind: "evaluator", id: r.id, ...textOf(r), deleted: false, ...priorOf(step.before.prior) },
+  });
+  // Only the add step itself may still take the list's move of the new evaluator.
+  if (context.added && context.added.step !== step.id) {
+    context.added = null;
+    enqueue.assign({ added: null });
+  }
+  const { joins: _, ...open } = step;
+  context.stretch = step.field ? open : null;
+  enqueue.assign({ stretch: context.stretch });
+}
+
+// A record whose content a step left as it was still takes that step's stamp, so the next
+// step can be checked against it.
+function stamp(context, enqueue, current, stamps) {
+  const r = { ...current, ...stamps };
+  context.evaluators.set(r.id, r);
+  enqueue(() => context.store.put(r).catch(() => {}));
+}
+
+// One evaluator's content and whether it is there, written back by a step: a tombstone
+// comes back with a restore write (commit).
+function writeBack(context, enqueue, current, entry, step) {
+  if (entry.deleted === true) {
+    if (visible(current)) commit(context, enqueue, { ...current, removing: false, deleted: true, step });
+    else stamp(context, enqueue, current, { step });
+    return;
+  }
+  const { deleted: _, ...kept } = current;
+  commit(context, enqueue, { ...kept, name: str(entry.name), description: str(entry.description), questions: questionsOf(entry.questions), step });
+}
+
+// An Undo or Redo of one of this fact's steps. It is applied only while what it would
+// reverse is as the step left it: the part of the evaluator it wrote was last written in
+// this browser by that step. Anything written since, here, in another tab or on another
+// device, refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "evaluators") return;
+  context.stretch = null;
+  context.added = null;
+  enqueue.assign({ stretch: null, added: null });
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "evaluators", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  // An Undo expects the step's own stamp and leaves the one before it; a Redo the reverse.
+  const undoing = event.type === "step.undone";
+  const expected = (entry) => (undoing ? event.id : priorStamp(entry, event.id));
+  const leaves = (entry) => (undoing ? priorStamp(entry, event.id) : event.id);
+  const current = typeof p.id === "string" ? (p.id === YOURS ? live(context, YOURS) : context.evaluators.get(p.id)) : null;
+  const wrote = (entry) => (entry.deleted === true || (typeof entry.name === "string" && Array.isArray(entry.questions)));
+  if (p.kind === "evaluator" && current && wrote(p)) {
+    if (current.step !== expected(p)) return settle("refused", "changed");
+    writeBack(context, enqueue, current, p, leaves(p));
+    return settle("applied");
+  }
+  if (p.kind === "evaluators" && Array.isArray(p.items)) {
+    const records = p.items.map((n) => context.evaluators.get(n?.id));
+    if (records.some((r, i) => !r || !wrote(p.items[i]) || r.step !== expected(p.items[i]))) return settle("refused", "changed");
+    p.items.forEach((n, i) => writeBack(context, enqueue, records[i], n, leaves(n)));
+    return settle("applied");
+  }
+  if (p.kind === "on" && visible(current) && typeof p.on === "boolean") {
+    if (current.onStep !== expected(p)) return settle("refused", "changed");
+    commit(context, enqueue, { ...current, on: p.on, onStep: leaves(p) });
+    return settle("applied");
+  }
+  if (p.kind === "place" && visible(current) && isPosition(p.position)) {
+    if (current.placeStep !== expected(p)) return settle("refused", "changed");
+    if (p.position !== current.position) place(context, enqueue, current, p.position, leaves(p));
+    else stamp(context, enqueue, current, { placeStep: leaves(p) });
+    return settle("applied");
+  }
+  if (p.kind === "tick" && visible(current) && Array.isArray(p.starterFor)) {
+    if (current.tickStep !== expected(p)) return settle("refused", "changed");
+    commit(context, enqueue, { ...current, starterFor: pagesOf(p.starterFor), tickStep: leaves(p) });
+    return settle("applied");
+  }
+  settle("refused", "changed");
 }
 
 const settled = (context, message, enqueue) =>
@@ -668,10 +918,10 @@ function flush(context, message, enqueue) {
   else if (message.type === "evaluator.switched") applySwitch(context, message, enqueue);
   else if (message.type === "evaluator.moved") applyMove(context, message, enqueue);
   else if (message.type === "starter.ticked") applyTick(context, message, enqueue);
-  else if (message.type === "removal.started") applyMark(context, message, true, enqueue);
   else if (message.type === "removal.undone") applyMark(context, message, false, enqueue);
   else if (message.type === "removal.settled") settled(context, message, enqueue);
   else if (message.type === "evaluator.discarded") applyDiscard(context, message, enqueue);
+  else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
 // A failed store answers what it can: no evaluators, and nothing to check with.
@@ -682,7 +932,7 @@ function unanswerable(message) {
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
 const QUEUED = Object.fromEntries(
-  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.started", "removal.undone", "removal.settled", "evaluator.discarded"].map((t) => [t, { actions: queue }]),
+  ["list?", "active?", "evaluate?", "evaluator.saved", "evaluator.switched", "evaluator.moved", "starter.ticked", "removal.undone", "removal.settled", "evaluator.discarded", "step.undone", "step.redone"].map((t) => [t, { actions: queue }]),
 );
 
 // A visitor on a try page (8) with nothing in this browser yet gets the page's
@@ -825,8 +1075,9 @@ export const machine = setup({
           return { acks, networkError: true };
         }
         if (result.error === "unauthorized") return { acks, authFailed: true };
-        // A move for an evaluator the server never had: nothing to place (applySync).
-        acks.push(result);
+        // A move for an evaluator the server never had: nothing to place (applySync). Whether
+        // the row was a delete tells an Undo that raced it from a delete made elsewhere.
+        acks.push(row.deleted ? { ...result, sentDelete: true } : result);
         await store.outboxDelete(row.id).catch(() => {});
       }
       if (!pull) return { acks };
@@ -862,11 +1113,16 @@ export const machine = setup({
       "the order it had, oldest first, until it is moved. It works signed out, numbering versions " +
       "itself, and syncs to the account when signed in (section 5); signing in uploads every " +
       "evaluator with its history. The last write wins, so two devices never conflict, and a " +
-      "deleted evaluator is kept as a tombstone, which always wins. A removed evaluator, question " +
-      "or option is marked while its undo window runs and goes only when the window ends; a mark " +
-      "left by a closed tab ends at the next load. An evaluator deleted from the list " +
-      "(`evaluator.discarded`) is not marked, since the list counts its undo window down on the " +
-      "row, and goes at once when that window ends. An evaluator reads what it is given: the " +
+      "deleted evaluator is kept as a tombstone, which always wins. Each save, switch, move, " +
+      "delete and starter tick is a step Undo and Redo reverse (section 12); typing on in one " +
+      "field (the name, the description, a question's text, what yes or no means, an option's " +
+      "name or description) stays one step until anything else changes, and removing a question " +
+      "or an option is a save of its own step. A new evaluator the list places where it was " +
+      "started with o or O is added and placed in one step. A delete (`evaluator.discarded`) happens at once " +
+      "and asks for the short notice; Undo brings the evaluator back with a restore write the " +
+      "server accepts. A step is refused when what it would reverse was written since by anything " +
+      "else, here, in another tab or on another device. A mark from the undo window of before, " +
+      "left in this browser, ends at the next load. An evaluator reads what it is given: the " +
       "try page's Evaluate box asks the switched-on evaluators about a typed text, and " +
       "choice-point-checks asks the one chosen for a choice point box about each of its " +
       "lines, whether it is switched on or not. It also presents Your values, kept with the " +
@@ -888,7 +1144,8 @@ export const machine = setup({
       "kept with the Journal; the copies are the visitor's own and upload with the rest once " +
       "the guest is made, and later changes by the admin do not reach them. Start over on a " +
       "try page, once its Undo window ends, deletes every evaluator in the browser and " +
-      "copies the starters in again the same way. Your values has a fixed description. The chat " +
+      "copies the starters in again the same way, and the whole of it is one step, whose Undo " +
+      "brings back what was there and deletes the copies. Your values has a fixed description. The chat " +
       "may use two of its queries as tools, each with its own switch in Settings under What the chat " +
       "may read: `evaluators: active` (\"Listing your evaluators\") lists every " +
       "evaluator of the account that has a question to ask, switched on or not, each with its description, " +
@@ -902,17 +1159,16 @@ export const machine = setup({
       "changes nothing.",
     kind: "fact",
     shape: "replicated",
-    emits: ["evaluator.changed", "evaluator.deleted"],
+    emits: ["evaluator.changed", "evaluator.deleted", "step.recorded", "step.settled"],
     owns: "the account's evaluators",
     steps: {
-      "evaluator.saved": "pending",
-      "evaluator.switched": "pending",
-      "evaluator.moved": "pending",
-      "starter.ticked": "pending",
-      "removal.started": "pending",
+      "evaluator.saved": "step",
+      "evaluator.switched": "step",
+      "evaluator.moved": "step",
+      "starter.ticked": "step",
       "removal.undone": "pending",
       "removal.settled": "pending",
-      "evaluator.discarded": "pending",
+      "evaluator.discarded": "step",
     },
     asks: ["session: read", "books: list", "values: read", "llm: decide", "flags: read"],
   },
@@ -928,6 +1184,14 @@ export const machine = setup({
     // The try page this tab is on (8), by name, or null; and how a copy gets its ids.
     tryPage: input.tryPage ?? null,
     newId: input.newId,
+    mint: input.mint ?? ulid,
+    // The stretch of typing still open (12, Undo): { id, evaluator, field, verb, before }.
+    stretch: null,
+    // The evaluator just added, { id, step, before }, whose placing by the list joins its
+    // add step: o and O are one gesture (12, Undo).
+    added: null,
+    // A Start over waiting for its copies, so its one step names them too.
+    restarting: null,
     seeds: null,
     journal: null,
     // The current values (Your values' questions), null until the values fact is heard from.
@@ -1078,10 +1342,11 @@ export const machine = setup({
         "evaluator.switched": { actions: enqueueActions(({ context, event, enqueue }) => applySwitch(context, event, enqueue)) },
         "evaluator.moved": { actions: enqueueActions(({ context, event, enqueue }) => applyMove(context, event, enqueue)) },
         "starter.ticked": { actions: enqueueActions(({ context, event, enqueue }) => applyTick(context, event, enqueue)) },
-        "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, true, enqueue)) },
         "removal.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyMark(context, event, false, enqueue)) },
         "removal.settled": { actions: enqueueActions(({ context, event, enqueue }) => settled(context, event, enqueue)) },
         "evaluator.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         _restart: { target: "#evaluators.seeding", actions: assign({ seeds: null }) },
         // Every value counts toward its one mark, and with no values Your values has no
         // questions, so a line gets no values mark rather than a grey one.
@@ -1209,9 +1474,10 @@ export const machine = setup({
 // Adopt one record the server holds: its content and version, with this tab's marks
 // kept on what is still there. Announced as a change or, for a tombstone of an
 // evaluator this tab was showing, as gone.
-function adopt(context, server, enqueue) {
+// `stamps` are the steps of this browser that wrote what the server now holds.
+function adopt(context, server, enqueue, stamps = {}) {
   const held = context.evaluators.get(server.id);
-  let r = record({ ...server, removing: held?.removing });
+  let r = record({ ...server, removing: held?.removing, ...stamps });
   if (held && !held.deleted && !r.deleted) {
     const marks = new Map(held.questions.map((q) => [q.id, q]));
     r = {
@@ -1246,11 +1512,24 @@ function applySync(context, output, enqueue) {
     }
     const row = context.outbox.get(ack.id);
     const held = context.evaluators.get(ack.id);
+    // The delete this browser sent was taken back by an Undo meanwhile: the restore write
+    // queued since names the tombstone's version, and the evaluator stays.
+    if (ack.deleted && ack.sentDelete && visible(held) && row?.restore) {
+      const advanced = { ...row, baseVersion: ack.version };
+      context.outbox.set(ack.id, advanced);
+      enqueue(() => context.store.outboxPut(advanced).catch(() => {}));
+      const r = { ...held, version: ack.version };
+      context.evaluators.set(r.id, r);
+      enqueue(() => context.store.put(r).catch(() => {}));
+      continue;
+    }
     // The server holds a tombstone (a delete always wins, 5): the evaluator is gone here too.
     if (ack.deleted) {
       context.outbox.delete(ack.id);
       enqueue(() => context.store.outboxDelete(ack.id).catch(() => {}));
-      adopt(context, ack, enqueue);
+      // This browser's own delete keeps the steps that wrote it; a delete made elsewhere
+      // refuses them.
+      adopt(context, ack, enqueue, ack.sentDelete && held?.deleted ? stampsOf(held) : {});
       continue;
     }
     // A newer edit made during the sync leaves a newer row, which stays pending on the
@@ -1279,16 +1558,18 @@ function applySync(context, output, enqueue) {
       // device moved the evaluator since and has not sent it yet (the later write, 5).
       const moving = context.outbox.get(server.id)?.position !== undefined;
       if (visible(current) && !server.deleted && !moving && isPosition(server.position) && server.position !== current.position) {
-        const r = { ...current, position: server.position };
+        // A place written elsewhere: a move this browser made can no longer be undone.
+        const { placeStep: _, ...r } = { ...current, position: server.position };
         context.evaluators.set(r.id, r);
         enqueue(() => context.store.put(r).catch(() => {}));
         say(context, enqueue, r);
       }
       continue;
     }
-    // A local tombstone is never revived, and a local change not yet sent is the later
-    // write, so it wins (last write wins) and is sent at the next drain.
-    if (current && current.deleted) continue;
+    // A local tombstone whose delete is still to be sent is never revived; otherwise a live
+    // copy at a higher version is a restore write made elsewhere (5). A local change not
+    // yet sent is the later write, so it wins (last write wins) and is sent at the next drain.
+    if (current && current.deleted && context.outbox.get(server.id)?.deleted) continue;
     if (context.outbox.has(server.id) && !server.deleted) continue;
     if (server.deleted && context.outbox.has(server.id)) {
       context.outbox.delete(server.id);

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "An evaluator's undo window in the list ran out: evaluators tombstones it.",
+  "description": "The user deleted an evaluator: evaluators makes it a tombstone at once, one step Undo takes back (12).",
   "type": "object",
   "properties": {
     "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" }

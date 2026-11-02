@@ -1,15 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-// The kit (10): evaluators and notice-stack, both real, on the real bus with their real
-// schemas. No component emits removal.started yet (the evaluator editor will), so a
-// stand-in that declares it, with the shape removal.undone has plus the thing's name,
-// starts the removal the way the editor will.
+// The kit (10): evaluators, evaluator-list, notice-stack and undo, all real, on the real
+// bus with their real schemas.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
 const { mount, unmount } = await import("bus");
-const { setup, emit } = await import("xstate");
-const { readFileSync } = await import("node:fs");
+const { setup } = await import("xstate");
 
 const BOOK = "01ARZ3NDEKTSV4RRFFQ69G5BK1";
 const ID = "01ARZ3NDEKTSV4RRFFQ69G5EV1";
@@ -28,40 +25,32 @@ const memory = () => {
   };
 };
 
-function standIn() {
-  const undone = JSON.parse(readFileSync(new URL("../../notice-stack/events/removal.undone.json", import.meta.url)));
-  const started = { ...undone, properties: { ...undone.properties, name: { type: "string" } }, required: [...undone.required, "name"] };
-  const machine = setup({}).createMachine({
-    id: "test-remover",
-    meta: { kind: "view", emits: ["removal.started"], attributes: [] },
-    on: { go: { actions: emit(({ event }) => ({ type: "removal.started", ...event.body })) } },
-  });
-  return mount(machine, { events: { "removal.started": started } });
-}
-
-test("an evaluator's removal waits in notice-stack: Undo brings it back, the window running out deletes it", async () => {
+// A cut row deleted when the keyboard leaves the list goes at once, and the corner
+// notice's Undo, through `undo`, brings it back (12, Vim keys; 12, Undo).
+test("a cut evaluator deleted on leaving the list comes back with the notice's Undo", async () => {
   const store = memory();
   store.rows.set(ID, { id: ID, book: BOOK, name: "Goals", on: true, questions: [], version: 1 });
-  const { actors, unwire } = await wire(["evaluators", "notice-stack"], {
+  const lists = new Map();
+  const undoStore = { read: async (account) => lists.get(account), write: async (account, l) => void lists.set(account, structuredClone(l)) };
+  const { actors, unwire } = await wire(["evaluators", "evaluator-list", "notice-stack", "undo"], {
     evaluators: { store },
+    "evaluator-list": { mint: () => "01ARZ3NDEKTSV4RRFFQ69G5DRF" },
     "notice-stack": { fadeMs: 60 },
+    undo: { store: undoStore, tell: () => {} },
   });
-  const remover = standIn();
-  const removing = () => store.rows.get(ID).removing;
   try {
-    const stack = actors["notice-stack"];
-    await until(() => actors.evaluators.getSnapshot().matches("ready"));
-    remover.send({ type: "go", body: { kind: "evaluator", id: ID, name: "Goals" } });
-    await until(() => removing() === true);
-    stack.send({ type: "_act", key: `removal:evaluator:${ID}`, index: 0 });
-    await until(() => removing() === false);
-    assert.ok(!store.rows.get(ID).deleted);
-
-    remover.send({ type: "go", body: { kind: "evaluator", id: ID, name: "Goals" } });
-    await until(() => store.rows.get(ID).deleted === true);
-    assert.equal(store.rows.get(ID).version, 2);
+    const rows = () => actors["evaluator-list"].getSnapshot().context.evaluators.map((e) => e.id);
+    await until(() => rows().includes(ID));
+    actors["evaluator-list"].send({ type: "_cut", id: ID });
+    actors["evaluator-list"].send({ type: "_left" });
+    await until(() => store.rows.get(ID).deleted === true && !rows().includes(ID));
+    const notices = () => [...actors["notice-stack"].getSnapshot().context.notices.values()];
+    await until(() => notices().some((n) => n.key === "step"));
+    actors["notice-stack"].send({ type: "_act", key: "step", index: 0 });
+    await until(() => rows().includes(ID));
+    assert.equal(store.rows.get(ID).deleted, undefined, "brought back");
+    assert.equal(store.rows.get(ID).name, "Goals");
   } finally {
-    unmount(remover);
     unwire();
   }
 });

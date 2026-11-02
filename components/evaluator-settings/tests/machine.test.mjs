@@ -9,7 +9,7 @@ import { machine, shownOf, stopKey, boxEdge, JOURNAL, isEmpty, onMac } from "../
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const json = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = { "evaluator.saved": json("evaluator.saved"), "removal.started": json("removal.started") };
+const SCHEMAS = { "evaluator.saved": json("evaluator.saved"), "evaluator.discarded": json("evaluator.discarded") };
 const recorded = [];
 
 const BOOK = "01K6TEST000000000000000PA1";
@@ -148,30 +148,31 @@ test("a change from the fact while typing keeps what is typed; once saved it is 
   assert.equal(shownOf(ctx()).find((d) => d.id === A).name, "From elsewhere");
 });
 
-test("delete saves, starts the undo window and hides the evaluator; Undo brings it back", async () => {
+test("delete saves, emits evaluator.discarded and hides the evaluator; Undo brings it back", async () => {
   const { actor, emitted, ctx } = await start();
   actor.send({ type: "_delete", evaluator: A });
-  assert.deepEqual(emitted.map((e) => e.type), ["evaluator.saved", "removal.started"]);
-  assert.deepEqual(emitted[1], { type: "removal.started", kind: "evaluator", id: A, name: "Goal or value" });
+  assert.deepEqual(emitted.map((e) => e.type), ["evaluator.saved", "evaluator.discarded"]);
+  assert.deepEqual(emitted[1], { type: "evaluator.discarded", id: A });
   assert.equal(shownOf(ctx()).some((d) => d.id === A), false);
-  actor.send(changed({ ...EV_A, removing: true }));
+  actor.send({ type: "evaluator.deleted", id: A, book: JOURNAL });
   assert.equal(shownOf(ctx()).some((d) => d.id === A), false);
-  actor.send(changed({ ...EV_A, removing: false }));
+  actor.send(changed(EV_A));
   assert.equal(shownOf(ctx()).some((d) => d.id === A), true, "the way back");
   actor.send({ type: "evaluator.deleted", id: B, book: JOURNAL });
   assert.equal(shownOf(ctx()).some((d) => d.id === B), false);
 });
 
-test("removing a question or a cleared option waits out its undo window; a written option is not removed", async () => {
+test("removing a question or a cleared option saves the evaluator without it; a written option is not removed", async () => {
   const { actor, emitted, ctx } = await start();
   actor.send({ type: "_removeOption", evaluator: A, question: Q1, id: O1 });
   assert.equal(emitted.length, 0, "an option with words is kept");
   actor.send({ type: "_editOption", evaluator: A, question: Q1, id: O1, patch: { name: "" } });
   actor.send({ type: "_removeOption", evaluator: A, question: Q1, id: O1 });
-  assert.deepEqual(emitted.map((e) => [e.type, e.kind]), [["evaluator.saved", undefined], ["removal.started", "option"]]);
+  assert.deepEqual(emitted.map((e) => e.type), ["evaluator.saved", "evaluator.saved"]);
+  assert.equal(emitted[1].questions[0].options.some((o) => o.id === O1), false);
   actor.send({ type: "_removeQuestion", evaluator: B, id: Q2 });
-  assert.deepEqual(emitted.at(-1), { type: "removal.started", kind: "question", id: Q2, name: "" });
-  assert.equal(ctx().draft.questions[0].removing, true);
+  assert.equal(emitted.at(-1).questions.some((q) => q.id === Q2), false);
+  assert.equal(ctx().draft.questions.some((q) => q.id === Q2), false);
 });
 
 test("adding a question, switching its kind and switching it off change only the draft until saved", async () => {

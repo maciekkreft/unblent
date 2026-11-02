@@ -138,6 +138,19 @@ test("a delete is a tombstone that always wins and is pulled like a change", asy
   assert.deepEqual(later, { evaluators: [], cursor: all.cursor });
 });
 
+test("a restore write naming the tombstone's version brings it back; any other is refused", async () => {
+  const cookie = freshCookie();
+  await put(ID, body(), cookie);
+  await put(ID, body({ deleted: true, baseVersion: 1 }), cookie);
+  const stale = await (await put(ID, body({ name: "Back", restore: true, baseVersion: 1 }), cookie)).json();
+  assert.deepEqual([stale.deleted, stale.version], [true, 2], "a restore of an older version is refused");
+  const back = await (await put(ID, body({ name: "Back", restore: true, baseVersion: 2 }), cookie)).json();
+  assert.deepEqual([back.deleted, back.name, back.version], [false, "Back", 3]);
+  const fresh = await (await put(ID2, body({ restore: true, baseVersion: 4 }), cookie)).json();
+  assert.deepEqual([fresh.deleted, fresh.version], [false, 5], "a restore of an evaluator the server never had adds it");
+  assert.equal((await put(ID, body({ restore: "yes" }), cookie)).status, 400);
+});
+
 test("a body that is not an evaluator is refused with a fixed reply", async () => {
   const cookie = freshCookie();
   for (const bad of [body({ on: "yes" }), body({ book: "nope" }), body({ questions: ["x"] }), body({ baseVersion: true }), body({ journal: "yes" }), body({ updatedAt: "yesterday" })]) {

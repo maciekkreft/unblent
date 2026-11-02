@@ -3,7 +3,9 @@ evaluators fact. Every route needs a signed-in user (require_user) and resolves 
 user's own SQLite file, so isolation holds by construction and the code reads as if for
 a single user. version is assigned here. The last write wins, so a write is never
 refused for a stale base; a delete always wins (5), so a write onto a tombstone comes
-back as the tombstone rather than reviving it.
+back as the tombstone rather than reviving it. The one exception is a restore write (5),
+an Undo of a delete: it names the tombstone's own version, so only the delete it undoes
+is taken back.
 
 The admin's evaluators may be starters for try pages (8): starterFor names the pages.
 Whenever the admin saves one, the shared file data/evaluators.db is rewritten with a
@@ -188,6 +190,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
     questions, base, deleted = payload.get("questions"), payload.get("baseVersion"), payload.get("deleted", False)
     journal, updated = payload.get("journal"), payload.get("updatedAt")
     starter_for, description = payload.get("starterFor"), payload.get("description")
+    restore = payload.get("restore", False)
     valid = (
         _is_id(book)
         and isinstance(name, str)
@@ -200,6 +203,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         and (updated is None or _is_time(updated))
         and (starter_for is None or _pages(starter_for) is not None)
         and (description is None or isinstance(description, str))
+        and isinstance(restore, bool)
     )
     if not valid:
         return JSONResponse(_BAD, status_code=400)
@@ -212,7 +216,7 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
     admin = bool((session_of(request) or {}).get("admin"))
     with _connect(user_id) as connection:
         pages = _pages(starter_for) if admin and starter_for is not None else None
-        result = _write(connection, evaluator_id, book, name, description, on, journal, stored, base, deleted, updated, pages)
+        result = _write(connection, evaluator_id, book, name, description, on, journal, stored, base, deleted, updated, pages, restore)
         if position is not None:
             result = _place(connection, evaluator_id, position)
         if admin:
@@ -220,9 +224,10 @@ async def put_evaluator(evaluator_id: str, request: Request, user_id: str = Depe
         return result
 
 
-def _write(connection, evaluator_id, book, name, description, on, journal, stored, base, deleted, updated, pages) -> dict:
+def _write(connection, evaluator_id, book, name, description, on, journal, stored, base, deleted, updated, pages, restore=False) -> dict:
     """One write onto the user's own file; pages is the new starterFor and description the
-    new description, each None to keep what is held."""
+    new description, each None to keep what is held. restore brings back the tombstone
+    whose version is base."""
     row = connection.execute("SELECT * FROM evaluators WHERE id = ?", (evaluator_id,)).fetchone()
     if row is None:
         # A new id is an idempotent upsert of the browser's own ULID (5): it continues
@@ -233,8 +238,10 @@ def _write(connection, evaluator_id, book, name, description, on, journal, store
             (evaluator_id, book, name, description or "", int(on), int(bool(journal)), stored, (base or 0) + 1, _next_seq(connection), int(deleted), updated, json.dumps(pages or [])),
         )
         return _reread(connection, evaluator_id)
-    # A write onto a tombstone, or a second delete, returns the tombstone unchanged.
-    if row["deleted"]:
+    # A write onto a tombstone, or a second delete, returns the tombstone unchanged, unless
+    # it is the restore write of that very tombstone, written since by nothing else.
+    revived = bool(row["deleted"]) and restore and not deleted and base == row["version"]
+    if row["deleted"] and not revived:
         return _record(row)
     # A write from a browser that predates "Show in journal" leaves it out and keeps it.
     shown = row["journal"] if journal is None else int(journal)
@@ -243,7 +250,7 @@ def _write(connection, evaluator_id, book, name, description, on, journal, store
     said = row["description"] if description is None else description
     # What the server already holds is not a change: no new version and no new seq,
     # so a resend of a write already applied is harmless.
-    if not deleted and (name, said, int(on), shown, stored, ticks) == (row["name"], row["description"], row["on"], row["journal"], row["questions"], row["starter_for"]):
+    if not deleted and not revived and (name, said, int(on), shown, stored, ticks) == (row["name"], row["description"], row["on"], row["journal"], row["questions"], row["starter_for"]):
         return _record(row)
     connection.execute(
         'UPDATE evaluators SET name = ?, description = ?, "on" = ?, journal = ?, questions = ?, version = ?, seq = ?, deleted = ?, updated_at = ?, starter_for = ? WHERE id = ?',

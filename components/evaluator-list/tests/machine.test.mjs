@@ -9,7 +9,7 @@ import { machine, rows, subtitle, JOURNAL, request, lines, results, errorKind, s
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const schema = (name) => JSON.parse(readFileSync(resolve(HERE, "..", "events", `${name}.json`), "utf8"));
-const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started"].map((n) => [n, schema(n)]));
+const SCHEMAS = Object.fromEntries(["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded"].map((n) => [n, schema(n)]));
 
 const A = "01K7TEST000000000000000BA1";
 const B = "01K7TEST000000000000000BB1";
@@ -24,7 +24,7 @@ const KEPT = { [A]: [evaluator(1, A), evaluator(3, A, { removing: true }), evalu
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 // `kept` by the book each evaluator is stored with; the list asks for all of them at once.
-const start = async ({ fail, kept = KEPT, vimKeys, decide, texts, freeUse, session, tryPage, memory, clock, undoMs } = {}) => {
+const start = async ({ fail, kept = KEPT, vimKeys, decide, texts, freeUse, session, tryPage, memory, clock } = {}) => {
   const drafts = [D1, D2];
   const asked = [];
   const actor = createActor(machine, {
@@ -41,7 +41,6 @@ const start = async ({ fail, kept = KEPT, vimKeys, decide, texts, freeUse, sessi
       mint: () => drafts.shift(),
       ...(texts ? { drafts: texts } : {}),
       ...(memory ? { memory } : {}),
-      ...(undoMs ? { undoMs } : {}),
     },
     ...(clock ? { clock } : {}),
   });
@@ -699,47 +698,33 @@ test("dd ignores a row built from another fact (Your values), which cannot be de
   assert.equal(ctx().cut?.id, id(2), "a row the user wrote is cut as before");
 });
 
-test("Escape on a cut row counts down on the row; u takes it back; its end deletes it, with no corner notice", async () => {
-  const clock = new SimulatedClock();
-  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED }, clock, undoMs: 3000 });
+test("Escape on a cut row deletes it at once, and so does a second dd", async () => {
+  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED } });
+  actor.send({ type: "_escape" });
+  assert.equal(emitted.length, 0, "Escape with nothing cut deletes nothing");
   actor.send({ type: "_cut", id: id(2) });
   actor.send({ type: "_escape" });
-  assert.deepEqual([...ctx().discarding.keys()], [id(2)]);
-  actor.send({ type: "_undo", id: id(2) });
-  assert.equal(ctx().discarding.size, 0);
-  clock.increment(3000);
-  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 0, "taken back, nothing goes");
-  actor.send({ type: "_cut", id: id(2) });
-  actor.send({ type: "_escape" });
-  clock.increment(3000);
   assert.deepEqual(emitted.at(-1), { type: "evaluator.discarded", id: id(2) });
-  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 0, "one Undo: no corner notice");
-  assert.equal(ctx().discarding.size, 0);
-  // A row already cut, cut again over, counts down too and ends the same way.
+  assert.equal(ctx().cut, null);
+  // A row already cut, cut again over, is deleted, as Vim's register holds only the latest cut.
   actor.send({ type: "_cut", id: id(1) });
   actor.send({ type: "_cut", id: id(3) });
-  assert.deepEqual([...ctx().discarding.keys()], [id(1)]);
-  clock.increment(3000);
   assert.deepEqual(emitted.at(-1), { type: "evaluator.discarded", id: id(1) });
-  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 0);
+  assert.equal(ctx().cut.id, id(3));
   valid(emitted);
 });
 
-test("the keyboard leaving the list, or a row opened, hands a cut or a countdown to the corner notice", async () => {
-  const clock = new SimulatedClock();
-  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED }, clock });
-  actor.send({ type: "_cut", id: id(1) });
-  actor.send({ type: "_escape" });
+test("the keyboard leaving the list, or a row opened, deletes a cut row at once", async () => {
+  const { actor, ctx, emitted } = await start({ kept: { [A]: ORDERED } });
   actor.send({ type: "_cut", id: id(2) });
   actor.send({ type: "_left" });
-  assert.deepEqual(emitted.filter((e) => e.type === "removal.started").map((e) => e.id), [id(1), id(2)]);
-  assert.deepEqual([ctx().cut, ctx().discarding.size], [null, 0]);
-  clock.increment(5000);
-  assert.equal(emitted.filter((e) => e.type === "removal.started").length, 2, "its own timer is gone");
-  assert.equal(emitted.filter((e) => e.type === "evaluator.discarded").length, 0, "the notice decides now");
+  assert.deepEqual(emitted.filter((e) => e.type === "evaluator.discarded").map((e) => e.id), [id(2)]);
+  assert.equal(ctx().cut, null);
+  actor.send({ type: "_left" });
+  assert.equal(emitted.filter((e) => e.type === "evaluator.discarded").length, 1, "nothing cut, nothing deleted");
   actor.send({ type: "_cut", id: id(3) });
   actor.send({ type: "_pick", id: D1 });
-  assert.deepEqual(emitted.slice(-2).map((e) => e.type), ["removal.started", "evaluator.selected"]);
+  assert.deepEqual(emitted.slice(-2).map((e) => e.type), ["evaluator.discarded", "evaluator.selected"]);
   valid(emitted);
 });
 

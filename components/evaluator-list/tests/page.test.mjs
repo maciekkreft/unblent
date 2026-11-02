@@ -95,7 +95,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys on, dd cuts a row and p places it; Escape counts its delete down on the row and u takes it back; cc opens it in its name", async () => {
+    test("with Vim keys on, dd cuts a row and p places it; Escape deletes it at once and u, the global Undo, brings it back; cc opens it in its name", async () => {
       const { context, page, problems } = await open(true);
       try {
         const rowClass = (name) =>
@@ -111,15 +111,18 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await until(async () => (await names(page)).join() === "New evaluator,Values,Goals,Your values");
         await until(async () => (await focusedName(page)) === "Goals");
         assert.ok(!(await rowClass("Goals")).includes("cut"));
-        // Cut again, then Escape: the delete counts down on the row and the list keeps the keyboard.
+        // Cut again, then Escape: the row is deleted at once and the list keeps the keyboard,
+        // on the row after it; u there is the global Undo, which brings it back (12).
         await page.keyboard.press("d");
         await page.keyboard.press("d");
         await until(async () => (await rowClass("Goals")).includes("cut"));
         await page.keyboard.press("Escape");
-        await until(async () => (await rowClass("Goals")).includes("discarding"));
-        assert.equal(await focusedName(page), "Goals");
+        await until(async () => (await names(page)).join() === "New evaluator,Values,Your values");
+        await until(async () => (await focusedName(page)) === "Your values");
         await page.keyboard.press("u");
-        await until(async () => !(await rowClass("Goals")).includes("discarding"));
+        await until(async () => (await names(page)).join() === "New evaluator,Values,Goals,Your values");
+        await page.keyboard.press("k");
+        await until(async () => (await focusedName(page)) === "Goals");
         await page.keyboard.press("c");
         await page.keyboard.press("c");
         await until(async () =>

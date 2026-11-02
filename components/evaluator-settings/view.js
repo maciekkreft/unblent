@@ -8,7 +8,7 @@ import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs } from "editor";
 import { machine, duplicateNames, OPTION_ICONS, removable, shownOf, TRY_PATH, stopKey, boxEdge } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
-import started from "./events/removal.started.json" with { type: "json" };
+import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 
 // The multi-line fields are CodeMirror boxes, one editor each, so they take Vim's keys
 // when the "Vim keys" preference (12) is on, and write in paragraphs like every editor.
@@ -73,7 +73,7 @@ class ActorController {
     }
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload), mint: ulid, folded },
-      events: { "evaluator.saved": saved, "removal.started": started },
+      events: { "evaluator.saved": saved, "evaluator.discarded": discarded },
     });
     let keptFolds = this.actor.getSnapshot().context.folded;
     this.subscription = this.actor.subscribe((snapshot) => {

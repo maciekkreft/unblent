@@ -129,7 +129,7 @@ async function drain(clock) {
   await flush();
 }
 
-test("a change of content is stamped with its time, kept in the cache and the outbox; a mark keeps the stamp", async () => {
+test("a change of content is stamped with its time, kept in the cache and the outbox", async () => {
   const store = fakeStore([{ id: ID2, book: BOOK, name: "Old", on: true, questions: [], version: 1 }]);
   const api = fakeApi();
   const times = ["2026-03-01T00:00:00.000Z", "2026-03-02T00:00:00.000Z"];
@@ -138,8 +138,6 @@ test("a change of content is stamped with its time, kept in the cache and the ou
   actor.send(saved());
   assert.equal(changed.at(-1).updatedAt, "2026-03-01T00:00:00.000Z");
   assert.equal(store.outbox.get(ID).updatedAt, "2026-03-01T00:00:00.000Z", "sent, so the server keeps the browser's time");
-  actor.send({ type: "removal.started", kind: "question", id: Q1 });
-  assert.equal(changed.at(-1).updatedAt, "2026-03-01T00:00:00.000Z");
   actor.send(saved({ name: "Renamed" }));
   assert.equal(store.rows.get(ID).updatedAt, "2026-03-02T00:00:00.000Z");
   const listed = await list(actor);
@@ -222,7 +220,7 @@ test("an option's icon is kept, announced, listed and sent; a save without it ta
   assert.equal(changed.length, 3, "the same save again is no change");
 });
 
-test("a question's expected answer is kept while it names an answer it has, comes back on Undo, and goes when its option settles", async () => {
+test("a question's expected answer is kept while it names an answer it has, and goes with its option", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);
   actor.send(saved({ questions: [{ ...yesno(), expect: "no" }, { ...pick(), expect: O1 }] }));
@@ -233,15 +231,8 @@ test("a question's expected answer is kept while it names an answer it has, come
   assert.equal(changed.at(-1).questions[1].expect, O1, "switched to yes / no, its options and their expectation are kept");
   actor.send(saved({ questions: [yesno(), { ...pick(), expect: O1 }] }));
   assert.equal(changed.at(-1).questions[1].expect, O1, "and switching back has it again");
-  actor.send(saved({ questions: [yesno(), { ...pick(), expect: O1 }] }));
-  actor.send({ type: "removal.started", kind: "option", id: O1, name: "Goal" });
   actor.send(saved({ questions: [yesno(), { ...pick(Q2, [{ id: O2, name: "Value", description: "" }]), expect: O1 }] }));
-  assert.equal(changed.at(-1).questions[1].expect, O1, "kept while the option waits out its undo window");
-  actor.send({ type: "removal.undone", kind: "option", id: O1 });
-  assert.equal(changed.at(-1).questions[1].expect, O1);
-  actor.send({ type: "removal.started", kind: "option", id: O1, name: "Goal" });
-  actor.send({ type: "removal.settled", kind: "option", id: O1 });
-  assert.equal("expect" in changed.at(-1).questions[1], false, "the settled option took it away");
+  assert.equal("expect" in changed.at(-1).questions[1], false, "the removed option took it away");
 });
 
 test("a journal flag left from Show in journal is neither kept, announced nor sent", async () => {
@@ -268,27 +259,7 @@ test("switching keeps the tick, and the same tick or an unknown id is no change"
 
 // --- Removal ---------------------------------------------------------------------------
 
-test("an evaluator's removal marks it, Undo unmarks it, and settling makes it a tombstone", async () => {
-  const store = fakeStore();
-  const { actor, changed, deleted } = start(store);
-  await ready(actor);
-  actor.send(saved());
-  actor.send({ type: "removal.started", kind: "evaluator", id: ID, name: "Goals" });
-  assert.deepEqual([changed.at(-1).removing, changed.at(-1).version], [true, 1], "a mark is not a new version");
-  actor.send({ type: "removal.undone", kind: "evaluator", id: ID });
-  assert.equal(changed.at(-1).removing, false);
-  actor.send({ type: "removal.settled", kind: "evaluator", id: ID });
-  assert.deepEqual(deleted, [], "an undone removal does not settle");
-  actor.send({ type: "removal.started", kind: "evaluator", id: ID, name: "Goals" });
-  actor.send({ type: "removal.settled", kind: "evaluator", id: ID });
-  assert.deepEqual(deleted, [{ type: "evaluator.deleted", id: ID, book: BOOK }]);
-  assert.deepEqual(await list(actor), []);
-  assert.deepEqual([store.rows.get(ID).deleted, store.rows.get(ID).version], [true, 2], "kept as a tombstone");
-  actor.send(saved({ name: "Back?" }));
-  assert.deepEqual(await list(actor), [], "a deleted id stays deleted");
-});
-
-test("an evaluator discarded from the list becomes a tombstone at once, unmarked; an unknown id passes by", async () => {
+test("a deleted evaluator becomes a tombstone at once and stays deleted; an unknown id passes by", async () => {
   const store = fakeStore();
   const { actor, deleted } = start(store);
   await ready(actor);
@@ -301,36 +272,22 @@ test("an evaluator discarded from the list becomes a tombstone at once, unmarked
   assert.deepEqual([store.rows.get(ID).deleted, store.rows.get(ID).version], [true, 2], "kept as a tombstone");
   actor.send({ type: "evaluator.discarded", id: ID });
   assert.equal(deleted.length, 1, "deleted once");
+  actor.send(saved({ name: "Back?" }));
+  assert.deepEqual(await list(actor), [], "a deleted id stays deleted");
 });
 
-test("a question or an option is marked, kept through a save that leaves it out, and dropped on settle", async () => {
+test("a save that leaves out a question or an option drops it; a settled removal of another fact passes by", async () => {
   const { actor, changed } = start(fakeStore());
   await ready(actor);
   actor.send(saved({ questions: [yesno(), pick()] }));
-  actor.send({ type: "removal.started", kind: "option", id: O1, name: "Goal" });
-  actor.send({ type: "removal.started", kind: "question", id: Q1, name: "" });
-  // The editor saves without what it shows as removed; the marked items stay.
   actor.send(saved({ name: "Goals 2", questions: [pick(Q2, [{ id: O2, name: "Value", description: "" }])] }));
-  let now = changed.at(-1);
-  assert.deepEqual(now.questions.map((q) => [q.id, q.removing]), [[Q1, true], [Q2, false]]);
-  assert.deepEqual(now.questions[1].options.map((o) => [o.id, o.removing]), [[O1, true], [O2, false]]);
-  actor.send({ type: "removal.undone", kind: "question", id: Q1 });
-  actor.send({ type: "removal.settled", kind: "option", id: O1 });
-  now = changed.at(-1);
-  assert.deepEqual(now.questions.map((q) => [q.id, q.removing]), [[Q1, false], [Q2, false]]);
-  assert.deepEqual(now.questions[1].options.map((o) => o.id), [O2]);
+  const now = changed.at(-1);
+  assert.deepEqual(now.questions.map((q) => q.id), [Q2]);
+  assert.deepEqual(now.questions[0].options.map((o) => o.id), [O2]);
   const count = changed.length;
-  actor.send({ type: "removal.settled", kind: "question", id: Q1 });
-  assert.equal(changed.length, count, "an undone question does not settle");
-});
-
-test("a removal of another fact's id passes by", async () => {
-  const { actor, changed } = start(fakeStore());
-  await ready(actor);
-  actor.send(saved());
-  actor.send({ type: "removal.started", kind: "option", id: O1, name: "" });
-  actor.send({ type: "removal.started", kind: "case", id: ID, name: "" });
-  assert.equal(changed.length, 1);
+  actor.send({ type: "removal.settled", kind: "case", id: ID });
+  actor.send({ type: "removal.settled", kind: "option", id: O1 });
+  assert.equal(changed.length, count);
 });
 
 test("a mark left by a closed tab settles at the next load", async () => {
@@ -397,12 +354,11 @@ test("signed in: a save is pending, waits out the idle window, then is acknowled
   assert.equal(store.outbox.size, 0);
 });
 
-test("signed in: edits within the window coalesce into one write, with no mark sent", async () => {
+test("signed in: edits within the window coalesce into one write, with no step stamp sent", async () => {
   const api = fakeApi();
   const { actor, clock } = start(fakeStore(), { api, ask: askUser("u1") });
   await ready(actor);
   actor.send(saved({ questions: [pick()] }));
-  actor.send({ type: "removal.started", kind: "option", id: O1, name: "" });
   actor.send(saved({ name: "Two", questions: [pick()] }));
   actor.send({ type: "evaluator.switched", id: ID, on: false });
   clock.increment(SYNC_IDLE_MS / 2);
@@ -414,20 +370,18 @@ test("signed in: edits within the window coalesce into one write, with no mark s
   assert.equal(api.puts.length, 1);
   assert.deepEqual([api.puts[0].name, api.puts[0].on, api.puts[0].baseVersion], ["Three", false, null]);
   assert.ok(!JSON.stringify(api.puts[0]).includes("removing"), "marks belong to this tab");
-  assert.equal(api.puts[0].questions[0].options.length, 2, "the marked option is sent until it settles");
+  assert.ok(!JSON.stringify(api.puts[0]).includes("Step"), "steps belong to this browser");
+  assert.ok(!("step" in api.puts[0]));
 });
 
-test("signed in: a settled removal is sent as a delete and drains", async () => {
+test("signed in: a delete is sent as a delete and drains", async () => {
   const store = fakeStore();
   const api = fakeApi();
   const { actor, clock, deleted } = start(store, { api, ask: askUser("u1") });
   await ready(actor);
   actor.send(saved());
   await drain(clock);
-  actor.send({ type: "removal.started", kind: "evaluator", id: ID, name: "" });
-  await drain(clock);
-  assert.equal(api.puts.length, 1, "a mark is not a write");
-  actor.send({ type: "removal.settled", kind: "evaluator", id: ID });
+  actor.send({ type: "evaluator.discarded", id: ID });
   assert.equal(deleted.length, 1);
   await drain(clock);
   assert.deepEqual([api.puts[1].deleted, api.puts[1].baseVersion], [true, 1]);
@@ -506,8 +460,7 @@ test("sign-in uploads what was made signed out, with its history, tombstones inc
   actor.send(saved());
   actor.send(saved({ name: "Goals 2" }));
   actor.send(saved({ id: ID2, name: "Gone" }));
-  actor.send({ type: "removal.started", kind: "evaluator", id: ID2, name: "Gone" });
-  actor.send({ type: "removal.settled", kind: "evaluator", id: ID2 });
+  actor.send({ type: "evaluator.discarded", id: ID2 });
   actor.send({ type: "session.changed", userId: "u1" });
   await flush();
   assert.deepEqual(

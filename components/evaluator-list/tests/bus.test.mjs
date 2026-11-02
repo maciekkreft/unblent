@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 // The kit (10): evaluator-list and evaluators, both real, on the real bus with their real
 // schemas. What each decides alone is in its own machine test; here is what they do
-// together without a browser (9): a delete whose countdown ran out on the row reaches
-// `evaluators` as evaluator.discarded, which tombstones it, with no corner notice. The
+// together without a browser (9): Escape on a cut row reaches `evaluators` as
+// evaluator.discarded, which tombstones it at once as one step with the short notice. The
 // store is faked.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
@@ -30,15 +30,14 @@ const memory = (rows) => {
 
 const kept = (id, name, position) => ({ id, book: BOOK, name, on: true, questions: [], version: 1, position });
 
-// A row's countdown running out while the keyboard stays in the list (12, Vim keys) is
-// the delete itself: evaluators makes a tombstone and the row goes, no notice is asked.
-test("a row's countdown running out deletes the evaluator, with no corner notice", async () => {
+// Escape on a cut row (12, Vim keys) is the delete itself: evaluators makes a tombstone,
+// the row goes, and the step asks for the short notice (12, Undo).
+test("Escape on a cut row deletes the evaluator at once, one step with the notice", async () => {
   const store = memory([kept(ONE, "Goals", "a"), kept(TWO, "Values", "b")]);
   const { actors, records, unwire } = await wire(["evaluators", "evaluator-list"], {
     evaluators: { store },
     "evaluator-list": {
       mint: () => DRAFT,
-      undoMs: 20,
     },
   });
   const list = actors["evaluator-list"];
@@ -51,7 +50,8 @@ test("a row's countdown running out deletes the evaluator, with no corner notice
     await until(() => store.rows.get(ONE).deleted === true);
     await until(() => shown() === "Values");
     assert.equal(emitted("evaluator.discarded").length, 1);
-    assert.equal(emitted("removal.started").length, 0, "no corner notice");
+    const [step] = emitted("step.recorded");
+    assert.deepEqual([step.payload.label, step.payload.notice], ["delete evaluator Goals", true]);
     assert.ok(!store.rows.get(TWO).deleted);
   } finally {
     unwire();

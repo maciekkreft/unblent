@@ -199,7 +199,6 @@ test("Start over, once its window ends, deletes what is here and copies the star
   const { actor, clock } = start(store, { api, ask: askAs("guest-1"), tryPage: "evaluators" });
   await flush();
   assert.deepEqual(api.asked, [], "a browser that holds an evaluator gets no copies at load");
-  actor.send({ type: "removal.started", kind: "trial", id: TRIAL, name: "" });
   actor.send({ type: "removal.undone", kind: "trial", id: TRIAL });
   assert.deepEqual((await list(actor)).map((e) => e.id), [ID], "the window and an Undo change nothing");
   actor.send({ type: "removal.settled", kind: "trial", id: TRIAL });

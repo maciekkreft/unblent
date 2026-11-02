@@ -22,9 +22,8 @@ import { setup, assign, emit, fromPromise, enqueueActions } from "xstate";
 // Its answers are UI state: remembered by the view in this browser, never emitted, never
 // saved on the account.
 //
-// The rows are in the order `evaluators` keeps (5); a cut, a paste, a delete counting down
-// on a row, its end (evaluator.discarded) and its hand-off to the corner notice when the
-// keyboard leaves mid-countdown (removal.started) are the list's own.
+// The rows are in the order `evaluators` keeps (5); a cut and a paste are the list's own,
+// and a delete leaves at once as evaluator.discarded, a step `evaluators` records (12, Undo).
 
 export const UNTITLED = "Untitled evaluator";
 
@@ -227,7 +226,7 @@ export const results = (asked, answers) => {
 
 // What the user sees (7.3), shown by `show.py components` and the components page.
 const DESCRIPTION =
-  "Lists the account's evaluators and checks a text with them, on the Evaluators try page. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept. There is no button: a line is checked once the user has finished it, by pressing Enter, by moving the cursor to another line, or by leaving the box; a paste finishes every line it brings. Each line is checked on its own with the switched-on evaluators, asking only their switched-on questions; a line without words (no letter or digit in any script, such as one of only spaces, \"*\" or \"-\") is skipped and gets no mark. Finished lines wait their turn and each is one request to Jev, sent one after another, never two at once; a small Stop shows only while more than one line waits, and lets the line being asked be answered and asks no more until another line is finished. Answers are remembered in this browser, by evaluator, what it asks and the line's text, so a reload shows the marks again without asking Jev, and nothing is asked when the page opens; a line typed but never finished is not asked. At most 1000 answers are kept; when there are more, the oldest are forgotten, and their lines are asked again only when finished again. A change to what an evaluator asks (a question, an option, a question's or the evaluator's tick) removes its marks and, two seconds after the last change, checks every line again, one at a time; a rename or a move asks nothing. Deleting a line removes its marks with it, and so does editing it, until it is finished again. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. Under the box, a panel tells about one line: while lines are being checked the line answered last, otherwise the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the checking: the lines already answered keep their marks, the ones waiting are not asked until finished again. Under the box a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. The evaluators are in the order the user set, kept on the account and the same on every device: a new evaluator goes to the top, an edit does not move one, and evaluators from before keep the order they had, oldest first, until moved. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. Every evaluator of the account is listed, whichever book it was once kept with; a new one is kept with the Journal. Where the values are on the page, Your values, built from the user's values, is a row like any other that can be switched off and moved, and whose questions the Evaluate box asks like any evaluator's. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. With Vim keys on, never while typing in a field: dd cuts the row, greyed and marked Cut with no countdown, and the keyboard stays in the list; p places it below the row the cursor is on and P above; u on the cut row puts it back. While a row is cut, Escape does not leave the list but starts the row's delete with its undo countdown on the row, and u, Enter or a click on a row counting down takes the delete back. When the countdown ends the evaluator is deleted, with no notice after it, as in Notes and Chats. If the keyboard leaves the list while a row is cut or counting down (a row opened, another panel, a click elsewhere), the delete moves instead to the dark notice in the corner with its Undo, as a delete from the editor does, and the evaluator is deleted when that notice's time runs out. o starts a new evaluator below the cursor row and O above it, opening its editor; it takes that place once something is written in it. cc opens the evaluator's editor with the keyboard in its name. New evaluator stays put: dd does nothing there, and a move from it goes to the top. Your values cannot be deleted, so dd does nothing on its row either. On a try page, when a guest has used all its free use nothing more is checked and under the box it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it says \"Free trials are paused for now.\"; a guest the admin blocked reads \"This trial has ended.\" The text is kept in this browser, so a reload shows it again. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself after a reload, and the keyboard starts from it. Signed out it shows no box, no \"Evaluated by\" line and no rows, only \"Sign in to run evaluators.\"; the evaluators stay kept in this browser and come back when the user signs in, without a reload. On a try page a visitor not yet signed in still sees the starters and has lines checked, since the first check makes the guest.";
+  "Lists the account's evaluators and checks a text with them, on the Evaluators try page. At the top a box labelled \"Write one sentence per line\" takes a text, an editor that grows with it, where Enter starts a new line after a small gap, a pasted text keeps its lines, and with Vim keys on the box takes Vim's keys, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept. There is no button: a line is checked once the user has finished it, by pressing Enter, by moving the cursor to another line, or by leaving the box; a paste finishes every line it brings. Each line is checked on its own with the switched-on evaluators, asking only their switched-on questions; a line without words (no letter or digit in any script, such as one of only spaces, \"*\" or \"-\") is skipped and gets no mark. Finished lines wait their turn and each is one request to Jev, sent one after another, never two at once; a small Stop shows only while more than one line waits, and lets the line being asked be answered and asks no more until another line is finished. Answers are remembered in this browser, by evaluator, what it asks and the line's text, so a reload shows the marks again without asking Jev, and nothing is asked when the page opens; a line typed but never finished is not asked. At most 1000 answers are kept; when there are more, the oldest are forgotten, and their lines are asked again only when finished again. A change to what an evaluator asks (a question, an option, a question's or the evaluator's tick) removes its marks and, two seconds after the last change, checks every line again, one at a time; a rename or a move asks nothing. Deleting a line removes its marks with it, and so does editing it, until it is finished again. The line being asked has a pulsing dot at its end and is scrolled into view, so a long text follows along. Each answered line gets, at its end, one mark per answer: the option's icon, or a check, or a warning when the answer is not the one expected; green when Jev gave the answer the question expects, red when not, plain when nothing is expected, judged by the top answer for Between and Not clear; solid when the answer is plain (the option's name, Yes or No) and faded when it is not. A mark is not text: the cursor and Vim pass it by, and it reads aloud as its answer. Under the box, a panel tells about one line: while lines are being checked the line answered last, otherwise the line the user clicks or puts the cursor on, when that line is answered; with nothing answered it is not shown. That line is tinted in the box. The panel's top row says \"Line 9 of 25\", a bar of how many lines are answered, and \"9 evaluated · 4 as expected\" (a line is as expected when every answer that expects one got it; the second half is left out when no question expects an answer). Then the line quoted, and each answer in words, never as a number, with its mark: a pick answer names the option when Jev is sure (75% or more), \"Between: A and B\" when the top two are within 15 points, \"Probably: A\" from an even chance, and \"Not clear, maybe: A\" below it; a yes / no answer is Yes, Probably yes, Probably no or No, split at 75%, 50% and 25%, and \"Not clear\" from 45% to 55%. Under a pick answer stands the first line of the option's description when it has one, and \"Also close: B\" for Between and Not clear. When the question expects an answer a line says \"Behavioral Goal, as expected\" in green or \"Behavioral Goal is expected\" in red (\"Yes is expected\" for a yes / no question). The question's text comes before an answer when the question is yes / no or its evaluator asks more than one; with more than one evaluator, each one's answers sit under its name. A failed line says why in the panel, in one sentence, and stops the checking: the lines already answered keep their marks, the ones waiting are not asked until finished again. Under the box a line says who evaluates: \"Evaluated by\" and the one or two switched-on evaluators by name, or how many when there are three or more, or \"No evaluator is on\" (\"No evaluator has a question yet\" when those on have none to ask); pressing it shows or hides the list of evaluators under it. With `folded` the list starts hidden, without it shown; the user's own showing or hiding is remembered in this browser and wins over the page. The list: New evaluator is the first row and opens an empty editor; the evaluator appears in the list once something is written in it. The evaluators are in the order the user set, kept on the account and the same on every device: a new evaluator goes to the top, an edit does not move one, and evaluators from before keep the order they had, oldest first, until moved. Each row has a tick box that switches the evaluator on or off, its name, greyed when off, and how many of its questions would be asked: those written and switched on. Every evaluator of the account is listed, whichever book it was once kept with; a new one is kept with the Journal. Where the values are on the page, Your values, built from the user's values, is a row like any other that can be switched off and moved, and whose questions the Evaluate box asks like any evaluator's. The arrow keys move between the rows, and with Vim keys on so do j, k, gg and G; Enter opens the row. With Vim keys on, never while typing in a field: dd cuts the row, greyed and marked Cut with no countdown, and the keyboard stays in the list; p places it below the row the cursor is on and P above, one move; u on the cut row puts it back. While a row is cut, Escape does not leave the list but deletes the row at once, and so does the keyboard leaving the list (a row opened, another panel, a click elsewhere) or a second dd on another row; the delete shows the short notice with Undo, as in Notes and Chats. Undo and Redo take back a delete, a move or a switch (section 12). o starts a new evaluator below the cursor row and O above it, opening its editor; it takes that place once something is written in it. cc opens the evaluator's editor with the keyboard in its name. New evaluator stays put: dd does nothing there, and a move from it goes to the top. Your values cannot be deleted, so dd does nothing on its row either. On a try page, when a guest has used all its free use nothing more is checked and under the box it says \"You have used all your free use.\"; while free trials are paused for every guest, or Jev cannot be asked on the guest's behalf, it says \"Free trials are paused for now.\"; a guest the admin blocked reads \"This trial has ended.\" The text is kept in this browser, so a reload shows it again. The row of the evaluator the editor shows is marked, whether the user picked it or the editor opened it by itself after a reload, and the keyboard starts from it. Signed out it shows no box, no \"Evaluated by\" line and no rows, only \"Sign in to run evaluators.\"; the evaluators stay kept in this browser and come back when the user signs in, without a reload. On a try page a visitor not yet signed in still sees the starters and has lines checked, since the first check makes the guest.";
 // --- The Evaluate box ------------------------------------------------------------------
 // A line is checked once the user has finished it (the view tells: Enter, the cursor on
 // another line, a paste, the box losing the keyboard). Finished lines wait in a queue and
@@ -416,13 +415,6 @@ export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn =
 // What every evaluator shown asks, one signature each, so a change to it is seen.
 const askedBy = (evaluators) => askable(evaluators).map((a) => `${a.id}|${signature(a)}`);
 
-const withoutKey = (map, key) => {
-  if (!map.has(key)) return map;
-  const next = new Map(map);
-  next.delete(key);
-  return next;
-};
-
 // The box as it starts: nothing waits and nothing is asked.
 const fresh = { text: "", queue: [], asking: null, job: null, failures: {}, refused: null, picked: null, placing: null };
 
@@ -463,28 +455,20 @@ const provisional = (evaluators, after, before) => {
   return null;
 };
 
-// An evaluator row the user can cut or delete: shown, not already going, and written by
+// An evaluator row the user can cut or delete: shown, not cut already, and written by
 // the user; one built from another fact (Your values) cannot be deleted, so dd ignores it (12).
 const deletable = (context, id) =>
-  shownHas(context, id) && !context.discarding.has(id) && context.cut?.id !== id && !context.evaluators.find((e) => e.id === id)?.derivedFrom;
+  shownHas(context, id) && context.cut?.id !== id && !context.evaluators.find((e) => e.id === id)?.derivedFrom;
 
 const nameOf = (context, id) => context.evaluators.find((e) => e.id === id)?.name ?? "";
 
-// Start a row's undo window on the row: nothing is emitted until it runs out.
-function startDiscard(enqueue, id, name) {
-  enqueue.assign({ discarding: ({ context }) => new Map(context.discarding).set(id, name) });
-  enqueue.raise({ type: "_elapsed", id }, { delay: ({ context }) => context.undoMs, id: `undo:${id}` });
-}
-
-// The keyboard left the list while a row was cut or counting down (12, Vim keys): its
-// delete goes to the corner notice, which keeps its Undo in sight, as the editor's delete
-// does; `evaluators` marks it while the notice shows, and the list leaves it out.
-function handOff(context, enqueue) {
-  const going = [...context.discarding, ...(context.cut ? [[context.cut.id, context.cut.name]] : [])];
-  if (!going.length) return;
-  for (const [id] of context.discarding) enqueue.cancel(`undo:${id}`);
-  for (const [id, name] of going) enqueue.emit({ type: "removal.started", kind: "evaluator", id, name });
-  enqueue.assign({ discarding: new Map(), cut: null });
+// The cut row is deleted (12, Vim keys): Escape, the keyboard leaving the list, or a
+// second dd. The delete happens at once; it is a step `evaluators` records, with the
+// short notice and its Undo.
+function dropCut(context, enqueue) {
+  if (!context.cut) return;
+  enqueue.emit({ type: "evaluator.discarded", id: context.cut.id });
+  enqueue.assign({ cut: null });
 }
 
 const remint = (context, evaluators) => (evaluators.some((e) => e.id === context.draft) ? context.mint() : context.draft);
@@ -547,7 +531,7 @@ export const machine = setup({
   meta: {
     description: DESCRIPTION,
     kind: "view",
-    emits: ["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded", "removal.started"],
+    emits: ["evaluator.selected", "evaluator.switched", "evaluator.moved", "evaluator.discarded"],
     attributes: ["folded"],
     asks: ["evaluators: list", "settings: read", "llm: decide", "llm: read", "session: read"],
   },
@@ -564,7 +548,6 @@ export const machine = setup({
     memory: input.memory ?? pageMemory(),
     // How many answers were remembered in this page, so the view draws each one.
     remembered: 0,
-    undoMs: input.undoMs ?? 3000,
     evaluators: [],
     // The evaluator the editor shows, learned from evaluator.opened; the row marked.
     open: null,
@@ -582,8 +565,6 @@ export const machine = setup({
     // The row cut with Vim's dd (12), { id, name }, waiting for p or P to place it, u to
     // put it back, or Escape to delete it; null when none. Greyed in place, no timer.
     cut: null,
-    // The rows counting down to their delete, by id, with their names for the notice.
-    discarding: new Map(),
     // The box (UI state): the text; the lines finished and waiting to be asked, by text;
     // the line being asked and the evaluators asked about it ({ line, asked }); why a line
     // failed, by text; the refusal told under the box; the line the user last pointed at
@@ -687,13 +668,12 @@ export const machine = setup({
         },
         // The gestures (7.2: internal messages from the view). A pick names a shown
         // evaluator or the draft; a tick names a shown evaluator and changes it. Opening a
-        // row while another is cut or counting down hands that delete to the corner
-        // notice, so it never goes out of sight (12).
+        // row while another is cut takes the keyboard out of the list, so the cut row is
+        // deleted (12).
         _pick: {
-          guard: ({ context, event }) =>
-            (event.id === context.draft || shownHas(context, event.id)) && !context.discarding.has(event.id) && context.cut?.id !== event.id,
+          guard: ({ context, event }) => (event.id === context.draft || shownHas(context, event.id)) && context.cut?.id !== event.id,
           actions: [
-            enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
+            enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)),
             assign({ placing: null }),
             emit(({ context, event }) => ({ type: "evaluator.selected", id: event.id, book: bookFor(context, event.id) })),
           ],
@@ -704,12 +684,12 @@ export const machine = setup({
           actions: emit(({ event }) => ({ type: "evaluator.switched", id: event.id, on: event.on })),
         },
         // Vim's dd on an evaluator row (12): the row is cut, greyed in place with no
-        // timer, while the keyboard stays in the list. A row already cut is deleted with
-        // its countdown, as Vim's register holds only the latest cut.
+        // timer, while the keyboard stays in the list. A row already cut is deleted, as
+        // Vim's register holds only the latest cut.
         _cut: {
           guard: ({ context, event }) => deletable(context, event.id),
           actions: enqueueActions(({ context, event, enqueue }) => {
-            if (context.cut) startDiscard(enqueue, context.cut.id, context.cut.name);
+            dropCut(context, enqueue);
             enqueue.assign({ cut: { id: event.id, name: nameOf(context, event.id) } });
           }),
         },
@@ -731,27 +711,14 @@ export const machine = setup({
         },
         // u on the cut row: it stays where it was.
         _uncut: { guard: ({ context }) => context.cut != null, actions: assign({ cut: null }) },
-        // Escape while a row is cut: the cut becomes a delete, its countdown on the row.
-        _escape: {
-          guard: ({ context }) => context.cut != null,
-          actions: enqueueActions(({ context, enqueue }) => {
-            startDiscard(enqueue, context.cut.id, context.cut.name);
-            enqueue.assign({ cut: null });
-          }),
-        },
-        // u, a click or Enter on a row counting down: its delete is taken back.
-        _undo: {
-          guard: ({ context, event }) => context.discarding.has(event.id),
-          actions: enqueueActions(({ event, enqueue }) => {
-            enqueue.cancel(`undo:${event.id}`);
-            enqueue.assign({ discarding: ({ context }) => withoutKey(context.discarding, event.id) });
-          }),
-        },
+        // Escape while a row is cut, or the keyboard leaving the list (the view tells): the
+        // cut row is deleted.
+        _escape: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
         // o or O (12): a new evaluator, opened like New evaluator, that goes between these
         // neighbours once something is written in it.
         _place: {
           actions: enqueueActions(({ context, event, enqueue }) => {
-            handOff(context, enqueue);
+            dropCut(context, enqueue);
             enqueue.assign({ placing: { id: context.draft, after: event.after ?? null, before: event.before ?? null } });
             enqueue.emit({ type: "evaluator.selected", id: context.draft, book: JOURNAL });
           }),
@@ -804,16 +771,6 @@ export const machine = setup({
         cut: context.cut?.id === event.id ? null : context.cut,
       })),
     },
-    // The window on a row ran out while the keyboard stayed in the list: the user saw it
-    // run out, so the delete is a fact now (evaluator.discarded), with no second Undo.
-    _elapsed: {
-      guard: ({ context, event }) => context.discarding.has(event.id),
-      actions: enqueueActions(({ context, event, enqueue }) => {
-        enqueue.assign({ discarding: withoutKey(context.discarding, event.id) });
-        enqueue.emit({ type: "evaluator.discarded", id: event.id });
-      }),
-    },
-    // The keyboard left the list (the view tells): see handOff.
-    _left: { actions: enqueueActions(({ context, enqueue }) => handOff(context, enqueue)) },
+    _left: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
   },
 });

@@ -4,6 +4,8 @@ import { machine } from "./machine.js";
 import { openEvaluators } from "./store.js";
 import changed from "./events/evaluator.changed.json" with { type: "json" };
 import deleted from "./events/evaluator.deleted.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import active from "./queries/active.json" with { type: "json" };
 import evaluate from "./queries/evaluate.json" with { type: "json" };
@@ -64,7 +66,7 @@ const actor = mount(machine, {
     // Monotonic, so the copies list in the starters' own order.
     newId: monotonicFactory(),
   },
-  events: { "evaluator.changed": changed, "evaluator.deleted": deleted },
+  events: { "evaluator.changed": changed, "evaluator.deleted": deleted, "step.recorded": recorded, "step.settled": settled },
   queries: { list, active, evaluate },
 });
 

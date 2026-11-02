@@ -8,9 +8,9 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // for the "Vim keys" preference (12) and follows settings.changed, and asks session: read
 // and follows session.changed (4.3, fourth rule). Every edit leaves as the whole evaluator,
 // evaluator.saved, at a throttle while typing and at once on blur (4.3, third rule). A
-// removal leaves as removal.started; `evaluators` marks the item until notice-stack
-// settles or undoes it, and the draft follows those marks, so the item disappears at
-// once and comes back on Undo. Whenever the evaluator it shows changes, picked or opened
+// removed question or option leaves in a save without it, and a delete as
+// evaluator.discarded; each is a step `evaluators` records, so Undo brings it back
+// (12, Undo). Whenever the evaluator it shows changes, picked or opened
 // by itself after a reload, it says which with evaluator.opened, so
 // the list marks that row; it learns nothing back. The ask, the id minting and the throttle arrive through
 // input, so the machine is a pure definition importable in Node.
@@ -225,22 +225,19 @@ const edits = (target) => ({
   },
 });
 
-// A removal first saves the draft as it stands, so `evaluators` holds the item it is
-// about to mark; then the item is marked here too and the gesture leaves. In an
-// evaluator that was never saved there is nothing to mark and nothing written to lose,
-// so the item just goes.
-const removal = (kind, find, flagged, dropped) => ({
+// A removal first saves what was typed as it stands, so the typing keeps its own step,
+// then saves the draft without the item, a step of its own (12, Undo). In an evaluator
+// that was never saved there is nothing written to lose, so the item just goes.
+const removal = (find, dropped) => ({
   guard: ({ context, event }) => !context.draft.derivedFrom && !!find(context, event),
   target: ".clean",
   actions: enqueueActions(({ context, event, enqueue }) => {
-    if (!savable(context)) {
-      enqueue.assign(() => ({ draft: dropped(context.draft, event) }));
-      return;
+    const draft = dropped(context.draft, event);
+    if (savable(context)) {
+      enqueue.emit({ type: "evaluator.saved", ...wire(context.draft) });
+      enqueue.emit({ type: "evaluator.saved", ...wire(draft) });
     }
-    enqueue.emit({ type: "evaluator.saved", ...wire(context.draft) });
-    enqueue.assign(() => ({ draft: flagged(context.draft, event) }));
-    const item = find(context, event);
-    enqueue.emit({ type: "removal.started", kind, id: item.id, name: kind === "question" ? "" : item.name.trim() });
+    enqueue.assign({ draft });
   }),
 });
 
@@ -298,8 +295,9 @@ export const machine = setup({
       "a press outside closes it unchanged. The icon is what the option's mark shows on a " +
       "choice point line. Every edit is saved as the " +
       "whole evaluator a short time into typing and when a field loses focus, and a new " +
-      "evaluator with nothing written in it is never saved; a new one is kept with the Journal, since evaluators belong to the account. Removing a question or an option, " +
-      "and deleting the evaluator, wait out the undo window, with Undo in a notice. The " +
+      "evaluator with nothing written in it is never saved; a new one is kept with the Journal, since evaluators belong to the account. Removing a question or an option " +
+      "happens at once, and so does deleting the evaluator, with the short notice and its Undo; " +
+      "Undo and Redo take back each of them, as they do an edit (section 12). The " +
       "evaluator open before a reload opens again while it is still kept. The question, what yes " +
       "and no mean and each option's description are text boxes that grow with what is written " +
       "and take Vim's keys when Vim keys is on, where p pastes text or a link copied in the reader with Vim keys, paragraphs kept; the name and the option names are one-line fields. " +
@@ -311,7 +309,7 @@ export const machine = setup({
       "only \"Sign in to run evaluators.\", as the list beside it does, and signing in shows " +
       "it again without a reload; on a try page a visitor not yet signed in edits the starters. Your values, which is built from the user's values, opens read only: its name, its fixed description, and each question with its answers and what each means, Serves marked expected, as words with nothing to type in, no Delete, and a line saying to change the values in the Values sheet, under the day's text in the Journal; with no values it says there is nothing to ask.",
     kind: "view",
-    emits: ["evaluator.saved", "removal.started", "evaluator.opened"],
+    emits: ["evaluator.saved", "evaluator.discarded", "evaluator.opened"],
     attributes: [],
     asks: ["evaluators: list", "settings: read", "session: read"],
   },
@@ -442,18 +440,14 @@ export const machine = setup({
           },
           on: {
             _removeQuestion: removal(
-              "question",
               (context, event) => liveQuestion(context, event.id),
-              (d, event) => patchQuestion(d, event.id, { removing: true }),
               (d, event) => ({ ...d, questions: d.questions.filter((q) => q.id !== event.id) }),
             ),
             _removeOption: removal(
-              "option",
               (context, event) => {
                 const option = liveOption(context, event.question, event.id);
                 return option && removable(option) ? option : undefined;
               },
-              (d, event) => patchOption(d, event.question, event.id, { removing: true }),
               (d, event) => ({
                 ...d,
                 questions: d.questions.map((q) => (q.id === event.question ? { ...q, options: q.options.filter((o) => o.id !== event.id) } : q)),
@@ -488,14 +482,15 @@ export const machine = setup({
               actions: [assign(({ context, event }) => ({ draft: withIcon(context.draft, event.question, event.id, event.icon) })), save],
             },
             // Only an evaluator the fact holds can be deleted; a New evaluator with nothing
-            // in it offers no Delete, because leaving it already keeps nothing.
+            // in it offers no Delete, because leaving it already keeps nothing. It goes at
+            // once, with the short notice and its Undo (12, Undo).
             _delete: {
               guard: ({ context }) => !context.draft.removing && !context.draft.derivedFrom && known(context, context.draft.id),
               target: ".clean",
               actions: [
                 save,
                 assign(({ context }) => ({ draft: { ...context.draft, removing: true } })),
-                emit(({ context }) => ({ type: "removal.started", kind: "evaluator", id: context.draft.id, name: context.draft.name.trim() })),
+                emit(({ context }) => ({ type: "evaluator.discarded", id: context.draft.id })),
               ],
             },
           },

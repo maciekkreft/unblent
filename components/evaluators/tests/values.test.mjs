@@ -50,7 +50,6 @@ const events = {
   "evaluator.discarded": schema("../../evaluator-list/events/evaluator.discarded.json"),
   "evaluator.switched": schema("../../evaluator-list/events/evaluator.switched.json"),
   "evaluator.saved": schema("../../evaluator-editor/events/evaluator.saved.json"),
-  "removal.started": schema("../../evaluator-editor/events/removal.started.json"),
 };
 
 function standIn(heard) {
@@ -133,7 +132,6 @@ test("a change of values is announced; a delete, a discard or a save over it cha
     await until(() => views.heard.some((e) => e.id === YOURS && e.questions.length === 2));
 
     views.send({ type: "evaluator.discarded", id: YOURS });
-    views.send({ type: "removal.started", kind: "evaluator", id: YOURS, name: "Your values" });
     views.send({ type: "evaluator.saved", id: YOURS, book: JOURNAL, name: "Mine", questions: [] });
     let listed = await yours(views);
     assert.deepEqual([listed.name, listed.removing, listed.questions.length], ["Your values", false, 2]);

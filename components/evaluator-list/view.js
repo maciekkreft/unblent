@@ -29,16 +29,6 @@ import selected from "./events/evaluator.selected.json" with { type: "json" };
 import switched from "./events/evaluator.switched.json" with { type: "json" };
 import moved from "./events/evaluator.moved.json" with { type: "json" };
 import discarded from "./events/evaluator.discarded.json" with { type: "json" };
-import removalStarted from "./events/removal.started.json" with { type: "json" };
-
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo window;
-// the token is the one clock, shared with the bar's animation.
-const toMs = (text, fallback = 3000) => {
-  const t = text.trim();
-  const n = parseFloat(t);
-  if (!Number.isFinite(n)) return fallback;
-  return t.endsWith("ms") ? n : n * 1000;
-};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -56,9 +46,6 @@ class ActorController {
         mint: ulid,
         drafts,
         memory,
-        // The undo window comes from --duration-undo, read off the host so a stylesheet
-        // or a test can shorten it.
-        undoMs: toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo")),
         // A try page (8) shows the starters signed out, as evaluators/fact.js reads it.
         tryPage: location.pathname.startsWith("/try/"),
       },
@@ -67,7 +54,6 @@ class ActorController {
         "evaluator.switched": switched,
         "evaluator.moved": moved,
         "evaluator.discarded": discarded,
-        "removal.started": removalStarted,
       },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
@@ -368,57 +354,15 @@ class EvaluatorList extends LitElement {
     .row.current {
       background: var(--color-accent-subtle);
     }
-    /* A cut row (Vim's dd) waits greyed in place for p or P, with no countdown; a row
-       counting down to its delete is struck through, with Undo and the draining bar. */
+    /* A cut row (Vim's dd) waits greyed in place for p or P, with no countdown. */
     .row.cut .name,
-    .row.cut .sub,
-    .row.discarding .name,
-    .row.discarding .sub {
+    .row.cut .sub {
       color: var(--color-mute);
-    }
-    .row.discarding .name {
-      text-decoration: line-through;
-    }
-    .row.discarding {
-      position: relative;
-      overflow: hidden;
     }
     .gone {
       flex: none;
       font-size: var(--text-caption);
       color: var(--color-mute);
-    }
-    .undo {
-      flex: none;
-      appearance: none;
-      background: none;
-      border: 0;
-      padding: 0;
-      margin: 0;
-      font: inherit;
-      font-size: var(--text-caption);
-      cursor: pointer;
-      color: var(--color-accent);
-    }
-    /* The visible echo of the machine's timer; both read --duration-undo, so they cannot
-       disagree. It stays under reduced motion because it is the only sign of how long is
-       left. */
-    .drain {
-      position: absolute;
-      inset-inline: 0;
-      inset-block-end: 0;
-      height: var(--space-2xs);
-      background: var(--color-accent);
-      transform-origin: left;
-      animation: drain var(--duration-undo) linear forwards;
-    }
-    @keyframes drain {
-      from {
-        transform: scaleX(1);
-      }
-      to {
-        transform: scaleX(0);
-      }
     }
     input[type="checkbox"] {
       flex: none;
@@ -818,26 +762,24 @@ class EvaluatorList extends LitElement {
   }
 
   // A click anywhere on a row opens it, except on its tick box, which only switches. On a
-  // row counting down to its delete it is the one-step undo, and on a cut row it puts the
-  // row back, the whole row being the target so there is nothing small to hit.
+  // cut row it puts the row back, the whole row being the target so there is nothing small
+  // to hit.
   #rowClick(event, id) {
     if (event.target.closest?.('input[type="checkbox"]')) return;
-    const { discarding, cut } = this.#actor.snapshot.context;
-    if (discarding.has(id)) this.#actor.send({ type: "_undo", id });
-    else if (cut?.id === id) this.#actor.send({ type: "_uncut" });
+    if (this.#actor.snapshot.context.cut?.id === id) this.#actor.send({ type: "_uncut" });
     else this.#actor.send({ type: "_pick", id });
   }
 
-  // The keyboard leaving the list while a row is cut or counting down hands the delete to
-  // the corner notice (12). Checked once the focus has landed; a window losing focus
-  // (another app) is not leaving the list, and neither is a press inside it.
+  // The keyboard leaving the list while a row is cut deletes it (12). Checked once the
+  // focus has landed; a window losing focus (another app) is not leaving the list, and
+  // neither is a press inside it.
   constructor() {
     super();
     this.addEventListener("focusout", () =>
       setTimeout(() => {
         if (!document.hasFocus() || this.renderRoot.querySelector(".list")?.matches(":focus-within")) return;
         const context = this.#actor.snapshot?.context;
-        if (context && (context.cut || context.discarding.size)) this.#actor.send({ type: "_left" });
+        if (context?.cut) this.#actor.send({ type: "_left" });
       }),
     );
   }
@@ -886,21 +828,25 @@ class EvaluatorList extends LitElement {
 
   #keydown(event, ids) {
     const context = this.#actor.snapshot.context;
-    // While a row is cut, Escape stays in the list (12): it starts the row's delete with
-    // its countdown, and the container never sees it as Back.
+    // While a row is cut, Escape stays in the list (12): it deletes the row, the keyboard
+    // goes to the row after it, and the container never sees it as Back.
     if (event.key === "Escape" && context.cut) {
       event.preventDefault();
       event.stopPropagation();
+      const at = ids.indexOf(context.cut.id);
+      const next = ids[at + 1] ?? ids[at - 1];
       this.#actor.send({ type: "_escape" });
+      if (next) this.#follow(next);
       return;
     }
     const vim = this.#vim(event);
-    // Every Vim letter the list owns is spent here, even with nowhere to move: an
-    // uncancelled letter is typed wherever WebKit still keeps a selection.
-    if (vim) event.preventDefault();
     const current = this.#focusRow(ids, context.open);
+    // Every Vim letter the list owns is spent here, even with nowhere to move: an
+    // uncancelled letter is typed wherever WebKit still keeps a selection. u is the list's
+    // only on the cut row; anywhere else it is the global Undo's (12).
+    if (vim && !(vim === "undo" && current !== context.cut?.id)) event.preventDefault();
     if (vim === "cut") return this.#actor.send({ type: "_cut", id: current });
-    if (vim === "rename") return current === context.draft || context.discarding.has(current) ? undefined : this.#actor.send({ type: "_pick", id: current });
+    if (vim === "rename") return current === context.draft ? undefined : this.#actor.send({ type: "_pick", id: current });
     if (vim === "below" || vim === "above") {
       if (!context.cut) return;
       const { id } = context.cut;
@@ -910,7 +856,6 @@ class EvaluatorList extends LitElement {
     }
     if (vim === "undo") {
       if (current === context.cut?.id) this.#actor.send({ type: "_uncut" });
-      else if (context.discarding.has(current)) this.#actor.send({ type: "_undo", id: current });
       return;
     }
     if (vim === "openBelow" || vim === "openAbove") return this.#actor.send({ type: "_place", ...this.#neighbours(ids, current, vim === "openBelow") });
@@ -1178,16 +1123,15 @@ class EvaluatorList extends LitElement {
   #row(e, open, focusId, context) {
     const tab = e.id === focusId ? 0 : -1;
     const name = e.name.trim();
-    const going = context.discarding.has(e.id);
     const cut = context.cut?.id === e.id;
-    const classes = ["row", e.id === open ? "current" : "", going ? "discarding" : "", cut ? "cut" : ""].filter(Boolean).join(" ");
+    const classes = ["row", e.id === open ? "current" : "", cut ? "cut" : ""].filter(Boolean).join(" ");
     return html`
       <li class=${classes} data-id=${e.id} @click=${(event) => this.#rowClick(event, e.id)}>
           <input
             type="checkbox"
             tabindex=${tab}
             .checked=${e.on}
-            ?disabled=${going || cut}
+            ?disabled=${cut}
             aria-label="${name || UNTITLED} is on"
             @change=${(event) => this.#actor.send({ type: "_switch", id: e.id, on: event.target.checked })}
           />
@@ -1195,11 +1139,7 @@ class EvaluatorList extends LitElement {
             <span class="name ${name ? (e.on ? "" : "off") : "untitled"}">${name || UNTITLED}</span>
             <span class="sub">${subtitle(e)}</span>
           </button>
-          ${going
-            ? html`<button class="undo" type="button" tabindex="-1">Undo</button><span class="drain"></span>`
-            : cut
-              ? html`<span class="gone">Cut</span>`
-              : nothing}
+          ${cut ? html`<span class="gone">Cut</span>` : nothing}
       </li>
     `;
   }

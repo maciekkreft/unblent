@@ -8,7 +8,7 @@ import { Vim, getCM } from "@replit/codemirror-vim";
 import { baseExtensions, setVim, paragraphs, toRegister } from "editor";
 import { machine, duplicateNames, OPTION_ICONS, showing, removable } from "./machine.js";
 import saved from "./events/evaluator.saved.json" with { type: "json" };
-import started from "./events/removal.started.json" with { type: "json" };
+import discarded from "./events/evaluator.discarded.json" with { type: "json" };
 import opened from "./events/evaluator.opened.json" with { type: "json" };
 
 // The multi-line fields are CodeMirror boxes, one editor each, so they take Vim's keys
@@ -84,7 +84,7 @@ class ActorController {
         // A try page (8) shows the starters signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
-      events: { "evaluator.saved": saved, "removal.started": started, "evaluator.opened": opened },
+      events: { "evaluator.saved": saved, "evaluator.discarded": discarded, "evaluator.opened": opened },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }

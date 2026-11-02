@@ -10,9 +10,10 @@ import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
 // preference (12) and follows settings.changed, and asks session: read and follows
 // session.changed (4.3, fourth rule). Every edit leaves as the whole evaluator,
 // evaluator.saved, at a throttle while typing and at once on blur (4.3, third rule); a
-// removal leaves as removal.started and `evaluators` marks the item until notice-stack
-// settles or undoes it. The ask, the id minting and the throttle arrive through input, so
-// the machine is a pure definition importable in Node.
+// removed question or option leaves in a save without it, and a delete as
+// evaluator.discarded, each a step `evaluators` records (12, Undo). The ask, the id
+// minting and the throttle arrive through input, so the machine is a pure definition
+// importable in Node.
 //
 // One evaluator is edited at a time, the one the user last touched: a gesture on another
 // first saves what was typed in the one before, so nothing typed is lost by moving on.
@@ -109,7 +110,7 @@ const byPlace = (a, b) => {
 };
 
 // What the tab shows, top to bottom: a New evaluator not saved yet first, then every
-// evaluator not waiting out its undo window, each as the draft while it is the one being
+// evaluator not marked by an undo window of before, each as the draft while it is the one being
 // typed in, else as the fact has it.
 export const shownOf = ({ evaluators, draft }) => {
   const kept = [...evaluators].filter((r) => !r.removing).sort(byPlace);
@@ -261,23 +262,21 @@ const edits = (target, pending) => ({
   ),
 });
 
-// A removal first saves the draft as it stands, so `evaluators` holds the item it is about
-// to mark; then the item is marked here too and the gesture leaves. In an evaluator never
-// saved there is nothing to mark and nothing written to lose, so the item just goes.
-const removal = (pending, kind, find, flagged, dropped) => ({
+// A removal first saves what was typed as it stands, so the typing keeps its own step,
+// then saves the draft without the item, a step of its own (12, Undo). In an evaluator
+// never saved there is nothing written to lose, so the item just goes.
+const removal = (pending, find, dropped) => ({
   guard: ({ context, event }) => editable(context, event.evaluator) && !!find(draftFor(context, event.evaluator), event),
   target: "clean",
   actions: [
     take(pending),
     enqueueActions(({ context, event, enqueue }) => {
-      if (!savable(context)) {
-        enqueue.assign({ draft: dropped(context.draft, event) });
-        return;
+      const draft = dropped(context.draft, event);
+      if (savable(context)) {
+        enqueue.emit({ type: "evaluator.saved", ...wire(context.draft) });
+        enqueue.emit({ type: "evaluator.saved", ...wire(draft) });
       }
-      enqueue.emit({ type: "evaluator.saved", ...wire(context.draft) });
-      enqueue.assign({ draft: flagged(context.draft, event) });
-      const item = find(context.draft, event);
-      enqueue.emit({ type: "removal.started", kind, id: item.id, name: kind === "question" ? "" : item.name.trim() });
+      enqueue.assign({ draft });
     }),
   ],
 });
@@ -287,19 +286,15 @@ const removal = (pending, kind, find, flagged, dropped) => ({
 const presses = (pending) => ({
   _removeQuestion: removal(
     pending,
-    "question",
     (d, event) => liveQuestion(d, event.id),
-    (d, event) => patchQuestion(d, event.id, { removing: true }),
     (d, event) => ({ ...d, questions: d.questions.filter((q) => q.id !== event.id) }),
   ),
   _removeOption: removal(
     pending,
-    "option",
     (d, event) => {
       const option = liveOption(d, event.question, event.id);
       return option && removable(option) ? option : undefined;
     },
-    (d, event) => patchOption(d, event.question, event.id, { removing: true }),
     (d, event) => ({
       ...d,
       questions: d.questions.map((q) => (q.id === event.question ? { ...q, options: q.options.filter((o) => o.id !== event.id) } : q)),
@@ -336,14 +331,15 @@ const presses = (pending) => ({
     actions: [take(pending), assign(({ context, event }) => ({ draft: withIcon(context.draft, event.question, event.id, event.icon) })), save],
   },
   // Only an evaluator the fact holds can be deleted; a New evaluator with nothing in it
-  // offers no Delete, because leaving it already keeps nothing.
+  // offers no Delete, because leaving it already keeps nothing. It goes at once, with the
+  // short notice and its Undo (12, Undo).
   _delete: {
     guard: ({ context, event }) => editable(context, event.evaluator) && known(context, event.evaluator),
     target: "clean",
     actions: [
       take(pending),
       save,
-      emit(({ context }) => ({ type: "removal.started", kind: "evaluator", id: context.draft.id, name: context.draft.name.trim() })),
+      emit(({ context }) => ({ type: "evaluator.discarded", id: context.draft.id })),
       assign(({ context }) => ({ draft: { ...context.draft, removing: true } })),
     ],
   },
@@ -447,9 +443,9 @@ export const machine = setup({
       "button that opens a small panel of icons and No icon, and an x that removes it once its " +
       "words are cleared; Add an option and Add a question add one. Every edit is saved as the " +
       "whole evaluator a short time into typing and when the keyboard leaves it, and moving " +
-      "to another evaluator saves the one left first. Removing a question or an option, and " +
-      "deleting an evaluator, wait out the undo window with Undo in a notice, the item hidden " +
-      "meanwhile. Your values, built from the user's values, is shown read only: its " +
+      "to another evaluator saves the one left first. Removing a question or an option " +
+      "happens at once, and so does deleting an evaluator, with the short notice and its Undo; " +
+      "Undo and Redo take back each of them, as they do an edit (section 12). Your values, built from the user's values, is shown read only: its " +
       "questions and their answers as words, and a line saying to change the values in the " +
       "Values sheet. The multi-line fields are text boxes that grow with what is written and " +
       "take Vim's keys when Vim keys is on. The keyboard moves through the tab top to bottom: " +
@@ -461,7 +457,7 @@ export const machine = setup({
       "answer, change with the left and right arrows, and with h and l with Vim keys on. " +
       "Signed out it shows only \"Sign in to use evaluators.\"",
     kind: "view",
-    emits: ["evaluator.saved", "removal.started"],
+    emits: ["evaluator.saved", "evaluator.discarded"],
     attributes: [],
     asks: ["evaluators: list", "settings: read", "session: read"],
   },
