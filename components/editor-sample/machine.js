@@ -15,10 +15,12 @@ export const machine = setup({
   meta: {
     description:
       "A bare editor with everything the editor kit gives every editor: paragraphs, bullet, " +
-      "numbered and checklist items, quotes, source links drawn as tags, web links, and Vim " +
+      "numbered and checklist items, quotes, source links drawn as tags, web links, hashtags, " +
+      "marks at a line's end, and Vim " +
       "when the Vim keys setting is on. It is for trying the kit by hand and for the kit's " +
       "browser tests. The `text` attribute gives the text it starts with; what is typed lives " +
-      "only in the page and is never saved, and a click on a source link does nothing.",
+      "only in the page and is never saved, and a click on a source link does nothing. Which " +
+      "hashtags are known and which lines show marks are set by a test, never by the user.",
     kind: "view",
     emits: [],
     attributes: ["text"],

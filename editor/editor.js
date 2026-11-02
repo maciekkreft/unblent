@@ -1126,3 +1126,196 @@ const webLinkTheme = EditorView.theme({
 export function toRegister(text) {
   Vim.getRegisterController().pushText(null, "yank", text, false, false);
 }
+
+// --- Hashtags -----------------------------------------------------------------------
+// A hashtag line (13) is any line holding one or more `#name` words: a "#" at the start
+// of the line or after a space, then letters, digits and hyphens. The note editor's
+// Title level is never one, since its "# " has a space after the "#" and its markers live
+// only in the wire string. The functions here import nothing, so a fact that may not
+// import the kit (11.2) can copy them whole.
+
+const HASHTAG = /(^|\s)#([\p{L}\p{N}-]+)/gu;
+
+// Every `#name` in one line's text: { from, to, name }, `from` at the "#".
+export function hashtagsIn(text) {
+  const found = [];
+  for (const m of String(text).matchAll(HASHTAG)) {
+    const from = m.index + m[1].length;
+    found.push({ from, to: from + 1 + m[2].length, name: m[2] });
+  }
+  return found;
+}
+
+// What each hashtag line names and the lines it names them for: the lines after it in
+// the same paragraph or list, which runs over lines one "\n" apart and ends at a blank
+// line, the kit's gap (10). A later hashtag line ends the one before it and starts its
+// own. A line without a letter or a digit is no line to check. Each line is given
+// trimmed, the way lineMarks keys its marks.
+export function hashtagScopes(text) {
+  const scopes = [];
+  let open = null;
+  for (const line of String(text).split("\n")) {
+    const tags = [...new Set(hashtagsIn(line).map((t) => t.name))];
+    if (tags.length) {
+      open = { tags, lines: [] };
+      scopes.push(open);
+    } else if (line.trim() === "") open = null;
+    else if (open && /[\p{L}\p{N}]/u.test(line)) open.lines.push(line.trim());
+  }
+  return scopes;
+}
+
+// Which names are known, as a test on a name; an editor learns it from its own actor
+// and hands it over with refreshHashtags.
+const setKnown = StateEffect.define();
+
+const tagMark = (known) => Decoration.mark({ class: known ? "cm-hashtag cm-hashtag-known" : "cm-hashtag cm-hashtag-unknown" });
+const knownTag = tagMark(true);
+const unknownTag = tagMark(false);
+
+// One editor's hashtags, each drawn in the accent colour when `known(name)` is true and
+// muted when not. The text stays as typed.
+export function hashtags({ known = () => false } = {}) {
+  const decos = (state, test) => {
+    const builder = new RangeSetBuilder();
+    for (let n = 1; n <= state.doc.lines; n++) {
+      const line = state.doc.line(n);
+      if (!line.text.includes("#")) continue;
+      for (const t of hashtagsIn(line.text)) builder.add(line.from + t.from, line.from + t.to, test(t.name) ? knownTag : unknownTag);
+    }
+    return builder.finish();
+  };
+  const field = StateField.define({
+    create: (state) => ({ known, deco: decos(state, known) }),
+    update(value, tr) {
+      let test = value.known;
+      let asked = false;
+      for (const e of tr.effects) {
+        if (!e.is(setKnown)) continue;
+        asked = true;
+        if (e.value) test = e.value;
+      }
+      if (!tr.docChanged && !asked) return value;
+      return { known: test, deco: decos(tr.state, test) };
+    },
+    provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
+  });
+  return [field, hashtagTheme];
+}
+
+// The hashtags redrawn at once, with a new test of which names are known, or, without
+// one, with the same test asked again, for an editor whose `known` reads state that
+// changed. Call it only when the answer changed, since each call redraws.
+export function refreshHashtags(view, known = null) {
+  view.dispatch({ effects: setKnown.of(known) });
+}
+
+const hashtagTheme = EditorView.theme({
+  ".cm-hashtag-known": { color: "var(--color-accent)" },
+  ".cm-hashtag-unknown": { color: "var(--color-mute)" },
+});
+
+// --- Line marks ---------------------------------------------------------------------
+// The marks an editor shows at the end of a line, such as Jev's answers about it. The
+// editor hands them over as a Map from a line's trimmed text to its marks; every line
+// with that text shows them. The kit knows no icons (11.2), so `render(into, marks)`
+// draws them into the element the kit gives.
+
+export const setLineMarks = StateEffect.define();
+
+// The lines an editor's user finished in one update, by trimmed text: the line the cursor
+// was on, followed through the edit, when the cursor now stands on another line. An edit
+// that adds lines (Enter, a paste) also finishes every line it put between the two, so a
+// pasted block is finished whole; the line the cursor is on is never finished while it
+// is typed. A paste finishes every line it touched, the last pasted line too, since
+// nothing more is typed into it. Leaving the editor finishes every line; the editor
+// handles that itself. Empty lines are left out.
+export function finishedLines(update) {
+  const before = update.startState;
+  const after = update.state;
+  const from = update.changes.mapPos(before.doc.lineAt(before.selection.main.head).from, -1);
+  const was = after.doc.lineAt(from).number;
+  const now = after.doc.lineAt(after.selection.main.head).number;
+  const numbers = new Set();
+  if (update.transactions.some((t) => t.isUserEvent("input.paste"))) {
+    update.changes.iterChangedRanges((_a, _b, fromB, toB) => {
+      for (let n = after.doc.lineAt(fromB).number; n <= after.doc.lineAt(toB).number; n += 1) numbers.add(n);
+    });
+  }
+  if (was !== now) {
+    const [lo, hi] = update.docChanged ? [Math.min(was, now), Math.max(was, now)] : [was, was];
+    for (let n = lo; n <= hi; n += 1) if (n !== now) numbers.add(n);
+  }
+  const out = [];
+  for (const n of [...numbers].sort((a, b) => a - b)) {
+    const text = after.doc.line(n).text.trim();
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
+}
+
+// One editor's line marks. They are a widget after the line's text, not text: the cursor,
+// Vim and CodeMirror pass them by, and a press on one leaves the cursor where it is. The
+// marks float at the line's right end, inside the line, so the text wraps around them by
+// their real width, however long their names are; when the last row of the text leaves
+// no room, they move to a row of their own below it, still on the right.
+export function lineMarks({ render }) {
+  class MarksWidget extends WidgetType {
+    constructor(marks) {
+      super();
+      this.marks = marks;
+      this.key = JSON.stringify(marks);
+    }
+    eq(other) {
+      return other.key === this.key;
+    }
+    toDOM() {
+      const span = document.createElement("span");
+      span.className = "cm-line-marks";
+      render(span, this.marks);
+      span.addEventListener("mousedown", (event) => event.preventDefault());
+      return span;
+    }
+    ignoreEvent() {
+      return true;
+    }
+  }
+
+  const field = StateField.define({
+    create: () => new Map(),
+    update: (value, tr) => tr.effects.reduce((v, e) => (e.is(setLineMarks) ? e.value : v), value),
+  });
+
+  const drawn = EditorView.decorations.compute([field, "doc"], (state) => {
+    const marks = state.field(field);
+    if (!marks.size) return Decoration.none;
+    const ranges = [];
+    for (let n = 1; n <= state.doc.lines; n++) {
+      const line = state.doc.line(n);
+      const these = marks.get(line.text.trim());
+      if (!these?.length) continue;
+      ranges.push(Decoration.line({ class: `cm-checked cm-checked-${Math.min(these.length, 4)}` }).range(line.from));
+      ranges.push(Decoration.widget({ widget: new MarksWidget(these), side: 1 }).range(line.to));
+    }
+    return Decoration.set(ranges);
+  });
+
+  return [field, drawn, lineMarksTheme];
+}
+
+const lineMarksTheme = EditorView.theme({
+  // A new block formatting context, so the line's box holds its floating marks and
+  // CodeMirror measures the line as tall as it is drawn (Vim's j/k move by that height).
+  ".cm-line.cm-checked": { display: "flow-root" },
+  ".cm-line-marks": {
+    float: "right",
+    display: "flex",
+    alignItems: "center",
+    gap: "var(--space-2xs)",
+    marginLeft: "var(--space-sm)",
+    textIndent: "0",
+    whiteSpace: "nowrap",
+    userSelect: "none",
+    WebkitUserSelect: "none",
+  },
+});

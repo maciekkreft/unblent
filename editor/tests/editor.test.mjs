@@ -34,6 +34,9 @@ import {
   webLinksIn,
   webLinkAt,
   webLinkDecorations,
+  hashtagsIn,
+  hashtagScopes,
+  finishedLines,
 } from "../editor.js";
 
 // The kit can break every editor (architecture.md 10), so its rule is tested here
@@ -792,4 +795,60 @@ test("a markdown link shows only its label, except on the raw line; a bare one s
     ["[Site](https://a.com)", "https://a.com"],
     ["https://b.com", "https://b.com"],
   ]);
+});
+
+test("a #name is a hashtag at a line's start or after a space, never the Title level's \"# \"", () => {
+  assert.deepEqual(hashtagsIn("#in-my-control"), [{ from: 0, to: 14, name: "in-my-control" }]);
+  assert.deepEqual(
+    hashtagsIn("Tonight #a #b2, and#no https://x.com/#frag").map((t) => t.name),
+    ["a", "b2"],
+  );
+  assert.deepEqual(hashtagsIn("# Title"), []);
+  assert.deepEqual(hashtagsIn("## Heading"), []);
+  assert.deepEqual(hashtagsIn("#Gedanken-über"), [{ from: 0, to: 14, name: "Gedanken-über" }]);
+});
+
+test("a hashtag line names its tags for the lines after it up to the next gap, skipping lines without a letter or digit", () => {
+  const text = [
+    "Before",
+    "Things on my mind #in-my-control #fact #fact",
+    "- The rain",
+    "  ---",
+    "- My answer  ",
+    "",
+    "Not in scope",
+    "#traps",
+    "#second",
+    "One",
+    "",
+    "#empty",
+  ].join("\n");
+  assert.deepEqual(hashtagScopes(text), [
+    { tags: ["in-my-control", "fact"], lines: ["- The rain", "- My answer"] },
+    { tags: ["traps"], lines: [] },
+    { tags: ["second"], lines: ["One"] },
+    { tags: ["empty"], lines: [] },
+  ]);
+  assert.deepEqual(hashtagScopes("No tags\nhere"), []);
+});
+
+// An update shaped as CodeMirror's ViewUpdate is, for the fields finishedLines reads.
+const updateOf = (doc, cursor, spec) => {
+  const startState = EditorState.create({ doc, selection: EditorSelection.cursor(cursor) });
+  const tr = startState.update(spec);
+  return { startState, state: tr.state, changes: tr.changes, docChanged: tr.docChanged, transactions: [tr] };
+};
+
+test("finishedLines: the line the cursor left, the lines an edit added, and every pasted line", () => {
+  // Typing on a line finishes nothing.
+  assert.deepEqual(finishedLines(updateOf("One", 3, { changes: { from: 3, insert: "x" }, selection: { anchor: 4 }, userEvent: "input.type" })), []);
+  // A move to another line finishes the line left, trimmed.
+  assert.deepEqual(finishedLines(updateOf(" One \nTwo", 2, { selection: { anchor: 7 }, userEvent: "select" })), ["One"]);
+  // Enter finishes the line it left; the new empty line is not one.
+  assert.deepEqual(finishedLines(updateOf("One", 3, { changes: { from: 3, insert: "\n" }, selection: { anchor: 4 }, userEvent: "input" })), ["One"]);
+  // A paste finishes every line it touched, the last one too.
+  assert.deepEqual(
+    finishedLines(updateOf("Start ", 6, { changes: { from: 6, insert: "a\nb\nc" }, selection: { anchor: 11 }, userEvent: "input.paste" })),
+    ["Start a", "b", "c"],
+  );
 });

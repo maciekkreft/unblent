@@ -268,6 +268,93 @@ for (const engine of ENGINES) {
       assert.equal(await head(page), 4);
     });
 
+    // Browser: rendering and layout.
+    run("a known hashtag is drawn in the accent colour and an unknown one muted, its text kept", {}, async (page) => {
+      await page.evaluate(() => (document.querySelector("editor-sample").known = ["in-my-control"]));
+      await page.keyboard.insertText("Tonight #in-my-control #foo");
+      await page.waitForFunction(() => document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-hashtag").length === 2);
+      const drawn = await page.evaluate(() => {
+        const root = document.querySelector("editor-sample").shadowRoot;
+        const paint = (name) => {
+          const probe = document.createElement("span");
+          probe.style.color = `var(${name})`;
+          root.append(probe);
+          const color = getComputedStyle(probe).color;
+          probe.remove();
+          return color;
+        };
+        const tag = (cls) => {
+          const el = root.querySelector(cls);
+          return { text: el.textContent, color: getComputedStyle(el).color };
+        };
+        return { known: tag(".cm-hashtag-known"), unknown: tag(".cm-hashtag-unknown"), accent: paint("--color-accent"), mute: paint("--color-mute") };
+      });
+      assert.deepEqual(drawn.known, { text: "#in-my-control", color: drawn.accent });
+      assert.deepEqual(drawn.unknown, { text: "#foo", color: drawn.mute });
+      // Once the name is known, the editor redraws it.
+      await page.evaluate(() => (document.querySelector("editor-sample").known = ["in-my-control", "foo"]));
+      await page.waitForFunction(() => document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-hashtag-known").length === 2);
+      assert.equal(await text(page), "Tonight #in-my-control #foo");
+    });
+
+    // Browser: rendering and layout.
+    run("a line's marks stand at its right end, and its text never runs under them, on the desk and on a phone", { viewport: { width: 360, height: 640 } }, async (page) => {
+      const long = "The rain kept on all evening and the trains stopped, so the plan for tonight had to change twice";
+      await page.keyboard.insertText(`Short line\n${long}\nPlain`);
+      await page.evaluate(
+        (long) => (document.querySelector("editor-sample").marks = { "Short line": ["In my control"], [long]: ["Not in my control", "Story"] }),
+        long,
+      );
+      await page.waitForFunction(() => document.querySelector("editor-sample").shadowRoot.querySelectorAll(".cm-line-marks").length === 2);
+      for (const size of [{ width: 1000, height: 700 }, { width: 360, height: 640 }]) {
+        await page.setViewportSize(size);
+        await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+        const shape = await page.evaluate(() => {
+          const root = document.querySelector("editor-sample").shadowRoot;
+          return [...root.querySelectorAll(".cm-line")].map((line) => {
+            const box = line.getBoundingClientRect();
+            const marks = line.querySelector(".cm-line-marks")?.getBoundingClientRect();
+            const node = [...line.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const rows = [...range.getClientRects()].map((r) => ({ top: r.top, bottom: r.bottom, right: r.right }));
+            return { line: { top: box.top, bottom: box.bottom, right: box.right }, marks: marks && { top: marks.top, bottom: marks.bottom, left: marks.left, right: marks.right }, rows };
+          });
+        });
+        assert.equal(shape[2].marks, undefined, "a line without marks shows none");
+        for (const [i, { line, marks, rows }] of shape.slice(0, 2).entries()) {
+          assert.ok(Math.abs(marks.right - line.right) <= 1, `${size.width}px line ${i}: the marks end at the line's right edge`);
+          assert.ok(marks.top >= line.top - 1 && marks.bottom <= line.bottom + 1, `${size.width}px line ${i}: the marks stay inside their line`);
+          const beside = rows.filter((r) => r.top < marks.bottom - 1 && r.bottom > marks.top + 1);
+          assert.ok(beside.every((r) => r.right <= marks.left + 1), `${size.width}px line ${i}: no text runs under the marks`);
+        }
+        if (size.width < 400) assert.ok(shape[1].rows.length >= 2, "the long line wraps on a phone");
+      }
+      assert.equal(await text(page), `Short line\n${long}\nPlain`, "the marks are not text");
+    });
+
+    // Browser: focus and keys.
+    run("with Vim keys j and k move line by line past a line with marks", { vim: true }, async (page) => {
+      await page.keyboard.press("i");
+      await page.keyboard.insertText("One\nTwo\nThree");
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => (document.querySelector("editor-sample").marks = { Two: ["A mark", "Another"] }));
+      await page.waitForFunction(() => document.querySelector("editor-sample").shadowRoot.querySelector(".cm-line-marks"));
+      await page.keyboard.type("gg");
+      await until(async () => (await head(page)) === 0);
+      for (const want of [4, 8]) {
+        await page.keyboard.press("j");
+        await until(async () => (await head(page)) === want);
+      }
+      for (const want of [4, 0]) {
+        await page.keyboard.press("k");
+        await until(async () => (await head(page)) === want);
+      }
+      await page.keyboard.type("j$");
+      await until(async () => (await head(page)) === 6);
+      assert.equal(await caretLine(page), 1, "the cursor is drawn on the marked line, before its marks");
+    });
+
     // Browser: a gesture.
     run("a web link shows its label off the cursor's line, and a click opens it in a new tab", {}, async (page, context) => {
       // The new tab gets an empty page, so the test never leaves this host.

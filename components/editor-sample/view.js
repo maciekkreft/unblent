@@ -3,7 +3,7 @@ import { mount, unmount, ask } from "bus";
 import { icon } from "icons";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { baseExtensions, setVim, paragraphs, sourceLinks, webLinks } from "editor";
+import { baseExtensions, setVim, paragraphs, sourceLinks, webLinks, hashtags, refreshHashtags, lineMarks, setLineMarks } from "editor";
 import { machine } from "./machine.js";
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -39,8 +39,13 @@ const fill = EditorView.theme({
 class EditorSample extends LitElement {
   // `text` is the editor's text both ways: the page gives the starting text, setting it
   // replaces the document, and typing keeps it current, so a test can seed and read it.
+  // `known` (the hashtag names drawn as known) and `marks` (an object from a line's text to
+  // the names of its marks) are properties only, a stand-in for an editor's actor, so a
+  // test can try the kit's hashtags and line marks.
   static properties = {
     text: { type: String },
+    known: { attribute: false },
+    marks: { attribute: false },
   };
 
   static styles = css`
@@ -49,6 +54,13 @@ class EditorSample extends LitElement {
       flex-direction: column;
       flex: 1;
       min-height: 0;
+    }
+    .mark {
+      padding: 0 var(--space-2xs);
+      border-radius: var(--radius-sm);
+      background: var(--color-accent-subtle);
+      font-size: var(--text-sm);
+      color: var(--color-body-mid);
     }
     .region {
       flex: 1;
@@ -70,6 +82,8 @@ class EditorSample extends LitElement {
   constructor() {
     super();
     this.text = "";
+    this.known = [];
+    this.marks = {};
   }
 
   #extensions() {
@@ -79,6 +93,9 @@ class EditorSample extends LitElement {
       // A source link needs `notes` to follow it, and this page has none (8).
       sourceLinks({ follow: () => {}, icon: (into) => render(icon("link"), into) }),
       webLinks(),
+      hashtags({ known: (name) => this.known.includes(name) }),
+      // The kit's style sheet sits in the shadow root, so a mark drawn here takes .mark.
+      lineMarks({ render: (into, marks) => render(marks.map((m) => html`<span class="mark">${m}</span>`), into) }),
       fill,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) return;
@@ -99,10 +116,12 @@ class EditorSample extends LitElement {
     });
   }
 
-  updated() {
+  updated(changed) {
     // Built here rather than once, so the document comes back if the tag is put back.
     if (!this.#view) this.#build();
     setVim(this.#view, this.#actor.snapshot?.context.vimKeys === true);
+    if (changed.has("known")) refreshHashtags(this.#view);
+    if (changed.has("marks")) this.#view.dispatch({ effects: setLineMarks.of(new Map(Object.entries(this.marks ?? {}))) });
     if (this.text === this.#shown) return;
     this.#shown = this.text;
     this.#view.dispatch({ changes: { from: 0, to: this.#view.state.doc.length, insert: this.text } });
