@@ -214,7 +214,7 @@ function applyPlace(context, event, enqueue) {
 // leaves it as that step left it and the step before can be undone next; one no step of
 // this browser wrote is left stamped with a mark of the step undone.
 const priorOf = (step) => (typeof step === "string" ? { prior: step } : {});
-const priorStamp = (p, step) => p.prior ?? `^`;
+const priorStamp = (p, step) => p.prior ?? `^${step}`;
 
 // What changed between two lists: the values gone, the values new, those whose name or
 // example changed, and whether the ones in both stand in another order.
