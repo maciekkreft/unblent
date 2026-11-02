@@ -63,7 +63,9 @@ export const tilesOf = (spending, people, now) => {
   if (people) {
     const guests = people.filter((p) => p.guest);
     const today = guests.filter((p) => sameDay(new Date(p.firstSeen), new Date(now))).length;
-    const blocked = (spending?.guests ?? []).filter((g) => g.blocked).length;
+    // A deleted guest still on the spending list until its delete can no longer be
+    // undone (3.4) is not one of the guests counted.
+    const blocked = (spending?.guests ?? []).filter((g) => g.blocked && guests.some((p) => p.userId === g.userId)).length;
     tiles.push({ title: "Guests", big: String(guests.length), sub: `${today} today` + (blocked ? ` · ${blocked} blocked` : "") });
   }
   return tiles;
@@ -105,8 +107,8 @@ export const rowsOf = (people, spending, now) =>
 
 const ok = (reply) => reply && !reply.error;
 
-// The accounts to show: a guest being deleted is left out while its Undo is offered,
-// so the row and the Guests count read as if it were already gone (12).
+// The accounts to show: a guest being deleted is left out until session's new list
+// says it is gone, so the row and the Guests count read as gone at once (12).
 export const shownOf = (people, deleting) => people && people.filter((p) => !deleting.includes(p.userId));
 
 export const machine = setup({
@@ -125,16 +127,18 @@ export const machine = setup({
       "first, then guests newest first, each with when they were first and last seen, " +
       "where they are, their browser, system and phone or desk, what they used as a " +
       "small bar and in dollars, and the space their work takes. Each guest row offers " +
-      "View as, Reset use, Block or Unblock, and Delete. Reset use and Block show an " +
-      "Undo for the undo window; Delete hides the row at once and deletes the guest's " +
-      "account, work and spending only when its Undo window ends; View as is reversed " +
-      "by Back to you. Every account with a passkey, yours included, has a Can sync switch, " +
-      "off at first, which says whether that account may connect a Mac app to its work on " +
-      "the web; it moves at once when pressed, and pressing it again undoes it. Turning it " +
+      "View as, Reset use, Block or Unblock, and Delete, each at once. Delete hides the row, " +
+      "signs the guest out and shows the short notice with Undo, which brings the guest back " +
+      "as it was; its account, work and spending are removed only once that delete can no " +
+      "longer be undone. Reset use, Block, Unblock, Delete and the Can sync switch are each a " +
+      "step Undo takes back, and View as is reversed by Back to you. Every account with a " +
+      "passkey, yours included, has a Can sync switch, off at first, which says whether that " +
+      "account may connect a Mac app to its work on the web; it moves at once when pressed, " +
+      "and pressing it again undoes it too. Turning it " +
       "off stops the account's connected Macs from syncing. The table scrolls sideways " +
       "on a narrow screen, and the Who column stays in view while it does.",
     kind: "view",
-    emits: ["viewas.requested", "guest.blocked", "use.reset", "removal.started", "sync.allowed"],
+    emits: ["viewas.requested", "guest.blocked", "use.reset", "removal.settled", "sync.allowed"],
     attributes: [],
     asks: ["session: people", "llm: spending"],
   },
@@ -164,8 +168,8 @@ export const machine = setup({
   },
   on: {
     // The admin's actions on a guest row (12), each the admin's own gesture (4.3, fifth
-    // rule): session hands the browser over, llm blocks or resets; notice-stack shows
-    // the Undo, and View as is reversed by Back to you.
+    // rule): session hands the browser over or deletes, llm blocks or resets, and the fact
+    // records each as a step (12, Undo); View as is reversed by Back to you.
     _viewAs: { actions: emit(({ event }) => ({ type: "viewas.requested", user: event.user })) },
     _reset: { actions: emit(({ event }) => ({ type: "use.reset", user: event.user })) },
     _block: { actions: emit(({ event }) => ({ type: "guest.blocked", user: event.user, blocked: event.blocked })) },
@@ -180,22 +184,18 @@ export const machine = setup({
         emit(({ event }) => ({ type: "sync.allowed", user: event.user, allowed: event.allowed })),
       ],
     },
-    // Delete waits out the undo window in notice-stack like every delete; session and
-    // llm act on removal.settled, and an Undo brings the row back.
+    // Delete happens at once (12, Undo): session marks the guest deleted and records the
+    // step; its new list brings the row back after an Undo.
     _delete: {
       actions: [
         assign({ deleting: ({ context, event }) => [...context.deleting, event.user] }),
-        emit(({ event }) => ({ type: "removal.started", kind: "guest", id: event.user, name: event.name })),
+        emit(({ event }) => ({ type: "removal.settled", kind: "guest", id: event.user })),
       ],
     },
-    "removal.undone": {
-      guard: ({ event }) => event.kind === "guest",
-      actions: assign({ deleting: ({ context, event }) => context.deleting.filter((id) => id !== event.id) }),
-    },
-    "people.changed": { actions: assign({ people: ({ event }) => event.people, failed: false }) },
-    // A gesture session could not honour, Can sync among them: read the list again, so
-    // the switches show what the registry holds.
-    "session.refused": { guard: ({ context }) => context.people !== null, target: ".reading" },
+    "people.changed": { actions: assign({ people: ({ event }) => event.people, failed: false, deleting: [] }) },
+    // A gesture session could not honour, Can sync or a Delete among them: read the list
+    // again, so the rows and switches show what the registry holds.
+    "session.refused": { guard: ({ context }) => context.people !== null, target: ".reading", actions: assign({ deleting: [] }) },
     "spending.changed": {
       actions: assign({
         spending: ({ event }) => ({

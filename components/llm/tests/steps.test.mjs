@@ -52,7 +52,7 @@ function server() {
   };
 }
 
-function start(srv) {
+function start(srv, extra = {}) {
   const input = {
     session: async () => ({ userId: "u1", registrationOpen: true }),
     read: async () => srv.picture(),
@@ -63,6 +63,7 @@ function start(srv) {
     generate: async () => ({ text: "" }),
     spending: async () => ({ error: "not-admin" }),
     edit: async () => ({ error: "not-admin" }),
+    ...extra,
   };
   const actor = createActor(machine, { input });
   const steps = [];
@@ -150,4 +151,103 @@ test("a step is refused when the settings were changed since, on any device", as
   await flush();
   await undo(actor, steps[0]);
   assert.deepEqual(settled.at(-1), { id: steps[0].id, owner: "llm", outcome: "refused", reason: "changed" });
+});
+
+// --- The admin's gestures about guests (12): limits, Block and Reset use ---
+
+function ledger() {
+  const state = { guest: 1, allGuests: 10, providers: { jev: null, anthropic: null }, spent: { g1: 0.25 }, blocked: new Set(), stash: {} };
+  const summary = () => ({
+    allGuests: { spent: Object.values(state.spent).reduce((a, b) => a + b, 0), limit: state.allGuests },
+    guest: state.guest,
+    providers: [
+      { id: "jev", label: "Jev by typesafe.ai", spent: 0, limit: state.providers.jev, guestKeySet: true, price: "" },
+      { id: "anthropic", label: "Anthropic", spent: 0, limit: state.providers.anthropic, guestKeySet: false, price: "" },
+    ],
+    guests: Object.entries(state.spent).map(([userId, spent]) => ({ userId, spent, blocked: state.blocked.has(userId) })),
+  });
+  const writes = [];
+  const edit = async (what, fields) => {
+    writes.push([what, fields]);
+    if (what === "limits") {
+      for (const k of ["guest", "allGuests"]) if (k in fields) state[k] = fields[k];
+      Object.assign(state.providers, fields.providers ?? {});
+    }
+    if (what === "blocked") fields.blocked ? state.blocked.add(fields.user) : state.blocked.delete(fields.user);
+    if (what === "reset" && fields.undone) {
+      state.spent[fields.user] = (state.spent[fields.user] ?? 0) + (state.stash[fields.user] ?? 0);
+      delete state.stash[fields.user];
+    } else if (what === "reset") {
+      state.stash[fields.user] = state.spent[fields.user];
+      state.spent[fields.user] = 0;
+    }
+    return summary();
+  };
+  return { state, writes, spending: async () => summary(), edit };
+}
+
+function startAdmin(book) {
+  const srv = server();
+  const { actor, steps, settled } = start(srv, { spending: book.spending, edit: book.edit });
+  return { actor, steps, settled };
+}
+
+const spendingRead = (actor) =>
+  new Promise((resolve) => actor.send({ type: "spending?", cid: "s1", payload: {}, reply: resolve }));
+
+test("a limit, a Block and a Reset use are one step each, and Undo then Redo bring them back exactly", async () => {
+  const book = ledger();
+  const { actor, steps, settled } = startAdmin(book);
+  await flush();
+  await spendingRead(actor);
+  await edit(actor, { type: "limits.edited", guest: 2 });
+  await edit(actor, { type: "limits.edited", providers: { jev: 0.5 } });
+  await edit(actor, { type: "guest.blocked", user: "g1", blocked: true });
+  await edit(actor, { type: "use.reset", user: "g1" });
+  assert.deepEqual(
+    steps.map((s) => [s.label, s.notice ?? false]),
+    [
+      ["change the limit for each guest", false],
+      ["change the limit of Jev by typesafe.ai", false],
+      ["block a guest", true],
+      ["reset the use of a guest", true],
+    ],
+  );
+  for (const step of [...steps].reverse()) await undo(actor, step);
+  assert.deepEqual([book.state.guest, book.state.providers.jev, book.state.blocked.has("g1"), book.state.spent.g1], [1, null, false, 0.25]);
+  for (const step of steps) await redo(actor, step);
+  assert.deepEqual([book.state.guest, book.state.providers.jev, book.state.blocked.has("g1"), book.state.spent.g1], [2, 0.5, true, 0]);
+  assert.equal(settled.length, 8);
+  assert.ok(settled.every((s) => s.outcome === "applied"), JSON.stringify(settled));
+  assert.equal(steps.length, 4, "an Undo or Redo records no step of its own");
+  assert.ok(!book.writes.some(([what]) => what === "guestkeys"), "a guest key is never part of a step");
+});
+
+test("a guest key is no step, and neither is a Reset use on a guest who spent nothing", async () => {
+  const book = ledger();
+  book.state.spent.g2 = 0;
+  const { actor, steps } = startAdmin(book);
+  await flush();
+  await spendingRead(actor);
+  await edit(actor, { type: "guestkeys.edited", jev: "secret-guest-key" });
+  await edit(actor, { type: "use.reset", user: "g2" });
+  assert.equal(steps.length, 0);
+});
+
+test("a step of the admin's is refused when what guests spent changed since, and writes nothing", async () => {
+  const book = ledger();
+  const { actor, steps, settled } = startAdmin(book);
+  await flush();
+  await spendingRead(actor);
+  await edit(actor, { type: "limits.edited", allGuests: 20 });
+  await edit(actor, { type: "use.reset", user: "g1" });
+  // The guest spent again, and another device changed the limit.
+  book.state.spent.g1 = 0.01;
+  book.state.allGuests = 30;
+  const written = book.writes.length;
+  await undo(actor, steps[1]);
+  assert.deepEqual(settled.at(-1), { id: steps[1].id, owner: "llm", outcome: "refused", reason: "changed" });
+  await undo(actor, steps[0]);
+  assert.deepEqual(settled.at(-1), { id: steps[0].id, owner: "llm", outcome: "refused", reason: "changed" });
+  assert.equal(book.writes.length, written);
 });

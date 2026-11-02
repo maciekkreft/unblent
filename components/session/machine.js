@@ -1,4 +1,5 @@
 import { setup, assign, emit, enqueueActions, fromPromise } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the signed-in user (3.4): headless, the single
 // place identity lives in the browser. It answers session: read from a cache,
@@ -113,6 +114,49 @@ async function switchOf(api, change) {
   return { picture, path: "/" };
 }
 
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// The admin's gestures in People live in the registry on the server, so a step holds what
+// it expects to find there and is applied only while the server still holds it.
+const listed = (reply) => (reply && Array.isArray(reply.people) ? reply.people : null);
+
+// Undo or Redo of one step, answered with how it ended: the new list when applied,
+// "changed" when the registry is no longer as the step left it, and null when the server
+// gave no answer, which leaves the step where it was (`undo` says so itself).
+async function applyStep(api, p) {
+  if (p.kind === "sync") {
+    const people = listed(await api.people());
+    if (!people) return null;
+    const now = people.find((x) => x.userId === p.user);
+    if (!now || Boolean(now.sync) !== p.expect) return "changed";
+    return listed(await api.allowSync(p.user, p.allowed));
+  }
+  if (p.kind === "guest") {
+    const reply = p.deleted ? await api.forget(p.user) : await api.restore(p.user);
+    if (reply?.error === "changed") return "changed";
+    return listed(reply);
+  }
+  return "changed";
+}
+
+const undoOrRedo = ({ context, event, self }) => {
+  const settle = (outcome) => self.send({ type: "_settled", id: event.id, outcome });
+  if (!context.userId || !context.admin) return settle("refused");
+  Promise.resolve()
+    .then(() => applyStep(context.api, event.payload ?? {}))
+    .then((result) => {
+      if (result === "changed") return settle("refused");
+      if (!result) return;
+      self.send({ type: "_people", people: result });
+      settle("applied");
+    })
+    .catch(() => {});
+};
+
+const syncLabel = (allowed, name) => `turn Can sync ${allowed ? "on" : "off"} for ${name}`;
+const guestLabel = (name) => `delete ${name ? `account ${name}` : "a guest"}`;
+
 export const machine = setup({
   actors: {
     // Sign in. Prefer an existing passkey so a shared one signs into its account
@@ -176,10 +220,12 @@ export const machine = setup({
       "without a passkey. Either way, what is not yet uploaded is uploaded and every local " +
       "copy of the account's work is emptied first; device preferences stay. If that cannot " +
       "be done within a few seconds, for example offline, nothing changes and a notice says so. " +
-      "The admin can also delete a guest: once its Undo window ends the account and everything " +
-      "it saved are removed, its number is never given again, and its browser is signed out " +
-      "at its next visit. The admin turns Can sync on or off for each account with a passkey, " +
-      "their own included; it is off at first. On the web, an account with Can sync on may " +
+      "The admin can also delete a guest: at once its browser is signed out and nothing is " +
+      "saved for it again, and the delete is a step Undo takes back, shown with the short " +
+      "notice, which brings the guest back as it was. Only when that step leaves the undo list " +
+      "is everything it saved removed; its number is never given again. The admin turns Can " +
+      "sync on or off for each account with a passkey, their own included; it is off at first, " +
+      "and each turn is a step Undo and Redo reverse, refused when the switch was changed since. On the web, an account with Can sync on may " +
       "connect a Mac: the connect page asks for a one-time code, good for one try within two " +
       "minutes, which the Mac trades for a lasting sign-in of its own. While Can sync is off, " +
       "the account gets no code and its connected Macs are treated as signed out. In the Mac " +
@@ -194,11 +240,11 @@ export const machine = setup({
       "tab then says to turn sync on again.",
     kind: "fact",
     shape: "replicated",
-    emits: ["session.changed", "session.refused", "people.changed"],
+    emits: ["session.changed", "session.refused", "people.changed", "step.recorded", "step.settled"],
     owns: "the signed-in user",
     steps: {
-      "removal.settled": "pending",
-      "sync.allowed": "pending",
+      "removal.settled": "step",
+      "sync.allowed": "step",
       "signin.requested": "identity",
       "viewas.requested": "identity",
       "connect.requested": "identity",
@@ -225,6 +271,9 @@ export const machine = setup({
     // Opening an address outside the app: the Mac app's shell sends it to the browser.
     open: input.open,
     waitMs: input.waitMs ?? 5000,
+    mint: input.mint ?? ulid,
+    // The people as the server last listed them, so a step knows what a gesture changed.
+    people: null,
   }),
   initial: "ready",
   on: {
@@ -242,30 +291,93 @@ export const machine = setup({
         enqueue.assign({ guestAsks: [...context.guestAsks, event.reply] });
       }),
     },
-    // Delete on a guest in People (12), once notice-stack's Undo window ended: the
-    // server removes the account and its work, and the new list goes out. The server
-    // decides who may; the cache only spares everyone else a request.
+    // Delete on a guest in People (12): at once, and one step with the short notice; the
+    // server signs the guest out and keeps its files until the step leaves the undo list.
+    // The server decides who may; the cache only spares everyone else a request.
     "removal.settled": {
       guard: ({ context, event }) => event.kind === "guest" && Boolean(context.userId && context.admin),
-      actions: ({ context, event, self }) =>
+      actions: ({ context, event, self }) => {
+        const name = context.people?.find((p) => p.userId === event.id)?.name;
         Promise.resolve()
           .then(() => context.api.forget(event.id))
-          .then((reply) => reply && Array.isArray(reply.people) && self.send({ type: "_people", people: reply.people }), () => {}),
+          .then((reply) => {
+            const people = listed(reply);
+            if (!people) return self.send({ type: "_refused", reason: "unavailable" });
+            self.send({ type: "_people", people });
+            self.send({
+              type: "_record",
+              label: guestLabel(name),
+              notice: true,
+              undo: { kind: "guest", user: event.id, deleted: false, expect: true },
+              redo: { kind: "guest", user: event.id, deleted: true, expect: false },
+            });
+          })
+          .catch(() => self.send({ type: "_refused", reason: "unavailable" }));
+      },
     },
-    _people: { actions: emit(({ event }) => ({ type: "people.changed", people: event.people })) },
-    // Can sync on a passkey account in People (3.4, 12): the server records it and the
-    // new list goes out. If it cannot, a notice says so, and People reads the list again.
+    // The deleted guest's step left the admin's undo list (3.4, 12): it can never come
+    // back now, so its files go.
+    "step.dropped": {
+      guard: ({ context, event }) =>
+        event.owner === "session" && event.payload?.kind === "guest" && event.payload.deleted === true && context.admin === true,
+      actions: ({ context, event }) =>
+        Promise.resolve()
+          .then(() => context.api.purge(event.payload.user))
+          .catch(() => {}),
+    },
+    _people: {
+      actions: [assign({ people: ({ event }) => event.people }), emit(({ event }) => ({ type: "people.changed", people: event.people }))],
+    },
+    _known: { actions: assign({ people: ({ event }) => event.people }) },
+    // Can sync on a passkey account in People (3.4, 12): the server records it, the new
+    // list goes out, and the change is one step. If it cannot, a notice says so, and
+    // People reads the list again.
     "sync.allowed": {
       guard: ({ context }) => Boolean(context.userId && context.admin),
-      actions: ({ context, event, self }) =>
+      actions: ({ context, event, self }) => {
+        const before = context.people?.find((p) => p.userId === event.user);
+        const was = before ? Boolean(before.sync) : !event.allowed;
+        const name = before?.name ?? "an account";
         Promise.resolve()
           .then(() => context.api.allowSync(event.user, event.allowed))
-          .then((reply) =>
-            reply && Array.isArray(reply.people)
-              ? self.send({ type: "_people", people: reply.people })
-              : self.send({ type: "_refused", reason: "unavailable" }),
-          )
-          .catch(() => self.send({ type: "_refused", reason: "unavailable" })),
+          .then((reply) => {
+            const people = listed(reply);
+            if (!people) return self.send({ type: "_refused", reason: "unavailable" });
+            self.send({ type: "_people", people });
+            if (was === event.allowed) return;
+            self.send({
+              type: "_record",
+              label: syncLabel(event.allowed, name),
+              undo: { kind: "sync", user: event.user, allowed: was, expect: event.allowed },
+              redo: { kind: "sync", user: event.user, allowed: event.allowed, expect: was },
+            });
+          })
+          .catch(() => self.send({ type: "_refused", reason: "unavailable" }));
+      },
+    },
+    _record: {
+      actions: emit(({ context, event }) => ({
+        type: "step.recorded",
+        id: context.mint(),
+        owner: "session",
+        label: event.label,
+        undo: event.undo,
+        redo: event.redo,
+        ...(event.notice ? { notice: true } : {}),
+      })),
+    },
+    // Undo and Redo of the admin's steps (12, Undo), applied by the server only while it
+    // still holds what the step left; a step of someone else's account is refused.
+    "step.undone": { guard: ({ event }) => event.owner === "session", actions: undoOrRedo },
+    "step.redone": { guard: ({ event }) => event.owner === "session", actions: undoOrRedo },
+    _settled: {
+      actions: emit(({ event }) => ({
+        type: "step.settled",
+        id: event.id,
+        owner: "session",
+        outcome: event.outcome,
+        ...(event.outcome === "refused" ? { reason: "changed" } : {}),
+      })),
     },
     _refused: { actions: emit(({ event }) => ({ type: "session.refused", reason: event.reason })) },
     // Connecting a Mac, asked by the connect page of the web edition (3.4). The server
@@ -289,11 +401,18 @@ export const machine = setup({
     // Only the admin sees across accounts (12). The server decides; the cache only
     // spares everyone else a request that would be refused.
     "people?": {
-      actions: ({ context, event }) => {
+      actions: ({ context, event, self }) => {
         if (!context.userId || !context.admin) return event.reply({ error: "not-admin" });
         Promise.resolve()
           .then(() => context.api.people())
-          .then(event.reply, () => event.reply({ error: "unavailable" }));
+          .then(
+            (reply) => {
+              const people = listed(reply);
+              if (people) self.send({ type: "_known", people });
+              event.reply(reply);
+            },
+            () => event.reply({ error: "unavailable" }),
+          );
       },
     },
   },

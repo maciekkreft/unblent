@@ -37,6 +37,7 @@ from server.user import (
     cross_site,
     device_of,
     local_user,
+    mark_removed,
     remote,
     remote_url,
     remove_files,
@@ -46,6 +47,7 @@ from server.user import (
     set_session_cookie,
     sign,
     space,
+    unmark_removed,
     verify,
 )
 
@@ -203,28 +205,55 @@ def people(request: Request):
     return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
 
 
-@router.delete("/people/{target}")
-def delete_person(target: str, request: Request):
-    # Delete on a guest (12), sent once notice-stack's Undo window ended: only the
-    # admin, whom the cookie names as View as does (3.4), and only a live guest. The
-    # registry keeps the row marked deleted; the guest's files go; llm forgets what it
-    # spent on its own.
+def _admin_only(request: Request) -> None:
+    # Only the admin, whom the cookie names as View as does (3.4).
     held = session_of(request)
     if not held or not held["admin"]:
         raise HTTPException(status_code=403, detail="not-admin")
+
+
+def _people() -> dict:
+    return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
+
+
+@router.delete("/people/{target}")
+def delete_person(target: str, request: Request):
+    # Delete on a guest (12), at once, as a step Undo takes back: the row is marked
+    # deleted and every server module refuses its cookie from now on, while its files and
+    # what it spent stay until the step leaves the admin's undo list (3.4).
+    _admin_only(request)
     if not registry.delete_guest(target):
         raise HTTPException(status_code=404, detail="no-such-guest")
+    mark_removed(target)
+    return _people()
+
+
+@router.post("/people/{target}/restore")
+def restore_person(target: str, request: Request):
+    # Undo of a guest's delete (12): the guest comes back as it was, with its files. A
+    # guest whose files went, or one not deleted, changed since: 409.
+    _admin_only(request)
+    if not registry.restore_guest(target):
+        raise HTTPException(status_code=409, detail="changed")
+    unmark_removed(target)
+    return _people()
+
+
+@router.post("/people/{target}/purge")
+def purge_person(target: str, request: Request):
+    # The step of a guest's delete left the admin's undo list (3.4, 12): its files go.
+    _admin_only(request)
+    if not registry.purge_guest(target):
+        raise HTTPException(status_code=404, detail="no-such-guest")
     remove_files(target)
-    return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
+    return _people()
 
 
 @router.put("/people/{target}/sync")
 async def allow_sync(target: str, request: Request):
     # Can sync (3.4, 12): only the admin, and only on a passkey account, the admin's own
     # included. Answers with the new list, so People shows what the registry holds.
-    held = session_of(request)
-    if not held or not held["admin"]:
-        raise HTTPException(status_code=403, detail="not-admin")
+    _admin_only(request)
     try:
         body = await request.json()
     except ValueError:
@@ -234,7 +263,7 @@ async def allow_sync(target: str, request: Request):
         raise HTTPException(status_code=400, detail="allowed must be true or false")
     if not registry.set_sync(target, allowed):
         raise HTTPException(status_code=404, detail="no-such-account")
-    return {"people": [{**person, "space": space(person["userId"])} for person in registry.people()]}
+    return _people()
 
 
 # Connecting a Mac (3.4): the native-app sign-in of RFC 8252 with PKCE (RFC 7636). The

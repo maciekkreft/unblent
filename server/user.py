@@ -67,15 +67,33 @@ def space(user_id: str) -> int:
     return total
 
 
-def remove_files(user_id: str) -> None:
-    """Remove everything the user saved (5): their directory and every component's files
-    in it, when the admin deletes a guest (12). An id that is not one plain name under
-    DATA is refused, so no path can reach outside it."""
+def _own_dir(user_id: str) -> Path:
+    # An id that is not one plain name under DATA is refused, so no path can reach outside it.
     directory = DATA / user_id
     if not user_id or directory.parent != DATA or directory.name != user_id or user_id.startswith("."):
         raise ValueError("not a user id")
+    return directory
+
+
+def mark_removed(user_id: str) -> None:
+    """The admin deleted a guest (12): from now on no request acts as it, while its files
+    stay until the step leaves the admin's undo list (3.4)."""
+    _own_dir(user_id)
     REMOVED.mkdir(parents=True, exist_ok=True)
     (REMOVED / user_id).touch()
+
+
+def unmark_removed(user_id: str) -> None:
+    """Undo of a guest's delete (12): its cookie is its own again, and its files with it."""
+    _own_dir(user_id)
+    (REMOVED / user_id).unlink(missing_ok=True)
+
+
+def remove_files(user_id: str) -> None:
+    """Remove everything the user saved (5): their directory and every component's files
+    in it, once a deleted guest's step leaves the admin's undo list (3.4, 12)."""
+    directory = _own_dir(user_id)
+    mark_removed(user_id)
     if directory.is_dir() and not directory.is_symlink():
         shutil.rmtree(directory)
 

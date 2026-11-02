@@ -280,7 +280,7 @@ test("people? is answered by the server for the admin only (12)", async () => {
   assert.equal(calls.people, 1);
 });
 
-test("a guest's Delete, once its Undo window ended, reaches the server and announces the new list (12)", async () => {
+test("a guest's Delete reaches the server at once and announces the new list (12)", async () => {
   const left = { people: [{ userId: "u1", name: "Admin", guest: false, admin: true }] };
   const { api, calls } = fakeApi({ forget: left });
   const changed = [];

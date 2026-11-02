@@ -5,8 +5,6 @@ import { machine } from "./machine.js";
 import saved from "./events/note.saved.json" with { type: "json" };
 import undone from "./events/removal.undone.json" with { type: "json" };
 import settled from "./events/removal.settled.json" with { type: "json" };
-import useReset from "./events/use.reset.json" with { type: "json" };
-import guestBlocked from "./events/guest.blocked.json" with { type: "json" };
 import requested from "./events/step.requested.json" with { type: "json" };
 
 // A CSS duration token ("3s", "300ms") as milliseconds, for the machine's fade
@@ -52,8 +50,6 @@ function describe(source) {
     const [noun, verb] = REMOVED[source.kind] ?? ["Item", "deleted"];
     return source.name ? `${noun} “${source.name}” ${verb}.` : `${noun} ${verb}.`;
   }
-  if (source.type === "use.reset") return "Use reset to $0.";
-  if (source.type === "guest.blocked") return source.blocked ? "Guest blocked." : "Guest unblocked.";
   if (source.type === "note.conflicted") {
     const title = source.theirs.title || "your note";
     return source.gone
@@ -110,8 +106,6 @@ class ActorController {
         "note.saved": saved,
         "removal.undone": undone,
         "removal.settled": settled,
-        "use.reset": useReset,
-        "guest.blocked": guestBlocked,
         "step.requested": requested,
       },
     });

@@ -113,21 +113,19 @@ test("a guest row offers its actions, and each is the admin's gesture on the bus
   ]);
 });
 
-test("Delete hides the guest at once and waits out its Undo; Undo brings the row back (12)", () => {
+test("Delete hides the guest at once and says so on the bus; session's next list, after an Undo, brings the row back (12)", () => {
   const emitted = [];
   const actor = createActor(machine, { input: { ask: async () => ({ error: "no" }) } });
   actor.on("*", (e) => emitted.push(e));
   actor.start();
   actor.send({ type: "people.changed", people: PEOPLE });
-  actor.send({ type: "_delete", user: "g14", name: "Guest 14" });
-  assert.deepEqual(emitted, [{ type: "removal.started", kind: "guest", id: "g14", name: "Guest 14" }]);
+  actor.send({ type: "_delete", user: "g14" });
+  assert.deepEqual(emitted, [{ type: "removal.settled", kind: "guest", id: "g14" }]);
   const { people, deleting } = actor.getSnapshot().context;
   const shown = shownOf(people, deleting);
   assert.deepEqual(shown.map((p) => p.userId), ["a", "g13", "g9"]);
   assert.equal(tilesOf(null, shown, NOW).at(-1).big, "2", "the Guests count leaves it out");
-  actor.send({ type: "removal.undone", kind: "evaluator", id: "g14" });
-  assert.equal(shownOf(actor.getSnapshot().context.people, actor.getSnapshot().context.deleting).length, 3);
-  actor.send({ type: "removal.undone", kind: "guest", id: "g14" });
+  actor.send({ type: "people.changed", people: PEOPLE });
   assert.equal(shownOf(actor.getSnapshot().context.people, actor.getSnapshot().context.deleting).length, 4);
 });
 

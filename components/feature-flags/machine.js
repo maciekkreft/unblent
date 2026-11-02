@@ -80,7 +80,7 @@ export const machine = setup({
       "everyone; it is shown only to the admin on the website, not while viewing as someone, " +
       "and only then is a feature that is not released shown as a row. Show hides or shows " +
       "the feature for this account alone; signed out it cannot be changed, and a line says " +
-      "to sign in. A switch moves at once when pressed; pressing it again is the undo. A " +
+      "to sign in. A switch moves at once when pressed; pressing it again, or Undo, takes it back. A " +
       "switch that cannot be saved, for example offline, goes back to where it was and a " +
       "line under the switches says so.",
     kind: "view",

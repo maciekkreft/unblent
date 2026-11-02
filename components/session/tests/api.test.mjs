@@ -163,7 +163,7 @@ test("only the admin may view as a guest, and Back to you returns without a pass
   assert.match(cookieOf(back), new RegExp(`^unblent_session=${adminId}\\|admin\\.`));
 });
 
-test("only the admin may delete a guest: its work goes, its number stays taken, its browser is signed out (12)", async () => {
+test("only the admin may delete a guest: it is signed out at once, Undo brings it back, and its work goes only when purged (3.4, 12)", async () => {
   const { existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const admin = forged(`admin-${Date.now()}|admin`);
@@ -180,19 +180,43 @@ test("only the admin may delete a guest: its work goes, its number stays taken, 
   const dir = join(process.env.UNBLENT_DATA, guest.userId);
   assert.ok(existsSync(dir));
 
-  const remove = (cookie, user) =>
-    fetch(`${BASE_URL}/api/session/people/${user}`, { method: "DELETE", headers: cookie ? { Cookie: cookie } : {} });
-  assert.equal((await remove(null, guest.userId)).status, 403);
-  assert.equal((await remove(guestCookie, guest.userId)).status, 403);
+  const call = (method, cookie, user, path = "") =>
+    fetch(`${BASE_URL}/api/session/people/${user}${path}`, { method, headers: cookie ? { Cookie: cookie } : {} });
+  const remove = (cookie, user) => call("DELETE", cookie, user);
+  const restore = (cookie, user) => call("POST", cookie, user, "/restore");
+  const purge = (cookie, user) => call("POST", cookie, user, "/purge");
+  for (const each of [remove, restore, purge]) {
+    assert.equal((await each(null, guest.userId)).status, 403);
+    assert.equal((await each(guestCookie, guest.userId)).status, 403);
+  }
   assert.equal((await remove(admin, "nobody")).status, 404);
+  assert.equal((await restore(admin, guest.userId)).status, 409, "a live guest has nothing to bring back");
+  assert.equal((await purge(admin, guest.userId)).status, 404, "a live guest's files are never purged");
 
+  const listedIds = async (res) => (await res.json()).people.map((p) => p.userId);
   const done = await remove(admin, guest.userId);
   assert.equal(done.status, 200);
-  assert.ok(Array.isArray((await done.json()).people));
-  assert.equal(existsSync(dir), false, "everything the guest saved is gone");
+  assert.ok(!(await listedIds(done)).includes(guest.userId));
+  assert.ok(existsSync(dir), "the guest's work stays while its step can be undone");
   assert.equal((await remove(admin, guest.userId)).status, 404, "a deleted guest cannot be deleted twice");
+  // Every other module refuses the old cookie at once (3.4).
+  assert.equal((await fetch(`${BASE_URL}/api/evaluators?since=0`, { headers: { Cookie: guestCookie } })).status, 401);
 
-  // Every other module refuses the old cookie, so nothing is saved for the account again (3.4).
+  // Undo: the guest is back as it was, its cookie and its work with it.
+  const back = await restore(admin, guest.userId);
+  assert.equal(back.status, 200);
+  assert.ok((await listedIds(back)).includes(guest.userId));
+  const work = await fetch(`${BASE_URL}/api/evaluators?since=0`, { headers: { Cookie: guestCookie } });
+  assert.equal(work.status, 200);
+  assert.ok(JSON.stringify(await work.json()).includes("01K7TEST00000000000000DE00"));
+
+  // Redo, then the step leaves the undo list: the work goes and can never come back.
+  assert.equal((await remove(admin, guest.userId)).status, 200);
+  assert.equal((await purge(admin, guest.userId)).status, 200);
+  assert.equal(existsSync(dir), false, "everything the guest saved is gone");
+  assert.equal((await purge(admin, guest.userId)).status, 404);
+  assert.equal((await restore(admin, guest.userId)).status, 409, "a purged guest cannot come back");
+
   assert.equal((await fetch(`${BASE_URL}/api/evaluators?since=0`, { headers: { Cookie: guestCookie } })).status, 401);
   assert.equal((await fetch(`${BASE_URL}/api/journal?since=0`, { headers: { Cookie: guestCookie } })).status, 401);
   assert.equal(existsSync(dir), false, "the old cookie brings no directory back");

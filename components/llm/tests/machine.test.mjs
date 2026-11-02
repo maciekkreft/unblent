@@ -630,9 +630,12 @@ test("Block, Unblock, Reset use and its Undo reach the server and announce what 
   ]);
   await until(() => h.emitted.filter((e) => e.type === "spending.changed").length >= 1);
 
-  // A guest's Delete, once settled, forgets what it spent; any other removal passes by.
-  h.actor.send({ type: "removal.settled", kind: "evaluator", id: "01K7TEST00000000000000EV00" });
-  h.actor.send({ type: "removal.settled", kind: "guest", id: "g1" });
+  // A guest's spending is forgotten once the step of its Delete leaves the undo list (3.4);
+  // any other dropped step passes by.
+  const step = { id: "01K7TEST00000000000000ST00", owner: "session" };
+  h.actor.send({ type: "step.dropped", ...step, payload: { kind: "sync", user: "u1", allowed: true, expect: false } });
+  h.actor.send({ type: "step.dropped", ...step, owner: "notes", payload: { kind: "guest", user: "g1", deleted: true } });
+  h.actor.send({ type: "step.dropped", ...step, payload: { kind: "guest", user: "g1", deleted: true, expect: false } });
   await until(() => h.calls.edit.length === 5);
   assert.deepEqual(h.calls.edit.at(-1), ["forget", { user: "g1" }]);
 });

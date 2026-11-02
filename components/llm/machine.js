@@ -101,16 +101,118 @@ const ended = (run, end) => {
 };
 
 // Each of the admin's gestures about guests (7.7, 12): the route it is sent to and the
-// fields it carries. Block and Reset use come from People and their Undo; a guest's
-// Delete arrives as removal.settled once its Undo window ended, and its spending is
-// forgotten.
+// fields it carries. A guest's spending is forgotten only once the step of its Delete,
+// which `session` records, leaves the admin's undo list (3.4).
 const EDITS = {
   "limits.edited": (event) => ({ what: "limits", fields: fieldsOf(event, ["guest", "allGuests", "providers"]) }),
   "guestkeys.edited": (event) => ({ what: "guestkeys", fields: fieldsOf(event, ["jev", "anthropic"]) }),
   "guest.blocked": (event) => ({ what: "blocked", fields: { user: event.user, blocked: event.blocked } }),
   "use.reset": (event) => ({ what: "reset", fields: { user: event.user, ...(event.undone ? { undone: true } : {}) } }),
-  "removal.settled": (event) => ({ what: "forget", fields: { user: event.id } }),
+  "step.dropped": (event) => ({ what: "forget", fields: { user: event.payload.user } }),
 };
+
+// --- Steps of the admin's gestures about guests (12, Undo) ------------------------------
+
+// What guests spent lives in one shared file on the server, so a step holds what it
+// expects to find there and is applied only while a fresh read still shows it. A guest
+// key is never part of a step (7.7).
+const SPENDING_STEPS = ["limits", "blocked", "reset"];
+
+// The limits a shape names (limits.edited's), as a ledger (the spending picture) holds them.
+function limitsIn(ledger, shape) {
+  const out = {};
+  if ("guest" in shape) out.guest = ledger.guest;
+  if ("allGuests" in shape) out.allGuests = ledger.allGuests.limit;
+  if (shape.providers)
+    out.providers = Object.fromEntries(
+      Object.keys(shape.providers).map((id) => [id, ledger.providers.find((p) => p.id === id)?.limit ?? null]),
+    );
+  return out;
+}
+const guestIn = (ledger, user) => ledger.guests.find((g) => g.userId === user);
+const spentOf = (ledger, user) => guestIn(ledger, user)?.spent ?? 0;
+const blockedOf = (ledger, user) => Boolean(guestIn(ledger, user)?.blocked);
+// A total read twice is summed the same way, but not always in the same order.
+const sameMoney = (a, b) => Math.abs(a - b) < 1e-9;
+
+// What a gesture changes, as the ledger held it before the gesture was sent; null when
+// the ledger was never read, or the gesture is no step (a guest key).
+function draftOf(ledger, event) {
+  if (!ledger) return null;
+  if (event.type === "limits.edited") return { kind: "limits", before: limitsIn(ledger, EDITS[event.type](event).fields) };
+  if (event.type === "guest.blocked") return { kind: "blocked", user: event.user, before: blockedOf(ledger, event.user) };
+  if (event.type === "use.reset" && !event.undone) return { kind: "reset", user: event.user, before: spentOf(ledger, event.user) };
+  return null;
+}
+
+const LIMIT_LABELS = { guest: () => "the limit for each guest", allGuests: () => "the limit for all guests" };
+
+// The step a gesture made, from the draft and the server's answer, or null when nothing
+// changed. Block and Reset use show the short notice with Undo, as they always offered one.
+function stepOfDraft(draft, after) {
+  if (draft.kind === "limits") {
+    const now = limitsIn(after, draft.before);
+    const before = {};
+    const changed = {};
+    for (const k of ["guest", "allGuests"])
+      if (k in draft.before && draft.before[k] !== now[k]) [before[k], changed[k]] = [draft.before[k], now[k]];
+    for (const id of Object.keys(draft.before.providers ?? {}))
+      if (draft.before.providers[id] !== now.providers[id]) {
+        before.providers = { ...before.providers, [id]: draft.before.providers[id] };
+        changed.providers = { ...changed.providers, [id]: now.providers[id] };
+      }
+    const first = Object.keys(changed)[0];
+    if (!first) return null;
+    const label =
+      first === "providers"
+        ? `the limit of ${after.providers.find((p) => p.id === Object.keys(changed.providers)[0])?.label ?? "a provider"}`
+        : LIMIT_LABELS[first]();
+    return {
+      label: `change ${label}`,
+      undo: { kind: "limits", fields: before, expect: changed },
+      redo: { kind: "limits", fields: changed, expect: before },
+    };
+  }
+  if (draft.kind === "blocked") {
+    const now = blockedOf(after, draft.user);
+    if (now === draft.before) return null;
+    return {
+      label: now ? "block a guest" : "unblock a guest",
+      notice: true,
+      undo: { kind: "blocked", user: draft.user, blocked: draft.before, expect: now },
+      redo: { kind: "blocked", user: draft.user, blocked: now, expect: draft.before },
+    };
+  }
+  // Reset use on a guest who spent nothing changes nothing.
+  if (draft.before <= 0) return null;
+  return {
+    label: "reset the use of a guest",
+    notice: true,
+    undo: { kind: "reset", user: draft.user, undone: true, expect: spentOf(after, draft.user) },
+    redo: { kind: "reset", user: draft.user, expect: draft.before },
+  };
+}
+
+// Whether a fresh ledger still shows what the step left.
+function stillAsLeft(ledger, p) {
+  if (!ledger || !Array.isArray(ledger.providers)) return false;
+  if (p.kind === "limits") {
+    const now = limitsIn(ledger, p.expect);
+    const same = (k) => !(k in p.expect) || now[k] === p.expect[k];
+    const providers = Object.entries(p.expect.providers ?? {}).every(([id, v]) => now.providers[id] === v);
+    return same("guest") && same("allGuests") && providers;
+  }
+  if (p.kind === "blocked") return blockedOf(ledger, p.user) === p.expect;
+  if (p.kind === "reset") return sameMoney(spentOf(ledger, p.user), p.expect);
+  return false;
+}
+
+// What a step writes back, as the route and fields of an admin's gesture.
+function writeOf(p) {
+  if (p.kind === "limits") return { what: "limits", fields: p.fields };
+  if (p.kind === "blocked") return { what: "blocked", fields: { user: p.user, blocked: p.blocked } };
+  return { what: "reset", fields: { user: p.user, ...(p.undone ? { undone: true } : {}) } };
+}
 
 // --- Steps (12, Undo) -------------------------------------------------------------------
 
@@ -160,8 +262,22 @@ const restoreOf = (fields) => {
   return patch;
 };
 
-// Only a guest's removal is llm's; every other removal passes by.
-const guestRemoved = ({ event }) => event.kind === "guest";
+// Only the step of a guest's Delete leaving the undo list is llm's (3.4, 12).
+const guestPurged = ({ event }) => event.owner === "session" && event.payload?.kind === "guest" && event.payload.deleted === true;
+
+// The admin's gestures about guests, each sent to the server from any state of `spending`
+// that is not already applying a step.
+const GESTURES = {
+  "limits.edited": { target: "editing", actions: "draft" },
+  "guestkeys.edited": { target: "editing", actions: "draft" },
+  "guest.blocked": { target: "editing", actions: "draft" },
+  "use.reset": { target: "editing", actions: "draft" },
+  "step.dropped": { guard: guestPurged, target: "editing", actions: "draft" },
+};
+const STEPS = {
+  "step.undone": { guard: "spendingStep", target: "verifying", actions: "startStepping" },
+  "step.redone": { guard: "spendingStep", target: "verifying", actions: "startStepping" },
+};
 
 export const machine = setup({
   actors: {
@@ -272,11 +388,40 @@ export const machine = setup({
       const reply = event.output && typeof event.output === "object" ? event.output : { error: "unavailable" };
       for (const r of context.spendingPending) r(reply);
       enqueue.assign({ spendingPending: [] });
+      if (Array.isArray(reply.providers)) enqueue.assign({ ledger: reply });
+    }),
+    // The gesture being sent, with what it changes as the ledger held it (12, Undo).
+    draft: assign({ draft: ({ context, event }) => draftOf(context.ledger, event) }),
+    recordSpendingStep: enqueueActions(({ context, event, enqueue }) => {
+      const step = context.draft && Array.isArray(event.output?.providers) && stepOfDraft(context.draft, event.output);
+      enqueue.assign({ draft: null });
+      if (!step) return;
+      enqueue.emit({
+        type: "step.recorded",
+        id: context.mint(),
+        owner: "llm",
+        label: step.label,
+        undo: step.undo,
+        redo: step.redo,
+        ...(step.notice ? { notice: true } : {}),
+      });
+    }),
+    startStepping: assign({ stepping: ({ event }) => ({ id: event.id, payload: event.payload }) }),
+    settleStepping: enqueueActions(({ context, enqueue }) => {
+      if (context.stepping) enqueue.emit({ type: "step.settled", id: context.stepping.id, owner: "llm", outcome: "applied" });
+      enqueue.assign({ stepping: null });
+    }),
+    refuseStepping: enqueueActions(({ context, enqueue }) => {
+      if (context.stepping)
+        enqueue.emit({ type: "step.settled", id: context.stepping.id, owner: "llm", outcome: "refused", reason: "changed" });
+      enqueue.assign({ stepping: null });
     }),
   },
   guards: {
     signedIn: ({ event }) => event.userId != null,
-    ownStep: ({ event }) => event.owner === "llm",
+    ownStep: ({ event }) => event.owner === "llm" && event.payload?.kind === "settings",
+    spendingStep: ({ event }) => event.owner === "llm" && SPENDING_STEPS.includes(event.payload?.kind),
+    stillAsLeft: ({ context, event }) => stillAsLeft(event.output, context.stepping.payload),
     stepApplies: ({ context, event }) => {
       const p = event.payload ?? {};
       if (event.owner !== "llm" || p.kind !== "settings" || !p.fields || !p.expect || !context.picture.signedIn) return false;
@@ -310,7 +455,11 @@ export const machine = setup({
       "little over, because its cost is known only after. A guest's picture carries the share of its allowance left, never " +
       "an amount, and is read again after each of its requests. Only the admin reads what guests spent and changes the " +
       "limits and guest keys; a change made while what guests spent is being read is still " +
-      "saved. When the admin deletes a guest, what it spent stops counting toward every limit. The settings belong to the account, so they are the " +
+      "saved. Each change of a limit, each Block or Unblock and each Reset use is a step Undo and Redo " +
+      "reverse, Block and Reset use with the short notice; Undo of a Reset use brings back the totals from " +
+      "before it, and a step is refused when a fresh read shows the limit, the block or what the guest spent " +
+      "changed since. When the admin deletes a guest, what it spent stops counting toward every limit once " +
+      "that delete can no longer be undone. The settings belong to the account, so they are the " +
       "same on every device. Each change of a chat setting (provider, model, thinking effort, cache " +
       "lifetime, the address of Ollama, who decides and its model) is a step Undo and Redo " +
       "reverse (section 12); a key is never part of a step, and a change of a key alone is no " +
@@ -331,11 +480,10 @@ export const machine = setup({
     steps: {
       "llm.edited": "step",
       "turn.steered": "spends",
-      "limits.edited": "pending",
+      "limits.edited": "step",
       "guestkeys.edited": "keys",
-      "guest.blocked": "pending",
-      "use.reset": "pending",
-      "removal.settled": "pending",
+      "guest.blocked": "step",
+      "use.reset": "step",
     },
     emits: ["llm.changed", "completion.progressed", "spending.changed", "step.recorded", "step.settled"],
     asks: ["session: read", "session: guest"],
@@ -359,6 +507,12 @@ export const machine = setup({
     spending: input.spending,
     edit: input.edit,
     spendingPending: [], // spending? replies held while a read or an edit is in flight
+    // What guests spent as the server last said, so a gesture's step knows what it changed.
+    ledger: null,
+    // The admin's gesture being sent, with what it changes: { kind, ... } (12, Undo).
+    draft: null,
+    // The Undo or Redo of an admin's gesture being checked and applied: { id, payload }.
+    stepping: null,
     mint: input.mint ?? ulid,
     // The chat settings as the gesture being saved found them, to record its step (12, Undo).
     editing: null,
@@ -608,11 +762,8 @@ export const machine = setup({
         idle: {
           on: {
             "spending?": { target: "reading", actions: "holdSpending" },
-            "limits.edited": { target: "editing" },
-            "guestkeys.edited": { target: "editing" },
-            "guest.blocked": { target: "editing" },
-            "use.reset": { target: "editing" },
-            "removal.settled": { guard: guestRemoved, target: "editing" },
+            ...GESTURES,
+            ...STEPS,
           },
         },
         // An edit made while the picture is read is never dropped: the read is left, the
@@ -621,11 +772,8 @@ export const machine = setup({
         reading: {
           on: {
             "spending?": { actions: "holdSpending" },
-            "limits.edited": { target: "editing" },
-            "guestkeys.edited": { target: "editing" },
-            "guest.blocked": { target: "editing" },
-            "use.reset": { target: "editing" },
-            "removal.settled": { guard: guestRemoved, target: "editing" },
+            ...GESTURES,
+            ...STEPS,
           },
           invoke: {
             src: "spending",
@@ -639,11 +787,7 @@ export const machine = setup({
           // applies both, and the answer to the last is the picture adopted.
           on: {
             "spending?": { actions: "holdSpending" },
-            "limits.edited": { target: "editing", reenter: true },
-            "guestkeys.edited": { target: "editing", reenter: true },
-            "guest.blocked": { target: "editing", reenter: true },
-            "use.reset": { target: "editing", reenter: true },
-            "removal.settled": { guard: guestRemoved, target: "editing", reenter: true },
+            ...Object.fromEntries(Object.entries(GESTURES).map(([k, v]) => [k, { ...v, reenter: true }])),
           },
           // The gesture arrives through input, so a guest key never enters context.
           invoke: {
@@ -653,11 +797,47 @@ export const machine = setup({
               {
                 guard: ({ event }) => Array.isArray(event.output?.providers),
                 target: "idle",
-                actions: ["replySpending", emit(({ event }) => ({ type: "spending.changed", ...event.output }))],
+                actions: ["replySpending", emit(({ event }) => ({ type: "spending.changed", ...event.output })), "recordSpendingStep"],
               },
-              { target: "idle", actions: "replySpending" },
+              { target: "idle", actions: ["replySpending", assign({ draft: null })] },
             ],
-            onError: { target: "idle", actions: "replySpending" },
+            onError: { target: "idle", actions: ["replySpending", assign({ draft: null })] },
+          },
+        },
+        // An Undo or Redo of the admin's gesture is applied only while a fresh read still
+        // shows what the step left; a change since, on any device or by a guest's use,
+        // refuses it. A gesture meanwhile goes first, and the step waits for `undo` to
+        // say it was not answered.
+        verifying: {
+          on: {
+            "spending?": { actions: "holdSpending" },
+            ...Object.fromEntries(Object.entries(GESTURES).map(([k, v]) => [k, { ...v, actions: ["draft", assign({ stepping: null })] }])),
+          },
+          invoke: {
+            src: "spending",
+            input: ({ context }) => ({ spending: context.spending }),
+            onDone: [
+              { guard: "stillAsLeft", target: "applying", actions: "replySpending" },
+              { target: "idle", actions: ["replySpending", "refuseStepping"] },
+            ],
+            onError: { target: "idle", actions: ["replySpending", assign({ stepping: null })] },
+          },
+        },
+        applying: {
+          on: { "spending?": { actions: "holdSpending" } },
+          invoke: {
+            src: "editSpending",
+            input: ({ context }) => ({ edit: context.edit, ...writeOf(context.stepping.payload) }),
+            onDone: [
+              {
+                guard: ({ event }) => Array.isArray(event.output?.providers),
+                target: "idle",
+                actions: ["replySpending", emit(({ event }) => ({ type: "spending.changed", ...event.output })), "settleStepping"],
+              },
+              // No answer from the server leaves the step where it was: `undo` says so itself.
+              { target: "idle", actions: ["replySpending", assign({ stepping: null })] },
+            ],
+            onError: { target: "idle", actions: ["replySpending", assign({ stepping: null })] },
           },
         },
       },

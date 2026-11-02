@@ -57,6 +57,8 @@ spending.set_blocked({"user": "g1", "blocked": False})
 out["unblocked"] = spending.free_use("g1")["blocked"]
 spending.reset({"user": "g1"})
 out["reset"] = [spending.free_use("g1")["left"], spending.summary()["allGuests"]["spent"]]
+# A second Reset with nothing spent since keeps what the first one set aside (12, Undo).
+spending.reset({"user": "g1"})
 spending.add("g1", "jev", 0.05)
 spending.reset({"user": "g1", "undone": True})
 out["undone"] = round(spending.summary()["allGuests"]["spent"], 9)

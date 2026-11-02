@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-// Delete on a guest (12), the whole way: the admin presses Delete in Administration ›
-// People, the row goes at once and the notice offers Undo; Undo brings it back; a
-// second Delete left to run out removes the guest's account and its files. The guest is
+// Delete on a guest (12), the whole way: the admin presses Delete in the People tab, the
+// row goes at once, the guest is signed out and the short notice offers Undo; Undo
+// brings the guest back with its work. Its files go only when the step leaves the undo
+// list, which session's Node and server tests cover. The guest is
 // a real registry row with a saved evaluator; the admin's cookie is forged as session's
 // server module sets it, and who is the admin and the people list, which need a passkey
 // account in the registry, are answered by request routing.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
-const { ENGINES, until, watch, forge, signedIn, shortUndo } = await import(process.env.UNBLENT_KIT);
+const { ENGINES, watch, forge, signedIn } = await import(process.env.UNBLENT_KIT);
 
 const BASE_URL = process.env.UNBLENT_URL;
 assert.ok(BASE_URL, "UNBLENT_URL must be set");
@@ -27,7 +28,7 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
     }, { timeout: 10000 });
 
     // Browser: a gesture.
-    test("Delete hides the guest with an Undo, and once it runs out the guest and its work are gone", async () => {
+    test("Delete hides and signs out the guest at once, and Undo brings it back with its work", async () => {
       const made = await fetch(`${BASE_URL}/api/session/guest`, { method: "POST" });
       const guest = await made.json();
       const guestCookie = (made.headers.get("set-cookie") || "").split(";")[0];
@@ -45,8 +46,6 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
       try {
         context.setDefaultTimeout(4000);
         await signedIn(context, forge(`${adminId}|admin`));
-        // Long enough to press Undo, short enough to let run out.
-        await shortUndo(context, 600);
         await context.route(/\/api\/session\/me$/, (route) =>
           route.fulfill({ json: { userId: adminId, registrationOpen: false, admin: true, name: "Admin" } }),
         );
@@ -70,17 +69,16 @@ for (const engine of ENGINES.filter((e) => e.name === "webkit")) {
         await row.waitFor();
         await row.getByRole("button", { name: `Delete ${guest.name}` }).click();
         await row.waitFor({ state: "detached" });
+        const me = async () => (await (await fetch(`${BASE_URL}/api/session/me`, { headers: { Cookie: guestCookie } })).json()).userId;
         const notice = page.locator("notice-stack .removal");
-        assert.match(await notice.innerText(), new RegExp(`Account “${guest.name}” deleted`));
+        await notice.waitFor();
+        assert.match(await notice.innerText(), new RegExp(`Delete account ${guest.name}`));
+        assert.equal(await me(), null, "the guest's browser is signed out at once");
+        assert.ok(existsSync(dir), "its work stays while the delete can be undone");
         await notice.getByRole("button", { name: "Undo" }).click();
         await row.waitFor();
-        assert.ok(existsSync(dir), "Undo deleted nothing");
-
-        await row.getByRole("button", { name: `Delete ${guest.name}` }).click();
-        await until(() => !existsSync(dir));
-        assert.equal(await row.count(), 0, "the row stays gone");
-        const me = await (await fetch(`${BASE_URL}/api/session/me`, { headers: { Cookie: guestCookie } })).json();
-        assert.equal(me.userId, null, "the guest's browser is signed out");
+        assert.equal(await me(), guest.userId, "Undo brings the guest back");
+        assert.ok(existsSync(dir));
         assert.deepEqual(problems, [], problems.join("; "));
       } finally {
         await context.close();

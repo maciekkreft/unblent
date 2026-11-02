@@ -6,6 +6,8 @@ import changed from "./events/session.changed.json" with { type: "json" };
 import refused from "./events/session.refused.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import peopleChanged from "./events/people.changed.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import guest from "./queries/guest.json" with { type: "json" };
 import people from "./queries/people.json" with { type: "json" };
 import connect from "./queries/connect.json" with { type: "json" };
@@ -72,6 +74,23 @@ const post = (path, body) =>
     headers: body ? { "content-type": "application/json", Accept: "application/json" } : { Accept: "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
+
+// One of the admin's gestures on a guest in People (12): the server answers with the new
+// list. keepalive: a step dropped as the page goes away must still arrive.
+async function person(user, path, method, changedStatus) {
+  try {
+    const res = await fetch(`/api/session/people/${encodeURIComponent(user)}${path}`, {
+      method,
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { Accept: "application/json" },
+    });
+    if (res.status === changedStatus) return { error: "changed" };
+    return res.ok ? await res.json() : { error: "unavailable" };
+  } catch {
+    return { error: "unavailable" };
+  }
+}
 
 // A cancelled ceremony surfaces as NotAllowedError; anything else that goes wrong
 // is reported as unavailable, so a view never sees a raw exception (12).
@@ -156,20 +175,16 @@ const api = {
       return { error: "unavailable" };
     }
   },
-  // Delete on a guest (12). keepalive: notice-stack settles every open removal as the
-  // page goes away, and the delete must still reach the server then.
+  // Delete on a guest (12), its Undo and its Redo, and removing its files once the step
+  // left the undo list (3.4). A guest that is no longer as the step left it is changed.
   async forget(user) {
-    try {
-      const res = await fetch(`/api/session/people/${encodeURIComponent(user)}`, {
-        method: "DELETE",
-        credentials: "same-origin",
-        keepalive: true,
-        headers: { Accept: "application/json" },
-      });
-      return res.ok ? await res.json() : { error: "unavailable" };
-    } catch {
-      return { error: "unavailable" };
-    }
+    return person(user, "", "DELETE", 404);
+  },
+  async restore(user) {
+    return person(user, "/restore", "POST", 409);
+  },
+  async purge(user) {
+    return person(user, "/purge", "POST", 404);
   },
   // Can sync in People (3.4, 12): the server answers with the new list.
   async allowSync(user, allowed) {
@@ -262,7 +277,7 @@ const actor = mount(machine, {
     // The Mac app's shell opens a window.open address in the user's browser (3.4).
     open: (url) => window.open(url, "_blank"),
   },
-  events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged },
+  events: { "session.changed": changed, "session.refused": refused, "people.changed": peopleChanged, "step.recorded": recorded, "step.settled": settled },
   queries: { read, guest, people, connect, connectCode },
 });
 

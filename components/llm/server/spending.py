@@ -346,6 +346,10 @@ def reset(body: dict) -> None:
             )
             connection.execute("DELETE FROM before_reset WHERE user_id = ?", (user_id,))
             return
+        # A guest who spent nothing since keeps the totals of the reset before, which an
+        # earlier step's Undo still brings back (12, Undo).
+        if not connection.execute("SELECT 1 FROM spent WHERE user_id = ?", (user_id,)).fetchone():
+            return
         connection.execute("DELETE FROM before_reset WHERE user_id = ?", (user_id,))
         connection.execute(
             "INSERT INTO before_reset (user_id, provider, dollars)"

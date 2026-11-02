@@ -25,6 +25,7 @@ _ADDED = (
     ("device", "TEXT NOT NULL DEFAULT 'desk'"),
     ("deleted_at", "INTEGER"),
     ("sync", "INTEGER NOT NULL DEFAULT 0"),
+    ("purged_at", "INTEGER"),
 )
 _DETAILS = ("country", "city", "browser", "system", "device")
 
@@ -213,6 +214,29 @@ def delete_guest(user_id: str) -> bool:
     with _connect() as connection:
         changed = connection.execute(
             "UPDATE users SET deleted_at = ? WHERE id = ? AND guest = 1 AND deleted_at IS NULL", (_now(), user_id)
+        ).rowcount
+        return changed == 1
+
+
+def restore_guest(user_id: str) -> bool:
+    """Undo of a guest's delete (12): the guest is back as it was, while its files are
+    still kept; False once they were removed or when it is not a deleted guest."""
+    with _connect() as connection:
+        changed = connection.execute(
+            "UPDATE users SET deleted_at = NULL WHERE id = ? AND guest = 1"
+            " AND deleted_at IS NOT NULL AND purged_at IS NULL",
+            (user_id,),
+        ).rowcount
+        return changed == 1
+
+
+def purge_guest(user_id: str) -> bool:
+    """A deleted guest's step left the admin's undo list (3.4, 12): from now on it can
+    never come back, so its files may go. False when it is not a deleted guest still kept."""
+    with _connect() as connection:
+        changed = connection.execute(
+            "UPDATE users SET purged_at = ? WHERE id = ? AND guest = 1 AND deleted_at IS NOT NULL AND purged_at IS NULL",
+            (_now(), user_id),
         ).rowcount
         return changed == 1
 

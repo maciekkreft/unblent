@@ -48,23 +48,6 @@ const TABLE = {
     actions: [{ label: "undo", emit: { type: "removal.undone", kind: p.kind, id: p.id } }],
     settle: { type: "removal.settled", kind: p.kind, id: p.id },
   }),
-  // The admin's actions on a guest in People (12) take effect at once; Undo sends the
-  // opposite gesture. An Undo of Reset use is itself no news to show.
-  "use.reset": (p) =>
-    p.undone
-      ? null
-      : {
-          key: `use.reset:${p.user}`,
-          standing: false,
-          undo: true,
-          actions: [{ label: "undo", emit: { type: "use.reset", user: p.user, undone: true } }],
-        },
-  "guest.blocked": (p) => ({
-    key: `guest.blocked:${p.user}`,
-    standing: false,
-    undo: true,
-    actions: [{ label: "undo", emit: { type: "guest.blocked", user: p.user, blocked: !p.blocked } }],
-  }),
   // A step that asked for it (a delete) shows the dark notice with Undo, the same as the
   // top bar's, and no countdown: Undo goes on working after it has gone (12, Undo). One
   // notice for all of them, so the next one replaces it.
@@ -168,14 +151,13 @@ export const machine = setup({
       "the user's copy again, because `notes` otherwise keeps the server's copy; Undo takes " +
       "that back in one step, to the server's copy. A deleted note or highlight shows the " +
       "short notice below. Something the " +
-      "user deleted or removed, a guest's account in the People tab among them, shows as a " +
+      "user deleted or removed shows as a " +
       "dark notice with Undo for the undo window; hovering or " +
       "focusing it holds the window, and when the window runs out or the notice is dismissed the " +
-      "removal is final. Leaving the page makes every open removal final. Reset use, Block and " +
-      "Unblock on a guest in the People tab take effect at once and show the same dark notice, " +
-      "whose Undo does the opposite. Notices are " +
+      "removal is final. Leaving the page makes every open removal final. Notices are " +
       "held only in this tab: after a reload a conflict and the copy it carried are gone, " +
-      "because `notes` does not keep conflicts. A step that is a delete (12, Undo) shows a " +
+      "because `notes` does not keep conflicts. A step that is a delete (12, Undo), or Reset use, " +
+      "Block or Unblock on a guest in the People tab, shows a " +
       "short dark notice naming it, such as Remove value Courage, with Undo and no countdown; " +
       "its Undo is the same as the top bar's, and the notice goes when it times out, is " +
       "dismissed, or another step is recorded or undone, while Undo goes on working. A step " +
@@ -184,7 +166,7 @@ export const machine = setup({
       "the part that owns it is not on the page. Notices sit in the bottom corner of the " +
       "window, and in the phone preview in the bottom of the phone's screen.",
     kind: "view",
-    emits: ["note.saved", "removal.undone", "removal.settled", "use.reset", "guest.blocked", "step.requested"],
+    emits: ["note.saved", "removal.undone", "removal.settled", "step.requested"],
     attributes: [],
     asks: ["undo: read"],
   },
@@ -210,8 +192,6 @@ export const machine = setup({
     "session.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "book.refused": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "removal.started": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
-    "use.reset": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
-    "guest.blocked": { actions: enqueueActions(({ context, event, enqueue }) => show(context, event, enqueue)) },
     "step.recorded": {
       actions: enqueueActions(({ context, event, enqueue }) => {
         enqueue.assign({ steps: { ...context.steps, [event.id]: { label: event.label, side: "undo" } } });

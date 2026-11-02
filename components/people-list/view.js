@@ -4,7 +4,7 @@ import { machine, tilesOf, rowsOf, shownOf } from "./machine.js";
 import viewasRequested from "./events/viewas.requested.json" with { type: "json" };
 import guestBlocked from "./events/guest.blocked.json" with { type: "json" };
 import useReset from "./events/use.reset.json" with { type: "json" };
-import removalStarted from "./events/removal.started.json" with { type: "json" };
+import removalSettled from "./events/removal.settled.json" with { type: "json" };
 import syncAllowed from "./events/sync.allowed.json" with { type: "json" };
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
@@ -17,7 +17,7 @@ class ActorController {
   hostConnected() {
     this.actor = mount(machine, {
       input: { ask: (target, name, payload) => ask(machine, target, name, payload) },
-      events: { "viewas.requested": viewasRequested, "guest.blocked": guestBlocked, "use.reset": useReset, "removal.started": removalStarted, "sync.allowed": syncAllowed },
+      events: { "viewas.requested": viewasRequested, "guest.blocked": guestBlocked, "use.reset": useReset, "removal.settled": removalSettled, "sync.allowed": syncAllowed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
     // The part reads its data each time it comes into view: the sheet shows it only to
@@ -223,9 +223,8 @@ class PeopleList extends LitElement {
     return html`<span class="mini track"><span class="fill ${used.out ? "out" : ""}" style="width: ${Math.round(used.share * 100)}%"></span></span>${used.spent}`;
   }
 
-  // A guest row's actions (12): Reset use and Block take effect at once and show an
-  // Undo in the notices, Delete waits out its Undo there, and View as is reversed by
-  // Back to you on the bar.
+  // A guest row's actions (12): Reset use, Block and Delete take effect at once, each a
+  // step with an Undo in the notices, and View as is reversed by Back to you on the bar.
   #actions(r) {
     const send = (type, extra = {}) => this.#actor.actor.send({ type, user: r.userId, ...extra });
     const who = r.who.replace(/ · blocked$/, "");
@@ -241,7 +240,7 @@ class PeopleList extends LitElement {
         @click=${() => send("_block", { blocked: !r.blocked })}
       >${r.blocked ? "Unblock" : "Block"}</button>
       <span aria-hidden="true">·</span>
-      <button type="button" class="danger" aria-label="Delete ${who}" @click=${() => send("_delete", { name: who })}>Delete</button>
+      <button type="button" class="danger" aria-label="Delete ${who}" @click=${() => send("_delete")}>Delete</button>
     </span>`;
   }
 
