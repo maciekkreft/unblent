@@ -5,7 +5,8 @@
 -- server-assigned; seq orders writes for the pull cursor. content_version names the
 -- immutable URL prefix the files are served under, bumped on re-import. deleted marks
 -- a tombstone: a delete is a write like any other (5), the row stays and is pulled,
--- and the directory is purged; a position is last write wins and never refused (4).
+-- and the directory is kept for a restore write; a position is last write wins and never
+-- refused (4).
 CREATE TABLE IF NOT EXISTS books (
     id               TEXT PRIMARY KEY,
     title            TEXT NOT NULL,   -- the title read from the file; a re-import refreshes it

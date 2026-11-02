@@ -1,0 +1,320 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createActor, SimulatedClock } from "xstate";
+import { Validator } from "@cfworker/json-schema";
+import { machine, JOURNAL } from "../machine.js";
+
+// books as an owner of steps (12, Undo): what it records for adding, renaming and
+// deleting a book, and how it applies an Undo or Redo `undo` names to it. The server is a
+// small fake that versions rows the way books/server/router.py does, so a restore write
+// is checked against the tombstone's version.
+
+const A = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const B = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
+const SYNC_IDLE_MS = 2000;
+
+const schema = (path) => new Validator(JSON.parse(readFileSync(new URL(path, import.meta.url))), "2020-12");
+const recordedSchema = schema("../events/step.recorded.json");
+const settledSchema = schema("../events/step.settled.json");
+const changedSchema = schema("../events/book.changed.json");
+
+const flush = async () => {
+  for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+};
+
+const row = (id, over = {}) => ({
+  id,
+  title: "Dune",
+  fileTitle: "Dune",
+  author: "Herbert",
+  fileAuthor: "Herbert",
+  cover: null,
+  chapters: [{ title: "One" }, { title: "Two" }],
+  toc: [],
+  position: { chapter: 0, block: 0 },
+  version: 1,
+  contentVersion: 1,
+  addedAt: 10,
+  updatedAt: 10,
+  deleted: false,
+  ...over,
+});
+
+function memory(initial = []) {
+  const books = new Map(initial.map((b) => [b.id, b]));
+  const outbox = new Map();
+  const meta = new Map([["userId", "u1"]]);
+  return {
+    books,
+    outbox,
+    all: async () => [...books.values()],
+    put: async (r) => void books.set(r.id, r),
+    outboxAll: async () => [...outbox.values()],
+    outboxPut: async (r) => void outbox.set(r.id, r),
+    outboxDelete: async (id) => void outbox.delete(id),
+    metaGet: async (k) => meta.get(k),
+    metaPut: async (k, v) => void meta.set(k, v),
+    clear: async () => (books.clear(), outbox.clear()),
+    empty: async () => (books.clear(), outbox.clear()),
+  };
+}
+
+// The server's rows, each written with the next version, as the router does.
+function server(initial = []) {
+  const rows = new Map(initial.map((b) => [b.id, { ...b, userTitle: null, userAuthor: null }]));
+  const restores = [];
+  const out = (r) => {
+    const { userTitle, userAuthor, ...rest } = r;
+    return { ...rest, title: userTitle ?? r.fileTitle, author: userAuthor ?? r.fileAuthor };
+  };
+  const bump = (id, over) => {
+    const r = { ...rows.get(id), ...over, version: rows.get(id).version + 1 };
+    rows.set(id, r);
+    return out(r);
+  };
+  return {
+    rows,
+    restores,
+    upload: async (id) => {
+      rows.set(id, { ...row(id), userTitle: null, userAuthor: null });
+      return { row: out(rows.get(id)) };
+    },
+    remove: async (id) => (rows.get(id).deleted ? out(rows.get(id)) : bump(id, { deleted: true })),
+    restore: async (id, base) => {
+      restores.push([id, base]);
+      const r = rows.get(id);
+      if (!r) return { error: "not-found" };
+      return r.deleted && r.version === base ? bump(id, { deleted: false }) : out(r);
+    },
+    title: async (id, t, a) =>
+      bump(id, {
+        ...(t !== undefined ? { userTitle: t.trim() || null } : {}),
+        ...(a !== undefined ? { userAuthor: a.trim() || null } : {}),
+      }),
+    position: async (id, chapter, block) => bump(id, { position: { chapter, block } }),
+    opened: async (id) => ({ id, at: 500 }),
+    pull: async () => ({ books: [], cursor: 0 }),
+    // Another device's write, which this browser learns of from a pull.
+    elsewhere: (id, over) => bump(id, over),
+  };
+}
+
+async function start({ store = memory(), api = server() } = {}) {
+  let minted = 0;
+  const mint = () => `01ARZ3NDEKTSV4RRFFQ69G${String(++minted).padStart(4, "0")}`;
+  let t = 100;
+  const clock = new SimulatedClock();
+  const ask = (target) => Promise.resolve(target === "session" ? { userId: "u1" } : { error: "no-answerer" });
+  const actor = createActor(machine, { input: { store, mint, now: () => ++t, ask, api, revoke: () => {} }, clock });
+  const steps = [];
+  const settled = [];
+  const changed = [];
+  const deleted = [];
+  actor.on("step.recorded", ({ type, ...p }) => {
+    assert.ok(recordedSchema.validate(p).valid, JSON.stringify(p));
+    steps.push(p);
+  });
+  actor.on("step.settled", ({ type, ...p }) => {
+    assert.ok(settledSchema.validate(p).valid, JSON.stringify(p));
+    settled.push(p);
+  });
+  actor.on("book.changed", ({ type, ...p }) => {
+    assert.ok(changedSchema.validate(p).valid, JSON.stringify(p));
+    changed.push(p);
+  });
+  actor.on("book.deleted", (e) => deleted.push(e.id));
+  actor.start();
+  await flush();
+  const sync = async () => {
+    clock.increment(SYNC_IDLE_MS);
+    await flush();
+  };
+  await sync();
+  return { actor, steps, settled, changed, deleted, store, api, sync };
+}
+
+const read = (actor, id) => new Promise((reply) => actor.send({ type: "read?", cid: "c", payload: { id }, reply }));
+const undo = (step) => ({ type: "step.undone", id: step.id, owner: "books", payload: step.undo });
+const redo = (step) => ({ type: "step.redone", id: step.id, owner: "books", payload: step.redo });
+const shown = async (actor, id) => (await read(actor, id)).book ?? null;
+
+test("adding a book is one step: Undo deletes it, Redo brings it back without importing it again", async () => {
+  const h = await start();
+  h.actor.send({ type: "book.picked", id: A, name: "dune.epub", size: 9, url: "blob:x" });
+  await flush();
+  assert.equal(h.steps.length, 1);
+  const [step] = h.steps;
+  assert.equal(step.label, "add book Dune");
+  assert.deepEqual(step.undo, { kind: "book", id: A, deleted: true });
+  assert.deepEqual(step.redo, { kind: "book", id: A, deleted: false });
+  assert.equal(step.notice, undefined, "only a delete asks for the notice");
+
+  h.actor.send(undo(step));
+  assert.deepEqual(h.settled.at(-1), { id: step.id, owner: "books", outcome: "applied" });
+  assert.deepEqual(h.deleted, [A]);
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, true, "the delete reached the server");
+
+  h.actor.send(redo(step));
+  assert.equal(h.settled.at(-1).outcome, "applied");
+  assert.equal((await shown(h.actor, A)).title, "Dune");
+  await h.sync();
+  assert.deepEqual(h.api.restores, [[A, 2]], "a restore write naming the tombstone's version");
+  assert.equal(h.api.rows.get(A).deleted, false);
+  assert.equal(h.api.rows.get(A).contentVersion, 1, "nothing is imported again");
+  assert.equal(h.store.outbox.size, 0);
+
+  h.actor.send(undo(step));
+  assert.equal(h.settled.at(-1).outcome, "applied", "the step can be undone again");
+});
+
+test("a rename is one step whose Undo and Redo give back the title and author exactly", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.renamed", id: A, title: "Arrakis", author: "Frank" });
+  const [step] = h.steps;
+  assert.equal(step.label, "rename book Dune");
+  assert.deepEqual(step.undo, { kind: "name", id: A, title: "", author: "" });
+  assert.deepEqual(step.redo, { kind: "name", id: A, title: "Arrakis", author: "Frank" });
+  await h.sync();
+
+  h.actor.send(undo(step));
+  assert.equal(h.settled.at(-1).outcome, "applied", "the server's answer to the rename refuses nothing");
+  const back = await shown(h.actor, A);
+  assert.deepEqual([back.title, back.author], ["Dune", "Herbert"]);
+  await h.sync();
+  assert.deepEqual([h.api.rows.get(A).userTitle, h.api.rows.get(A).userAuthor], [null, null]);
+
+  h.actor.send(redo(step));
+  assert.equal(h.settled.at(-1).outcome, "applied");
+  const again = await shown(h.actor, A);
+  assert.deepEqual([again.title, again.author], ["Arrakis", "Frank"]);
+});
+
+test("several renames of one book undo one after another, and redo in order", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.renamed", id: A, title: "One", author: "Herbert" });
+  h.actor.send({ type: "book.renamed", id: A, title: "Two", author: "Herbert" });
+  h.actor.send({ type: "book.renamed", id: A, title: "Two", author: "Frank" });
+  const [first, second, third] = h.steps;
+  assert.equal(h.steps.length, 3);
+  assert.equal(second.undo.prior, first.id);
+  assert.equal(third.undo.prior, second.id);
+  const title = async () => {
+    const b = await shown(h.actor, A);
+    return `${b.title} / ${b.author}`;
+  };
+  h.actor.send(undo(third));
+  assert.equal(await title(), "Two / Herbert");
+  h.actor.send(undo(second));
+  assert.equal(await title(), "One / Herbert");
+  h.actor.send(undo(first));
+  assert.equal(await title(), "Dune / Herbert");
+  h.actor.send(redo(first));
+  h.actor.send(redo(second));
+  h.actor.send(redo(third));
+  assert.equal(await title(), "Two / Frank");
+  assert.ok(h.settled.every((s) => s.outcome === "applied"), JSON.stringify(h.settled));
+});
+
+test("a delete happens at once as one step with the notice; Undo restores it, Redo deletes it again", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.discarded", id: A });
+  const [step] = h.steps;
+  assert.equal(step.label, "delete book Dune");
+  assert.equal(step.notice, true);
+  assert.deepEqual(step.undo, { kind: "book", id: A, deleted: false });
+  assert.deepEqual(step.redo, { kind: "book", id: A, deleted: true });
+  assert.deepEqual(h.deleted, [A]);
+
+  // Undone before the delete was sent: the delete is taken out of the outbox.
+  h.actor.send(undo(step));
+  assert.equal((await shown(h.actor, A)).title, "Dune");
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, false, "the server never deleted it");
+  assert.equal(h.api.rows.get(A).version, 1);
+
+  h.actor.send(redo(step));
+  assert.equal(await shown(h.actor, A), null);
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, true);
+  h.actor.send(undo(step));
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, false, "brought back with a restore write");
+  // The first restore found the book live, since its delete was never sent, and changed nothing.
+  assert.deepEqual(h.api.restores, [[A, 1], [A, 2]]);
+  assert.ok(h.settled.every((s) => s.outcome === "applied"));
+});
+
+test("Undo of a delete while it is on its way still brings the book back", async () => {
+  let release;
+  const api = server([row(A)]);
+  const remove = api.remove;
+  api.remove = (id) => new Promise((r) => (release = () => r(remove(id))));
+  const h = await start({ store: memory([row(A)]), api });
+  h.actor.send({ type: "book.discarded", id: A });
+  await h.sync();
+  h.actor.send(undo(h.steps[0]));
+  release();
+  await flush();
+  assert.ok(await shown(h.actor, A), "the book stays");
+  await h.sync();
+  assert.equal(h.api.rows.get(A).deleted, false);
+  assert.deepEqual(h.api.restores, [[A, 2]]);
+});
+
+test("adding, deleting and renaming several books are separate steps, each undone on its own", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.picked", id: B, name: "emma.epub", size: 9, url: "blob:y" });
+  await flush();
+  h.actor.send({ type: "book.renamed", id: A, title: "Arrakis", author: "Herbert" });
+  h.actor.send({ type: "book.discarded", id: A });
+  const [add, rename, del] = h.steps;
+  h.actor.send(undo(del));
+  h.actor.send(undo(rename));
+  h.actor.send(undo(add));
+  assert.ok(h.settled.every((s) => s.outcome === "applied"), JSON.stringify(h.settled));
+  assert.equal((await shown(h.actor, A)).title, "Dune");
+  assert.equal(await shown(h.actor, B), null);
+});
+
+test("a step is refused when the book was written since by anything else", async () => {
+  const api = server([row(A), row(B)]);
+  const h = await start({ store: memory([row(A), row(B)]), api });
+  h.actor.send({ type: "book.renamed", id: A, title: "Arrakis", author: "Herbert" });
+  h.actor.send({ type: "book.discarded", id: B });
+  await h.sync();
+  // Another device renames A and brings B back.
+  api.elsewhere(A, { userTitle: "Elsewhere" });
+  api.elsewhere(B, { deleted: false });
+  api.pull = async () => ({ books: [...api.rows.values()].map((r) => ({ ...r, title: r.userTitle ?? r.fileTitle, author: r.fileAuthor })), cursor: 9 });
+  h.actor.send({ type: "_sync", pull: true });
+  await flush();
+  assert.equal((await shown(h.actor, B)).title, "Dune", "a restore made elsewhere comes back here too");
+  h.actor.send(undo(h.steps[0]));
+  assert.deepEqual(h.settled.at(-1), { id: h.steps[0].id, owner: "books", outcome: "refused", reason: "changed" });
+  h.actor.send(undo(h.steps[1]));
+  assert.equal(h.settled.at(-1).outcome, "refused");
+  assert.equal((await shown(h.actor, A)).title, "Elsewhere", "nothing was changed");
+});
+
+test("turning a page is not a step and refuses nothing", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.renamed", id: A, title: "Arrakis", author: "Herbert" });
+  h.actor.send({ type: "book.progressed", id: A, chapter: 1, block: 3 });
+  await h.sync();
+  assert.equal(h.steps.length, 1);
+  h.actor.send(undo(h.steps[0]));
+  assert.equal(h.settled.at(-1).outcome, "applied");
+  assert.deepEqual((await shown(h.actor, A)).position, { chapter: 1, block: 3 });
+});
+
+test("the journal records nothing, and a step of another owner is not answered", async () => {
+  const h = await start({ store: memory([row(A)]), api: server([row(A)]) });
+  h.actor.send({ type: "book.renamed", id: JOURNAL, title: "Diary" });
+  h.actor.send({ type: "book.discarded", id: JOURNAL });
+  assert.equal(h.steps.length, 0);
+  h.actor.send({ type: "step.undone", id: "01ARZ3NDEKTSV4RRFFQ69G9999", owner: "notes", payload: { kind: "book", id: A, deleted: true } });
+  assert.equal(h.settled.length, 0);
+  assert.ok(await shown(h.actor, A));
+});

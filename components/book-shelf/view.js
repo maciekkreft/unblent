@@ -2,22 +2,11 @@ import { LitElement, html, css, nothing } from "lit";
 import { mount, unmount, ask } from "bus";
 import { ulid } from "ulid";
 import { icon } from "icons";
-import { machine, showing, shown } from "./machine.js";
+import { machine, showing } from "./machine.js";
 import picked from "./events/book.picked.json" with { type: "json" };
-import removalStarted from "./events/removal.started.json" with { type: "json" };
 import selected from "./events/book.selected.json" with { type: "json" };
 import discarded from "./events/book.discarded.json" with { type: "json" };
 import renamed from "./events/book.renamed.json" with { type: "json" };
-
-// A CSS duration token ("3s", "300ms") as milliseconds, for the machine's undo
-// window; the token is the one clock, shared with the bar's animation. Duplicated
-// from note-list rather than shared: a component may not import another.
-const toMs = (text, fallback = 3000) => {
-  const t = (text || "").trim();
-  const n = parseFloat(t);
-  if (Number.isNaN(n)) return fallback;
-  return t.endsWith("ms") ? n : n * 1000;
-};
 
 // Section 10: a reactive controller is the home for attaching an actor to a view.
 class ActorController {
@@ -27,17 +16,13 @@ class ActorController {
   }
 
   hostConnected() {
-    // The undo window comes from --duration-undo, read off the host so a stylesheet
-    // or a test can set it; the machine only ever sees the number (importable in Node).
-    const undoMs = toMs(getComputedStyle(this.host).getPropertyValue("--duration-undo"));
     this.actor = mount(machine, {
       input: {
         ask: (target, name, payload) => ask(machine, target, name, payload),
-        undoMs,
         // A try page (8) shows the shelf signed out.
         tryPage: location.pathname.startsWith("/try/"),
       },
-      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed, "removal.started": removalStarted },
+      events: { "book.picked": picked, "book.selected": selected, "book.discarded": discarded, "book.renamed": renamed },
     });
     this.subscription = this.actor.subscribe(() => this.host.requestUpdate());
   }
@@ -283,46 +268,14 @@ class BookShelf extends LitElement {
       outline: none;
       box-shadow: var(--focus-ring);
     }
-    /* A book counting down to its delete: the cover dims under an Undo, with a bar
-       draining the window, both reading --duration-undo so they cannot disagree. */
-    .discarding .over {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: var(--space-xs);
-      background: var(--color-canvas);
-      color: var(--color-body);
-      font-size: var(--text-sm);
+    /* A cut tile (Vim's dd) waits greyed in place, marked Cut, with no countdown. */
+    .cut .cover {
+      opacity: 0.4;
     }
-    .undo {
-      appearance: none;
-      border: 0;
-      background: none;
-      font: inherit;
-      font-size: var(--text-sm);
-      font-weight: var(--weight-semibold);
-      color: var(--color-accent);
-      cursor: pointer;
-    }
-    .bar {
-      position: absolute;
-      inset-inline: 0;
-      inset-block-end: 0;
-      height: var(--space-2xs);
-      background: var(--color-accent);
-      transform-origin: left;
-      animation: drain var(--duration-undo) linear forwards;
-    }
-    @keyframes drain {
-      from {
-        transform: scaleX(1);
-      }
-      to {
-        transform: scaleX(0);
-      }
+    .cut .title,
+    .cut .author,
+    .cut .progress {
+      color: var(--color-mute);
     }
     /* An import in flight: the cover names the file and says it is being added, so the
        gesture has immediate feedback before the server answers. */
@@ -378,7 +331,7 @@ class BookShelf extends LitElement {
   #editingId = null;
 
   #tiles(snapshot) {
-    return shown(snapshot.context);
+    return snapshot.context.books;
   }
 
   #focusTile(tiles, selected) {
@@ -443,52 +396,68 @@ class BookShelf extends LitElement {
   }
 
   #keydown(event, tiles) {
+    const { cut, selected } = this.#actor.snapshot.context;
+    // While a tile is cut, Escape stays on the shelf (12): it deletes the tile, and the
+    // container never sees it as Back.
+    if (event.key === "Escape" && cut) {
+      event.preventDefault();
+      const at = tiles.findIndex((t) => t.id === cut);
+      const next = tiles[at + 1] ?? tiles[at - 1];
+      this.#actor.send({ type: "_escape" });
+      if (next) this.#follow(next.id);
+      return;
+    }
     const vim = this.#vim(event);
+    const current = this.#focusTile(tiles, selected);
     // Every Vim letter the list owns is spent here, even with nowhere to move (j on the
     // last row): an uncancelled letter is typed wherever the browser still keeps a
-    // selection, and that may be a hidden editor (WebKit).
-    if (vim) event.preventDefault();
+    // selection, and that may be a hidden editor (WebKit). u is the shelf's only on the
+    // cut tile; anywhere else it is the global Undo's (12).
+    if (vim && !(vim === "undo" && current !== cut)) event.preventDefault();
     const move = { ArrowRight: "right", ArrowDown: "down", ArrowLeft: "left", ArrowUp: "up" }[event.key] ?? vim;
-    const current = this.#focusTile(tiles, this.#actor.snapshot.context.selected);
-    // The list keys (12): dd deletes the tile with its Undo (the journal ignores it, as
-    // the machine refuses it), u on a tile counting down takes it back, o and O open the
-    // add-book picker, and cc renames where the page lets titles change.
+    // The list keys (12): dd cuts the tile (the journal ignores it, as the machine
+    // refuses it), u on the cut tile puts it back, o and O open the add-book picker, and
+    // cc renames where the page lets titles change.
     if (vim === "delete") {
-      this.#actor.send({ type: "_discard", id: current });
+      this.#actor.send({ type: "_cut", id: current });
     } else if (vim === "undo") {
-      if (this.#actor.snapshot.context.discarding.has(current)) this.#actor.send({ type: "_undo", id: current });
+      if (current === cut) this.#actor.send({ type: "_uncut" });
     } else if (vim === "add") {
       this.#openPicker();
     } else if (vim === "rename") {
       const tile = tiles.find((t) => t.id === current);
-      if (this.renames && tile && !tile.written && !this.#actor.snapshot.context.discarding.has(current)) this.#startEdit(event, current);
+      if (this.renames && tile && !tile.written && current !== cut) this.#startEdit(event, current);
     } else if (move && move !== "prefix") {
       const at = tiles.findIndex((t) => t.id === current);
       const to = this.#target(at, move, tiles);
       const next = tiles[Math.min(tiles.length - 1, Math.max(0, to))];
       if (!next || next.id === current) return;
       event.preventDefault();
-      this.#focusId = next.id;
-      this.requestUpdate();
-      // The row the keyboard moved to is scrolled into view by whichever box scrolls around
-      // the list (its own, a panel's or the dock's), at once, so it is never left out of
-      // sight below the fold.
-      this.updateComplete.then(() => {
-        const el = this.renderRoot.querySelector(`.tile[data-id="${next.id}"]`);
-        el?.focus({ preventScroll: true });
-        el?.scrollIntoView({ block: "nearest", behavior: "instant" });
-      });
+      this.#follow(next.id);
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       this.#activate(current);
     }
   }
 
-  // A click or Enter on a tile opens it — or, if it is counting down, is the one-step
-  // undo, the whole tile being the target so there is nothing small to hit.
+  // The keyboard moves to a tile. It is scrolled into view by whichever box scrolls
+  // around the list (its own, a panel's or the dock's), at once, so it is never left out
+  // of sight below the fold.
+  #follow(id) {
+    this.#focusId = id;
+    this.requestUpdate();
+    this.updateComplete.then(() => {
+      const el = this.renderRoot.querySelector(`.tile[data-id="${id}"]`);
+      el?.focus({ preventScroll: true });
+      el?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    });
+  }
+
+  // A click or Enter on a tile opens it — or, if it is cut, puts it back, the whole tile
+  // being the target so there is nothing small to hit.
   #activate(id) {
     if (!id) return;
-    if (this.#actor.snapshot.context.discarding.has(id)) this.#actor.send({ type: "_undo", id });
+    if (this.#actor.snapshot.context.cut === id) this.#actor.send({ type: "_uncut" });
     else this.#select(id);
   }
 
@@ -600,26 +569,26 @@ class BookShelf extends LitElement {
 
   #dragover = false;
 
-  // The keyboard leaving the shelf while a tile counts down hands the delete to the
-  // corner notice (12), as the note and chat lists do. Checked once the focus has
-  // landed; a window losing focus (another app) is not leaving the shelf.
+  // The keyboard leaving the shelf while a tile is cut deletes it (12), as the note list
+  // does. Checked once the focus has landed; a window losing focus (another app) is not
+  // leaving the shelf.
   constructor() {
     super();
     this.addEventListener("focusout", () =>
       setTimeout(() => {
         if (!document.hasFocus() || this.matches(":focus-within")) return;
-        if (this.#actor.snapshot?.context.discarding.size) this.#actor.send({ type: "_left" });
+        if (this.#actor.snapshot?.context.cut) this.#actor.send({ type: "_left" });
       }),
     );
   }
 
   // The shelf can also go out of sight with no focus to lose: on the phone another panel
-  // takes its place after a delete by mouse. While a tile counts down, the shelf checks
-  // a few times a second whether it is still drawn, and hands the delete over if not.
-  // The containers hide it by display or by visibility, and neither fires an event here.
+  // takes its place. While a tile is cut, the shelf checks a few times a second whether
+  // it is still drawn, and deletes the cut tile if not. The containers hide it by
+  // display or by visibility, and neither fires an event here.
   #sightTimer = null;
   #watchSight() {
-    const counting = this.#actor.snapshot?.context.discarding.size > 0;
+    const counting = this.#actor.snapshot?.context.cut != null;
     if (counting && !this.#sightTimer) {
       this.#sightTimer = setInterval(() => {
         const seen = this.checkVisibility ? this.checkVisibility({ visibilityProperty: true }) : this.getClientRects().length > 0;
@@ -663,7 +632,7 @@ class BookShelf extends LitElement {
     const account = showing(snapshot.context);
     if (account === "wait") return nothing;
     if (account === "sign-in") return html`<div class="empty"><p>Sign in to see your books.</p></div>`;
-    const { importing, selected, discarding } = snapshot.context;
+    const { importing, selected, cut } = snapshot.context;
     const tiles = this.#tiles(snapshot);
     const focusId = this.#focusTile(tiles, selected);
     // The invite stands while the library holds no imported book, beside the journal
@@ -688,7 +657,7 @@ class BookShelf extends LitElement {
           ? html`
               <ul class="grid" role="listbox" aria-label="Books" @keydown=${(e) => this.#keydown(e, tiles)}>
                 ${importing.map((p) => this.#adding(p))}
-                ${tiles.map((t) => this.#tile(t, selected, focusId, discarding))}
+                ${tiles.map((t) => this.#tile(t, selected, focusId, cut))}
               </ul>
             `
           : nothing}
@@ -734,8 +703,8 @@ class BookShelf extends LitElement {
     </div>`;
   }
 
-  #tile(t, selected, focusId, discarding) {
-    const isDiscarding = discarding.has(t.id);
+  #tile(t, selected, focusId, cut) {
+    const isCut = cut === t.id;
     const cover = t.cover
       ? html`<img src=${t.cover} alt=${`Cover of ${t.title}`} />`
       : t.written
@@ -743,7 +712,7 @@ class BookShelf extends LitElement {
         : html`<div class="placeholder">${t.title}</div>`;
     return html`
       <li
-        class="tile ${isDiscarding ? "discarding" : ""}"
+        class="tile ${isCut ? "cut" : ""}"
         role="option"
         data-id=${t.id}
         aria-selected=${t.id === selected}
@@ -752,14 +721,7 @@ class BookShelf extends LitElement {
       >
         <div class="cover">
           ${cover}
-          ${t.written ? nothing : this.#actions(t)}
-          ${isDiscarding
-            ? html`<div class="over">
-                  <span>Deleted</span>
-                  <button class="undo" type="button" aria-label="Undo delete">Undo</button>
-                  <span class="bar"></span>
-                </div>`
-            : nothing}
+          ${t.written || isCut ? nothing : this.#actions(t)}
         </div>
         ${this.#editingId === t.id
           ? html`<div
@@ -773,7 +735,11 @@ class BookShelf extends LitElement {
             </div>`
           : html`<span class="title">${t.title}</span>
               <span class="author">${t.written ? "Written by you" : t.author || " "}</span>`}
-        ${t.written ? nothing : html`<span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>`}
+        ${t.written
+          ? nothing
+          : isCut
+            ? html`<span class="progress cut-mark">Cut</span>`
+            : html`<span class="progress">Chapter ${t.position.chapter + 1} of ${t.chapterCount}</span>`}
       </li>
     `;
   }

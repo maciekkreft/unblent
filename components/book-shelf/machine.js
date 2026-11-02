@@ -2,7 +2,7 @@ import { setup, assign, fromPromise, enqueueActions, emit } from "xstate";
 
 // The view component that shows the library and lets a book be added, opened, or
 // dropped (8, kind 4). It owns only UI state — the tiles it is showing, the imports
-// still in flight, which tile is open, and the ids counting down to a discard — and
+// still in flight, which tile is open, and the tile cut with Vim's dd — and
 // points at `books`, which owns the fact. It asks books: list for the starting
 // picture and follows book.changed / book.deleted after (4.3, fourth rule); it never
 // decides what a book is, it learns that from the fact's events. It asks session: read
@@ -39,14 +39,6 @@ const tile = ({ id, title, author, cover, position, chapters, pending, addedAt, 
 // add it, then re-sort.
 const upsert = (books, changed) => sorted([...books.filter((b) => b.id !== changed.id), tile(changed)]);
 
-// A Set with one id removed, as a new Set so assign sees a fresh value (XState keeps
-// context immutable; the view re-renders on every snapshot regardless).
-const without = (set, id) => {
-  const next = new Set(set);
-  next.delete(id);
-  return next;
-};
-
 // A session reply without a userId (no-answerer on a page or in a test without `session`)
 // counts as signed in, so a page that cannot tell never hides the shelf.
 export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId != null : true);
@@ -55,22 +47,16 @@ export const signedIn = (reply) => (reply && "userId" in reply ? reply.userId !=
 // neither the tiles nor the sign-in line flashes; "sign-in" signed out, since the books
 // kept in this browser are the account's; "show" otherwise. A try page (8) shows the
 // shelf to a visitor who is not yet a guest.
-// The tiles to show: a book whose delete waits in the corner notice (handOff) is not
-// shown while it waits there.
-export const shown = ({ books, handed }) => books.filter((b) => !handed?.has(b.id));
+// A tile the user can cut or delete: an imported book on the shelf, never the journal.
+const removable = (context, id) => context.books.some((b) => b.id === id && !b.written);
 
-// The keyboard or the panel left the shelf while a tile was counting down (12, Vim keys):
-// its delete goes to the corner notice, which keeps its Undo in sight and settles it there
-// (books deletes on removal.settled). The tile stays off the shelf meanwhile.
-function handOff(context, enqueue) {
-  const ids = [...context.discarding];
-  if (!ids.length) return;
-  for (const id of ids) {
-    enqueue.cancel(`undo:${id}`);
-    const book = context.books.find((b) => b.id === id);
-    if (book) enqueue.emit({ type: "removal.started", kind: "book", id, name: book.title ?? "" });
-  }
-  enqueue.assign({ handed: ({ context }) => new Set([...context.handed, ...ids]), discarding: new Set() });
+// The cut tile is deleted (12, Vim keys): Escape, the keyboard or the panel leaving the
+// shelf, a book opened, or a second dd. The delete happens at once; it is a step `books`
+// records, with the short notice and its Undo.
+function dropCut(context, enqueue) {
+  if (!context.cut) return;
+  enqueue.emit({ type: "book.discarded", id: context.cut });
+  enqueue.assign({ cut: null });
 }
 
 export const showing = ({ tryPage, signedIn }) => (tryPage ? "show" : signedIn === null ? "wait" : signedIn ? "show" : "sign-in");
@@ -99,27 +85,27 @@ export const machine = setup({
       "Shows the library as tiles, the journal first and then newest first, and lets the user " +
       "add a book from an epub file, open one, or remove one. A book being added shows as a " +
       "placeholder tile until the book arrives or the import is refused with a reason. Removing " +
-      "a book waits out the undo window before it becomes a deletion, so it can be taken back in " +
-      "one step. If the keyboard leaves the shelf, or the shelf goes out of sight (another " +
-      "panel shown in its place, or a book opened), while a tile is counting down, the delete " +
-      "moves to the corner notice with its Undo, and the tile leaves the shelf until the notice " +
-      "ends: Undo there brings it back, and the notice running out deletes it. The journal, the book the user writes, reads \"Written by you\" under its title, " +
+      "a book deletes it at once and shows the short notice with Undo; Undo and Redo take back " +
+      "adding, renaming and deleting a book (section 12). The journal, the book the user writes, reads \"Written by you\" under its title, " +
       "shows no chapter count, and has no rename or delete, so it is always on the shelf. " +
       "The arrow keys move through the tiles as a grid: left and right to the next tile, up " +
       "and down to the tile above or below, and with Vim keys on h, j, k and l do the same, " +
-      "gg and G go to the first and last tile, dd removes the tile with its Undo (the journal " +
-      "ignores it), u on a tile in its undo window takes it back, o or O opens the file " +
-      "picker to add a book, and cc renames the tile where titles can be changed. Renaming, " +
+      "gg and G go to the first and last tile, dd cuts the tile, greyed and marked Cut with no " +
+      "countdown while the keyboard stays on the shelf (the journal ignores it), and u on the " +
+      "cut tile puts it back. While a tile is cut, Escape deletes it at once, and so does the " +
+      "keyboard leaving the shelf, the shelf going out of sight, opening a book, or a second " +
+      "dd; o or O opens the file picker to add a book, and cc renames the tile where titles " +
+      "can be changed. Renaming, " +
       "by the pencil on a cover or cc, turns the title and the author into two fields, the " +
       "title ready to type in and Tab moving to the author; Enter or leaving both saves, " +
       "Escape cancels, and an empty field brings back what the book's file says. " +
       "Signed out it shows only \"Sign in to see your books.\": no tiles, not even the " +
       "journal's, and no Add a book. The books stay kept in this browser and come back, with " +
-      "the open one highlighted, when the user signs in, without a reload. A removal still " +
-      "in its undo window when the user signs out is taken back. On a try page a visitor not " +
+      "the open one highlighted, when the user signs in, without a reload. A tile still cut " +
+      "when the user signs out is put back. On a try page a visitor not " +
       "yet signed in still sees the shelf.",
     kind: "view",
-    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed", "removal.started"],
+    emits: ["book.picked", "book.selected", "book.discarded", "book.renamed"],
     attributes: ["renames"],
     asks: ["books: list", "session: read", "books: open", "settings: read"],
   },
@@ -128,10 +114,6 @@ export const machine = setup({
     // The "Vim keys" device preference (12): off until settings says otherwise, and off
     // on a page without it (the ask replies no-answerer).
     vimKeys: false,
-    // How long a discarded tile can be brought back (the --duration-undo token, read
-    // in the view and passed in so the machine stays importable in Node). The delete
-    // is not a fact until the window ends: stop it and nothing was emitted.
-    undoMs: input.undoMs,
     books: [],
     // Imports in flight: one placeholder per picked file, keyed by its minted id,
     // removed when book.changed brings the real tile or book.refused says why not.
@@ -140,10 +122,9 @@ export const machine = setup({
     // this device's pick and on another device's, pulled): the shelf highlights it but
     // does not own it, so a reload restores the highlight (4.3, fourth rule).
     selected: null,
-    // The ids counting down to a discard, each with its own cancelable timer.
-    discarding: new Set(),
-    // The tiles whose delete waits in the corner notice (handOff), hidden until it ends.
-    handed: new Set(),
+    // The tile cut with Vim's dd (12), waiting for u to put it back or Escape to delete
+    // it; null when none. Greyed in place, no timer.
+    cut: null,
     // Whether a user is signed in (3.4): null until session answers.
     signedIn: null,
     // Whether the page is a try page (8), from the view, so this stays importable in Node.
@@ -181,20 +162,15 @@ export const machine = setup({
   on: {
     "settings.changed": { actions: assign({ vimKeys: ({ event }) => event.vimKeys === true }) },
     // Who is signed in now (4.3): signing in re-asks books: list, because the fact
-    // pulls the library then. Signing out hides the tiles and keeps them; a removal
-    // the user can no longer see is taken back, so nothing goes without its Undo.
+    // pulls the library then. Signing out hides the tiles and keeps them; a cut the
+    // user can no longer see is put back, so nothing goes out of sight.
     "session.changed": [
       {
         guard: ({ event }) => event.userId != null,
         target: ".loading",
         actions: assign({ signedIn: true }),
       },
-      {
-        actions: enqueueActions(({ context, enqueue }) => {
-          for (const id of context.discarding) enqueue.cancel(`undo:${id}`);
-          enqueue.assign({ signedIn: false, importing: [], discarding: new Set() });
-        }),
-      },
+      { actions: assign({ signedIn: false, importing: [], cut: null }) },
     ],
     // The fact's news (4.3, fourth rule): a changed book replaces or adds its tile and
     // clears any placeholder that was standing for it.
@@ -204,18 +180,14 @@ export const machine = setup({
         importing: ({ context, event }) => context.importing.filter((p) => p.id !== event.id),
       }),
     },
-    // The fact confirms a book is gone (this device's discard on elapse, or another's):
-    // drop the tile, unselect it if it was open, clear any countdown still standing.
+    // The fact confirms a book is gone (this device's delete, another's, or an Undo):
+    // drop the tile and unselect it if it was open.
     "book.deleted": {
-      actions: enqueueActions(({ context, event, enqueue }) => {
-        enqueue.assign({
-          books: ({ context }) => context.books.filter((b) => b.id !== event.id),
-          importing: ({ context }) => context.importing.filter((p) => p.id !== event.id),
-          selected: ({ context }) => (context.selected === event.id ? null : context.selected),
-          discarding: ({ context }) => without(context.discarding, event.id),
-          handed: ({ context }) => without(context.handed, event.id),
-        });
-        if (context.discarding.has(event.id)) enqueue.cancel(`undo:${event.id}`);
+      actions: assign({
+        books: ({ context, event }) => context.books.filter((b) => b.id !== event.id),
+        importing: ({ context, event }) => context.importing.filter((p) => p.id !== event.id),
+        selected: ({ context, event }) => (context.selected === event.id ? null : context.selected),
+        cut: ({ context, event }) => (context.cut === event.id ? null : context.cut),
       }),
     },
     // An import was refused (signed out, unreadable, unavailable): notice-stack shows
@@ -243,23 +215,19 @@ export const machine = setup({
     },
     // The user opened a book (7.2, internal gesture): announce it. The highlight comes
     // back as book.opened from the fact, so there is one source of what is open. The
-    // panel then shows the book's contents in place of the shelf, so a tile still
-    // counting down is handed to the corner notice first (handOff).
+    // panel then shows the book's contents in place of the shelf, so a cut tile is
+    // deleted first (dropCut).
     _select: {
-      guard: ({ context, event }) =>
-        context.books.some((b) => b.id === event.id) && !context.discarding.has(event.id) && !context.handed.has(event.id),
+      guard: ({ context, event }) => context.books.some((b) => b.id === event.id) && context.cut !== event.id,
       actions: [
-        enqueueActions(({ context, enqueue }) => handOff(context, enqueue)),
+        enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)),
         emit(({ event }) => ({ type: "book.selected", id: event.id })),
       ],
     },
-    // The keyboard left the shelf, or the shelf went out of sight (the view tells): see handOff.
-    _left: { actions: enqueueActions(({ context, enqueue }) => handOff(context, enqueue)) },
-    // Undo in the corner notice: the tile comes back where it was.
-    "removal.undone": {
-      guard: ({ context, event }) => event.kind === "book" && context.handed.has(event.id),
-      actions: assign({ handed: ({ context, event }) => without(context.handed, event.id) }),
-    },
+    // Escape while a tile is cut, the keyboard leaving the shelf, or the shelf going out
+    // of sight (the view tells): the cut tile is deleted.
+    _escape: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
+    _left: { actions: enqueueActions(({ context, enqueue }) => dropCut(context, enqueue)) },
     // The user edited a title and author in place (D11, 7.2 internal gesture): announce
     // the trimmed texts as book.renamed, which books turns into a user title and author
     // (last write wins) and the book.changed that redraws the tile. Unchanged text emits
@@ -281,34 +249,23 @@ export const machine = setup({
         author: event.author.trim(),
       })),
     },
-    // The trash on a tile: begin the undo window. Nothing is emitted yet; only its
-    // elapse makes the delete a fact.
+    // The trash on a tile: the book is deleted at once, one step with the short notice
+    // and its Undo (12, Undo).
     _discard: {
-      guard: ({ context, event }) =>
-        context.books.some((b) => b.id === event.id && !b.written) &&
-        !context.discarding.has(event.id) &&
-        !context.handed.has(event.id),
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.assign({ discarding: ({ context }) => new Set(context.discarding).add(event.id) });
-        enqueue.raise({ type: "_elapsed", id: event.id }, { delay: ({ context }) => context.undoMs, id: `undo:${event.id}` });
+      guard: ({ context, event }) => removable(context, event.id) && context.cut !== event.id,
+      actions: emit(({ event }) => ({ type: "book.discarded", id: event.id })),
+    },
+    // Vim's dd on a tile (12): the tile is cut, greyed in place with no timer, while the
+    // keyboard stays on the shelf. A tile already cut is deleted, as Vim's register holds
+    // only the latest cut.
+    _cut: {
+      guard: ({ context, event }) => removable(context, event.id) && context.cut !== event.id,
+      actions: enqueueActions(({ context, event, enqueue }) => {
+        dropCut(context, enqueue);
+        enqueue.assign({ cut: event.id });
       }),
     },
-    // Undo: cancel the window, emit nothing.
-    _undo: {
-      guard: ({ context, event }) => context.discarding.has(event.id),
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.cancel(`undo:${event.id}`);
-        enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
-      }),
-    },
-    // The window ran out (the timer above): now the delete is a fact (book.discarded),
-    // which books turns into a tombstone and the book.deleted that removes the tile.
-    _elapsed: {
-      guard: ({ context, event }) => context.discarding.has(event.id),
-      actions: enqueueActions(({ event, enqueue }) => {
-        enqueue.assign({ discarding: ({ context }) => without(context.discarding, event.id) });
-        enqueue.emit({ type: "book.discarded", id: event.id });
-      }),
-    },
+    // u on the cut tile: it stays.
+    _uncut: { guard: ({ context }) => context.cut != null, actions: assign({ cut: null }) },
   },
 });

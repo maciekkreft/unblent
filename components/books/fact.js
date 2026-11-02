@@ -6,6 +6,8 @@ import deleted from "./events/book.deleted.json" with { type: "json" };
 import refused from "./events/book.refused.json" with { type: "json" };
 import opened from "./events/book.opened.json" with { type: "json" };
 import rejected from "./events/session.rejected.json" with { type: "json" };
+import recorded from "./events/step.recorded.json" with { type: "json" };
+import settled from "./events/step.settled.json" with { type: "json" };
 import list from "./queries/list.json" with { type: "json" };
 import read from "./queries/read.json" with { type: "json" };
 import chapter from "./queries/chapter.json" with { type: "json" };
@@ -136,6 +138,22 @@ const api = {
     if (!res.ok) throw new Error(`books delete ${res.status}`);
     return await res.json();
   },
+  // A restore write (5): brings back a deleted book, naming its tombstone's version; the
+  // server answers the row, still a tombstone when the delete stands. A book the server
+  // never had is not-found.
+  async restore(id, baseVersion) {
+    const res = await fetch(`/api/books/${id}/restored`, {
+      method: "PUT",
+      credentials: "same-origin",
+      keepalive: true,
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ baseVersion }),
+    });
+    if (res.status === 401) return { error: "unauthorized" };
+    if (res.status === 404) return { error: "not-found" };
+    if (!res.ok) throw new Error(`books restore ${res.status}`);
+    return await res.json();
+  },
   // The open book, last write wins and never refused (like a position): the server
   // stamps its own time and replies { id, at }. A 401 drops the session.
   async opened(id) {
@@ -186,7 +204,7 @@ const actor = mount(machine, {
     ask: (target, name, payload) => ask(machine, target, name, payload),
     revoke: (url) => URL.revokeObjectURL(url),
   },
-  events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused, "book.opened": opened, "session.rejected": rejected },
+  events: { "book.changed": changed, "book.deleted": deleted, "book.refused": refused, "book.opened": opened, "session.rejected": rejected, "step.recorded": recorded, "step.settled": settled },
   queries: { list, read, chapter, open, place },
 });
 

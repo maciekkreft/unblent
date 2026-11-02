@@ -1,4 +1,5 @@
 import { setup, assign, fromPromise, enqueueActions, and } from "xstate";
+import { ulid } from "ulid";
 
 // The fact component that owns the books (3.1), replicated (5): local-first, the
 // single place a book's metadata and reading position live in the browser. Unlike
@@ -138,6 +139,18 @@ const serverRecord = (b) => ({
   deleted: Boolean(b.deleted),
 });
 
+// The steps that last wrote a book in this browser (12, Undo): `step` whether it is on
+// the shelf, `nameStep` its title and author; the server never has them. The server's
+// answer to this browser's own write keeps both, and so does a pulled write that leaves
+// either as it was, so a page turn never refuses an Undo; anything else that changed it does.
+function carry(held, record, own = false) {
+  if (!held) return record;
+  const kept = { ...record };
+  if (held.step && (own || Boolean(held.deleted) === Boolean(record.deleted))) kept.step = held.step;
+  if (held.nameStep && (own || (held.title === record.title && held.author === record.author))) kept.nameStep = held.nameStep;
+  return kept;
+}
+
 // The book.changed payload, built once so its shape (7.1) is in one place. pending
 // reports a local change the server has not acknowledged (5).
 const bookOf = (record, pending) => ({
@@ -162,7 +175,10 @@ const changed = (record, pending) => ({ type: "book.changed", ...bookOf(record, 
 // position or delete keyed by the book id, or a title keyed under `title:<id>` (kept
 // apart so a rename never overwrites a pending page turn, D11).
 const pendingFor = (context, id) =>
-  context.outbox.has(id) || context.outbox.has(`title:${id}`) || context.outbox.has(`adopt:${id}`);
+  context.outbox.has(id) ||
+  context.outbox.has(`title:${id}`) ||
+  context.outbox.has(`adopt:${id}`) ||
+  context.outbox.has(`restore:${id}`);
 
 const tile = (context, r) => ({
   id: r.id,
@@ -204,8 +220,10 @@ function replyOpen(context, reply) {
 // answer is unavailable, so the reader offers to try again once the user has signed in.
 function htmlFor(context, id, record, chapter, self) {
   if (record.written) return Promise.resolve({ html: htmlOf(record.texts[chapter]) });
-  // A book still on its way to the account (adopt) has no chapters there yet.
-  if (context.api == null || context.outbox.has(`adopt:${id}`)) return Promise.resolve({ error: "unavailable" });
+  // A book still on its way to the account (adopt), or brought back by an Undo whose
+  // restore write is not answered yet, has no chapters there yet.
+  if (context.api == null || context.outbox.has(`adopt:${id}`) || context.outbox.has(`restore:${id}`))
+    return Promise.resolve({ error: "unavailable" });
   return Promise.resolve(context.api.chapter(id, record.contentVersion, chapter))
     .then((res) => {
       if (res && res.error === "unauthorized") {
@@ -352,10 +370,21 @@ function applyUploaded(context, event, enqueue) {
     enqueue.emit({ type: "book.refused", id, reason: res.error });
     return;
   }
-  const record = serverRecord(res.row);
+  // Adding a book is one step (12, Undo): its Undo deletes the book again and its Redo
+  // brings it back with a restore write, so the file is never imported twice.
+  const step = context.mint();
+  const record = { ...serverRecord(res.row), step };
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   enqueue.emit(changed(record, false));
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "books",
+    label: `add ${nameOf(record)}`,
+    undo: { kind: "book", id, deleted: true },
+    redo: { kind: "book", id, deleted: false },
+  });
 }
 
 // The user turned to a new place (book-reader emits book.progressed). The position
@@ -387,20 +416,56 @@ function applyProgress(context, event, enqueue) {
 // the server; it carries only the fields that changed, merged into a row still waiting,
 // so a later author change never drops an unsent title. A missing or tombstoned book,
 // or a rename that changes nothing, is ignored, and so is the journal, which is never
-// in the cache. An event without an author leaves the author as it is.
+// in the cache. An event without an author leaves the author as it is. Every rename is
+// one step (12, Undo), whose Undo gives back the title and author the book showed.
 function applyRename(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
   if (!current || current.deleted) return;
+  const before = givenName(current);
+  const after = {
+    title: (event.title || "").trim(),
+    author: typeof event.author === "string" ? event.author.trim() : before.author,
+  };
+  const step = context.mint();
+  if (!writeName(context, enqueue, current, after, step)) return;
+  const prior = current.nameStep ? { prior: current.nameStep } : {};
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "books",
+    label: `rename ${nameOf(current)}`,
+    undo: { kind: "name", id, ...before, ...prior },
+    redo: { kind: "name", id, ...after, ...prior },
+  });
+}
+
+// The title and author as a rename sends them: what the user gave, or an empty string
+// where the book shows what its file says.
+const givenName = (r) => ({
+  title: r.title === (r.fileTitle ?? r.title) ? "" : r.title,
+  author: r.author === (r.fileAuthor ?? r.author) ? "" : r.author,
+});
+
+// What a step is about, as people read it after "Undo:".
+const NAME_MAX = 40;
+function nameOf(record) {
+  const title = String(record.title ?? "").trim();
+  if (!title) return "a book";
+  return `book ${title.length > NAME_MAX ? `${title.slice(0, NAME_MAX).trimEnd()}…` : title}`;
+}
+
+// Give a book a title and author in the shape a rename sends, stamped with the step that
+// wrote it; false when that changes nothing, and then nothing is written.
+function writeName(context, enqueue, current, name, nameStep) {
+  const { id } = current;
   const fields = {};
-  const sentTitle = (event.title || "").trim();
-  const title = sentTitle || current.fileTitle || current.title;
-  if (title !== current.title) fields.title = sentTitle;
-  const sentAuthor = (event.author ?? "").trim();
-  const author = sentAuthor || (current.fileAuthor ?? current.author);
-  if (typeof event.author === "string" && author !== current.author) fields.author = sentAuthor;
-  if (Object.keys(fields).length === 0) return;
-  const record = { ...current, title, author: "author" in fields ? author : current.author, updatedAt: context.now() };
+  const title = name.title || current.fileTitle || current.title;
+  if (title !== current.title) fields.title = name.title;
+  const author = name.author || (current.fileAuthor ?? current.author);
+  if (author !== current.author) fields.author = name.author;
+  if (Object.keys(fields).length === 0) return false;
+  const record = { ...current, title, author, nameStep, updatedAt: context.now() };
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const row = { ...context.outbox.get(`title:${id}`), id: `title:${id}`, kind: "title", book: id, ...fields };
@@ -408,6 +473,7 @@ function applyRename(context, event, enqueue) {
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit(changed(record, true));
   enqueue.raise({ type: "_drain" });
+  return true;
 }
 
 // The user opened a book (book-shelf emits book.selected, book-stage book.switched; 4.3 fifth rule): record it
@@ -428,20 +494,42 @@ function applySelect(context, event, enqueue) {
   enqueue.raise({ type: "_drain" });
 }
 
-// The user let a book's undo window run out (book-shelf emits book.discarded, 4.3
-// fifth rule): tombstone it, queue a delete (which replaces any pending position,
-// Decision 6), announce it gone, and drain. The server purges the directory. The
-// journal is never in the cache, so it is never discarded here.
+// The user deleted a book (book-shelf emits book.discarded, 4.3 fifth rule): it happens
+// at once and is one step, shown with the short notice (12, Undo). A removal.settled
+// from the corner notice deletes the same way, without a step. The journal is never in
+// the cache, so it is never deleted here.
 function applyDiscard(context, event, enqueue) {
   const { id } = event;
   const current = context.books.get(id);
   if (!current || current.deleted) return;
-  const record = { ...current, deleted: true, updatedAt: context.now() };
+  const step = event.type === "book.discarded" ? context.mint() : null;
+  tombstone(context, enqueue, current, step);
+  if (!step) return;
+  const prior = current.step ? { prior: current.step } : {};
+  enqueue.emit({
+    type: "step.recorded",
+    id: step,
+    owner: "books",
+    label: `delete ${nameOf(current)}`,
+    undo: { kind: "book", id, deleted: false, ...prior },
+    redo: { kind: "book", id, deleted: true, ...prior },
+    notice: true,
+  });
+}
+
+// Mark a book a tombstone and announce it gone: queue a delete (which replaces any
+// pending position, Decision 6, or a restore not yet sent) and drain. The server keeps
+// the book's files, so a restore write (5) can bring it back.
+function tombstone(context, enqueue, current, step) {
+  const { id } = current;
+  const { step: _, ...kept } = current;
+  const record = { ...kept, deleted: true, updatedAt: context.now(), ...(step ? { step } : {}) };
   context.books.set(id, record);
   enqueue(() => context.store.put(record).catch(() => {}));
   const row = { id, kind: "delete" };
   // A book not yet added to the account (adopt) is not uploaded only to be deleted.
   if (context.outbox.delete(`adopt:${id}`)) enqueue(() => context.store.outboxDelete(`adopt:${id}`).catch(() => {}));
+  if (context.outbox.delete(`restore:${id}`)) enqueue(() => context.store.outboxDelete(`restore:${id}`).catch(() => {}));
   context.outbox.set(id, row);
   enqueue(() => context.store.outboxPut(row).catch(() => {}));
   enqueue.emit({ type: "book.deleted", id });
@@ -461,6 +549,69 @@ function forgetOpen(context, enqueue) {
     context.outbox.delete("open");
     enqueue(() => context.store.outboxDelete("open").catch(() => {}));
   }
+}
+
+// --- Steps (12, Undo) -------------------------------------------------------------------
+
+// A deleted book brought back. Signed in it rides a restore write (5), sent before any
+// other row, naming the tombstone's version once its delete is acknowledged; a delete not
+// yet sent is simply taken out of the outbox.
+function restore(context, enqueue, current, step) {
+  const { id } = current;
+  const record = { ...current, deleted: false, step, updatedAt: context.now() };
+  context.books.set(id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  if (context.outbox.get(id)?.kind === "delete") {
+    context.outbox.delete(id);
+    enqueue(() => context.store.outboxDelete(id).catch(() => {}));
+  }
+  const row = { id: `restore:${id}`, kind: "restore", book: id };
+  context.outbox.set(row.id, row);
+  enqueue(() => context.store.outboxPut(row).catch(() => {}));
+  enqueue.emit(changed(record, true));
+  enqueue.raise({ type: "_drain" });
+}
+
+// `prior` is the step that wrote a book before this one, so an Undo leaves it as that
+// step left it and the step before can be undone next; a book no step of this browser
+// wrote is left stamped with a mark of the step undone.
+const priorStamp = (entry, step) => entry.prior ?? `^${step}`;
+
+// A book whose content a step left as it was still takes that step's stamp, so the next
+// step can be checked against it.
+function stamp(context, enqueue, current, stamps) {
+  const record = { ...current, ...stamps };
+  context.books.set(record.id, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+}
+
+// An Undo or Redo of one of this fact's steps. It is applied only while what it would
+// reverse is as the step left it: whether the book is on the shelf, or its title and
+// author, was last written in this browser by that step. Anything written since, here,
+// in another tab or on another device, refuses it.
+function applyStep(context, event, enqueue) {
+  if (event.owner !== "books") return;
+  const settle = (outcome, reason) =>
+    enqueue.emit({ type: "step.settled", id: event.id, owner: "books", outcome, ...(reason ? { reason } : {}) });
+  const p = event.payload ?? {};
+  const current = typeof p.id === "string" ? context.books.get(p.id) : null;
+  const undoing = event.type === "step.undone";
+  const expected = (entry) => (undoing ? event.id : priorStamp(entry, event.id));
+  const leaves = (entry) => (undoing ? priorStamp(entry, event.id) : event.id);
+  if (p.kind === "book" && current && typeof p.deleted === "boolean") {
+    if (current.step !== expected(p)) return settle("refused", "changed");
+    if (p.deleted === Boolean(current.deleted)) stamp(context, enqueue, current, { step: leaves(p) });
+    else if (p.deleted) tombstone(context, enqueue, current, leaves(p));
+    else restore(context, enqueue, current, leaves(p));
+    return settle("applied");
+  }
+  if (p.kind === "name" && visible(current) && typeof p.title === "string" && typeof p.author === "string") {
+    if (current.nameStep !== expected(p)) return settle("refused", "changed");
+    if (!writeName(context, enqueue, current, { title: p.title, author: p.author }, leaves(p)))
+      stamp(context, enqueue, current, { nameStep: leaves(p) });
+    return settle("applied");
+  }
+  settle("refused", "changed");
 }
 
 // The session ended, however it ended (a deliberate sign-out, a cookie gone across a
@@ -524,6 +675,7 @@ function flush(context, message, enqueue, self) {
   else if (message.type === "book.renamed") applyRename(context, message, enqueue);
   else if (message.type === "book.discarded") applyDiscard(context, message, enqueue);
   else if (message.type === "removal.settled") applyDiscard(context, message, enqueue);
+  else if (message.type === "step.undone" || message.type === "step.redone") applyStep(context, message, enqueue);
 }
 
 const queue = assign({ queued: ({ context, event }) => [...context.queued, event] });
@@ -609,8 +761,11 @@ async function keepFor(store, from, userId, api, source) {
 }
 
 // A book being added to the account (adopt) is sent before any other row, so a place or
-// a title for it never reaches the account before the book does.
-const adoptFirst = (a, b) => (a.kind === "adopt") === (b.kind === "adopt") ? byId(a, b) : a.kind === "adopt" ? -1 : 1;
+// a title for it never reaches the account before the book does; a restore write comes
+// next, so a place or a title for a book brought back never lands on its tombstone.
+const RANK = { adopt: 0, restore: 1 };
+const rank = (row) => RANK[row.kind] ?? 2;
+const adoptFirst = (a, b) => rank(a) - rank(b) || byId(a, b);
 
 export const machine = setup({
   guards: {
@@ -667,6 +822,8 @@ export const machine = setup({
           result =
             row.kind === "delete"
               ? await api.remove(row.id)
+              : row.kind === "restore"
+                ? await api.restore(row.book, row.baseVersion)
               : row.kind === "open"
                 ? await api.opened(row.book)
                 : row.kind === "title"
@@ -676,7 +833,7 @@ export const machine = setup({
           return { acks, networkError: true };
         }
         if (result.error === "unauthorized") return { acks, authFailed: true };
-        acks.push({ id: row.id, kind: row.kind, sent: { title: row.title, author: row.author }, row: result });
+        acks.push({ id: row.id, kind: row.kind, book: row.book, sent: { title: row.title, author: row.author }, row: result });
         await store.outboxDelete(row.id).catch(() => {});
       }
       if (!pull) return { acks };
@@ -706,8 +863,13 @@ export const machine = setup({
       "presents the journal as the first book, signed in or out: its chapters are the days, " +
       "oldest first, with today's empty page last while no day has been started today, and " +
       "the contents list them newest first. Each of its chapters carries its day's date. It stores nothing for the journal, which can be " +
-      "opened but never renamed or deleted here. A book whose delete the shelf handed to the " +
-      "corner notice is deleted when that notice's Undo runs out. On a try page the Journal is always the open " +
+      "opened but never renamed or deleted here. Adding a book, renaming one and deleting one " +
+      "are each a step Undo and Redo reverse (section 12); a delete happens at once and asks for " +
+      "the short notice. Undo of an added book deletes it, and a deleted book comes back with a " +
+      "restore write the server accepts, its files kept on the server, so nothing is imported " +
+      "again. A step is refused when the book was written since by anything else; turning a " +
+      "page is not a step and refuses nothing. A delete from the corner notice, when its Undo " +
+      "runs out, is no step. On a try page the Journal is always the open " +
       "book, and this browser's own open book is left as it was. Following a source link in a " +
       "note opens the link's book, the same as choosing it on the shelf, and so does bringing a " +
       "book's tab to the front on the stage, and so does picking a chapter of a book, or a day of the " +
@@ -725,18 +887,18 @@ export const machine = setup({
       "whose file cannot be read is left out with a notice.",
     kind: "fact",
     shape: "replicated",
-    emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected"],
+    emits: ["book.changed", "book.deleted", "book.refused", "book.opened", "session.rejected", "step.recorded", "step.settled"],
     owns: "the books",
     steps: {
-      "book.picked": "pending",
+      "book.picked": "step",
       "book.progressed": "navigation",
-      "book.renamed": "pending",
+      "book.renamed": "step",
       "book.selected": "navigation",
       "book.switched": "navigation",
       "passage.selected": "navigation",
       "chapter.selected": "navigation",
       "day.selected": "navigation",
-      "book.discarded": "pending",
+      "book.discarded": "step",
       "removal.settled": "pending",
     },
     asks: ["session: read", "journal: read"],
@@ -749,6 +911,7 @@ export const machine = setup({
     api: input.api,
     ask: input.ask,
     revoke: input.revoke,
+    mint: input.mint ?? ulid,
     // Who is signed in now, null signed out; syncing runs only while it is set.
     userId: null,
     // The account this browser's copy belongs to, kept in the meta across a sign-out.
@@ -833,6 +996,8 @@ export const machine = setup({
         "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
         "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
+        "step.undone": { actions: queue },
+        "step.redone": { actions: queue },
       },
     },
     // The store is loaded; confirm who is signed in before flushing, so an early pick
@@ -881,6 +1046,8 @@ export const machine = setup({
         "day.selected": { actions: queue },
         "book.discarded": { actions: queue },
         "removal.settled": { guard: ({ event }) => event.kind === "book", actions: queue },
+        "step.undone": { actions: queue },
+        "step.redone": { actions: queue },
       },
     },
     ready: {
@@ -914,6 +1081,8 @@ export const machine = setup({
         "book.progressed": { actions: enqueueActions(({ context, event, enqueue }) => applyProgress(context, event, enqueue)) },
         "book.renamed": { actions: enqueueActions(({ context, event, enqueue }) => applyRename(context, event, enqueue)) },
         "book.discarded": { actions: enqueueActions(({ context, event, enqueue }) => applyDiscard(context, event, enqueue)) },
+        "step.undone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
+        "step.redone": { actions: enqueueActions(({ context, event, enqueue }) => applyStep(context, event, enqueue)) },
         // A delete the shelf handed to the corner notice when the keyboard left it: the
         // notice's undo window ran out, so the book goes, as on book.discarded.
         "removal.settled": {
@@ -993,7 +1162,11 @@ export const machine = setup({
             input: ({ context, event }) => ({
               api: context.api,
               store: context.store,
-              rows: [...context.outbox.values()],
+              // A restore names the version of the tombstone it brings back (5), known only
+              // once the delete was acknowledged, so it is read when the row is sent.
+              rows: [...context.outbox.values()].map((row) =>
+                row.kind === "restore" ? { ...row, baseVersion: context.books.get(row.book)?.version ?? 0 } : row,
+              ),
               cursor: context.cursor,
               pull: Boolean(event.pull) && !context.leaving,
             }),
@@ -1058,12 +1231,27 @@ function applySync(context, output, enqueue) {
     if (ack.kind === "delete") {
       // The delete was announced already; drop the outbox row and keep the tombstone
       // at the server's version. The sync cleared the store; clear the in-memory Map too.
-      context.outbox.delete(ack.id);
-      const held = context.books.get(ack.id) || {};
-      const record = { ...serverRecord(ack.row), deleted: true };
-      record.position = held.position ?? record.position;
+      // A row queued for the book since (an Undo's restore, then a page turn) stays.
+      const queued = context.outbox.get(ack.id);
+      if (queued?.kind === "delete") context.outbox.delete(ack.id);
+      else if (queued) enqueue(() => context.store.outboxPut(queued).catch(() => {}));
+      const held = context.books.get(ack.id);
+      // Brought back while its delete was on the way: it stays, and its restore write
+      // names this tombstone's version.
+      if (visible(held)) {
+        const record = { ...held, version: ack.row.version };
+        context.books.set(ack.id, record);
+        enqueue(() => context.store.put(record).catch(() => {}));
+        continue;
+      }
+      const record = carry(held, { ...serverRecord(ack.row), deleted: true }, true);
+      record.position = held?.position ?? record.position;
       context.books.set(ack.id, record);
       enqueue(() => context.store.put(record).catch(() => {}));
+      continue;
+    }
+    if (ack.kind === "restore") {
+      applyRestored(context, ack, enqueue);
       continue;
     }
     if (ack.kind === "title") {
@@ -1080,7 +1268,7 @@ function applySync(context, output, enqueue) {
         enqueue(() => context.store.outboxPut(queued).catch(() => {}));
       }
       const held = context.books.get(server.id);
-      const record = serverRecord(server);
+      const record = carry(held, serverRecord(server), true);
       if (held) record.position = held.position;
       context.books.set(server.id, record);
       enqueue(() => context.store.put(record).catch(() => {}));
@@ -1102,7 +1290,7 @@ function applySync(context, output, enqueue) {
       enqueue(() => context.store.outboxPut(queued).catch(() => {}));
     }
     const held = context.books.get(ack.id);
-    const record = serverRecord(server);
+    const record = carry(held, serverRecord(server), true);
     if (held) record.position = held.position; // keep the latest local place
     context.books.set(ack.id, record);
     enqueue(() => context.store.put(record).catch(() => {}));
@@ -1112,10 +1300,13 @@ function applySync(context, output, enqueue) {
   for (const book of pulled) {
     const current = context.books.get(book.id);
     if (current && book.version <= current.version) continue;
-    // A delete always wins (5): a live copy never resurrects a local tombstone.
-    if (current && current.deleted && !book.deleted) continue;
-    const record = serverRecord(book);
+    // A delete always wins (5): a live copy never resurrects a local delete not yet sent.
+    // Otherwise a live copy of a local tombstone at a higher version is a restore write
+    // made elsewhere (5).
+    if (current && current.deleted && !book.deleted && context.outbox.get(book.id)?.kind === "delete") continue;
+    const record = carry(current, serverRecord(book));
     if (book.deleted) {
+      if (context.outbox.delete(`restore:${book.id}`)) enqueue(() => context.store.outboxDelete(`restore:${book.id}`).catch(() => {}));
       context.books.set(book.id, record);
       enqueue(() => context.store.put(record).catch(() => {}));
       if (visible(current)) enqueue.emit({ type: "book.deleted", id: book.id });
@@ -1148,6 +1339,27 @@ function applySync(context, output, enqueue) {
     // `session` to re-check so the auth control flips too (session.rejected).
     signOut(context, enqueue, { sawReject: true });
   }
+}
+
+// A restore write was answered (5). Brought back on the server, the book takes the
+// server's row and keeps its place; deleted again here meanwhile, the delete queued since
+// stands. Still a tombstone there, another device deleted it later, and a delete always
+// wins, so it goes here too. A book the server never had is left as it is.
+function applyRestored(context, ack, enqueue) {
+  context.outbox.delete(ack.id);
+  const held = context.books.get(ack.book);
+  if (!held || !ack.row || ack.row.error) return;
+  if (!visible(held)) {
+    context.books.set(ack.book, { ...held, version: Math.max(held.version, ack.row.version) });
+    enqueue(() => context.store.put(context.books.get(ack.book)).catch(() => {}));
+    return;
+  }
+  const record = carry(held, serverRecord(ack.row), true);
+  record.position = held.position;
+  context.books.set(ack.book, record);
+  enqueue(() => context.store.put(record).catch(() => {}));
+  if (record.deleted) enqueue.emit({ type: "book.deleted", id: ack.book });
+  else enqueue.emit(changed(record, pendingFor(context, ack.book)));
 }
 
 // A book of this browser's copy reached the account (adopt), or could not. Added: the

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createActor } from "xstate";
-import { machine, showing, shown } from "../machine.js";
+import { machine, showing } from "../machine.js";
 
 // The shelf's actor is where the rename decision lives (D11): the view turns Enter or
 // blur into a _rename gesture carrying the fields' texts, and the machine announces it
@@ -19,7 +19,7 @@ const ask = (target, name) =>
       : Promise.resolve({ id: null });
 
 function start() {
-  const actor = createActor(machine, { input: { ask, undoMs: 3000 } });
+  const actor = createActor(machine, { input: { ask } });
   const renamed = [];
   actor.on("book.renamed", (e) => renamed.push(e));
   actor.start();
@@ -78,7 +78,7 @@ test("_rename to an empty string is a real change: it restores the file's title"
 });
 
 // The "Vim keys" preference (12): asked of settings at start, followed after.
-const VIM_INPUT = { undoMs: 3000 };
+const VIM_INPUT = {};
 const vimAsk = (reply) => (target, name) =>
   Promise.resolve(target === "settings" && name === "read" ? reply : {});
 const vimActor = (reply) => createActor(machine, { input: { ...VIM_INPUT, ask: vimAsk(reply) } }).start();
@@ -116,16 +116,20 @@ test("an error reply, or a reply without the field, leaves Vim keys off", async 
 // renames or discards it.
 const JRN = "00000000000000000000000JRN";
 
-test("the journal sits first and cannot be renamed or discarded", async () => {
+test("the journal sits first and cannot be renamed, cut or deleted", async () => {
   const { actor, renamed } = start();
+  const discarded = [];
+  actor.on("book.discarded", (e) => discarded.push(e));
   await flush();
   actor.send(changed(ID, "Imported"));
   actor.send({ ...changed(JRN, "Journal"), addedAt: 0, written: true });
   assert.deepEqual(actor.getSnapshot().context.books.map((b) => b.id), [JRN, ID]);
   actor.send({ type: "_rename", id: JRN, title: "Diary", author: "Me" });
   actor.send({ type: "_discard", id: JRN });
+  actor.send({ type: "_cut", id: JRN });
   assert.deepEqual(renamed, []);
-  assert.equal(actor.getSnapshot().context.discarding.size, 0);
+  assert.deepEqual(discarded, []);
+  assert.equal(actor.getSnapshot().context.cut, null);
 });
 
 // --- Signed out (14) -------------------------------------------------------------------
@@ -138,7 +142,7 @@ const shelf = async (session, tryPage = false) => {
   const books = [{ ...changed(JRN, "Journal"), chapterCount: 1, addedAt: 0, written: true }, { ...changed(ID, "Dune"), chapterCount: 1 }];
   const ask = (target, name) =>
     Promise.resolve(target === "session" ? (session ?? { error: "no-answerer" }) : name === "list" ? { books } : name === "open" ? { id: ID } : {});
-  const actor = createActor(machine, { input: { ask, undoMs: 3000, tryPage } });
+  const actor = createActor(machine, { input: { ask, tryPage } });
   const discarded = [];
   actor.on("book.discarded", (e) => discarded.push(e));
   actor.start();
@@ -155,15 +159,15 @@ test("signed out the shelf asks to sign in; signed in, or with no session to ask
   assert.equal(showing((await shelf(SIGNED_OUT, true)).ctx()), "show", "a try page shows its visitor the shelf");
 });
 
-test("signing out hides the tiles without dropping them, and takes back a delete still in its undo window", async () => {
+test("signing out hides the tiles without dropping them, and puts back a cut tile", async () => {
   const { actor, ctx, discarded } = await shelf(SIGNED_IN);
-  actor.send({ type: "_discard", id: ID });
+  actor.send({ type: "_cut", id: ID });
   actor.send({ type: "session.changed", ...SIGNED_OUT });
   assert.equal(showing(ctx()), "sign-in");
   assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID], "the tiles are kept");
   assert.equal(ctx().selected, ID, "the open book stays highlighted");
-  assert.equal(ctx().discarding.size, 0, "the delete is taken back");
-  actor.send({ type: "_elapsed", id: ID });
+  assert.equal(ctx().cut, null, "the cut is put back");
+  actor.send({ type: "_left" });
   assert.deepEqual(discarded, []);
   actor.send({ type: "session.changed", ...SIGNED_IN });
   await flush();
@@ -172,42 +176,48 @@ test("signing out hides the tiles without dropping them, and takes back a delete
   assert.deepEqual(ctx().books.map((b) => b.id), [JRN, ID]);
 });
 
-// --- The corner notice (12, Vim keys: a delete never happens out of sight) --------------
+// --- Deleting and cutting (12, Undo; Vim keys) -----------------------------------------
 
-test("leaving the shelf hands a counting-down tile to the corner notice, hidden until it ends", async () => {
-  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
-  const started = [];
-  actor.on("removal.started", (e) => started.push({ kind: e.kind, id: e.id, name: e.name }));
-  actor.send({ type: "_left" });
-  assert.deepEqual(started, [], "nothing counting down, nothing handed");
+test("the trash deletes a book at once", async () => {
+  const { actor, discarded } = await shelf(SIGNED_IN);
   actor.send({ type: "_discard", id: ID });
-  actor.send({ type: "_left" });
-  assert.deepEqual(started, [{ kind: "book", id: ID, name: "Dune" }]);
-  assert.equal(ctx().discarding.size, 0);
-  assert.deepEqual(shown(ctx()).map((b) => b.id), [JRN], "the tile is off the shelf");
-  actor.send({ type: "_elapsed", id: ID });
-  assert.deepEqual(discarded, [], "the notice settles it now, not the tile's timer");
-  actor.send({ type: "_discard", id: ID });
-  assert.equal(ctx().discarding.size, 0, "a handed tile cannot be deleted again");
-  actor.send({ type: "removal.undone", kind: "note", id: ID });
-  assert.equal(shown(ctx()).length, 1, "another kind's undo is not ours");
-  actor.send({ type: "removal.undone", kind: "book", id: ID });
-  assert.deepEqual(shown(ctx()).map((b) => b.id), [JRN, ID], "Undo in the notice brings it back");
+  assert.deepEqual(discarded, [{ type: "book.discarded", id: ID }]);
 });
 
-test("opening a book while another counts down hands that delete to the corner notice", async () => {
-  const { actor, ctx } = await shelf(SIGNED_IN);
+test("dd cuts a tile: u puts it back, Escape or the keyboard leaving deletes it at once", async () => {
+  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
+  actor.send({ type: "_cut", id: ID });
+  assert.equal(ctx().cut, ID);
+  assert.deepEqual(discarded, [], "a cut is not a delete");
+  actor.send({ type: "_uncut" });
+  assert.equal(ctx().cut, null);
+  actor.send({ type: "_escape" });
+  assert.deepEqual(discarded, [], "Escape with nothing cut deletes nothing");
+  actor.send({ type: "_cut", id: ID });
+  actor.send({ type: "_escape" });
+  assert.deepEqual(discarded, [{ type: "book.discarded", id: ID }]);
+  assert.equal(ctx().cut, null);
+  actor.send({ type: "book.deleted", id: ID });
+  actor.send({ ...changed(ID, "Dune"), addedAt: 10 });
+  actor.send({ type: "_cut", id: ID });
+  actor.send({ type: "_left" });
+  assert.equal(discarded.length, 2, "the keyboard leaving deletes the cut tile");
+});
+
+test("opening a book, or cutting another, deletes the tile already cut", async () => {
+  const { actor, ctx, discarded } = await shelf(SIGNED_IN);
   const OTHER = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
   actor.send({ ...changed(OTHER, "Emma"), addedAt: 0 });
-  const started = [];
   const selected = [];
-  actor.on("removal.started", (e) => started.push(e.id));
   actor.on("book.selected", (e) => selected.push(e.id));
-  actor.send({ type: "_discard", id: ID });
+  actor.send({ type: "_cut", id: ID });
+  actor.send({ type: "_select", id: ID });
+  assert.deepEqual(selected, [], "the cut tile itself does not open");
   actor.send({ type: "_select", id: OTHER });
-  assert.deepEqual(started, [ID]);
+  assert.deepEqual(discarded.map((e) => e.id), [ID]);
   assert.deepEqual(selected, [OTHER]);
-  assert.ok(ctx().handed.has(ID));
-  actor.send({ type: "book.deleted", id: ID });
-  assert.equal(ctx().handed.size, 0, "the fact's deletion ends the wait");
+  actor.send({ type: "_cut", id: OTHER });
+  actor.send({ type: "_cut", id: ID });
+  assert.deepEqual(discarded.map((e) => e.id), [ID, OTHER]);
+  assert.equal(ctx().cut, ID);
 });

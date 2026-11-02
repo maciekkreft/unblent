@@ -43,7 +43,9 @@
     <script type="module" src="/static/components/session/fact.js"></script>
     <script type="module" src="/static/components/dock/fact.js"></script>
     <script type="module" src="/static/components/books/fact.js"></script>
+    <script type="module" src="/static/components/undo/fact.js"></script>
     <script type="module" src="/static/components/page-nav/view.js"></script>
+    <script type="module" src="/static/components/undo-bar/view.js"></script>
     <script type="module" src="/static/components/session-switch/view.js"></script>
     <script type="module" src="/static/components/viewport-switch/view.js"></script>
     <script type="module" src="/static/components/notice-stack/view.js"></script>
@@ -55,6 +57,7 @@
   </head>
   <body>
     <page-nav><layout-switch></layout-switch><session-switch></session-switch></page-nav>
+    <undo-bar></undo-bar>
     <dock-desk>
       <book-reader label="Reader" height="fill"></book-reader>
       <book-shelf label="Books" side="left" renames></book-shelf>

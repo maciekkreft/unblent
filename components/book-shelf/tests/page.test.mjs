@@ -98,14 +98,7 @@ const clickEdit = (page, title) =>
       ?.querySelector(".edit")
       ?.click();
   }, title);
-const clickUndo = (page, title) =>
-  page.evaluate((title) => {
-    const root = document.querySelector("book-shelf").shadowRoot;
-    [...root.querySelectorAll(".tile")]
-      .find((t) => t.querySelector(".title")?.textContent.trim() === title)
-      ?.querySelector(".undo")
-      ?.click();
-  }, title);
+const isCut = (page) => page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.cut")));
 
 const forgeCookie = () => {
   const SECRET = process.env.SESSION_SECRET;
@@ -263,27 +256,21 @@ for (const engine of ENGINES) {
     });
 
     // Browser: a gesture.
-    test("the bin offers Undo, which brings the book back", async () => {
+    test("the bin deletes at once, and the notice's Undo brings the book back", async () => {
       const cookie = forgeCookie();
       await importBook(cookie, SAMPLE_ID, SAMPLE);
       const { page, problems, debug } = await open({ cookie });
       await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
 
-      // Undo brings the book straight back, and no book.discarded was ever emitted.
+      // The delete happens at once (12, Undo), and the short notice names it.
       await clickBin(page, "Sample Book");
-      await until(async () =>
-        page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.discarding"))),
-      );
-      await clickUndo(page, "Sample Book");
-      await until(async () =>
-        page.evaluate(() => !document.querySelector("book-shelf").shadowRoot.querySelector(".tile.discarding")),
-      );
-      await new Promise((r) => setTimeout(r, 100));
-      assert.ok(!debug.some((l) => DISCARDED.test(l)), "undo emits no discard");
-      assert.ok((await tiles(page)).some((t) => t.title === "Sample Book"), "the book is still there");
+      await until(() => debug.some((l) => DISCARDED.test(l)));
+      await until(async () => !(await tiles(page)).some((t) => t.title === "Sample Book"));
+      await page.locator("notice-stack", { hasText: "Delete book Sample Book" }).waitFor();
 
-      // That a window running out makes the delete a fact, which `books` tombstones and
-      // sends, and that it stays gone, is book-shelf's bus test.
+      // Its Undo brings the book back, and that the restore reaches the server is books'.
+      await page.locator("notice-stack .undo").click();
+      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });
@@ -364,27 +351,36 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("with Vim keys on, dd removes a tile with its Undo, u takes it back, cc renames and o opens the picker", async () => {
+    test("with Vim keys on, dd cuts a tile, u puts it back, Escape deletes it, cc renames and o opens the picker", async () => {
       const cookie = forgeCookie();
       await importBook(cookie, SAMPLE_ID, SAMPLE);
-      const { page, problems } = await open({ cookie, vimKeys: true });
-      await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
-      const discarding = () =>
-        page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.discarding")));
+      await importBook(cookie, "01K00000000000000000000GPS", GAPS);
+      const { page, problems, debug } = await open({ cookie, vimKeys: true });
+      await until(async () => (await tiles(page)).length === 2);
       await focusShelf(page);
-      await until(async () => (await focusedTile(page)) === "Sample Book");
+      const first = await focusedTile(page);
       await page.keyboard.press("d");
       await page.keyboard.press("d");
-      await until(discarding);
+      await until(() => isCut(page));
       await page.keyboard.press("u");
-      await until(async () => !(await discarding()));
+      await until(async () => !(await isCut(page)));
+      assert.ok(!debug.some((l) => DISCARDED.test(l)), "a cut put back deletes nothing");
+      await page.keyboard.press("d");
+      await page.keyboard.press("d");
+      await until(() => isCut(page));
+      await page.keyboard.press("Escape");
+      await until(() => debug.some((l) => DISCARDED.test(l)));
+      await until(async () => (await tiles(page)).length === 1);
+      assert.ok(!(await tiles(page)).some((t) => t.title === first));
+      const left = (await tiles(page))[0].title;
+      await until(async () => (await focusedTile(page)) === left, 2000);
       await page.keyboard.press("c");
       await page.keyboard.press("c");
       const input = page.locator("book-shelf .title-input");
       await input.waitFor();
       assert.ok(await input.evaluate((el) => el.getRootNode().activeElement === el), "the title field has the keyboard");
       await input.press("Escape");
-      await until(async () => (await focusedTile(page)) === "Sample Book");
+      await until(async () => (await focusedTile(page)) === left);
       const chooser = page.waitForEvent("filechooser", { timeout: 2000 });
       await page.keyboard.press("o");
       await chooser;
@@ -393,7 +389,7 @@ for (const engine of ENGINES) {
     });
 
     // Browser: focus and keys.
-    test("the keyboard leaving the shelf during a delete hands it to the corner notice, whose Undo brings the book back", async () => {
+    test("the keyboard leaving the shelf while a tile is cut deletes it, and the notice's Undo brings the book back", async () => {
       const cookie = forgeCookie();
       await importBook(cookie, SAMPLE_ID, SAMPLE);
       const { page, problems, debug } = await open({ cookie, vimKeys: true });
@@ -402,16 +398,14 @@ for (const engine of ENGINES) {
       await until(async () => (await focusedTile(page)) === "Sample Book");
       await page.keyboard.press("d");
       await page.keyboard.press("d");
-      await until(async () =>
-        page.evaluate(() => Boolean(document.querySelector("book-shelf").shadowRoot.querySelector(".tile.discarding"))),
-      );
+      await until(() => isCut(page));
       const box = await page.locator("book-reader").boundingBox();
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-      await until(async () => (await noticeTexts(page)).includes("Book “Sample Book” deleted."));
-      assert.ok(!(await tiles(page)).some((t) => t.title === "Sample Book"), "the tile waits off the shelf");
-      await page.locator("notice-stack .removal .undo").click();
+      await until(() => debug.some((l) => DISCARDED.test(l)));
+      await until(async () => !(await tiles(page)).some((t) => t.title === "Sample Book"));
+      await page.locator("notice-stack", { hasText: "Delete book Sample Book" }).waitFor();
+      await page.locator("notice-stack .undo").click();
       await until(async () => (await tiles(page)).some((t) => t.title === "Sample Book"));
-      assert.ok(!debug.some((l) => DISCARDED.test(l)), "nothing was deleted");
       assert.deepEqual(problems, [], `reported: ${problems.join("; ")}`);
       await page.close();
     });

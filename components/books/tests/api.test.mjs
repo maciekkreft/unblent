@@ -58,6 +58,12 @@ const remove = (id, cookie) =>
     headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
     body: "{}",
   });
+const restore = (id, baseVersion, cookie) =>
+  fetch(`${BASE_URL}/api/books/${id}/restored`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ baseVersion }),
+  });
 const opened = (id, cookie) =>
   fetch(`${BASE_URL}/api/books/${id}/opened`, {
     method: "PUT",
@@ -397,7 +403,7 @@ test("a database file from before user titles gains the column, defaulting to th
   }
 });
 
-test("a delete tombstones the row and purges the directory", async () => {
+test("a delete tombstones the row, and a restore write naming its version brings it back", async () => {
   const cookie = cookieFor(freshUser());
   const row = await (await importBook(ID, SAMPLE, cookie)).json();
   const name = row.cover.split("/").pop();
@@ -405,12 +411,22 @@ test("a delete tombstones the row and purges the directory", async () => {
   const gone = await (await remove(ID, cookie)).json();
   assert.equal(gone.deleted, true);
   assert.equal(gone.version, 2);
-  // The directory is gone, so both file routes 404 (the row is a tombstone anyway).
+  // The row is a tombstone, so both file routes 404, though the files are kept.
   assert.equal((await getChapter(ID, 1, 0, cookie)).status, 404);
   assert.equal((await getImage(ID, 1, name, cookie)).status, 404);
   // A second delete is idempotent.
   const again = await (await remove(ID, cookie)).json();
   assert.equal(again.version, gone.version);
+  // A restore naming an older version is not the delete's undo: the tombstone stands.
+  assert.equal((await (await restore(ID, 1, cookie)).json()).deleted, true);
+  const back = await (await restore(ID, gone.version, cookie)).json();
+  assert.equal(back.deleted, false);
+  assert.equal(back.version, 3);
+  assert.equal(back.contentVersion, 1, "nothing is imported again");
+  assert.equal((await getChapter(ID, 1, 0, cookie)).status, 200);
+  assert.equal((await getImage(ID, 1, name, cookie)).status, 200);
+  // A restore of a live book answers it as it is.
+  assert.equal((await (await restore(ID, back.version, cookie)).json()).version, 3);
 });
 
 test("a delete for an unknown id is born a tombstone", async () => {

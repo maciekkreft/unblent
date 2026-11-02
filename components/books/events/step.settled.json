@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "How a step.undone or step.redone ended (12, Undo). Its owner answers every one addressed to it: applied, or refused when the record is no longer as the step left it. `undo` says unreachable itself when no answer comes in time, because the owner is not on this page.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$", "description": "The step's id." },
+    "owner": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The component that recorded the step." },
+    "outcome": { "enum": ["applied", "refused", "unreachable"], "description": "applied: the step was reversed or made again. refused: it was not, and the step is dropped. unreachable: no owner answered, and the step stays where it was." },
+    "reason": { "type": "string", "description": "Why a step was refused: changed, the record changed since the step; closed, the day it belongs to can no longer be written. Absent otherwise." }
+  },
+  "required": ["id", "owner", "outcome"],
+  "additionalProperties": false
+}

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 
 // The kit (10): book-shelf with `books`, real machines on the real bus. The store and the
 // server are faked, and the account is signed in, so a delete is sent. The shelf's
-// gestures are sent to its actor the way its view forwards them; a tile's bin and its
-// Undo themselves are clicked in the browser test.
+// gestures are sent to its actor the way its view forwards them; a tile's bin itself is
+// clicked in the browser test.
 assert.ok(process.env.UNBLENT_KIT, "UNBLENT_KIT must be set (checks/check.py sets it)");
 const { wire, until } = await import(process.env.UNBLENT_KIT);
 
@@ -54,33 +54,29 @@ async function start(store, api) {
       revoke: () => {},
       ask: async (target) => (target === "session" ? { userId: "u1", registrationOpen: false } : { error: "no-answerer" }),
     },
-    "book-shelf": { undoMs: 20 },
+    "book-shelf": {},
   });
   const tiles = () => wired.actors["book-shelf"].getSnapshot().context.books.filter((b) => !b.written).map((b) => b.id);
   const emitted = (type) => wired.records.filter((r) => r.kind === "event" && r.name === type);
   return { ...wired, tiles, emitted };
 }
 
-// Undo inside the window takes the delete back and nothing is emitted; a window that
-// runs out makes it a fact (book.discarded): `books` tombstones the book, sends the
-// delete, and announces it gone, so the tile goes, and a fresh start does not bring it back.
-test("delete offers undo, then commits when its window ends and stays gone", async () => {
+// The trash deletes at once (12, Undo): book.discarded, which `books` turns into a
+// tombstone, a step with the short notice, the delete sent, and book.deleted, so the tile
+// goes, and a fresh start does not bring it back.
+test("delete happens at once as one step and stays gone", async () => {
   const store = booksStore([BOOK]);
   const api = fakeApi();
   const h = await start(store, api);
   try {
     await until(() => h.tiles().includes(ID));
-    const shelf = h.actors["book-shelf"];
-    shelf.send({ type: "_discard", id: ID });
-    assert.ok(shelf.getSnapshot().context.discarding.has(ID));
-    shelf.send({ type: "_undo", id: ID });
-    await new Promise((r) => setTimeout(r, 60));
-    assert.equal(h.emitted("book.discarded").length, 0, "undo emits no discard");
-    assert.ok(h.tiles().includes(ID), "the book is still there");
-
-    shelf.send({ type: "_discard", id: ID });
+    h.actors["book-shelf"].send({ type: "_discard", id: ID });
     await until(() => h.emitted("book.discarded").length === 1 && h.emitted("book.deleted").length === 1);
     await until(() => !h.tiles().includes(ID));
+    const [step] = h.emitted("step.recorded");
+    assert.equal(step.payload.owner, "books");
+    assert.equal(step.payload.notice, true);
+    assert.equal(step.payload.label, "delete book Sample Book");
     assert.equal(store.books.get(ID).deleted, true, "the book is a tombstone");
     await until(() => api.removes.includes(ID));
   } finally {
@@ -95,33 +91,20 @@ test("delete offers undo, then commits when its window ends and stays gone", asy
   }
 });
 
-// A delete handed to the corner notice when the keyboard leaves the shelf is deleted by
-// `books` when the notice's window ends (12, Vim keys), not by the tile's own timer.
-test("a handed-off delete is settled by the corner notice and deleted by books", async () => {
+// A tile cut with dd is deleted by `books` once the keyboard leaves the shelf (12, Vim keys).
+test("a cut tile is deleted when the keyboard leaves the shelf", async () => {
   const store = booksStore([BOOK]);
-  const api = fakeApi();
-  const wired = await wire(["books", "book-shelf", "notice-stack"], {
-    books: {
-      store,
-      api,
-      now: (() => { let n = 100; return () => ++n; })(),
-      revoke: () => {},
-      ask: async (target) => (target === "session" ? { userId: "u1", registrationOpen: false } : { error: "no-answerer" }),
-    },
-    "book-shelf": { undoMs: 20 },
-    "notice-stack": { fadeMs: 30 },
-  });
-  const shelf = wired.actors["book-shelf"];
+  const h = await start(store, fakeApi());
   try {
-    await until(() => shelf.getSnapshot().context.books.some((b) => b.id === ID));
-    shelf.send({ type: "_discard", id: ID });
+    await until(() => h.tiles().includes(ID));
+    const shelf = h.actors["book-shelf"];
+    shelf.send({ type: "_cut", id: ID });
+    assert.equal(h.emitted("book.discarded").length, 0, "a cut is not a delete");
     shelf.send({ type: "_left" });
-    await until(() => store.books.get(ID).deleted === true, 4000);
-    assert.ok(!wired.records.some((r) => r.kind === "event" && r.name === "book.discarded"), "the tile's timer was cancelled");
-    assert.ok(wired.records.some((r) => r.name === "removal.settled"));
-    await until(() => api.removes.includes(ID));
-    await until(() => shelf.getSnapshot().context.handed.size === 0);
+    await until(() => store.books.get(ID).deleted === true);
+    await until(() => !h.tiles().includes(ID));
+    assert.equal(shelf.getSnapshot().context.cut, null);
   } finally {
-    wired.unwire();
+    h.unwire();
   }
 });

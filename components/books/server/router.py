@@ -4,7 +4,8 @@ that user's own SQLite file and book directory, so isolation holds by constructi
 The row (a few KB) holds what rides the bus; the chapters and images are files under
 books/<id>/, served immutable under a URL carrying the content version so a re-import
 never serves a stale cache. A position is last write wins and never refused (Decision
-4); a delete purges the directory and tombstones the row (Decision 6).
+4); a delete tombstones the row and keeps the directory, so a restore write (5) can bring
+the book back without importing it again.
 """
 
 import json
@@ -258,9 +259,29 @@ async def delete_book(book_id: str, user_id: str = Depends(require_user)):
             "UPDATE books SET version = ?, updated_at = ?, seq = ?, deleted = 1 WHERE id = ?",
             (row["version"] + 1, now, _next_seq(connection), book_id),
         )
-        result = _reread(connection, book_id)
-    purge(_book_dir(user_id, book_id))
-    return result
+        return _reread(connection, book_id)
+
+
+@router.put("/{book_id}/restored")
+async def restore_book(book_id: str, request: Request, user_id: str = Depends(require_user)):
+    # A restore write (5): it names the tombstone's own version, so only the delete it
+    # undoes is taken back; any later write there, or a live book, answers the row as it
+    # is. A tombstone from before deletes kept the files cannot come back without them.
+    payload = await request.json()
+    base = payload.get("baseVersion")
+    now = int(time.time() * 1000)
+    with _connect(user_id) as connection:
+        row = connection.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404)
+        kept = (_book_dir(user_id, book_id) / "chapters").is_dir()
+        if not row["deleted"] or base != row["version"] or not kept:
+            return _record(row)
+        connection.execute(
+            "UPDATE books SET version = ?, updated_at = ?, seq = ?, deleted = 0 WHERE id = ?",
+            (row["version"] + 1, now, _next_seq(connection), book_id),
+        )
+        return _reread(connection, book_id)
 
 
 @router.put("/{book_id}/opened")
